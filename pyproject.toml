@@ -1,0 +1,22 @@
+[project]
+name = "finance-agent"
+version = "0.1.0"
+description = "AI-powered financial analysis report system for A-share stocks"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.4.0",
+    "gradio>=5.0.0",
+    "pandas>=2.0.0",
+    "litellm>=1.0.0",
+]
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
