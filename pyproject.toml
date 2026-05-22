@@ -9,6 +9,7 @@ dependencies = [
     "gradio>=5.0.0",
     "pandas>=2.0.0",
     "litellm>=1.0.0",
+    "akshare>=1.18.63",
 ]
 
 [tool.uv]
@@ -20,3 +21,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
