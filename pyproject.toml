@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.0.0",
     "litellm>=1.0.0",
     "akshare>=1.18.63",
+    "pyarrow>=24.0.0",
 ]
 
 [tool.uv]
