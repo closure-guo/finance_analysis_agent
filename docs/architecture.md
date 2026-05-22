@@ -8,12 +8,12 @@
 
 ### 1.1 四层架构
 
-| 层级 | 选型 | 职责 |
-|------|------|------|
-| L1 前端 | Gradio 5.x Blocks API | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载 |
-| L2 Agent | LangGraph | 11 节点 + 2 子图 + 数据准备子图 + 条件路由 |
-| L3 数据 | pandas + SQLite | AKShare 数据拉取 + 全部计算 + SQLite 缓存（MVP 不含 Chroma/Tavily） |
-| L4 LLM | DeepSeek(开发) / GPT-4o(Demo) | LiteLLM 路由 + 降级链 |
+| 层级     | 选型                          | 职责                                                                |
+| -------- | ----------------------------- | ------------------------------------------------------------------- |
+| L1 前端  | Gradio 5.x Blocks API         | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
+| L2 Agent | LangGraph                     | 11 节点 + 2 子图 + 数据准备子图 + 条件路由                          |
+| L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（MVP 不含 Chroma/Tavily） |
+| L4 LLM   | DeepSeek(开发) / GPT-4o(Demo) | LiteLLM 路由 + 降级链                                               |
 
 ### 1.2 核心原则
 
@@ -36,12 +36,11 @@ flowchart TB
 
         subgraph PREP["数据准备子图 L3"]
             direction TB
-            CC["① check_cache<br/>逐项查缓存+TTL"]
+            CC["① check_cache<br/>查持久化报表+缓存行情"]
             FP["② fetch_data<br/>Step1: AKShare并行拉取<br/>Step2: 同业数据(依赖行业归属)"]
             CM["③ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP<br/>纯pandas无LLM"]
-            CC -->|"FULL_HIT"| BYPASS["跳过"]
-            CC -->|"RAW_HIT"| CM
-            CC -->|"MISS"| FP --> CM
+            CC -->|"MISS 首次"| FP --> CM
+            CC -->|"HIT 报表已有"| CM
         end
 
         Route{"④ route"}
@@ -64,7 +63,6 @@ flowchart TB
     end
 
     PREP --> Route
-    BYPASS --> Route
 
     Route -->|"financial"| FA
     Route -->|"investment"| IA
@@ -97,33 +95,50 @@ flowchart TB
 
 ## 三、节点详细规格
 
-| # | 节点 | 读 State | 写 State | LLM |
-|---|------|----------|----------|-----|
-| ① | check_cache | stock_code | 命中时填充 L1-L3 全部 | 否 |
-| ② | fetch_data | missing_items | L1+L2+L4 全部原始数据 | 否 |
-| ③ | compute_metrics | L1-L4 原始数据 | 四维度+杜邦+灯+同业+相对估值+GARP | 否 |
-| ④ | route | analysis_type | 无 | 否 |
-| ⑤ | fa_analyze | 四维度+灯+杜邦+同业+异常 | financial_analysis | 是 |
-| ⑥ | fa_report | financial_analysis | financial_report | 是 |
-| ⑦ | ia_analyze | 行业+DCF+估值+GARP+风险 | investment_analysis | 是 |
-| ⑧ | ia_report | investment_analysis | investment_report | 是 |
-| ⑨ | merge | financial_report + investment_report | final_report | 是 |
-| ⑩ | generate_file | final_report | file_path | 否 |
-| ⑪ | output | file_path | 无 | 否 |
+| #   | 节点            | 读 State                             | 写 State                          | LLM |
+| --- | --------------- | ------------------------------------ | --------------------------------- | --- |
+| ①   | check_cache     | stock_code                           | 命中时填充 L1-L3 全部             | 否  |
+| ②   | fetch_data      | missing_items                        | L1+L2+L4 全部原始数据             | 否  |
+| ③   | compute_metrics | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP | 否  |
+| ④   | route           | analysis_type                        | 无                                | 否  |
+| ⑤   | fa_analyze      | 四维度+灯+杜邦+同业+异常             | financial_analysis                | 是  |
+| ⑥   | fa_report       | financial_analysis                   | financial_report                  | 是  |
+| ⑦   | ia_analyze      | 行业+DCF+估值+GARP+风险              | investment_analysis               | 是  |
+| ⑧   | ia_report       | investment_analysis                  | investment_report                 | 是  |
+| ⑨   | merge           | financial_report + investment_report | final_report                      | 是  |
+| ⑩   | generate_file   | final_report                         | file_path                         | 否  |
+| ⑪   | output          | file_path                            | 无                                | 否  |
 
 ---
 
-## 四、数据准备状态机
+## 四、数据持久化与缓存
 
-### 4.1 状态与转换
+### 4.1 数据分层策略
+
+| 策略       | 数据               | 存储方式                 | 原因                                     |
+| ---------- | ------------------ | ------------------------ | ---------------------------------------- |
+| **持久化** | 三大报表           | SQLite                   | 历史事实不可变，拉一次存下来，新季度追加 |
+| **持久化** | 分析报告快照       | SQLite 主表              | 用户历史报告，按标的/时间检索            |
+| **缓存**   | 行情数据           | SQLite（TTL 到当日收盘） | 每天变动                                 |
+| **缓存**   | 行业归属           | SQLite（TTL 30 天）      | 极少变                                   |
+| **缓存**   | AKShare 预计算指标 | SQLite（TTL 同报表）     | 跟随报表时效                             |
+| **不存储** | L3 衍生计算        | 每次重算                 | 纯 pandas，无 API，毫秒级                |
+
+### 4.2 自动追踪
+
+| 用途                                         | 方式        | 备注                    |
+| -------------------------------------------- | ----------- | ----------------------- |
+| 断点恢复                                     | SqliteSaver | 本地，不跨会话          |
+| 历史观测（每节点 I/O + 耗时 + token + 异常） | LangSmith   | 云端，30 天保留，零代码 |
+
+### 4.3 缓存状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> CHECK_CACHE: 输入(stock_code, analysis_type)
 
-    CHECK_CACHE --> READY: FULL_HIT
-    CHECK_CACHE --> COMPUTE: RAW_HIT
-    CHECK_CACHE --> FETCH: PARTIAL_MISS / FULL_MISS
+    CHECK_CACHE --> COMPUTE: HIT（报表持久化命中 + 行情未过期）
+    CHECK_CACHE --> FETCH: MISS（首次分析）
 
     FETCH --> COMPUTE: 拉取成功
     FETCH --> COMPUTE: 部分失败(标记N/A)
@@ -131,25 +146,14 @@ stateDiagram-v2
     READY --> [*]
 ```
 
-### 4.2 四条执行路径
+两条执行路径：
 
-| 路径 | 触发条件 | 经过节点 | API 调用 | 耗时 |
-|------|---------|---------|---------|------|
-| 热路径 | 全部缓存命中 | check_cache → END | 0 | <0.5s |
-| 温路径 | 原始有 指标没算 | check_cache → compute → END | 0 | <1s |
-| 冷路径 | 部分缺失 | check_cache → fetch(部分) → compute → END | 2-3 | ~3s |
-| 冰路径 | 首次分析 | check_cache → fetch(全量) → compute → END | 5-8 | ~6s |
+| 路径 | 触发条件                    | 经过节点                                      | API 调用         | 耗时 |
+| ---- | --------------------------- | --------------------------------------------- | ---------------- | ---- |
+| HIT  | 报表持久化命中 + 行情未过期 | check_cache → compute → Route → Agent         | 0（数据）+ LLM   | ~2s  |
+| MISS | 首次分析                    | check_cache → fetch → compute → Route → Agent | 5-8（数据）+ LLM | ~8s  |
 
-### 4.3 缓存 TTL
-
-| 数据类型 | TTL |
-|---------|-----|
-| 三大报表 | 到下个财报季 |
-| 行情数据 | 到当日收盘 |
-| 预计算指标 | 同三大报表 |
-| 券商研报 | 1 天 |
-| 行业归属 | 30 天 |
-| 衍生计算 | 同源数据 |
+> 注：两条路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
 
 ### 4.4 fetch_data 内部分步（MVP）
 
@@ -164,28 +168,28 @@ stateDiagram-v2
 
 ### 5.1 指标清单与数据来源
 
-| 维度 | 指标 | 来源 |
-|------|------|------|
-| 偿债(5) | 资产负债率 | AKShare |
-| | 流动比率 | AKShare |
-| | 速动比率 | AKShare |
-| | 利息覆盖倍数 | 自算 |
-| | 净债务/EBITDA | 自算 |
-| 盈利(5) | 毛利率 | AKShare |
-| | 净利率 | AKShare |
-| | ROE | AKShare |
-| | ROA | AKShare |
-| | ROIC | 自算 |
-| 运营(4) | 存货周转率 | AKShare |
-| | 应收账款周转率 | AKShare |
-| | 总资产周转率 | AKShare |
-| | 应付账款周转率 | 自算 |
-| 现金流(6) | 经营现金流/净利润 | 自算 |
-| | FCF | 自算 |
-| | 资本支出/折旧 | 自算 |
-| | 现金流覆盖比率 | 自算 |
-| | FCF 收益率 | 自算 |
-| | 留存现金流比率 | 自算 |
+| 维度      | 指标              | 来源    |
+| --------- | ----------------- | ------- |
+| 偿债(5)   | 资产负债率        | AKShare |
+|           | 流动比率          | AKShare |
+|           | 速动比率          | AKShare |
+|           | 利息覆盖倍数      | 自算    |
+|           | 净债务/EBITDA     | 自算    |
+| 盈利(5)   | 毛利率            | AKShare |
+|           | 净利率            | AKShare |
+|           | ROE               | AKShare |
+|           | ROA               | AKShare |
+|           | ROIC              | 自算    |
+| 运营(4)   | 存货周转率        | AKShare |
+|           | 应收账款周转率    | AKShare |
+|           | 总资产周转率      | AKShare |
+|           | 应付账款周转率    | 自算    |
+| 现金流(6) | 经营现金流/净利润 | 自算    |
+|           | FCF               | 自算    |
+|           | 资本支出/折旧     | 自算    |
+|           | 现金流覆盖比率    | 自算    |
+|           | FCF 收益率        | 自算    |
+|           | 留存现金流比率    | 自算    |
 
 10 个 AKShare 预计算 + 11 个自算。
 
@@ -193,12 +197,12 @@ stateDiagram-v2
 
 **绝对值阈值（部分示例）**：
 
-| 指标 | 🟢 优良 | 🟡 关注 | 🔴 警告 |
-|------|---------|---------|---------|
-| 资产负债率 | <40% | 40-65% | >65% |
-| 流动比率 | >2.0 | 1.0-2.0 | <1.0 |
-| ROE | >15% | 8-15% | <8% |
-| FCF | 正且增长 | 正但下降 | 负值 |
+| 指标       | 🟢 优良  | 🟡 关注  | 🔴 警告 |
+| ---------- | -------- | -------- | ------- |
+| 资产负债率 | <40%     | 40-65%   | >65%    |
+| 流动比率   | >2.0     | 1.0-2.0  | <1.0    |
+| ROE        | >15%     | 8-15%    | <8%     |
+| FCF        | 正且增长 | 正但下降 | 负值    |
 
 运营效率维度使用行业均值倍数：> 行业均值×1.2 = 🟢。
 
@@ -282,9 +286,12 @@ class AnalysisState(TypedDict):
 ```python
 # 数据准备子图条件边
 def after_check_cache(state):
+    # HIT（报表持久化命中 + 行情未过期）→ 重算 L3
+    # MISS → 完整拉取 + 持久化报表 → 算 L3
+    # 两条路径都走 Route → Agent（报告不缓存，LLM 每次重新生成）
     result = state["cache_result"]
-    if result == "FULL_HIT":   return END
-    if result == "RAW_HIT":    return "compute_metrics"
+    if result == "HIT":
+        return "compute_metrics"  # 报表已有，只重算 L3
     return "fetch_data"
 
 # 主图路由
@@ -302,30 +309,30 @@ def after_agent(state):
 
 ## 八、技术选型
 
-| 层级 | 选型 | 备选 | 决策依据 |
-|------|------|------|---------|
-| 前端 | Gradio 5.x Blocks | Streamlit | 表单布局灵活 + share 链接 |
-| Agent | LangGraph | CrewAI | Supervisor + Sub-graph 原生支持 |
-| LLM(开发) | DeepSeek-V3.2 | Qwen2.5 | 成本 4元/M tokens，中文财务更优 |
-| LLM(Demo) | GPT-4o | Claude 3.5 | 长链推理最强 |
-| LLM 路由 | LiteLLM | 自定义 | 100+ 模型统一接口 |
-| PDF | pdfplumber | Unstructured.io | 表格准确率 98.3%，速度快 6x |
-| 数据 | AKShare | Tushare | 免费无 API Key |
-| 向量 | Chroma | FAISS | 本地零配置 |
-| 关系 | SQLite | PostgreSQL | 零配置单文件 |
-| 搜索 | Tavily | Brave | 为 LLM 优化 |
-| Word | python-docx | — | 程序化生成 |
-| PPT | python-pptx | — | 程序化生成 |
+| 层级      | 选型              | 备选            | 决策依据                        |
+| --------- | ----------------- | --------------- | ------------------------------- |
+| 前端      | Gradio 5.x Blocks | Streamlit       | 表单布局灵活 + share 链接       |
+| Agent     | LangGraph         | CrewAI          | Supervisor + Sub-graph 原生支持 |
+| LLM(开发) | DeepSeek-V3.2     | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
+| LLM(Demo) | GPT-4o            | Claude 3.5      | 长链推理最强                    |
+| LLM 路由  | LiteLLM           | 自定义          | 100+ 模型统一接口               |
+| PDF       | pdfplumber        | Unstructured.io | 表格准确率 98.3%，速度快 6x     |
+| 数据      | AKShare           | Tushare         | 免费无 API Key                  |
+| 向量      | Chroma            | FAISS           | 本地零配置                      |
+| 关系      | SQLite            | PostgreSQL      | 零配置单文件                    |
+| 搜索      | Tavily            | Brave           | 为 LLM 优化                     |
+| Word      | python-docx       | —               | 程序化生成                      |
+| PPT       | python-pptx       | —               | 程序化生成                      |
 
 ---
 
 ## 九、未决定项
 
-| 问题 | 选项 | 影响 |
-|------|------|------|
-| ~~DCF 的 WACC 假设来源~~ | ~~公式估算 vs LLM 生成 vs 硬编码默认值~~ | ~~已决定：公式估算（CAPM + 利息费用/有息负债）~~ |
-| ~~项目目录结构~~ | ~~见架构文档~~ | ~~已决定：src/finance_agent/ 分 nodes/metrics/mcp_servers/data/prompts/templates~~ |
-| ~~实施阶段划分~~ | ~~P0骨架→P1数据层→P2分析层→P3输出层~~ | ~~已决定：4阶段渐进~~ |
+| 问题                     | 选项                                     | 影响                                                                               |
+| ------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| ~~DCF 的 WACC 假设来源~~ | ~~公式估算 vs LLM 生成 vs 硬编码默认值~~ | ~~已决定：公式估算（CAPM + 利息费用/有息负债）~~                                   |
+| ~~项目目录结构~~         | ~~见架构文档~~                           | ~~已决定：src/finance_agent/ 分 nodes/metrics/mcp_servers/data/prompts/templates~~ |
+| ~~实施阶段划分~~         | ~~P0骨架→P1数据层→P2分析层→P3输出层~~    | ~~已决定：4阶段渐进~~                                                              |
 
 ### 补充决定
 

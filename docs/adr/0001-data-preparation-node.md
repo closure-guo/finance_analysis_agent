@@ -17,14 +17,16 @@
 在 Supervisor 路由之前插入一个**数据准备子图**（check_cache → fetch_data → compute_metrics），统一负责所有数据拉取和计算，结果写入 LangGraph State。
 
 数据准备子图实现为 LangGraph 子图，包含条件边：
-- FULL_HIT → 跳过 fetch 和 compute，直接进入 Route
-- RAW_HIT → 跳过 fetch，只执行 compute
-- PARTIAL_MISS / FULL_MISS → 执行 fetch → compute
 
-fetch_data 内部分三步：
-- Step 1：并行拉取 L1 + L2 无依赖数据
-- Step 2：拉取依赖 Step 1 结果的数据（Tavily 搜索需要行业名称）
-- Step 3：拉取同业数据（需要 Layer 1 的行业归属）
+- HIT → 报表持久化命中 + 行情未过期，跳过 fetch，只执行 compute（重算 L3 衍生指标）
+- MISS → 首次分析，执行 fetch（拉取 + 持久化报表 + 缓存行情）→ compute
+
+两条路径都继续走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
+
+fetch_data 内部分两步（MVP）：
+
+- Step 1：并行拉取 L1 + L2 无依赖数据（三大报表 + 行情 + 行业归属 + 预计算指标）
+- Step 2：拉取同业数据（需要 Step 1 的行业归属）
 
 ## Consequences
 

@@ -76,7 +76,7 @@
 ```
 START(用户输入 stock_code + analysis_type)
   → check_cache
-  → [FULL_HIT: 跳过] / [RAW_HIT: compute_metrics] / [MISS: fetch_data → compute_metrics]
+  → [HIT: compute_metrics] / [MISS: fetch_data → compute_metrics]
   → route(按 analysis_type)
   → financial: fa_analyze → fa_report
   → investment: ia_analyze → ia_report
@@ -85,13 +85,14 @@ START(用户输入 stock_code + analysis_type)
   → output(Gradio)
 ```
 
-数据准备子图有条件边：FULL_HIT 跳过 fetch 和 compute；RAW_HIT 只跑 compute；MISS 跑完整 fetch→compute。4 条执行路径：热（<0.5s）、温（<1s）、冷（~3s）、冰（~6s）。
+数据准备子图有两条路径：MISS（首次分析，拉取+持久化+计算）和 HIT（报表已有，只重算 L3 衍生指标）。两条路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
 
 ### State Definition (TypedDict)
 
 LangGraph State 使用 TypedDict（非 Pydantic BaseModel），因为 LangGraph 原生支持 TypedDict、Reducer 注解零摩擦、Checkpoint 序列化无额外处理。
 
 关键字段：
+
 - 输入：stock_code, analysis_type, peer_codes（可选）
 - Layer 1 基础数据：三大报表（DataFrame）、行情、行业归属
 - Layer 2 预计算指标：financial_indicators
@@ -107,6 +108,7 @@ Agent 节点（fa_analyze, fa_report, ia_analyze, ia_report, merge）只读 Stat
 MVP 仅使用 AKShare 作为数据源，不接入 Tavily 搜索、巨潮 PDF 解析、Chroma RAG。
 
 fetch_data 分两步：
+
 - Step 1（并行）：三大报表 + 行情 + 行业归属 + 预计算指标（无依赖）
 - Step 2（依赖 Step 1）：同业公司财务数据（需要行业归属结果）
 
@@ -115,6 +117,7 @@ fetch_data 分两步：
 ### Metrics Computation: Pure pandas
 
 compute_metrics 节点执行所有计算，纯 pandas 无 LLM：
+
 - 四维度 20 指标（10 个 AKShare 预计算 + 11 个自算）
 - 3 层杜邦分解
 - 红黄绿灯矩阵（双重阈值：绝对值水平 + 同比变化率）
@@ -128,6 +131,7 @@ compute_metrics 节点执行所有计算，纯 pandas 无 LLM：
 ### Report Generation: Two-Pass
 
 报告生成采用两步法解决"执行摘要需要总结全文"的问题：
+
 1. 先生成正文章节（财务：3-7 章；投资：3-6 章）
 2. 再将正文作为上下文，调用 LLM 生成执行摘要（第 2 章）
 3. 最后拼接：封面 + 摘要 + 正文 + 免责声明
@@ -158,6 +162,7 @@ MVP 报告纯 Markdown + 表格，不引入图表库。
 ### Scoring Model
 
 每个指标通过双重阈值评判：
+
 - 绝对值水平：优良/关注/警告（各指标阈值不同，运营效率用行业均值倍数）
 - 同比变化率：<20% 稳定 / 20-50% 波动 / >50% 异动
 - 最终灯色 = max(绝对值灯, 变化率灯)
@@ -212,7 +217,7 @@ src/finance_agent/
 
 ### Key Module Interfaces
 
-- **metrics/*.py**: 纯函数，`(df_balance, df_income, df_cashflow, ...) → dict`。无 I/O、无 LLM、无外部调用。
+- **metrics/\*.py**: 纯函数，`(df_balance, df_income, df_cashflow, ...) → dict`。无 I/O、无 LLM、无外部调用。
 - **data/akshare_client.py**: `(stock_code, years) → dict of DataFrames`。封装所有 AKShare API 调用、重试、错误处理。
 - **data/cache.py**: `get(key) → Optional[data]` + `set(key, data, ttl) → None`。封装 SQLite 读写和 TTL 过期。
 - **nodes/fetch.py**: 读 cache + 调 akshare_client + 写 State。编排数据拉取的 Step 1 和 Step 2。
@@ -231,11 +236,13 @@ src/finance_agent/
 **metrics/ — 重点测试**（全部 8 个文件）：
 
 每个指标计算函数用已知财报数据验证。原因：
+
 - 纯函数、无 I/O、无 LLM — 天然可测，测试稳定不 flaky
 - 财务计算正确性是系统地基，一个指标算错后面全错
 - 阈值边界条件需要覆盖（红黄绿灯切换点）
 
 测试覆盖范围：
+
 - solvency.py: 5 个指标计算 + 阈值边界
 - profitability.py: 5 个指标计算 + 阈值边界
 - efficiency.py: 4 个指标计算 + 行业均值倍数阈值
@@ -283,6 +290,7 @@ src/finance_agent/
 ### v2.0 Expansion Points
 
 架构上预留以下扩展点：
+
 - 数据层：DataFetcher 接口抽象，美股换 yfinance / Financial Modeling Prep
 - 阈值：从硬编码抽到 `thresholds/{market}.yaml`
 - MCP：整个 Agent 封装为 MCP Server
@@ -292,6 +300,7 @@ src/finance_agent/
 ### Existing ADRs
 
 实现时遵循以下架构决策记录：
+
 - ADR-0001: 数据准备子图（Strategy C，统一数据拉取）
 - ADR-0002: Agent 节点纯 LLM 消费者
 - ADR-0003: 双重阈值红黄绿灯评分模型

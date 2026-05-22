@@ -10,7 +10,7 @@ class AnalysisState(TypedDict, total=False):
     peer_codes: Optional[list[str]]
 
     # ── Cache ──
-    cache_result: str  # FULL_HIT | RAW_HIT | MISS
+    cache_result: str  # HIT | MISS
 
     # ── Layer 1: 基础公共数据 ──
     balance_sheet: pd.DataFrame
