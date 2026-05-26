@@ -11,7 +11,7 @@
 | 层级     | 选型                          | 职责                                                                |
 | -------- | ----------------------------- | ------------------------------------------------------------------- |
 | L1 前端  | Gradio 5.x Blocks API         | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
-| L2 Agent | LangGraph                     | 11 节点 + 2 子图 + 数据准备子图 + 条件路由                          |
+| L2 Agent | LangGraph                     | 12 节点 + 2 子图 + 数据准备子图 + 条件路由                          |
 | L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（MVP 不含 Chroma/Tavily） |
 | L4 LLM   | DeepSeek(开发) / GPT-4o(Demo) | LiteLLM 路由 + 降级链                                               |
 
@@ -25,7 +25,7 @@
 
 ---
 
-## 二、图拓扑：11 节点
+## 二、图拓扑：12 节点
 
 ```mermaid
 flowchart TB
@@ -38,28 +38,31 @@ flowchart TB
             direction TB
             CC["① check_cache<br/>查持久化报表+缓存行情"]
             FP["② fetch_data<br/>Step1: AKShare并行拉取<br/>Step2: 同业数据(依赖行业归属)"]
-            CM["③ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP<br/>纯pandas无LLM"]
-            CC -->|"MISS 首次"| FP --> CM
-            CC -->|"HIT 报表已有"| CM
+            VF["③ validate_financials<br/>4条勾稽校验<br/>硬等式FAIL→终止 软等式→warning"]
+            CM["④ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP<br/>纯pandas无LLM"]
+            CC -->|"MISS 首次"| FP --> VF
+            CC -->|"HIT 报表已有"| VF
+            VF -->|"PASS"| CM
+            VF -->|"FAIL 硬等式"| END_ERR(["终止: 数据校验失败"])
         end
 
-        Route{"④ route"}
+        Route{"⑤ route"}
 
         subgraph FA["财务分析子图 纯LLM"]
-            FA1["⑤ fa_analyze<br/>读State全部分析数据<br/>LLM解读写分析文字"]
-            FA2["⑥ fa_report<br/>填充8章硬编码模板"]
+            FA1["⑥ fa_analyze<br/>读State全部分析数据<br/>LLM解读写分析文字"]
+            FA2["⑦ fa_report<br/>填充8章硬编码模板"]
             FA1 --> FA2
         end
 
         subgraph IA["投资分析子图 纯LLM"]
-            IA1["⑦ ia_analyze<br/>读State行业+估值+风险<br/>LLM解读写分析文字"]
-            IA2["⑧ ia_report<br/>填充7章硬编码模板"]
+            IA1["⑧ ia_analyze<br/>读State行业+估值+风险<br/>LLM解读写分析文字"]
+            IA2["⑨ ia_report<br/>填充7章硬编码模板"]
             IA1 --> IA2
         end
 
-        Merge["⑨ merge_reports<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
-        GenFile["⑩ generate_file<br/>python-docx/pptx生成Word/PPT"]
-        Output(["⑪ 输出Gradio"])
+        Merge["⑩ merge_reports<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
+        GenFile["⑪ generate_file<br/>python-docx/pptx生成Word/PPT"]
+        Output(["⑫ 输出Gradio"])
     end
 
     PREP --> Route
@@ -79,7 +82,9 @@ flowchart TB
     style PREP fill:#e8f5e9
     style CC fill:#81c784,color:#fff
     style FP fill:#81c784,color:#fff
+    style VF fill:#ffcc80,color:#fff
     style CM fill:#81c784,color:#fff
+    style END_ERR fill:#ef5350,color:#fff
     style Route fill:#ff9800,color:#fff
     style FA fill:#e3f2fd
     style IA fill:#f3e5f5
@@ -95,19 +100,20 @@ flowchart TB
 
 ## 三、节点详细规格
 
-| #   | 节点            | 读 State                             | 写 State                          | LLM |
-| --- | --------------- | ------------------------------------ | --------------------------------- | --- |
-| ①   | check_cache     | stock_code                           | 命中时填充 L1-L3 全部             | 否  |
-| ②   | fetch_data      | missing_items                        | L1+L2+L4 全部原始数据             | 否  |
-| ③   | compute_metrics | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP | 否  |
-| ④   | route           | analysis_type                        | 无                                | 否  |
-| ⑤   | fa_analyze      | 四维度+灯+杜邦+同业+异常             | financial_analysis                | 是  |
-| ⑥   | fa_report       | financial_analysis                   | financial_report                  | 是  |
-| ⑦   | ia_analyze      | 行业+DCF+估值+GARP+风险              | investment_analysis               | 是  |
-| ⑧   | ia_report       | investment_analysis                  | investment_report                 | 是  |
-| ⑨   | merge           | financial_report + investment_report | final_report                      | 是  |
-| ⑩   | generate_file   | final_report                         | file_path                         | 否  |
-| ⑪   | output          | file_path                            | 无                                | 否  |
+| #   | 节点                | 读 State                             | 写 State                          | LLM |
+| --- | ------------------- | ------------------------------------ | --------------------------------- | --- |
+| ①   | check_cache         | stock_code                           | 命中时填充 L1-L3 全部             | 否  |
+| ②   | fetch_data          | missing_items                        | L1+L2+L4 全部原始数据             | 否  |
+| ③   | validate_financials | L1 三大报表                          | validation_result + warnings      | 否  |
+| ④   | compute_metrics     | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP | 否  |
+| ⑤   | route               | analysis_type                        | 无                                | 否  |
+| ⑥   | fa_analyze          | 四维度+灯+杜邦+同业+异常+warnings    | financial_analysis                | 是  |
+| ⑦   | fa_report           | financial_analysis                   | financial_report                  | 是  |
+| ⑧   | ia_analyze          | 行业+DCF+估值+GARP+风险              | investment_analysis               | 是  |
+| ⑨   | ia_report           | investment_analysis                  | investment_report                 | 是  |
+| ⑩   | merge               | financial_report + investment_report | final_report                      | 是  |
+| ⑪   | generate_file       | final_report                         | file_path                         | 否  |
+| ⑫   | output              | file_path                            | 无                                | 否  |
 
 ---
 
@@ -140,18 +146,21 @@ stateDiagram-v2
     CHECK_CACHE --> COMPUTE: HIT（报表持久化命中 + 行情未过期）
     CHECK_CACHE --> FETCH: MISS（首次分析）
 
-    FETCH --> COMPUTE: 拉取成功
-    FETCH --> COMPUTE: 部分失败(标记N/A)
+    FETCH --> VALIDATE: 拉取成功
+    FETCH --> VALIDATE: 部分失败(标记N/A)
+    VALIDATE --> COMPUTE: PASS（硬等式通过）
+    VALIDATE --> [*]: FAIL（硬等式失败,终止）
     COMPUTE --> READY: 计算完成
     READY --> [*]
 ```
 
 两条执行路径：
 
-| 路径 | 触发条件                    | 经过节点                                      | API 调用         | 耗时 |
-| ---- | --------------------------- | --------------------------------------------- | ---------------- | ---- |
-| HIT  | 报表持久化命中 + 行情未过期 | check_cache → compute → Route → Agent         | 0（数据）+ LLM   | ~2s  |
-| MISS | 首次分析                    | check_cache → fetch → compute → Route → Agent | 5-8（数据）+ LLM | ~8s  |
+| 路径 | 触发条件                    | 经过节点                                                 | API 调用         | 耗时 |
+| ---- | --------------------------- | -------------------------------------------------------- | ---------------- | ---- |
+| HIT  | 报表持久化命中 + 行情未过期 | check_cache → validate → compute → Route → Agent         | 0（数据）+ LLM   | ~2s  |
+| MISS | 首次分析                    | check_cache → fetch → validate → compute → Route → Agent | 5-8（数据）+ LLM | ~8s  |
+| FAIL | 硬等式校验失败              | check_cache → [fetch →] validate → END                   | 0-5（数据）      | ~1s  |
 
 > 注：两条路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
 
@@ -236,6 +245,9 @@ class AnalysisState(TypedDict):
     analysis_type: Literal["financial", "investment", "comprehensive"]
     peer_codes: Optional[list[str]]  # 用户手动指定的对标股票，None 则自动选取
 
+    # ── Cache ──
+    cache_result: str  # HIT | MISS
+
     # ── Layer 1: 基础公共 ──
     balance_sheet: pd.DataFrame
     income_statement: pd.DataFrame
@@ -250,6 +262,10 @@ class AnalysisState(TypedDict):
     # annual_report_text: Optional[str]
     # research_reports: Optional[list[dict]]
     # industry_search: Optional[list[dict]]
+
+    # ── Validation ──
+    validation_result: str  # PASS | FAIL
+    validation_warnings: list[str]  # 软规则告警（LLM 报告可引用）
 
     # ── Layer 3: 衍生计算 ──
     solvency_metrics: dict
@@ -286,13 +302,17 @@ class AnalysisState(TypedDict):
 ```python
 # 数据准备子图条件边
 def after_check_cache(state):
-    # HIT（报表持久化命中 + 行情未过期）→ 重算 L3
-    # MISS → 完整拉取 + 持久化报表 → 算 L3
-    # 两条路径都走 Route → Agent（报告不缓存，LLM 每次重新生成）
     result = state["cache_result"]
     if result == "HIT":
-        return "compute_metrics"  # 报表已有，只重算 L3
+        return "validate_financials"  # 报表已有，先校验再算
     return "fetch_data"
+
+# 勾稽校验条件边
+def after_validate(state):
+    result = state["validation_result"]
+    if result == "FAIL":
+        return "__end__"  # 硬等式失败，短路终止
+    return "compute_metrics"
 
 # 主图路由
 def route_to_agent(state):

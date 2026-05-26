@@ -27,6 +27,13 @@
 10. 作为一个投资者，如果部分非必需数据（同业、搜索）拉取失败，系统能继续分析并在报告中标注数据缺失
 11. 作为一个投资者，如果三大报表等必需数据拉取失败，系统能给出明确错误提示而非生成一份错误报告
 
+### 数据校验
+
+12. 作为一个投资者，系统在计算指标之前能自动校验三张报表的勾稽关系，而非直接基于可能不一致的数据生成报告
+13. 作为一个投资者，如果资产负债表试算不平衡（资产 ≠ 负债 + 权益），系统能明确告知数据有问题并拒绝生成报告
+14. 作为一个投资者，如果利润表/现金流表/留存收益勾稽存在偏差，系统在报告中标注数据偏差提示，而非静默忽略
+15. 作为一个投资者，校验告警信息（如"利润表存在较大营业外收支"）能在 LLM 分析中被引用，帮助理解数据偏差的财务含义
+
 ### 财务分析
 
 12. 作为一个投资者，我能在报告中看到偿债能力的 5 个指标（资产负债率、流动比率、速动比率、利息覆盖倍数、净债务/EBITDA）及其红黄绿灯评判
@@ -62,12 +69,12 @@
 
 ## Implementation Decisions
 
-### Architecture: 4-Layer, 11 Nodes
+### Architecture: 4-Layer, 12 Nodes
 
 系统采用 4 层架构，MVP 去掉 MCP 层：
 
 - **L1 前端**：Gradio 5.x Blocks API，表单输入 + 报告展示 + 文件下载
-- **L2 Agent**：LangGraph，11 个节点 + 2 个 Agent 子图 + 数据准备子图 + 条件路由
+- **L2 Agent**：LangGraph，12 个节点 + 2 个 Agent 子图 + 数据准备子图 + 条件路由
 - **L3 数据**：pandas + SQLite，AKShare 数据拉取 + 全部计算 + 缓存
 - **L4 LLM**：DeepSeek-V3.2（开发）/ GPT-4o（Demo），LiteLLM 路由
 
@@ -76,7 +83,8 @@
 ```
 START(用户输入 stock_code + analysis_type)
   → check_cache
-  → [HIT: compute_metrics] / [MISS: fetch_data → compute_metrics]
+  → [HIT: validate_financials] / [MISS: fetch_data → validate_financials]
+  → [PASS: compute_metrics] / [FAIL: END]
   → route(按 analysis_type)
   → financial: fa_analyze → fa_report
   → investment: ia_analyze → ia_report
@@ -85,7 +93,7 @@ START(用户输入 stock_code + analysis_type)
   → output(Gradio)
 ```
 
-数据准备子图有两条路径：MISS（首次分析，拉取+持久化+计算）和 HIT（报表已有，只重算 L3 衍生指标）。两条路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
+数据准备子图有三条路径：MISS（首次分析，拉取+持久化+校验+计算）、HIT（报表已有，校验+计算）和 FAIL（硬等式校验失败，终止）。PASS 路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
 
 ### State Definition (TypedDict)
 
@@ -94,8 +102,10 @@ LangGraph State 使用 TypedDict（非 Pydantic BaseModel），因为 LangGraph 
 关键字段：
 
 - 输入：stock_code, analysis_type, peer_codes（可选）
+- Cache：cache_result（HIT | MISS）
 - Layer 1 基础数据：三大报表（DataFrame）、行情、行业归属
 - Layer 2 预计算指标：financial_indicators
+- Validation：validation_result（PASS | FAIL）、validation_warnings（软规则告警）
 - Layer 3 衍生计算：四维度 metrics dict、杜邦树、红黄绿灯、同业对比、相对估值、GARP 结果
 - Agent 输出：financial_analysis, financial_report, investment_analysis, investment_report, final_report, file_path
 
@@ -188,12 +198,14 @@ src/finance_agent/
 ├── nodes/
 │   ├── cache.py          # check_cache 节点
 │   ├── fetch.py          # fetch_data 节点（编排 AKShare 调用）
+│   ├── validate.py       # validate_financials 节点（编排勾稽校验）
 │   ├── compute.py        # compute_metrics 节点（编排 metrics/ 计算）
 │   ├── fa.py             # FA 子图：fa_analyze + fa_report
 │   ├── ia.py             # IA 子图：ia_analyze + ia_report
 │   ├── merge.py          # merge 节点（拼接 + LLM 摘要）
 │   └── output.py         # generate_file 节点（Word/PPT）
 ├── metrics/
+│   ├── validate.py       # 勾稽校验 4 规则（纯函数）
 │   ├── solvency.py       # 偿债 5 指标
 │   ├── profitability.py  # 盈利 5 指标
 │   ├── efficiency.py     # 运营 4 指标
@@ -217,10 +229,12 @@ src/finance_agent/
 
 ### Key Module Interfaces
 
+- **metrics/validate.py**: 纯函数，`(df_balance, df_income, df_cashflow) → (result, warnings)`。4 条勾稽规则，硬等式失败返回 "FAIL"，软等式失败追加 warning。无 I/O、无 LLM。
 - **metrics/\*.py**: 纯函数，`(df_balance, df_income, df_cashflow, ...) → dict`。无 I/O、无 LLM、无外部调用。
 - **data/akshare_client.py**: `(stock_code, years) → dict of DataFrames`。封装所有 AKShare API 调用、重试、错误处理。
 - **data/cache.py**: `get(key) → Optional[data]` + `set(key, data, ttl) → None`。封装 SQLite 读写和 TTL 过期。
 - **nodes/fetch.py**: 读 cache + 调 akshare_client + 写 State。编排数据拉取的 Step 1 和 Step 2。
+- **nodes/validate.py**: 读 State 原始报表 + 调 metrics/validate.py + 写 State（validation_result + warnings）。
 - **nodes/compute.py**: 读 State 原始数据 + 调 metrics/ 所有函数 + 写 State。
 
 ## Testing Decisions
@@ -233,7 +247,7 @@ src/finance_agent/
 
 ### Modules to Test
 
-**metrics/ — 重点测试**（全部 8 个文件）：
+**metrics/ — 重点测试**（全部 9 个文件）：
 
 每个指标计算函数用已知财报数据验证。原因：
 
@@ -243,6 +257,7 @@ src/finance_agent/
 
 测试覆盖范围：
 
+- validate.py: 4 条勾稽规则 + 硬/软分级 + 阈值边界（试算平衡通过/失败、利润表勾稽偏差在阈值内/外）
 - solvency.py: 5 个指标计算 + 阈值边界
 - profitability.py: 5 个指标计算 + 阈值边界
 - efficiency.py: 4 个指标计算 + 行业均值倍数阈值
@@ -305,3 +320,4 @@ src/finance_agent/
 - ADR-0002: Agent 节点纯 LLM 消费者
 - ADR-0003: 双重阈值红黄绿灯评分模型
 - ADR-0004: 四层持久化策略
+- ADR-0005: 勾稽校验（compute 前置数据质量门卫）
