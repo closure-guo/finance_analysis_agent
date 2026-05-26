@@ -1,0 +1,789 @@
+{
+  "stock": "600519",
+  "solvency": {
+    "资产负债率": {
+      "2025": 16.415362192247624,
+      "2024": 19.044755657916053,
+      "2023": 17.984324139179147,
+      "2022": 19.474492712829385,
+      "2021": 22.8126739768969
+    },
+    "流动比率": {
+      "2025": 5.090026917619075,
+      "2024": 4.454078781593729,
+      "2023": 4.623892443179299,
+      "2022": 4.414725020115733,
+      "2021": 3.81194263258774
+    },
+    "速动比率": {
+      "2025": 3.851832372104694,
+      "2024": 3.492522865076911,
+      "2023": 3.670351116817004,
+      "2022": 3.623451300893101,
+      "2021": 3.235324942067849
+    },
+    "利息覆盖倍数": {
+      "2025": 3994.578149051891,
+      "2024": 8266.42423952024,
+      "2023": 8212.137058130507,
+      "2022": 7295.352165323722,
+      "2021": 5509.4080064031605
+    },
+    "净债务/EBITDA": {
+      "2025": null,
+      "2024": null,
+      "2023": null,
+      "2022": null,
+      "2021": null
+    }
+  },
+  "profitability": {
+    "毛利率": {
+      "2025": 91.17955168348007,
+      "2024": 91.93121663606456,
+      "2023": 91.96493724135799,
+      "2022": 91.86665485641154,
+      "2021": 91.5402912603551
+    },
+    "净利率": {
+      "2025": 50.52788651554344,
+      "2024": 52.273359367779534,
+      "2023": 52.488038517900485,
+      "2022": 52.68019521281276,
+      "2021": 52.47240672964729
+    },
+    "ROE": {
+      "2025": 33.59213083222213,
+      "2024": 36.91345091917804,
+      "2023": 34.66095862204306,
+      "2022": 31.90038647512643,
+      "2021": 28.29063531953681
+    },
+    "ROA": {
+      "2025": 28.077860888019185,
+      "2024": 29.883374386715815,
+      "2023": 28.427419473708078,
+      "2022": 25.68794803566352,
+      "2021": 21.836784918098033
+    },
+    "ROIC": {
+      "2025": 33.594694600414975,
+      "2024": 36.90084710187687,
+      "2023": 34.6563389852935,
+      "2022": 31.887745065859736,
+      "2021": 28.2807921055745
+    }
+  },
+  "efficiency": {
+    "存货周转率": {
+      "2025": 0.0804,
+      "2024": 0.1455,
+      "2023": 0.2231,
+      "2022": 0.3011,
+      "2021": 0.0776
+    },
+    "应收账款周转率": {
+      "2025": null,
+      "2024": null,
+      "2023": null,
+      "2022": null,
+      "2021": null
+    },
+    "总资产周转率": {
+      "2025": 0.5556903885022352,
+      "2024": 0.5716750319501266,
+      "2023": 0.5415980531262033,
+      "2022": 0.4876205931259676,
+      "2021": 0.4161574869360831
+    },
+    "应付账款周转率": {
+      "2025": 3.716278776001346,
+      "2024": 3.923073422399162,
+      "2023": 3.836703625605886,
+      "2022": 4.190993992045051,
+      "2021": 4.469714680106692
+    }
+  },
+  "cashflow": {
+    "经营现金流/净利润": {
+      "2025": 0.7211577861097138,
+      "2024": 1.0350251711923593,
+      "2023": 0.8590296640178982,
+      "2022": 0.5613462646815852,
+      "2021": 1.1491038616718467
+    },
+    "FCF": {
+      "2025": 58394610072.94,
+      "2024": 87784980114.87,
+      "2023": 63973491832.299995,
+      "2022": 31392049413.489998,
+      "2021": 60619891615.36
+    },
+    "资本支出/折旧": {
+      "2025": 1.7230555691541325,
+      "2024": 2.812739165362058,
+      "2023": 1.6717014414271072,
+      "2022": 3.8223709441514253,
+      "2021": null
+    },
+    "现金流覆盖比率": {
+      "2025": 18.50079445941885,
+      "2024": 18.704770743749112,
+      "2023": 24.302524432070033,
+      "2022": 5.902348121515784,
+      "2021": 17.713127589748623
+    },
+    "FCF收益率": {
+      "2025": 0.3458615632559878,
+      "2024": 0.5136653924000963,
+      "2023": 0.4331500462382122,
+      "2022": 0.25295800912664285,
+      "2021": 0.5708616933891041
+    },
+    "留存现金流比率": {
+      "2025": -0.15150581982582229,
+      "2024": 0.19176347012782965,
+      "2023": 0.0815760552194071,
+      "2022": -0.8275390509167108,
+      "2021": 0.5632453451523254
+    }
+  },
+  "dupont": {
+    "L1": {
+      "2025": {
+        "ROE": 0.33592130832222133,
+        "净利率": 0.5052788651554344,
+        "总资产周转率": 0.5556903885022352,
+        "权益乘数": 1.196392095758117
+      },
+      "2024": {
+        "ROE": 0.3691345091917804,
+        "净利率": 0.5227335936777954,
+        "总资产周转率": 0.5716750319501266,
+        "权益乘数": 1.2352504252527565
+      },
+      "2023": {
+        "ROE": 0.34660958622043053,
+        "净利率": 0.5248803851790048,
+        "总资产周转率": 0.5415980531262033,
+        "权益乘数": 1.219279106712456
+      },
+      "2022": {
+        "ROE": 0.3190038647512643,
+        "净利率": 0.5268019521281276,
+        "总资产周转率": 0.4876205931259676,
+        "权益乘数": 1.2418425337375314
+      },
+      "2021": {
+        "ROE": 0.28290635319536805,
+        "净利率": 0.5247240672964729,
+        "总资产周转率": 0.4161574869360831,
+        "权益乘数": 1.2955494788104045
+      }
+    },
+    "L2": {
+      "2025": {
+        "毛利率": 0.9117955168348006,
+        "费用率": 0.08853708374796819
+      },
+      "2024": {
+        "毛利率": 0.9193121663606456,
+        "费用率": 0.08018240902238294
+      },
+      "2023": {
+        "毛利率": 0.9196493724135798,
+        "费用率": 0.08629941025656265
+      },
+      "2022": {
+        "毛利率": 0.9186665485641154,
+        "费用率": 0.08906776013802514
+      },
+      "2021": {
+        "毛利率": 0.9154029126035511,
+        "费用率": 0.09713747307890037
+      }
+    },
+    "L3": {
+      "2025": {
+        "销售费用率": 0.04296127173097437,
+        "管理费用率": 0.049278341415446625,
+        "研发费用率": 0.0011260032169773196,
+        "财务费用率": -0.004828532615430134
+      },
+      "2024": {
+        "销售费用率": 0.03299782347879281,
+        "管理费用率": 0.05450963294023137,
+        "研发费用率": 0.0012778031368867874,
+        "财务费用率": -0.008602850533528031
+      },
+      "2023": {
+        "销售费用率": 0.03147471135263061,
+        "管理费用率": 0.06587549442439318,
+        "研发费用率": 0.0010655293640929409,
+        "财务费用率": -0.012116324884554084
+      },
+      "2022": {
+        "销售费用率": 0.026573153444084462,
+        "管理费用率": 0.07262048685724533,
+        "研发费用率": 0.0010893299805306614,
+        "财务费用率": -0.011215210143835313
+      },
+      "2021": {
+        "销售费用率": 0.02577799645181377,
+        "管理费用率": 0.07957681272301638,
+        "研发费用率": 0.0005831351661659129,
+        "财务费用率": -0.008800471262095677
+      }
+    }
+  },
+  "lights": {
+    "solvency": {
+      "资产负债率": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "流动比率": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "速动比率": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "利息覆盖倍数": {
+        "2025": {
+          "absolute": "green",
+          "change": "red",
+          "final": "red"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "净债务/EBITDA": {
+        "2025": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2024": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2023": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2021": {
+          "absolute": "red",
+          "change": null,
+          "final": "red"
+        }
+      }
+    },
+    "profitability": {
+      "毛利率": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "净利率": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "ROE": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "ROA": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "ROIC": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      }
+    },
+    "efficiency": {
+      "存货周转率": {
+        "2025": {
+          "absolute": "red",
+          "change": "yellow",
+          "final": "red"
+        },
+        "2024": {
+          "absolute": "red",
+          "change": "yellow",
+          "final": "red"
+        },
+        "2023": {
+          "absolute": "red",
+          "change": "yellow",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2021": {
+          "absolute": "red",
+          "change": null,
+          "final": "red"
+        }
+      },
+      "应收账款周转率": {
+        "2025": {
+          "absolute": null,
+          "change": null,
+          "final": null
+        },
+        "2024": {
+          "absolute": null,
+          "change": null,
+          "final": null
+        },
+        "2023": {
+          "absolute": null,
+          "change": null,
+          "final": null
+        },
+        "2022": {
+          "absolute": null,
+          "change": null,
+          "final": null
+        },
+        "2021": {
+          "absolute": null,
+          "change": null,
+          "final": null
+        }
+      },
+      "总资产周转率": {
+        "2025": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2024": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2023": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2022": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2021": {
+          "absolute": "yellow",
+          "change": null,
+          "final": "yellow"
+        }
+      },
+      "应付账款周转率": {
+        "2025": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2024": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2023": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2022": {
+          "absolute": "yellow",
+          "change": "green",
+          "final": "yellow"
+        },
+        "2021": {
+          "absolute": "yellow",
+          "change": null,
+          "final": "yellow"
+        }
+      }
+    },
+    "cashflow": {
+      "经营现金流/净利润": {
+        "2025": {
+          "absolute": "yellow",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2023": {
+          "absolute": "yellow",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "yellow",
+          "change": "red",
+          "final": "red"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "FCF": {
+        "2025": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "资本支出/折旧": {
+        "2025": {
+          "absolute": "yellow",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2024": {
+          "absolute": "yellow",
+          "change": "red",
+          "final": "red"
+        },
+        "2023": {
+          "absolute": "yellow",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        },
+        "2021": {
+          "absolute": null,
+          "change": null,
+          "final": null
+        }
+      },
+      "现金流覆盖比率": {
+        "2025": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "red",
+          "final": "red"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "FCF收益率": {
+        "2025": {
+          "absolute": "green",
+          "change": "yellow",
+          "final": "yellow"
+        },
+        "2024": {
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
+        },
+        "2023": {
+          "absolute": "green",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "green",
+          "change": "red",
+          "final": "red"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      },
+      "留存现金流比率": {
+        "2025": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2024": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2023": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2022": {
+          "absolute": "red",
+          "change": "red",
+          "final": "red"
+        },
+        "2021": {
+          "absolute": "green",
+          "change": null,
+          "final": "green"
+        }
+      }
+    }
+  }
+}

@@ -1,14 +1,13 @@
 """TDD tests for metrics/efficiency.py — 运营效率 4 指标。
 
 指标：
-1. 存货周转率（次）— AKShare 预计算
-2. 应收账款周转率（次）— AKShare 预计算
-3. 总资产周转率（次）— AKShare 预计算
+1. 存货周转率（次）— AKShare 预计算（年报）
+2. 应收账款周转率（次）— 自算 = 营业收入 / 应收账款平均余额
+3. 总资产周转率（次）— 自算 = 营业收入 / 资产总计
 4. 应付账款周转率（次）— 自算 = 营业成本 / 应付账款
 
-注意：运营效率阈值使用行业均值倍数（ADR-0003），但计算本身不需要行业数据。
-
 fixture 手算（2024）：
+- 应收账款周转率 = 营业收入(1000) / ((应收账款(40)+上年应收(35))/2) = 1000/37.5 = 26.67
 - 应付账款周转率 = 营业成本(600) / 应付账款(60) = 10
 - 总资产周转率 = 营业收入(1000) / 资产总计(1000) = 1.0
 """
@@ -49,6 +48,21 @@ class TestCalcEfficiency:
     def test_ap_turnover_2023(self, balance_sheet, income_statement, indicators):
         result = calc_efficiency(balance_sheet, income_statement, indicators)
         assert isclose(result["应付账款周转率"]["2023"], 550 / 50, rel_tol=1e-2)
+
+    def test_ar_turnover_2024(self, balance_sheet, income_statement, indicators):
+        """应收账款周转率 = 营业收入 / 应收账款平均余额 = 1000 / ((40+35)/2) = 26.67"""
+        result = calc_efficiency(balance_sheet, income_statement, indicators)
+        assert isclose(result["应收账款周转率"]["2024"], 1000 / 37.5, rel_tol=1e-2)
+
+    def test_ar_turnover_2023(self, balance_sheet, income_statement, indicators):
+        """应收账款周转率 = 营业收入 / 应收账款平均余额 = 900 / ((35+30)/2) = 27.69"""
+        result = calc_efficiency(balance_sheet, income_statement, indicators)
+        assert isclose(result["应收账款周转率"]["2023"], 900 / 32.5, rel_tol=1e-2)
+
+    def test_ar_turnover_oldest_year(self, balance_sheet, income_statement, indicators):
+        """最老年份无上年数据，用当年应收账款直接算 = 800 / 30 = 26.67"""
+        result = calc_efficiency(balance_sheet, income_statement, indicators)
+        assert isclose(result["应收账款周转率"]["2022"], 800 / 30.0, rel_tol=1e-2)
 
     def test_zero_accounts_payable(self):
         import pandas as pd

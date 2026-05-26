@@ -1,8 +1,8 @@
 """运营效率 4 指标计算。
 
 指标：
-1. 存货周转率（次）— AKShare 预计算
-2. 应收账款周转率（次）— AKShare 预计算
+1. 存货周转率（次）— AKShare 预计算（年报）
+2. 应收账款周转率（次）— 营业收入 / 应收账款平均余额（自算）
 3. 总资产周转率（次）— 营业收入 / 资产总计
 4. 应付账款周转率（次）— 营业成本 / 应付账款
 """
@@ -57,13 +57,16 @@ def calc_efficiency(
         else:
             result["存货周转率"][year] = None
 
-        # 应收账款周转率 — 从 indicators 提取
-        if ind_val is not None:
-            val = ind_val.get("应收账款周转率(次)")
-            if val is not None and not (isinstance(val, float) and pd.isna(val)):
-                result["应收账款周转率"][year] = float(val)
-            else:
-                result["应收账款周转率"][year] = None
+        # 应收账款周转率 — 自算: 营业收入 / 应收账款
+        # 数据最新在前：i+1 是上一年，用年初+年末均值
+        accounts_receivable = _safe(row_bs.get("应收账款"))
+        if i < len(years) - 1:
+            prev_ar = _safe(balance_sheet.iloc[i + 1].get("应收账款"))
+            avg_ar = (accounts_receivable + prev_ar) / 2
+        else:
+            avg_ar = accounts_receivable
+        if avg_ar != 0:
+            result["应收账款周转率"][year] = revenue / avg_ar
         else:
             result["应收账款周转率"][year] = None
 

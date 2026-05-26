@@ -75,9 +75,14 @@ class AKShareClient:
         return self._trim_years(df, years)
 
     def fetch_indicators(self, stock_code: str, start_year: str = "2020") -> pd.DataFrame:
-        return ak.stock_financial_analysis_indicator(
+        df = ak.stock_financial_analysis_indicator(
             symbol=stock_code, start_year=start_year
         )
+        # 只保留年报（日期以 12-31 结尾）
+        if not df.empty and "日期" in df.columns:
+            mask = df["日期"].astype(str).str.endswith("12-31")
+            df = df[mask].reset_index(drop=True)
+        return df
 
     def fetch_industry(self, stock_code: str) -> dict:
         df = ak.stock_individual_info_em(symbol=stock_code)
