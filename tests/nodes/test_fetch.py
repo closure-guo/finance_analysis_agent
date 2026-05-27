@@ -45,8 +45,8 @@ def _setup_client():
     mock.fetch_income_statement.return_value = _make_income()
     mock.fetch_cash_flow.return_value = _make_cashflow()
     mock.fetch_indicators.return_value = _make_indicators()
-    mock.fetch_industry.return_value = {"行业": "白酒"}
-    mock.fetch_stock_quote.return_value = {"最新价": 1800.0}
+    mock.fetch_industry.return_value = {"industry": "白酒", "name": "贵州茅台"}
+    mock.fetch_stock_quote.return_value = {"price": 1800.0, "name": "贵州茅台", "code": "600519"}
     return mock
 
 
@@ -61,8 +61,8 @@ class TestFetchDataBasic:
         assert result["income_statement"] is not None
         assert result["cash_flow_statement"] is not None
         assert result["financial_indicators"] is not None
-        assert result["industry_info"]["行业"] == "白酒"
-        assert result["stock_quote"]["最新价"] == 1800.0
+        assert result["industry_info"]["industry"] == "白酒"
+        assert result["stock_quote"]["price"] == 1800.0
 
     def test_writes_to_cache(self):
         mock_client = _setup_client()

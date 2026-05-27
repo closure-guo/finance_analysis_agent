@@ -18,6 +18,22 @@ import akshare as ak
 import pandas as pd
 
 
+# AKShare 返回中文列名，下游使用英文 key，在此做映射。
+_QUOTE_KEY_MAP = {
+    "名称": "name",
+    "代码": "code",
+    "最新价": "price",
+    "总市值": "market_cap",
+    "市盈率-动态": "PE",
+    "市净率": "PB",
+}
+
+_INDUSTRY_KEY_MAP = {
+    "公司名称": "name",
+    "行业": "industry",
+}
+
+
 def _add_prefix(code: str) -> str:
     """给股票代码加 sh/sz 前缀。"""
     if code.startswith(("sh", "sz")):
@@ -88,7 +104,8 @@ class AKShareClient:
         df = ak.stock_individual_info_em(symbol=stock_code)
         result = {}
         for _, row in df.iterrows():
-            result[row["item"]] = row["value"]
+            key = _INDUSTRY_KEY_MAP.get(row["item"], row["item"])
+            result[key] = row["value"]
         return result
 
     def fetch_stock_quote(self, stock_code: str) -> dict:
@@ -96,4 +113,5 @@ class AKShareClient:
         row = df[df["代码"] == stock_code]
         if row.empty:
             return {}
-        return row.iloc[0].to_dict()
+        raw = row.iloc[0].to_dict()
+        return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}

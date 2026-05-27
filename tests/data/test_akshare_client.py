@@ -139,12 +139,14 @@ class TestFetchIndustry:
     def test_returns_industry_info(self, mock_ak, client):
         mock_ak.stock_individual_info_em.return_value = pd.DataFrame(
             {
-                "item": ["行业", "总市值"],
-                "value": ["白酒", "2000000000000"],
+                "item": ["行业", "公司名称", "总市值"],
+                "value": ["白酒", "贵州茅台", "2000000000000"],
             }
         )
         result = client.fetch_industry("600519")
-        assert result["行业"] == "白酒"
+        assert result["industry"] == "白酒"
+        assert result["name"] == "贵州茅台"
+        assert "行业" not in result
 
 
 class TestFetchStockQuote:
@@ -160,8 +162,11 @@ class TestFetchStockQuote:
             }
         )
         result = client.fetch_stock_quote("600519")
-        assert result["最新价"] == 1800.0
-        assert result["市盈率-动态"] == 25.0
+        assert result["name"] == "贵州茅台"
+        assert result["code"] == "600519"
+        assert result["price"] == 1800.0
+        assert result["PE"] == 25.0
+        assert "名称" not in result
 
 
 class TestMinYearCheck:

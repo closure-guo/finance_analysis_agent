@@ -20,6 +20,7 @@ from math import isclose
 import pytest
 
 from finance_agent.metrics.traffic_light import (
+    _apply_safety_floor,
     assess_change_rate,
     assess_traffic_lights,
     compute_health_score,
@@ -287,3 +288,78 @@ class TestHealthScore:
         assert isclose(score["dimensions"]["efficiency"], 0.0)
         # 现金流: 2绿(2*4.167) + 2黄(2*2.083) + 2红(0) = 12.5
         assert isclose(score["dimensions"]["cashflow"], 12.5)
+
+
+# ── 安全地板规则 ──
+
+
+class TestSafetyFloor:
+    """绝对值远超优良阈值时，变化率灯色降为绿色。"""
+
+    def test_extreme_value_unchanged_by_decline(self):
+        """利息覆盖倍数 3994 vs 8266，下降 51.7%，但 3994 >> 60(6*10)→ 变化率覆盖为绿。"""
+        m = {
+            "solvency": {
+                "利息覆盖倍数": {"2024": 3994.0, "2023": 8266.0},
+            },
+            "profitability": {},
+            "efficiency": {},
+            "cashflow": {},
+        }
+        result = assess_traffic_lights(m)
+        assert result["solvency"]["利息覆盖倍数"]["2024"]["change"] == "green"
+        assert result["solvency"]["利息覆盖倍数"]["2024"]["final"] == "green"
+
+    def test_not_applied_near_threshold(self):
+        """利息覆盖倍数 7 vs 15，下降 53%，但 7 < 60 → 安全地板不生效。"""
+        m = {
+            "solvency": {
+                "利息覆盖倍数": {"2024": 7.0, "2023": 15.0},
+            },
+            "profitability": {},
+            "efficiency": {},
+            "cashflow": {},
+        }
+        result = assess_traffic_lights(m)
+        assert result["solvency"]["利息覆盖倍数"]["2024"]["change"] == "red"
+        assert result["solvency"]["利息覆盖倍数"]["2024"]["final"] == "red"
+
+    def test_not_applied_when_abs_yellow(self):
+        """绝对值黄色时，安全地板不介入。"""
+        m = {
+            "solvency": {
+                "利息覆盖倍数": {"2024": 4.0, "2023": 9.0},
+            },
+            "profitability": {},
+            "efficiency": {},
+            "cashflow": {},
+        }
+        result = assess_traffic_lights(m)
+        assert result["solvency"]["利息覆盖倍数"]["2024"]["absolute"] == "yellow"
+        # 变化率 (4-9)/9 = -55.6% → red
+        assert result["solvency"]["利息覆盖倍数"]["2024"]["change"] == "red"
+
+    def test_applied_for_lower_is_better(self):
+        """资产负债率 1.0% (green_thresh=40, 40/10=4, 1.0<=4) → 覆盖。"""
+        m = {
+            "solvency": {
+                "资产负债率": {"2024": 1.0, "2023": 3.0},
+            },
+            "profitability": {},
+            "efficiency": {},
+            "cashflow": {},
+        }
+        result = assess_traffic_lights(m)
+        assert result["solvency"]["资产负债率"]["2024"]["change"] == "green"
+        assert result["solvency"]["资产负债率"]["2024"]["final"] == "green"
+
+    def test_preserves_green_change(self):
+        """变化率已是绿色时直接返回。"""
+        result = _apply_safety_floor("利息覆盖倍数", 3994.0, "green", "green")
+        assert result == "green"
+
+    def test_zero_green_threshold_skip(self):
+        """净债务/EBITDA green_threshold=0，跳过安全地板。"""
+        # green_thresh=0, higher_is_better=False → 除以零风险，应跳过
+        result = _apply_safety_floor("净债务/EBITDA", -0.5, "green", "red")
+        assert result == "red"

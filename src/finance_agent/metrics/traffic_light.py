@@ -46,6 +46,8 @@ ABSOLUTE_THRESHOLDS: dict[str, tuple] = {
 
 LIGHT_ORDER = {"green": 0, "yellow": 1, "red": 2}
 
+SAFETY_FLOOR_MULTIPLIER = 10
+
 
 def assess_change_rate(change_rate: float) -> str:
     """评判同比变化率灯色。取绝对值：<20%🟢 / 20-50%🟡 / >50%🔴。"""
@@ -98,6 +100,34 @@ def _max_light(a: str | None, b: str | None) -> str | None:
     if b is None:
         return a
     return a if LIGHT_ORDER[a] >= LIGHT_ORDER[b] else b
+
+
+def _apply_safety_floor(
+    metric_name: str,
+    value: float,
+    abs_light: str | None,
+    change_light: str | None,
+) -> str | None:
+    """绝对值远超优良阈值时，将变化率灯色上限降为绿色。"""
+    if abs_light != "green" or change_light == "green":
+        return change_light
+
+    if metric_name not in ABSOLUTE_THRESHOLDS:
+        return change_light
+
+    green_thresh, _, higher_is_better = ABSOLUTE_THRESHOLDS[metric_name]
+
+    if green_thresh == 0:
+        return change_light
+
+    if higher_is_better:
+        if value >= green_thresh * SAFETY_FLOOR_MULTIPLIER:
+            return "green"
+    else:
+        if value <= green_thresh / SAFETY_FLOOR_MULTIPLIER:
+            return "green"
+
+    return change_light
 
 
 def assess_traffic_lights(
@@ -156,6 +186,8 @@ def assess_traffic_lights(
                         change_light = None
                 else:
                     change_light = None
+
+                change_light = _apply_safety_floor(metric_name, val, abs_light, change_light)
 
                 final_light = _max_light(abs_light, change_light)
 

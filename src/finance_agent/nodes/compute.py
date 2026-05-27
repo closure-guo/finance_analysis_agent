@@ -74,6 +74,7 @@ def compute_metrics(state: dict) -> dict:
     result["garp_result"] = _try_garp(quote, profitability, solvency, ind, latest_year)
 
     # ── 同业对比（如果有 peer 数据）──
+    # TODO(Issue #4): peer_comparison 目前仅是标志位，需添加同业指标格式化器注入 LLM context
     if peer_financials is not None:
         result["peer_comparison"] = {"available": True}
 
