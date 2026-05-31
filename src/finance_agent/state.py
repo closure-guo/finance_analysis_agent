@@ -45,3 +45,4 @@ class AnalysisState(TypedDict, total=False):
     investment_report: Optional[str]
     final_report: Optional[str]
     file_path: Optional[str]
+    file_paths: Optional[dict]

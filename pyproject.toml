@@ -11,6 +11,8 @@ dependencies = [
     "litellm>=1.0.0",
     "akshare>=1.18.63",
     "pyarrow>=24.0.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
 ]
 
 [tool.uv]

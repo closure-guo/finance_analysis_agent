@@ -10,7 +10,7 @@ from finance_agent.nodes.fa import fa_analyze
 from finance_agent.nodes.ia import ia_analyze
 from finance_agent.nodes.merge import merge_reports
 from finance_agent.nodes.output import generate_file
-from finance_agent.routing import after_check_cache, route_to_agent, after_agent
+from finance_agent.routing import after_check_cache, route_to_agent
 
 
 def build_graph() -> StateGraph:
@@ -42,9 +42,9 @@ def build_graph() -> StateGraph:
     graph.add_node("route", route_node)
     graph.add_conditional_edges("route", route_to_agent)
 
-    # Agent → 后处理
-    graph.add_conditional_edges("fa_analyze", after_agent)
-    graph.add_conditional_edges("ia_analyze", after_agent)
+    # Agent → merge（普通边，LangGraph 并行分支完成后只触发 merge 一次）
+    graph.add_edge("fa_analyze", "merge")
+    graph.add_edge("ia_analyze", "merge")
     graph.add_edge("merge", "generate_file")
     graph.add_edge("generate_file", END)
 

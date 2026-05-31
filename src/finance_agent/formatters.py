@@ -128,6 +128,91 @@ def format_growth_rates(growth_rates: dict) -> str:
     return "\n".join(lines)
 
 
+def format_valuation_section(
+    relative_valuation: dict | None,
+    garp_result: dict | None,
+    stock_quote: dict,
+) -> str:
+    """格式化相对估值 + GARP 为 LLM 可读 Markdown。"""
+    lines = []
+
+    # 股票行情头部
+    pe = stock_quote.get("PE") or stock_quote.get("pe")
+    pb = stock_quote.get("PB") or stock_quote.get("pb")
+    industry_pe = stock_quote.get("industry_avg_PE")
+    price = stock_quote.get("price")
+    market_cap = stock_quote.get("market_cap")
+
+    lines.append("### 当前估值")
+    if price:
+        lines.append(f"- 最新价: {price}")
+    if market_cap:
+        lines.append(f"- 总市值: {market_cap}亿")
+    if pe is not None:
+        lines.append(f"- PE(TTM): {pe:.2f}")
+    if pb is not None:
+        lines.append(f"- PB: {pb:.2f}")
+    if industry_pe is not None:
+        lines.append(f"- 行业平均PE: {industry_pe:.2f}")
+
+    # 相对估值
+    if relative_valuation:
+        lines.append("\n### 相对估值（目标公司 vs 同业均值）")
+        for metric in ("PE", "PB"):
+            rv = relative_valuation.get(metric)
+            if not rv:
+                continue
+            target = rv.get("target")
+            avg = rv.get("peer_avg")
+            lo = rv.get("peer_min")
+            hi = rv.get("peer_max")
+            conclusion = rv.get("conclusion", "N/A")
+
+            label_map = {
+                "undervalued": "低估",
+                "fair": "合理",
+                "overvalued": "高估",
+                "N/A": "N/A",
+            }
+            label = label_map.get(conclusion, conclusion)
+
+            parts = [f"- **{metric}**"]
+            if target is not None:
+                parts.append(f"目标: {target:.2f}")
+            if avg is not None:
+                parts.append(f"同业均值: {avg:.2f}")
+            if lo is not None and hi is not None:
+                parts.append(f"同业区间: {lo:.2f}-{hi:.2f}")
+            parts.append(f"结论: {label}")
+            lines.append(" | ".join(parts))
+    else:
+        lines.append("\n### 相对估值")
+        lines.append("无同业对比数据")
+
+    # GARP 结果
+    if garp_result:
+        lines.append("\n### GARP 筛选结果")
+        passed = garp_result.get("pass", False)
+        status = "✅ 通过" if passed else "❌ 未通过"
+        lines.append(f"- 综合结果: {status}")
+        failures = garp_result.get("failures", [])
+        if failures:
+            lines.append("- 未满足条件:")
+            for f in failures:
+                lines.append(f"  - {f}")
+        details = garp_result.get("details", {})
+        if details:
+            lines.append("- 指标详情:")
+            for k, v in details.items():
+                val = f"{v:.2f}" if isinstance(v, float) else (str(v) if v is not None else "N/A")
+                lines.append(f"  - {k}: {val}")
+    else:
+        lines.append("\n### GARP 筛选结果")
+        lines.append("GARP 数据不可用")
+
+    return "\n".join(lines)
+
+
 def _fmt_val(v: Any) -> str:
     if v is None:
         return "N/A"
