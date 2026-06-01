@@ -12,6 +12,10 @@ class AnalysisState(TypedDict, total=False):
     # ── Cache ──
     cache_result: str  # HIT | MISS
 
+    # ── Validation ──
+    validation_result: str  # PASS | FAIL
+    validation_warnings: list[str]
+
     # ── Layer 1: 基础公共数据 ──
     balance_sheet: pd.DataFrame
     income_statement: pd.DataFrame

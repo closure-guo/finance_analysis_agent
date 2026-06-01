@@ -10,7 +10,8 @@ from finance_agent.nodes.fa import fa_analyze
 from finance_agent.nodes.ia import ia_analyze
 from finance_agent.nodes.merge import merge_reports
 from finance_agent.nodes.output import generate_file
-from finance_agent.routing import after_check_cache, route_to_agent, after_agent
+from finance_agent.nodes.validate import validate_node
+from finance_agent.routing import after_check_cache, route_to_agent, after_agent, after_validate
 
 
 def build_graph() -> StateGraph:
@@ -19,6 +20,7 @@ def build_graph() -> StateGraph:
     # 数据准备子图节点
     graph.add_node("check_cache", check_cache)
     graph.add_node("fetch_data", fetch_data)
+    graph.add_node("validate_financials", validate_node)
     graph.add_node("compute_metrics", compute_metrics)
 
     # Agent 子图节点
@@ -32,7 +34,8 @@ def build_graph() -> StateGraph:
     # 边：数据准备
     graph.add_edge(START, "check_cache")
     graph.add_conditional_edges("check_cache", after_check_cache)
-    graph.add_edge("fetch_data", "compute_metrics")
+    graph.add_edge("fetch_data", "validate_financials")
+    graph.add_conditional_edges("validate_financials", after_validate)
     graph.add_edge("compute_metrics", "route")
 
     # 虚拟路由节点（fan-out 到 Agent 子图）
