@@ -47,7 +47,7 @@ def calc_efficiency(
         # 存货周转率 — 从 indicators 提取
         inv_turnover = row_is.get("存货周转率")
         # 从 indicators 取（如果 balance sheet 没有）
-        ind_val = indicators.iloc[i] if i < len(indicators) else None
+        ind_val = indicators.iloc[i] if indicators is not None and i < len(indicators) else None
         if ind_val is not None:
             val = ind_val.get("存货周转率(次)")
             if val is not None and not (isinstance(val, float) and pd.isna(val)):

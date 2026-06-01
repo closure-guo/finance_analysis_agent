@@ -12,6 +12,9 @@ from finance_agent.export.pptx_exporter import markdown_to_pptx
 def generate_file(state: dict) -> dict:
     final_report = state.get("final_report", "")
     if not final_report:
+        # Single-agent mode fallback (investment/financial without merge)
+        final_report = state.get("investment_report", "") or state.get("financial_report", "")
+    if not final_report:
         return {"file_path": None, "file_paths": None}
 
     stock_code = state.get("stock_code", "unknown")
@@ -44,6 +47,7 @@ def generate_file(state: dict) -> dict:
     return {
         "file_path": docx_path,
         "file_paths": file_paths,
+        "final_report": final_report,
     }
 
 
