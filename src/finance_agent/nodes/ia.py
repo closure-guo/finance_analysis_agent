@@ -53,6 +53,7 @@ def _build_context(state: dict) -> str:
         state.get("relative_valuation"),
         state.get("garp_result"),
         state.get("stock_quote") or {},
+        state.get("industry_pe"),
     )
     sections.append(valuation)
 

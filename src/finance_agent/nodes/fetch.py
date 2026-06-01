@@ -81,6 +81,13 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
         logger.warning("行情数据拉取失败: %s", e)
         result["stock_quote"] = {}
 
+    try:
+        industry_pe = ak.fetch_industry_pe(code)
+        if industry_pe:
+            result["industry_pe"] = industry_pe
+    except Exception as e:
+        logger.warning("行业PE拉取失败: %s", e)
+
     # Step 2: 同业数据（依赖行业归属）
     try:
         peers = _fetch_peers(ak, code, state, result.get("industry_info"))

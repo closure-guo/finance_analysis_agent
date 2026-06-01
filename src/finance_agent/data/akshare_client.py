@@ -25,7 +25,18 @@ _QUOTE_KEY_MAP = {
     "最新价": "price",
     "总市值": "market_cap",
     "市盈率-动态": "PE",
+    "市盈率-静态": "PE_static",
+    "市盈率-TTM": "PE_ttm",
     "市净率": "PB",
+}
+
+# 行业 PE 接口列名映射
+_INDUSTRY_PE_KEY_MAP = {
+    "行业名称": "industry_name",
+    "静态市盈率-算术平均": "avg_pe",
+    "静态市盈率-中位数": "median_pe",
+    "静态市盈率-加权平均": "weighted_pe",
+    "公司家数": "company_count",
 }
 
 _INDUSTRY_KEY_MAP = {
@@ -115,3 +126,47 @@ class AKShareClient:
             return {}
         raw = row.iloc[0].to_dict()
         return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
+
+    def fetch_industry_pe(self, stock_code: str) -> dict | None:
+        """获取个股所属行业的平均静态PE。
+
+        通过 stock_individual_info_em 获取行业名称，再匹配
+        stock_industry_pe_ratio_cninfo 的行业PE数据。
+        如果任一环节失败返回 None，避免阻塞主流程。
+        """
+        try:
+            # 1. 获取行业名称
+            info_df = ak.stock_individual_info_em(symbol=stock_code)
+            industry_name = None
+            for _, row in info_df.iterrows():
+                if row["item"] == "行业":
+                    industry_name = row["value"]
+                    break
+            if not industry_name:
+                return None
+
+            # 2. 获取全部行业PE（证监会行业分类）
+            from datetime import datetime
+            date_str = datetime.now().strftime("%Y%m%d")
+            pe_df = ak.stock_industry_pe_ratio_cninfo(
+                symbol="证监会行业分类", date=date_str
+            )
+            # 列名映射
+            pe_df = pe_df.rename(columns=_INDUSTRY_PE_KEY_MAP)
+
+            # 3. 模糊匹配行业名称
+            matched = pe_df[pe_df["industry_name"].str.contains(industry_name, na=False)]
+            if matched.empty:
+                return None
+
+            row = matched.iloc[0]
+            return {
+                "industry_name": row.get("industry_name"),
+                "avg_pe": row.get("avg_pe"),
+                "median_pe": row.get("median_pe"),
+                "weighted_pe": row.get("weighted_pe"),
+                "company_count": row.get("company_count"),
+            }
+        except Exception:
+            # 网络异常或 AKShare 接口变更时不阻塞主流程
+            return None

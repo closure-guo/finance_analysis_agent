@@ -132,14 +132,16 @@ def format_valuation_section(
     relative_valuation: dict | None,
     garp_result: dict | None,
     stock_quote: dict,
+    industry_pe: dict | None = None,
 ) -> str:
     """格式化相对估值 + GARP 为 LLM 可读 Markdown。"""
     lines = []
 
     # 股票行情头部
     pe = stock_quote.get("PE") or stock_quote.get("pe")
+    pe_static = stock_quote.get("PE_static")
+    pe_ttm = stock_quote.get("PE_ttm")
     pb = stock_quote.get("PB") or stock_quote.get("pb")
-    industry_pe = stock_quote.get("industry_avg_PE")
     price = stock_quote.get("price")
     market_cap = stock_quote.get("market_cap")
 
@@ -149,11 +151,27 @@ def format_valuation_section(
     if market_cap:
         lines.append(f"- 总市值: {market_cap}亿")
     if pe is not None:
-        lines.append(f"- PE(TTM): {pe:.2f}")
+        lines.append(f"- PE(动态): {pe:.2f}")
+    if pe_ttm is not None:
+        lines.append(f"- PE(TTM): {pe_ttm:.2f}")
+    if pe_static is not None:
+        lines.append(f"- PE(静态): {pe_static:.2f}")
     if pb is not None:
         lines.append(f"- PB: {pb:.2f}")
-    if industry_pe is not None:
-        lines.append(f"- 行业平均PE: {industry_pe:.2f}")
+
+    # 行业PE
+    if industry_pe:
+        avg = industry_pe.get("avg_pe")
+        median = industry_pe.get("median_pe")
+        name = industry_pe.get("industry_name", "所属行业")
+        parts = [f"- {name}行业平均PE"]
+        if avg is not None:
+            parts.append(f"算术平均: {avg:.2f}")
+        if median is not None:
+            parts.append(f"中位数: {median:.2f}")
+        lines.append(" | ".join(parts))
+    else:
+        lines.append("- 行业平均PE: 数据不可用（未接入行业PE数据源）")
 
     # 相对估值
     if relative_valuation:
