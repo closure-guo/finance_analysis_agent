@@ -76,17 +76,17 @@
   },
   "efficiency": {
     "存货周转率": {
-      "2025": 0.0804,
-      "2024": 0.1455,
-      "2023": 0.2231,
-      "2022": 0.3011,
-      "2021": 0.0776
+      "2025": 0.3011,
+      "2024": 0.2886,
+      "2023": 0.2795,
+      "2022": 0.2784,
+      "2021": 0.2737
     },
     "应收账款周转率": {
-      "2025": null,
-      "2024": null,
-      "2023": null,
-      "2022": null,
+      "2025": 15645.296333146114,
+      "2024": 4307.6071732559185,
+      "2023": 3632.8274002268,
+      "2022": 11854.51499707792,
       "2021": null
     },
     "总资产周转率": {
@@ -322,8 +322,8 @@
       "利息覆盖倍数": {
         "2025": {
           "absolute": "green",
-          "change": "red",
-          "final": "red"
+          "change": "green",
+          "final": "green"
         },
         "2024": {
           "absolute": "green",
@@ -337,12 +337,12 @@
         },
         "2022": {
           "absolute": "green",
-          "change": "yellow",
-          "final": "yellow"
+          "change": "green",
+          "final": "green"
         },
         "2021": {
           "absolute": "green",
-          "change": null,
+          "change": "green",
           "final": "green"
         }
       },
@@ -515,22 +515,22 @@
       "存货周转率": {
         "2025": {
           "absolute": "red",
-          "change": "yellow",
+          "change": "green",
           "final": "red"
         },
         "2024": {
           "absolute": "red",
-          "change": "yellow",
+          "change": "green",
           "final": "red"
         },
         "2023": {
           "absolute": "red",
-          "change": "yellow",
+          "change": "green",
           "final": "red"
         },
         "2022": {
           "absolute": "red",
-          "change": "red",
+          "change": "green",
           "final": "red"
         },
         "2021": {
@@ -541,24 +541,24 @@
       },
       "应收账款周转率": {
         "2025": {
-          "absolute": null,
-          "change": null,
-          "final": null
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
         },
         "2024": {
-          "absolute": null,
-          "change": null,
-          "final": null
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
         },
         "2023": {
-          "absolute": null,
-          "change": null,
-          "final": null
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
         },
         "2022": {
-          "absolute": null,
-          "change": null,
-          "final": null
+          "absolute": "green",
+          "change": "green",
+          "final": "green"
         },
         "2021": {
           "absolute": null,
@@ -711,13 +711,13 @@
         },
         "2024": {
           "absolute": "green",
-          "change": "yellow",
-          "final": "yellow"
+          "change": "green",
+          "final": "green"
         },
         "2023": {
           "absolute": "green",
-          "change": "red",
-          "final": "red"
+          "change": "green",
+          "final": "green"
         },
         "2022": {
           "absolute": "green",
@@ -726,7 +726,7 @@
         },
         "2021": {
           "absolute": "green",
-          "change": null,
+          "change": "green",
           "final": "green"
         }
       },
@@ -753,7 +753,7 @@
         },
         "2021": {
           "absolute": "green",
-          "change": null,
+          "change": "green",
           "final": "green"
         }
       },
