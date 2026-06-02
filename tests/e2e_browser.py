@@ -167,9 +167,9 @@ if not args.no_mock:
     _setup_mock()
 
 # Now safe to import app
-from playwright.sync_api import sync_playwright  # noqa: E402
-
-from finance_agent.app import demo  # noqa: E402
+# ruff: noqa: E402, I001
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
+from finance_agent.app import demo
 
 SCREENSHOT_DIR = Path(__file__).parent / "e2e"
 GRADIO_URL = "http://127.0.0.1:7860"
@@ -251,7 +251,7 @@ def main() -> bool:
                             if txt and len(txt) > 50:
                                 report_text = txt
                                 break
-                    except Exception:
+                    except PlaywrightError:
                         continue
                 if report_text:
                     break
@@ -288,7 +288,7 @@ def main() -> bool:
                     if btns.count() > 0:
                         has_download = True
                         break
-                except Exception:
+                except PlaywrightError:
                     continue
             # Also check if report text mentions download
             if not has_download:
