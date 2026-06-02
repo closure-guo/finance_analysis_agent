@@ -363,3 +363,25 @@ class TestSafetyFloor:
         # green_thresh=0, higher_is_better=False → 除以零风险，应跳过
         result = _apply_safety_floor("净债务/EBITDA", -0.5, "green", "red")
         assert result == "red"
+
+
+class TestIndustryOverride:
+    """行业特定阈值覆盖。"""
+
+    def test_liquor_inventory_turnover(self):
+        """白酒行业存货周转率 0.3 次 → 行业覆盖阈值下应为 🟢。"""
+        m = {
+            "efficiency": {
+                "存货周转率": {"2024": 0.3, "2023": 0.28},
+            },
+            "solvency": {},
+            "profitability": {},
+            "cashflow": {},
+        }
+        # 无行业 → 通用阈值 (>=5🟢) → 0.3 < 2 → 🔴
+        result_generic = assess_traffic_lights(m)
+        assert result_generic["efficiency"]["存货周转率"]["2024"]["absolute"] == "red"
+
+        # 白酒行业 → 覆盖阈值 (>=0.5🟢) → 0.3 >= 0.2 且 < 0.5 → 🟡
+        result_liquor = assess_traffic_lights(m, industry="白酒")
+        assert result_liquor["efficiency"]["存货周转率"]["2024"]["absolute"] == "yellow"

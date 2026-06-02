@@ -34,10 +34,18 @@ inc = client.fetch_income_statement(STOCK)
 cf = client.fetch_cash_flow(STOCK)
 ind = client.fetch_indicators(STOCK, start_year="2020")
 
+try:
+    industry_info = client.fetch_industry(STOCK)
+    industry_name = industry_info.get("industry", "")
+except Exception:
+    industry_info = {}
+    industry_name = ""
+
 print(f"\n资产负债表: {len(bs)} 年")
 print(f"利润表: {len(inc)} 年")
 print(f"现金流量表: {len(cf)} 年")
 print(f"预计算指标: {len(ind)} 年")
+print(f"行业信息: {industry_info}")
 
 # 打印列名用于调试
 print(f"\n资产负债表列名: {list(bs.columns)}")
@@ -157,7 +165,7 @@ for level in ["L1", "L2", "L3"]:
             row_str += f"{fmt_val(v):>12}"
         print(row_str)
 
-# 红黄绿灯
+# 红黄绿灯（通用阈值 vs 行业适配）
 print("\n## 红黄绿灯 (Traffic Lights)")
 all_metrics = {
     "solvency": solvency,
@@ -165,8 +173,23 @@ all_metrics = {
     "efficiency": efficiency,
     "cashflow": cashflow,
 }
-lights = assess_traffic_lights(all_metrics)
-for dim, dim_data in lights.items():
+
+print("\n--- 通用阈值 ---")
+lights_generic = assess_traffic_lights(all_metrics)
+for dim, dim_data in lights_generic.items():
+    print(f"\n### {dim}")
+    for metric, year_data in dim_data.items():
+        parts = []
+        for y in sorted(year_data.keys(), reverse=True):
+            entry = year_data[y]
+            if entry["final"]:
+                color = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(entry["final"], "?")
+                parts.append(f"{y}:{color}")
+        print(f"  {metric:<15} {' '.join(parts)}")
+
+print(f"\n--- 行业适配（行业={industry_name or 'N/A'}）---")
+lights_industry = assess_traffic_lights(all_metrics, industry=industry_name)
+for dim, dim_data in lights_industry.items():
     print(f"\n### {dim}")
     for metric, year_data in dim_data.items():
         parts = []
@@ -181,9 +204,15 @@ for dim, dim_data in lights.items():
 years_list = sorted(
     set().union(*(d.keys() for dim in all_metrics.values() for d in dim.values())), reverse=True
 )
-print("\n## 健康度评分")
+print("\n## 健康度评分（通用阈值）")
 for y in years_list:
-    score = compute_health_score(lights, y)
+    score = compute_health_score(lights_generic, y)
+    dim_parts = " | ".join(f"{k}={v:.1f}" for k, v in score["dimensions"].items())
+    print(f"  {y}: 总分={score['total']:.1f} ({score['rating']}) — {dim_parts}")
+
+print("\n## 健康度评分（行业适配）")
+for y in years_list:
+    score = compute_health_score(lights_industry, y)
     dim_parts = " | ".join(f"{k}={v:.1f}" for k, v in score["dimensions"].items())
     print(f"  {y}: 总分={score['total']:.1f} ({score['rating']}) — {dim_parts}")
 
@@ -195,7 +224,9 @@ output = {
     "efficiency": efficiency,
     "cashflow": cashflow,
     "dupont": dupont,
-    "lights": lights,
+    "lights_generic": lights_generic,
+    "lights_industry": lights_industry,
+    "industry": industry_name,
 }
 
 

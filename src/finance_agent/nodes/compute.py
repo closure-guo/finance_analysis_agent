@@ -44,7 +44,8 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
         "efficiency": efficiency,
         "cashflow": cashflow,
     }
-    traffic_lights = assess_traffic_lights(all_metrics)
+    industry = (state.get("industry_info") or {}).get("industry")
+    traffic_lights = assess_traffic_lights(all_metrics, industry=industry)
     result["traffic_lights"] = traffic_lights
 
     years = sorted(

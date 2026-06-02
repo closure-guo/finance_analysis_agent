@@ -224,5 +224,8 @@ test-assets/cache/
 reports/
 screenshots/
 
+# SQLite cache files
+cache.db*
+
 # Streamlit
 .streamlit/secrets.toml

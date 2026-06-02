@@ -14,8 +14,12 @@
 
 from __future__ import annotations
 
+import logging
+
 import akshare as ak
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # AKShare 返回中文列名，下游使用英文 key，在此做映射。
 _QUOTE_KEY_MAP = {
@@ -40,6 +44,9 @@ _INDUSTRY_PE_KEY_MAP = {
 
 _INDUSTRY_KEY_MAP = {
     "公司名称": "name",
+    "股票简称": "name",
+    "股票名称": "name",
+    "公司简称": "name",
     "行业": "industry",
 }
 
@@ -102,21 +109,65 @@ class AKShareClient:
             df = df[mask].reset_index(drop=True)
         return df
 
+    def _fetch_name_fallback(self, stock_code: str) -> dict:
+        """当东方财富接口不可用时，用 stock_info_a_code_name 获取名称。"""
+        try:
+            df = ak.stock_info_a_code_name()
+            row = df[df["code"] == stock_code]
+            if not row.empty:
+                return {"name": row.iloc[0]["name"]}
+        except Exception:
+            logger.warning("stock_info_a_code_name fallback failed for %s", stock_code)
+        return {}
+
+    def _fetch_industry_cninfo(self, stock_code: str) -> str | None:
+        """当东方财富接口不可用时，用 cninfo 获取行业名称（行业中类）。"""
+        try:
+            df = ak.stock_industry_change_cninfo(symbol=stock_code)
+            if not df.empty and "行业中类" in df.columns:
+                return str(df.iloc[0]["行业中类"])
+        except Exception:
+            logger.warning("stock_industry_change_cninfo failed for %s", stock_code)
+        return None
+
     def fetch_industry(self, stock_code: str) -> dict:
-        df = ak.stock_individual_info_em(symbol=stock_code)
-        result = {}
-        for _, row in df.iterrows():
-            key = _INDUSTRY_KEY_MAP.get(row["item"], row["item"])
-            result[key] = row["value"]
+        # 主源：东方财富（含行业+名称）
+        try:
+            df = ak.stock_individual_info_em(symbol=stock_code)
+            result = {}
+            for _, row in df.iterrows():
+                key = _INDUSTRY_KEY_MAP.get(row["item"], row["item"])
+                result[key] = row["value"]
+            if result.get("name") or result.get("industry"):
+                return result
+        except Exception as e:
+            logger.warning("stock_individual_info_em failed for %s: %s", stock_code, e)
+        # 降级：cninfo 行业 + 名称 fallback
+        result = self._fetch_name_fallback(stock_code)
+        industry = self._fetch_industry_cninfo(stock_code)
+        if industry:
+            result["industry"] = industry
         return result
 
     def fetch_stock_quote(self, stock_code: str) -> dict:
-        df = ak.stock_zh_a_spot_em()
-        row = df[df["代码"] == stock_code]
-        if row.empty:
-            return {}
-        raw = row.iloc[0].to_dict()
-        return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
+        # 主源：东方财富实时行情（含 PE/PB/市值/价格）
+        try:
+            df = ak.stock_zh_a_spot_em()
+            # 尝试多种格式匹配（纯数字 / 带前缀）
+            for code_key in (stock_code, stock_code.lstrip("sh").lstrip("sz")):
+                row = df[df["代码"] == code_key]
+                if not row.empty:
+                    break
+            if not row.empty:
+                raw = row.iloc[0].to_dict()
+                return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
+        except Exception as e:
+            logger.warning("stock_zh_a_spot_em failed for %s: %s", stock_code, e)
+        # 降级：仅获取名称+代码
+        fallback = self._fetch_name_fallback(stock_code)
+        if fallback:
+            fallback["code"] = stock_code
+        return fallback
 
     def fetch_industry_pe(self, stock_code: str) -> dict | None:
         """获取个股所属行业的平均静态PE。

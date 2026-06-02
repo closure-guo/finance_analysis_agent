@@ -16,31 +16,46 @@ from __future__ import annotations
 # higher_is_better=True: 值>=green → 🟢, 值<yellow → 🔴
 # higher_is_better=False: 值<=green → 🟢, 值>yellow → 🔴
 
+# 格式: (green_threshold, yellow_threshold, higher_is_better)
+# higher_is_better=True: 值>=green → 🟢, 值<yellow → 🔴
+# higher_is_better=False: 值<=green → 🟢, 值>yellow → 🔴
+
 ABSOLUTE_THRESHOLDS: dict[str, tuple] = {
     # 偿债
-    "资产负债率": (40, 65, False),  # <=40%🟢, 40-65%🟡, >65%🔴
-    "流动比率": (2.0, 1.0, True),  # >=2.0🟢, 1.0-2.0🟡, <1.0🔴
-    "速动比率": (1.5, 0.8, True),  # >=1.5🟢, 0.8-1.5🟡, <0.8🔴
-    "利息覆盖倍数": (6, 2, True),  # >=6🟢, 2-6🟡, <2🔴
-    "净债务/EBITDA": (0, 2, False),  # <=0🟢, 0-2🟡, >2🔴
+    "资产负债率": (40, 65, False),
+    "流动比率": (2.0, 1.0, True),
+    "速动比率": (1.5, 0.8, True),
+    "利息覆盖倍数": (6, 2, True),
+    "净债务/EBITDA": (0, 2, False),
     # 盈利
-    "毛利率": (30, 15, True),  # >=30%🟢, 15-30%🟡, <15%🔴
-    "净利率": (15, 5, True),  # >=15%🟢, 5-15%🟡, <5%🔴
-    "ROE": (15, 8, True),  # >=15%🟢, 8-15%🟡, <8%🔴
-    "ROA": (10, 3, True),  # >=10%🟢, 3-10%🟡, <3%🔴
-    "ROIC": (12, 6, True),  # >=12%🟢, 6-12🟡, <6🔴
-    # 运营（使用行业均值倍数，MVP 用固定阈值）
+    "毛利率": (30, 15, True),
+    "净利率": (15, 5, True),
+    "ROE": (15, 8, True),
+    "ROA": (10, 3, True),
+    "ROIC": (12, 6, True),
+    # 运营（通用阈值，行业覆盖见下方）
     "存货周转率": (5, 2, True),
     "应收账款周转率": (8, 3, True),
     "总资产周转率": (0.8, 0.3, True),
     "应付账款周转率": (6, 3, True),
     # 现金流
     "经营现金流/净利润": (1.0, 0.5, True),
-    "FCF": (0, None, True),  # >0🟢, None means simple check
-    "资本支出/折旧": (3, 1, True),  # >=3🟢（投得多说明增长）, <1🔴
+    "FCF": (0, None, True),
+    "资本支出/折旧": (3, 1, True),
     "现金流覆盖比率": (1.0, 0.5, True),
-    "FCF收益率": (0.05, 0.02, True),  # >=5%🟢, 2-5%🟡, <2%🔴
+    "FCF收益率": (0.05, 0.02, True),
     "留存现金流比率": (0.5, 0.2, True),
+}
+
+# ── 行业阈值覆盖 ──
+# key 为行业名称子串（模糊匹配），值为 {指标名: 阈值三元组}
+INDUSTRY_OVERRIDES: dict[str, dict[str, tuple]] = {
+    "白酒": {
+        "存货周转率": (0.5, 0.2, True),  # 基酒需 3-5 年陈酿，周转率天然低
+    },
+    "酿酒": {
+        "存货周转率": (0.5, 0.2, True),
+    },
 }
 
 LIGHT_ORDER = {"green": 0, "yellow": 1, "red": 2}
@@ -59,12 +74,23 @@ def assess_change_rate(change_rate: float) -> str:
         return "red"
 
 
-def _assess_absolute(metric_name: str, value: float) -> str | None:
+def _get_thresholds(metric_name: str, industry: str | None) -> tuple | None:
+    """获取指标阈值，优先使用行业覆盖。"""
+    if not industry:
+        return ABSOLUTE_THRESHOLDS.get(metric_name)
+    for key, overrides in INDUSTRY_OVERRIDES.items():
+        if key in industry and metric_name in overrides:
+            return overrides[metric_name]
+    return ABSOLUTE_THRESHOLDS.get(metric_name)
+
+
+def _assess_absolute(metric_name: str, value: float, industry: str | None = None) -> str | None:
     """评判绝对值灯色。"""
-    if metric_name not in ABSOLUTE_THRESHOLDS:
+    thresholds = _get_thresholds(metric_name, industry)
+    if thresholds is None:
         return None
 
-    green_thresh, yellow_thresh, higher_is_better = ABSOLUTE_THRESHOLDS[metric_name]
+    green_thresh, yellow_thresh, higher_is_better = thresholds
 
     if metric_name == "FCF":
         return "green" if value > 0 else ("yellow" if value == 0 else "red")
@@ -106,15 +132,17 @@ def _apply_safety_floor(
     value: float,
     abs_light: str | None,
     change_light: str | None,
+    industry: str | None = None,
 ) -> str | None:
     """绝对值远超优良阈值时，将变化率灯色上限降为绿色。"""
     if abs_light != "green" or change_light == "green":
         return change_light
 
-    if metric_name not in ABSOLUTE_THRESHOLDS:
+    thresholds = _get_thresholds(metric_name, industry)
+    if thresholds is None:
         return change_light
 
-    green_thresh, _, higher_is_better = ABSOLUTE_THRESHOLDS[metric_name]
+    green_thresh, _, higher_is_better = thresholds
 
     if green_thresh == 0:
         return change_light
@@ -131,6 +159,7 @@ def _apply_safety_floor(
 
 def assess_traffic_lights(
     metrics: dict[str, dict[str, dict[str, float | None]]],
+    industry: str | None = None,
 ) -> dict[str, dict[str, dict[str, dict]]]:
     """对全部指标做双重阈值评判。
 
@@ -139,6 +168,8 @@ def assess_traffic_lights(
     metrics : dict
         {dimension: {metric_name: {year: value}}}
         dimension: solvency, profitability, efficiency, cashflow
+    industry : str | None
+        行业名称，用于加载行业特定阈值覆盖。
 
     Returns
     -------
@@ -169,7 +200,7 @@ def assess_traffic_lights(
                     }
                     continue
 
-                abs_light = _assess_absolute(metric_name, val)
+                abs_light = _assess_absolute(metric_name, val, industry)
 
                 # 变化率：与上一年比较
                 prev_year_idx = idx + 1  # sorted_years 是最新在前
@@ -186,7 +217,9 @@ def assess_traffic_lights(
                 else:
                     change_light = None
 
-                change_light = _apply_safety_floor(metric_name, val, abs_light, change_light)
+                change_light = _apply_safety_floor(
+                    metric_name, val, abs_light, change_light, industry
+                )
 
                 final_light = _max_light(abs_light, change_light)
 
