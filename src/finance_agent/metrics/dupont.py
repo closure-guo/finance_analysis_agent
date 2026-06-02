@@ -25,7 +25,7 @@ def calc_dupont(
     income_statement: pd.DataFrame,
 ) -> dict[str, dict[str, dict]]:
     years = [_year(d) for d in income_statement["报告日"]]
-    result = {"L1": {}, "L2": {}, "L3": {}}
+    result: dict[str, dict] = {"L1": {}, "L2": {}, "L3": {}}
 
     for i, year in enumerate(years):
         row_is = income_statement.iloc[i]

@@ -23,7 +23,7 @@ def _year_from_report_date(date_str: str) -> str:
 def calc_solvency(
     balance_sheet: pd.DataFrame,
     income_statement: pd.DataFrame,
-    indicators: pd.DataFrame,
+    indicators: pd.DataFrame | None,
 ) -> dict[str, dict[str, float | None]]:
     """计算偿债能力 5 指标。
 

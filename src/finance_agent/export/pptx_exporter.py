@@ -61,7 +61,7 @@ def markdown_to_pptx(markdown_text: str, output_path: str, stock_name: str = "")
     return output_path
 
 
-def _add_cover_slide(prs: Presentation, title_text: str) -> None:
+def _add_cover_slide(prs: Presentation, title_text: str) -> None:  # pyrefly: ignore[not-a-type]
     slide_layout = prs.slide_layouts[6]  # Blank
     slide = prs.slides.add_slide(slide_layout)
 
@@ -85,7 +85,7 @@ def _add_cover_slide(prs: Presentation, title_text: str) -> None:
     p2.alignment = PP_ALIGN.CENTER
 
 
-def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -> None:
+def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -> None:  # pyrefly: ignore[not-a-type]
     slide_layout = prs.slide_layouts[1]  # Title and Content
     slide = prs.slides.add_slide(slide_layout)
 
@@ -122,7 +122,7 @@ def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -
             p.text = ""
 
 
-def _add_disclaimer_slide(prs: Presentation) -> None:
+def _add_disclaimer_slide(prs: Presentation) -> None:  # pyrefly: ignore[not-a-type]
     slide_layout = prs.slide_layouts[1]  # Title and Content
     slide = prs.slides.add_slide(slide_layout)
     slide.shapes.title.text = "免责声明"

@@ -48,21 +48,12 @@ flowchart TB
 
         Route{"⑤ route"}
 
-        subgraph FA["财务分析子图 纯LLM"]
-            FA1["⑥ fa_analyze<br/>读State全部分析数据<br/>LLM解读写分析文字"]
-            FA2["⑦ fa_report<br/>填充8章硬编码模板"]
-            FA1 --> FA2
-        end
+        FA["⑥ fa_analyze<br/>读State全部分析数据<br/>LLM生成正文+摘要+组装8章报告"]
 
-        subgraph IA["投资分析子图 纯LLM"]
-            IA1["⑧ ia_analyze<br/>读State行业+估值+风险<br/>LLM解读写分析文字"]
-            IA2["⑨ ia_report<br/>填充7章硬编码模板"]
-            IA1 --> IA2
-        end
+        IA["⑦ ia_analyze<br/>读State行业+估值+风险<br/>LLM生成正文+摘要+组装7章报告"]
 
-        Merge["⑩ merge_reports<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
-        GenFile["⑪ generate_file<br/>python-docx/pptx生成Word/PPT"]
-        Output(["⑫ 输出Gradio"])
+        Merge["⑧ merge_reports<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
+        GenFile["⑨ generate_file<br/>python-docx/pptx生成Word/PPT"]
     end
 
     PREP --> Route
@@ -77,7 +68,7 @@ flowchart TB
     FA -->|"单Agent"| GenFile
     IA -->|"单Agent"| GenFile
     Merge --> GenFile
-    GenFile --> Output
+    GenFile --> END([END])
 
     style PREP fill:#e8f5e9
     style CC fill:#81c784,color:#fff
@@ -88,10 +79,6 @@ flowchart TB
     style Route fill:#ff9800,color:#fff
     style FA fill:#e3f2fd
     style IA fill:#f3e5f5
-    style FA1 fill:#64b5f6,color:#fff
-    style FA2 fill:#64b5f6,color:#fff
-    style IA1 fill:#ba68c8,color:#fff
-    style IA2 fill:#ba68c8,color:#fff
     style GenFile fill:#ef9a9a
     style Merge fill:#ab47bc,color:#fff
 ```
@@ -100,20 +87,19 @@ flowchart TB
 
 ## 三、节点详细规格
 
-| #   | 节点                | 读 State                             | 写 State                          | LLM |
-| --- | ------------------- | ------------------------------------ | --------------------------------- | --- |
-| ①   | check_cache         | stock_code                           | 命中时填充 L1-L3 全部             | 否  |
-| ②   | fetch_data          | missing_items                        | L1+L2+L4 全部原始数据             | 否  |
-| ③   | validate_financials | L1 三大报表                          | validation_result + warnings      | 否  |
-| ④   | compute_metrics     | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP | 否  |
-| ⑤   | route               | analysis_type                        | 无                                | 否  |
-| ⑥   | fa_analyze          | 四维度+灯+杜邦+同业+异常+warnings    | financial_analysis                | 是  |
-| ⑦   | fa_report           | financial_analysis                   | financial_report                  | 是  |
-| ⑧   | ia_analyze          | 行业+DCF+估值+GARP+风险              | investment_analysis               | 是  |
-| ⑨   | ia_report           | investment_analysis                  | investment_report                 | 是  |
-| ⑩   | merge               | financial_report + investment_report | final_report                      | 是  |
-| ⑪   | generate_file       | final_report                         | file_path                         | 否  |
-| ⑫   | output              | file_path                            | 无                                | 否  |
+| #   | 节点                | 读 State                             | 写 State                                 | LLM |
+| --- | ------------------- | ------------------------------------ | ---------------------------------------- | --- |
+| ①   | check_cache         | stock_code                           | 命中时填充 L1-L3 全部                    | 否  |
+| ②   | fetch_data          | missing_items                        | L1+L2+L4 全部原始数据                    | 否  |
+| ③   | validate_financials | L1 三大报表                          | validation_result + warnings             | 否  |
+| ④   | compute_metrics     | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP+健康度 | 否  |
+| ⑤   | route               | analysis_type                        | 无                                       | 否  |
+| ⑥   | fa_analyze          | 四维度+灯+杜邦+同业+异常+warnings    | financial_analysis + financial_report    | 是  |
+| ⑦   | ia_analyze          | 行业+估值+GARP+风险                  | investment_analysis + investment_report  | 是  |
+| ⑧   | merge               | financial_report + investment_report | final_report                             | 是  |
+| ⑨   | generate_file       | final_report                         | file_path + file_paths                   | 否  |
+
+> 注：fa_analyze / ia_analyze 采用双阶段生成（Phase 1 正文 → Phase 2 摘要 → Phase 3 模板组装），原设计的独立 fa_report / ia_report 节点已合并，以简化图拓扑。
 
 ---
 

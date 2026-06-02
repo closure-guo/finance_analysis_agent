@@ -23,8 +23,8 @@ def calc_garp(data: dict) -> dict:
     dict
         {"pass": bool, "failures": [str], "details": dict}
     """
-    failures = []
-    details = {}
+    failures: list[str] = []
+    details: dict[str, float | None] = {}
 
     pe = data.get("PE")
     industry_pe = data.get("industry_avg_PE")

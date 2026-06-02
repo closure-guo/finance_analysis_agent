@@ -76,7 +76,7 @@ def markdown_to_docx(markdown_text: str, output_path: str, stock_name: str = "")
     return output_path
 
 
-def _set_default_font(doc: Document) -> None:
+def _set_default_font(doc: Document) -> None:  # pyrefly: ignore[not-a-type]
     """Set default font for the document."""
     style = doc.styles["Normal"]
     font = style.font
@@ -99,7 +99,7 @@ def _heading_font_size(level: int) -> int:
     return {0: 18, 1: 16, 2: 14, 3: 12}.get(level, 12)
 
 
-def _add_table(doc: Document, rows: list[list[str]]) -> None:
+def _add_table(doc: Document, rows: list[list[str]]) -> None:  # pyrefly: ignore[not-a-type]
     if not rows:
         return
     num_cols = max(len(r) for r in rows)
@@ -116,7 +116,7 @@ def _add_table(doc: Document, rows: list[list[str]]) -> None:
                 _set_run_font(run, bold=(i == 0), size=9)
 
 
-def _add_paragraph(doc: Document, text: str) -> None:
+def _add_paragraph(doc: Document, text: str) -> None:  # pyrefly: ignore[not-a-type]
     """Add a paragraph with inline bold/italic formatting."""
     p = doc.add_paragraph()
     # Split by **bold** and *italic* patterns

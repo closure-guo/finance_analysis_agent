@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
 from finance_agent.metrics.efficiency import calc_efficiency
@@ -10,12 +12,13 @@ from finance_agent.metrics.profitability import calc_profitability
 from finance_agent.metrics.relative import calc_relative_valuation
 from finance_agent.metrics.solvency import calc_solvency
 from finance_agent.metrics.traffic_light import assess_traffic_lights, compute_health_score
+from finance_agent.state import AnalysisState
 
 
-def compute_metrics(state: dict) -> dict:
-    bs = state.get("balance_sheet")
-    inc = state.get("income_statement")
-    cf = state.get("cash_flow_statement")
+def compute_metrics(state: AnalysisState) -> dict[str, Any]:
+    bs = state["balance_sheet"]
+    inc = state["income_statement"]
+    cf = state["cash_flow_statement"]
     ind = state.get("financial_indicators")
 
     result: dict = {}

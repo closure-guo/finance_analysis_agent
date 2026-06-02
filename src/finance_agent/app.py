@@ -75,10 +75,10 @@ def analyze(
 def on_search(query: str) -> gr.Dropdown:
     """Update dropdown choices based on search query."""
     if not query or len(query) < 1:
-        return gr.update(choices=[])
+        return gr.update(choices=[])  # pyrefly: ignore[bad-return]
     matches = search_stocks(query)
     choices = dict(matches)
-    return gr.update(choices=choices)
+    return gr.update(choices=choices)  # pyrefly: ignore[bad-return]
 
 
 # ── Build Gradio UI ──

@@ -62,7 +62,7 @@ class AKShareClient:
         return df[mask].reset_index(drop=True)
 
     def _normalize_nan(self, df: pd.DataFrame) -> pd.DataFrame:
-        return df.where(df.notna(), other=None)
+        return df.where(df.notna(), other=None)  # pyrefly: ignore[no-matching-overload]
 
     def _check_min_years(self, df: pd.DataFrame, stock_code: str) -> None:
         if len(df) < 2:

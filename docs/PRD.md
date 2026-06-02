@@ -218,10 +218,11 @@ src/finance_agent/
 │   ├── akshare_client.py # AKShare API 封装
 │   └── cache.py          # SQLite 缓存读写 + TTL
 ├── prompts/
-│   ├── fa_analyze.md     # 财务分析 prompt
-│   ├── fa_report.md      # 财务报告生成 prompt
-│   ├── ia_analyze.md     # 投资分析 prompt
-│   └── ia_report.md      # 投资报告生成 prompt
+│   ├── fa_analyze.md     # 财务分析 prompt（正文生成）
+│   ├── fa_summary.md     # 财务执行摘要 prompt
+│   ├── ia_analyze.md     # 投资分析 prompt（正文生成）
+│   ├── ia_summary.md     # 投资执行摘要 prompt
+│   └── synthesis.md      # 综合分析摘要 prompt
 └── templates/
     ├── financial_report.md  # 财务报告 8 章模板
     └── investment_report.md # 投资报告 7 章模板

@@ -11,6 +11,7 @@ Step2 依赖：同业公司数据（需要行业归属结果）
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from finance_agent.data.akshare_client import AKShareClient
 from finance_agent.data.cache import DataCache
@@ -21,7 +22,7 @@ _CACHE: DataCache | None = None
 _CLIENT: AKShareClient | None = None
 
 
-def _get_cache(cache=None) -> DataCache:
+def _get_cache(cache: DataCache | None = None) -> DataCache:
     if cache is not None:
         return cache
     global _CACHE
@@ -30,7 +31,7 @@ def _get_cache(cache=None) -> DataCache:
     return _CACHE
 
 
-def _get_client(client=None) -> AKShareClient:
+def _get_client(client: AKShareClient | None = None) -> AKShareClient:
     if client is not None:
         return client
     global _CLIENT
@@ -44,7 +45,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
     c = _get_cache(cache)
     ak = _get_client(client)
 
-    result = {}
+    result: dict[str, Any] = {}
 
     # Step 1: 必需数据（缺失报错）
     bs = ak.fetch_balance_sheet(code)
@@ -62,6 +63,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
     # Step 1: 非必需数据（缺失标记 N/A）
     try:
         indicators = ak.fetch_indicators(code)
+        c.set(f"{code}:indicators", indicators)
         result["financial_indicators"] = indicators
     except Exception as e:
         logger.warning("预计算指标拉取失败: %s", e)
@@ -69,6 +71,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
 
     try:
         industry = ak.fetch_industry(code)
+        c.set(f"{code}:industry_info", industry, ttl_seconds=2_592_000)
         result["industry_info"] = industry
     except Exception as e:
         logger.warning("行业归属拉取失败: %s", e)
@@ -76,6 +79,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
 
     try:
         quote = ak.fetch_stock_quote(code)
+        c.set(f"{code}:stock_quote", quote, ttl_seconds=86_400)
         result["stock_quote"] = quote
     except Exception as e:
         logger.warning("行情数据拉取失败: %s", e)
@@ -84,6 +88,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
     try:
         industry_pe = ak.fetch_industry_pe(code)
         if industry_pe:
+            c.set(f"{code}:industry_pe", industry_pe, ttl_seconds=86_400)
             result["industry_pe"] = industry_pe
     except Exception as e:
         logger.warning("行业PE拉取失败: %s", e)

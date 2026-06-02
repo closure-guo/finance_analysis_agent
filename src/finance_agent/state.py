@@ -26,6 +26,7 @@ class AnalysisState(TypedDict, total=False):
 
     # ── Layer 2: 分析导向 (MVP: 仅预计算指标) ──
     financial_indicators: pd.DataFrame | None
+    industry_pe: dict | None
 
     # ── Layer 3: 衍生计算 ──
     solvency_metrics: dict
@@ -36,6 +37,7 @@ class AnalysisState(TypedDict, total=False):
     growth_rates: dict
     anomalies: list
     traffic_lights: dict
+    health_score: dict | None
 
     # ── Layer 3 扩展: 同业+估值 ──
     peer_financials: pd.DataFrame | None

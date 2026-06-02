@@ -55,4 +55,4 @@ def call_llm(
         kwargs["temperature"] = temperature
 
     resp = litellm.completion(**kwargs)
-    return resp.choices[0].message.content
+    return str(resp.choices[0].message.content)

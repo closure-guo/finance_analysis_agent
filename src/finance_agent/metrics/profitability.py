@@ -28,7 +28,7 @@ def _safe(val, default=0.0):
 def calc_profitability(
     balance_sheet: pd.DataFrame,
     income_statement: pd.DataFrame,
-    indicators: pd.DataFrame,
+    indicators: pd.DataFrame | None,
 ) -> dict[str, dict[str, float | None]]:
     years = [_year(d) for d in income_statement["报告日"]]
     result: dict[str, dict[str, float | None]] = {

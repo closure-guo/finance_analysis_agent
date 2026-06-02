@@ -26,16 +26,19 @@ def generate_file(state: dict) -> dict:
     date_str = datetime.now().strftime("%Y%m%d")
     base_name = f"{stock_code}_{date_str}"
 
-    docx_path = str(reports_dir / f"{base_name}_report.docx")
-    pptx_path = str(reports_dir / f"{base_name}_report.pptx")
+    docx_target = str(reports_dir / f"{base_name}_report.docx")
+    pptx_target = str(reports_dir / f"{base_name}_report.pptx")
+
+    docx_path: str | None = docx_target
+    pptx_path: str | None = pptx_target
 
     try:
-        markdown_to_docx(final_report, docx_path, stock_name)
+        markdown_to_docx(final_report, docx_target, stock_name)
     except Exception:
         docx_path = None  # noqa: S110
 
     try:
-        markdown_to_pptx(final_report, pptx_path, stock_name)
+        markdown_to_pptx(final_report, pptx_target, stock_name)
     except Exception:
         pptx_path = None  # noqa: S110
 
@@ -54,4 +57,4 @@ def generate_file(state: dict) -> dict:
 def _get_stock_name(state: dict) -> str:
     quote = state.get("stock_quote") or {}
     info = state.get("industry_info") or {}
-    return quote.get("name") or info.get("name", "")
+    return str(quote.get("name") or info.get("name", ""))

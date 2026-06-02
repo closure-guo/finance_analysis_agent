@@ -145,8 +145,8 @@ def assess_traffic_lights(
     dict
         {dimension: {metric_name: {year: {absolute, change, final}}}}
     """
-    result = {}
-    all_years = set()
+    result: dict[str, dict[str, dict[str, dict]]] = {}
+    all_years: set[str] = set()
 
     # 收集所有年份
     for dim_metrics in metrics.values():

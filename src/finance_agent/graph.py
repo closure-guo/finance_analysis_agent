@@ -1,6 +1,7 @@
-"""LangGraph 主图定义：11 节点 + 条件路由"""
+"""LangGraph 主图定义：9 节点（8 实际 + 1 虚拟路由）+ 条件路由"""
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from finance_agent.nodes.cache import check_cache
 from finance_agent.nodes.compute import compute_metrics
@@ -14,8 +15,8 @@ from finance_agent.routing import after_agent, after_check_cache, after_validate
 from finance_agent.state import AnalysisState
 
 
-def build_graph() -> StateGraph:
-    graph = StateGraph(AnalysisState)
+def build_graph() -> CompiledStateGraph:
+    graph = StateGraph(AnalysisState)  # pyrefly: ignore[bad-specialization]
 
     # 数据准备子图节点
     graph.add_node("check_cache", check_cache)
