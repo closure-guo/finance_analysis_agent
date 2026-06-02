@@ -28,11 +28,13 @@ def analyze(
     peers = [c.strip() for c in peer_codes.split(",") if c.strip()] or None
 
     try:
-        result = graph.invoke({
-            "stock_code": stock_code.strip(),
-            "analysis_type": analysis_type,
-            "peer_codes": peers,
-        })
+        result = graph.invoke(
+            {
+                "stock_code": stock_code.strip(),
+                "analysis_type": analysis_type,
+                "peer_codes": peers,
+            }
+        )
     except ValueError as e:
         return (
             f"❌ 数据错误：{e}",
@@ -75,7 +77,7 @@ def on_search(query: str) -> gr.Dropdown:
     if not query or len(query) < 1:
         return gr.update(choices=[])
     matches = search_stocks(query)
-    choices = {label: code for label, code in matches}
+    choices = dict(matches)
     return gr.update(choices=choices)
 
 

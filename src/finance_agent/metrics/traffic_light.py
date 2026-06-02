@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-
 # ── 绝对值阈值表 ──
 # 格式: (green_threshold, yellow_threshold, higher_is_better)
 # higher_is_better=True: 值>=green → 🟢, 值<yellow → 🔴
@@ -19,17 +18,17 @@ from __future__ import annotations
 
 ABSOLUTE_THRESHOLDS: dict[str, tuple] = {
     # 偿债
-    "资产负债率": (40, 65, False),        # <=40%🟢, 40-65%🟡, >65%🔴
-    "流动比率": (2.0, 1.0, True),          # >=2.0🟢, 1.0-2.0🟡, <1.0🔴
-    "速动比率": (1.5, 0.8, True),          # >=1.5🟢, 0.8-1.5🟡, <0.8🔴
-    "利息覆盖倍数": (6, 2, True),          # >=6🟢, 2-6🟡, <2🔴
-    "净债务/EBITDA": (0, 2, False),        # <=0🟢, 0-2🟡, >2🔴
+    "资产负债率": (40, 65, False),  # <=40%🟢, 40-65%🟡, >65%🔴
+    "流动比率": (2.0, 1.0, True),  # >=2.0🟢, 1.0-2.0🟡, <1.0🔴
+    "速动比率": (1.5, 0.8, True),  # >=1.5🟢, 0.8-1.5🟡, <0.8🔴
+    "利息覆盖倍数": (6, 2, True),  # >=6🟢, 2-6🟡, <2🔴
+    "净债务/EBITDA": (0, 2, False),  # <=0🟢, 0-2🟡, >2🔴
     # 盈利
-    "毛利率": (30, 15, True),              # >=30%🟢, 15-30%🟡, <15%🔴
-    "净利率": (15, 5, True),               # >=15%🟢, 5-15%🟡, <5%🔴
-    "ROE": (15, 8, True),                  # >=15%🟢, 8-15%🟡, <8%🔴
-    "ROA": (10, 3, True),                  # >=10%🟢, 3-10%🟡, <3%🔴
-    "ROIC": (12, 6, True),                 # >=12%🟢, 6-12🟡, <6🔴
+    "毛利率": (30, 15, True),  # >=30%🟢, 15-30%🟡, <15%🔴
+    "净利率": (15, 5, True),  # >=15%🟢, 5-15%🟡, <5%🔴
+    "ROE": (15, 8, True),  # >=15%🟢, 8-15%🟡, <8%🔴
+    "ROA": (10, 3, True),  # >=10%🟢, 3-10%🟡, <3%🔴
+    "ROIC": (12, 6, True),  # >=12%🟢, 6-12🟡, <6🔴
     # 运营（使用行业均值倍数，MVP 用固定阈值）
     "存货周转率": (5, 2, True),
     "应收账款周转率": (8, 3, True),
@@ -37,10 +36,10 @@ ABSOLUTE_THRESHOLDS: dict[str, tuple] = {
     "应付账款周转率": (6, 3, True),
     # 现金流
     "经营现金流/净利润": (1.0, 0.5, True),
-    "FCF": (0, None, True),                # >0🟢, None means simple check
-    "资本支出/折旧": (3, 1, True),          # >=3🟢（投得多说明增长）, <1🔴
+    "FCF": (0, None, True),  # >0🟢, None means simple check
+    "资本支出/折旧": (3, 1, True),  # >=3🟢（投得多说明增长）, <1🔴
     "现金流覆盖比率": (1.0, 0.5, True),
-    "FCF收益率": (0.05, 0.02, True),       # >=5%🟢, 2-5%🟡, <2%🔴
+    "FCF收益率": (0.05, 0.02, True),  # >=5%🟢, 2-5%🟡, <2%🔴
     "留存现金流比率": (0.5, 0.2, True),
 }
 
@@ -209,7 +208,7 @@ def compute_health_score(
     四维度各 25 分，🟢=满分 🟡=半分 🔴=零分。
     None 不计入。
     """
-    DIMENSION_WEIGHT = 25
+    dimension_weight = 25
     dimension_scores = {}
     red_metrics = []
 
@@ -230,7 +229,7 @@ def compute_health_score(
                 red_metrics.append(f"{dim_name}.{metric_name}")
 
         if count > 0:
-            dimension_scores[dim_name] = points / count * DIMENSION_WEIGHT
+            dimension_scores[dim_name] = points / count * dimension_weight
         else:
             dimension_scores[dim_name] = 0.0
 

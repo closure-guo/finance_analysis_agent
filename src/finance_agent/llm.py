@@ -27,7 +27,7 @@ def call_llm(
     max_tokens: int = 4096,
 ) -> str:
     model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
-    api_key = os.environ.get("LLM_API_KEY", os.environ.get("Deepseek-Api-Key", ""))
+    api_key = os.environ.get("LLM_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
     base_url = os.environ.get("LLM_BASE_URL", _DEFAULT_BASE_URL)
     thinking = os.environ.get("LLM_THINKING", "enabled")
     reasoning_effort = os.environ.get("LLM_REASONING_EFFORT", "max")

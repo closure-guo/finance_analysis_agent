@@ -1,4 +1,5 @@
-from typing import TypedDict, Optional, Literal
+from typing import Literal, TypedDict
+
 import pandas as pd
 
 
@@ -7,7 +8,7 @@ class AnalysisState(TypedDict, total=False):
     query: str
     stock_code: str
     analysis_type: Literal["financial", "investment", "comprehensive"]
-    peer_codes: Optional[list[str]]
+    peer_codes: list[str] | None
 
     # ── Cache ──
     cache_result: str  # HIT | MISS
@@ -24,7 +25,7 @@ class AnalysisState(TypedDict, total=False):
     industry_info: dict
 
     # ── Layer 2: 分析导向 (MVP: 仅预计算指标) ──
-    financial_indicators: Optional[pd.DataFrame]
+    financial_indicators: pd.DataFrame | None
 
     # ── Layer 3: 衍生计算 ──
     solvency_metrics: dict
@@ -37,16 +38,16 @@ class AnalysisState(TypedDict, total=False):
     traffic_lights: dict
 
     # ── Layer 3 扩展: 同业+估值 ──
-    peer_financials: Optional[pd.DataFrame]
-    peer_comparison: Optional[dict]
-    relative_valuation: Optional[dict]
-    garp_result: Optional[dict]
+    peer_financials: pd.DataFrame | None
+    peer_comparison: dict | None
+    relative_valuation: dict | None
+    garp_result: dict | None
 
     # ── Agent 输出 ──
-    financial_analysis: Optional[str]
-    financial_report: Optional[str]
-    investment_analysis: Optional[str]
-    investment_report: Optional[str]
-    final_report: Optional[str]
-    file_path: Optional[str]
-    file_paths: Optional[dict]
+    financial_analysis: str | None
+    financial_report: str | None
+    investment_analysis: str | None
+    investment_report: str | None
+    final_report: str | None
+    file_path: str | None
+    file_paths: dict | None

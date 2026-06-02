@@ -14,8 +14,7 @@ def get_stock_list() -> list[dict]:
         try:
             df = ak.stock_zh_a_spot_em()
             _STOCK_LIST_CACHE = [
-                {"code": str(row["代码"]), "name": str(row["名称"])}
-                for _, row in df.iterrows()
+                {"code": str(row["代码"]), "name": str(row["名称"])} for _, row in df.iterrows()
             ]
         except Exception:
             _STOCK_LIST_CACHE = []

@@ -2,8 +2,6 @@
 
 from unittest.mock import patch
 
-import pytest
-
 
 @patch("finance_agent.nodes.merge.call_llm")
 def test_merge_pass_through_financial(mock_llm):

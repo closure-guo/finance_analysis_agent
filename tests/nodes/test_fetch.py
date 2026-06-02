@@ -16,15 +16,11 @@ from finance_agent.nodes.fetch import fetch_data
 
 
 def _make_balance_sheet():
-    return pd.DataFrame(
-        {"报告日": ["20241231", "20231231"], "资产总计": [1000.0, 900.0]}
-    )
+    return pd.DataFrame({"报告日": ["20241231", "20231231"], "资产总计": [1000.0, 900.0]})
 
 
 def _make_income():
-    return pd.DataFrame(
-        {"报告日": ["20241231", "20231231"], "营业收入": [1000.0, 900.0]}
-    )
+    return pd.DataFrame({"报告日": ["20241231", "20231231"], "营业收入": [1000.0, 900.0]})
 
 
 def _make_cashflow():
@@ -34,9 +30,7 @@ def _make_cashflow():
 
 
 def _make_indicators():
-    return pd.DataFrame(
-        {"日期": ["2024-12-31", "2023-12-31"], "销售毛利率(%)": [40.0, 38.0]}
-    )
+    return pd.DataFrame({"日期": ["2024-12-31", "2023-12-31"], "销售毛利率(%)": [40.0, 38.0]})
 
 
 def _setup_client():

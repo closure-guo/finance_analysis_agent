@@ -16,8 +16,6 @@ fixture 手算（2024）：
 
 from math import isclose
 
-import pytest
-
 from finance_agent.metrics.dupont import calc_dupont
 
 

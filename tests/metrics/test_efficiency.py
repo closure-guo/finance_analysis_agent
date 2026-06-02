@@ -14,8 +14,6 @@ fixture 手算（2024）：
 
 from math import isclose
 
-import pytest
-
 from finance_agent.metrics.efficiency import calc_efficiency
 
 
@@ -67,12 +65,8 @@ class TestCalcEfficiency:
     def test_zero_accounts_payable(self):
         import pandas as pd
 
-        bs = pd.DataFrame(
-            {"报告日": ["20241231"], "资产总计": [1000.0], "应付账款": [0.0]}
-        )
-        is_ = pd.DataFrame(
-            {"报告日": ["20241231"], "营业收入": [1000.0], "营业成本": [600.0]}
-        )
+        bs = pd.DataFrame({"报告日": ["20241231"], "资产总计": [1000.0], "应付账款": [0.0]})
+        is_ = pd.DataFrame({"报告日": ["20241231"], "营业收入": [1000.0], "营业成本": [600.0]})
         ind = pd.DataFrame(
             {
                 "日期": ["2024-12-31"],

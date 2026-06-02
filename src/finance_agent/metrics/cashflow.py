@@ -47,14 +47,8 @@ def calc_cashflow(
         row_bs = balance_sheet.iloc[i]
 
         ocf = _safe(row_cf.get("经营活动产生的现金流量净额"))
-        capex = _safe(
-            row_cf.get(
-                "购建固定资产、无形资产和其他长期资产所支付的现金"
-            )
-        )
-        dividends = _safe(
-            row_cf.get("分配股利、利润或偿付利息所支付的现金")
-        )
+        capex = _safe(row_cf.get("购建固定资产、无形资产和其他长期资产所支付的现金"))
+        dividends = _safe(row_cf.get("分配股利、利润或偿付利息所支付的现金"))
         net_income = _safe(row_is.get("净利润"))
         interest = _safe(row_is.get("利息费用"))
         revenue = _safe(row_is.get("营业收入"))

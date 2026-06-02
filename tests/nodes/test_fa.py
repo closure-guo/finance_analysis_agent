@@ -1,17 +1,17 @@
 """fa.py 单元测试 — mock LLM，验证双阶段调用和报告组装。"""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
 
 @pytest.fixture
 def fa_state(balance_sheet, income_statement, cash_flow, indicators):
-    from finance_agent.metrics.solvency import calc_solvency
-    from finance_agent.metrics.profitability import calc_profitability
-    from finance_agent.metrics.efficiency import calc_efficiency
     from finance_agent.metrics.cashflow import calc_cashflow
     from finance_agent.metrics.dupont import calc_dupont
+    from finance_agent.metrics.efficiency import calc_efficiency
+    from finance_agent.metrics.profitability import calc_profitability
+    from finance_agent.metrics.solvency import calc_solvency
     from finance_agent.metrics.traffic_light import assess_traffic_lights
 
     solv = calc_solvency(balance_sheet, income_statement, indicators)

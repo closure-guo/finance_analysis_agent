@@ -1,7 +1,5 @@
 """formatters.py 单元测试。"""
 
-import pytest
-
 
 def test_format_stock_header():
     from finance_agent.formatters import format_stock_header

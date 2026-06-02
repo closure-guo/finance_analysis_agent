@@ -22,10 +22,15 @@ class TestComputeMetrics:
 
         result = compute_metrics(sample_state)
         expected_keys = [
-            "solvency_metrics", "profitability_metrics",
-            "efficiency_metrics", "cashflow_metrics",
-            "dupont_tree", "traffic_lights", "growth_rates",
-            "anomalies", "garp_result",
+            "solvency_metrics",
+            "profitability_metrics",
+            "efficiency_metrics",
+            "cashflow_metrics",
+            "dupont_tree",
+            "traffic_lights",
+            "growth_rates",
+            "anomalies",
+            "garp_result",
         ]
         for key in expected_keys:
             assert key in result, f"missing key: {key}"

@@ -20,8 +20,6 @@ fixture 手算（2024）：
 
 from math import isclose
 
-import pytest
-
 from finance_agent.metrics.cashflow import calc_cashflow
 
 
@@ -38,7 +36,9 @@ class TestCalcCashflow:
         }
         assert set(result.keys()) == expected_keys
 
-    def test_each_metric_has_all_years(self, balance_sheet, income_statement, cash_flow, indicators):
+    def test_each_metric_has_all_years(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
         result = calc_cashflow(balance_sheet, income_statement, cash_flow)
         for name, values in result.items():
             assert set(values.keys()) == {"2024", "2023", "2022"}, f"{name} years mismatch"
@@ -51,7 +51,9 @@ class TestCalcCashflow:
         result = calc_cashflow(balance_sheet, income_statement, cash_flow)
         assert isclose(result["FCF"]["2024"], 250 - 80, rel_tol=1e-2)
 
-    def test_capex_to_depreciation_2024(self, balance_sheet, income_statement, cash_flow, indicators):
+    def test_capex_to_depreciation_2024(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
         result = calc_cashflow(balance_sheet, income_statement, cash_flow)
         # CapEx=80, 折旧变动(2024-2023)=120-100=20
         assert isclose(result["资本支出/折旧"]["2024"], 80 / 20, rel_tol=1e-2)
@@ -66,7 +68,9 @@ class TestCalcCashflow:
         # FCF=170, 营业收入=1000 → 0.17
         assert isclose(result["FCF收益率"]["2024"], 170 / 1000, rel_tol=1e-2)
 
-    def test_retained_cashflow_ratio_2024(self, balance_sheet, income_statement, cash_flow, indicators):
+    def test_retained_cashflow_ratio_2024(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
         result = calc_cashflow(balance_sheet, income_statement, cash_flow)
         # (FCF - 股利) / FCF = (170-50)/170 = 0.706
         assert isclose(result["留存现金流比率"]["2024"], (170 - 50) / 170, rel_tol=1e-2)

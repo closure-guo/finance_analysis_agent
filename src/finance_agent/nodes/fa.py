@@ -31,7 +31,9 @@ def fa_analyze(state: dict) -> dict:
 
     # ── Phase 2: 生成执行摘要（第 2 章）──
     summary_prompt = load_prompt("fa_summary").replace("{{body}}", body_text)
-    executive_summary = call_llm(summary_prompt, system="你是财务分析摘要撰写专家。", temperature=0.2)
+    executive_summary = call_llm(
+        summary_prompt, system="你是财务分析摘要撰写专家。", temperature=0.2
+    )
 
     # ── Phase 3: 组装完整报告 ──
     report = _assemble_report(state, executive_summary, body_text)

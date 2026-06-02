@@ -6,10 +6,9 @@ check_cache 职责：
 3. MISS → cache_result="MISS", 不填充
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pandas as pd
-import pytest
 
 from finance_agent.nodes.cache import check_cache
 

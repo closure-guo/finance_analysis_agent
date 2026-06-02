@@ -8,12 +8,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt
 
 from finance_agent.export.parser import Section, parse_markdown, split_by_chapters
-
 
 _DISCLAIMER = (
     "本报告由 AI 系统基于公开财务数据自动生成，仅供参考，不构成任何投资建议。"
@@ -114,7 +113,7 @@ def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -
                 header = sec.rows[0]
                 for row in sec.rows[1:]:
                     p = body.add_paragraph()
-                    cells = [f"{h}: {c}" for h, c in zip(header, row)]
+                    cells = [f"{h}: {c}" for h, c in zip(header, row, strict=False)]
                     p.text = " | ".join(cells)
                     p.level = 1
                     p.font.size = Pt(12)

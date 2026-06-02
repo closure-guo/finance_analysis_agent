@@ -10,8 +10,6 @@ TTL 策略（ADR-0004）：
 """
 
 import time
-from datetime import datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 import pytest

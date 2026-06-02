@@ -7,11 +7,10 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
 from docx.oxml.ns import qn
+from docx.shared import Pt
 
-from finance_agent.export.parser import Section, parse_markdown
-
+from finance_agent.export.parser import parse_markdown
 
 # 免责声明（追加到报告末尾）
 _DISCLAIMER = (

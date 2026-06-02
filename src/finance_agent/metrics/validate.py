@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-
 # ── 阈值 ──
 HARD_TOLERANCE_PCT = 0.01  # 硬等式：相对误差 < 0.01%
 SOFT_TOLERANCE_PCT = 0.05  # 软等式：相对误差 < 5%
@@ -50,7 +49,7 @@ def validate_financials(
     result = "PASS"
 
     # ── 规则1：试算平衡（硬等式）──
-    for i, row in balance_sheet.iterrows():
+    for _i, row in balance_sheet.iterrows():
         year = _year(row["报告日"])
         assets = _safe(row.get("资产总计"))
         liabilities = _safe(row.get("负债合计"))
@@ -74,13 +73,11 @@ def validate_financials(
             warnings.append(msg)
             details.append(msg)
         else:
-            details.append(
-                f"[{year}] 试算平衡通过：差异={diff:,.0f}（{diff_pct:.4f}%）"
-            )
+            details.append(f"[{year}] 试算平衡通过：差异={diff:,.0f}（{diff_pct:.4f}%）")
 
     # ── 规则2：利润表内部勾稽（软等式）──
     # 验证 净利润 ≈ 利润总额 - 所得税费用（利润表最核心勾稽）
-    for i, row in income_statement.iterrows():
+    for _i, row in income_statement.iterrows():
         year = _year(row["报告日"])
         total_profit = _safe(row.get("利润总额"))
         tax = _safe(row.get("所得税费用"))
@@ -103,13 +100,10 @@ def validate_financials(
             warnings.append(msg)
             details.append(msg)
         else:
-            details.append(
-                f"[{year}] 利润表勾稽通过：差异={diff:,.0f}（阈值={threshold:,.0f}）"
-            )
+            details.append(f"[{year}] 利润表勾稽通过：差异={diff:,.0f}（阈值={threshold:,.0f}）")
 
     # ── 规则3：现金流量表内部勾稽（软等式）──
-    cf_years = {str(r["报告日"])[:4]: r for _, r in cash_flow.iterrows()}
-    for i, row in cash_flow.iterrows():
+    for _i, row in cash_flow.iterrows():
         year = _year(row["报告日"])
         ocf = _safe(row.get("经营活动产生的现金流量净额"))
         icf = _safe(row.get("投资活动产生的现金流量净额"))
@@ -172,9 +166,7 @@ def validate_financials(
             warnings.append(msg)
             details.append(msg)
         else:
-            details.append(
-                f"[{year}] 留存收益勾稽通过：差异={diff:,.0f}（阈值={threshold:,.0f}）"
-            )
+            details.append(f"[{year}] 留存收益勾稽通过：差异={diff:,.0f}（阈值={threshold:,.0f}）")
 
     return {
         "result": result,

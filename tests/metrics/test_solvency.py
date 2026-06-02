@@ -21,7 +21,6 @@ fixture 数据手算验证：
 from math import isclose
 
 import pandas as pd
-import pytest
 
 from finance_agent.metrics.solvency import calc_solvency
 
@@ -44,9 +43,7 @@ class TestCalcSolvency:
         result = calc_solvency(balance_sheet, income_statement, indicators)
         for metric_name, values in result.items():
             assert isinstance(values, dict), f"{metric_name} should be dict"
-            assert set(values.keys()) == {"2024", "2023", "2022"}, (
-                f"{metric_name} years mismatch"
-            )
+            assert set(values.keys()) == {"2024", "2023", "2022"}, f"{metric_name} years mismatch"
 
     # ── 2024 验证 ──
 

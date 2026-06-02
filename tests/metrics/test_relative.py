@@ -35,23 +35,17 @@ class TestRelativeValuation:
         }
 
     def test_returns_pe_and_pb(self, sample_data):
-        result = calc_relative_valuation(
-            sample_data["target"], sample_data["peers"]
-        )
+        result = calc_relative_valuation(sample_data["target"], sample_data["peers"])
         assert "PE" in result
         assert "PB" in result
 
     def test_pe_peer_avg(self, sample_data):
-        result = calc_relative_valuation(
-            sample_data["target"], sample_data["peers"]
-        )
+        result = calc_relative_valuation(sample_data["target"], sample_data["peers"])
         # (30+28+22+26+24)/5 = 26.0
         assert isclose(result["PE"]["peer_avg"], 26.0, rel_tol=1e-2)
 
     def test_pe_fair_within_range(self, sample_data):
-        result = calc_relative_valuation(
-            sample_data["target"], sample_data["peers"]
-        )
+        result = calc_relative_valuation(sample_data["target"], sample_data["peers"])
         # PE=25, avg=26 → 25/26=0.96 → 在 ±15% 内 → fair
         assert result["PE"]["conclusion"] == "fair"
 
@@ -74,9 +68,7 @@ class TestRelativeValuation:
         assert result["PE"]["conclusion"] == "overvalued"
 
     def test_pb_fair(self, sample_data):
-        result = calc_relative_valuation(
-            sample_data["target"], sample_data["peers"]
-        )
+        result = calc_relative_valuation(sample_data["target"], sample_data["peers"])
         # PB=3.5, avg=(4+3.8+3+3.3+3.2)/5=3.46 → 3.5/3.46=1.01 → fair
         assert result["PB"]["conclusion"] == "fair"
 
@@ -86,9 +78,7 @@ class TestRelativeValuation:
         assert result["PB"]["conclusion"] == "N/A"
 
     def test_peer_min_max(self, sample_data):
-        result = calc_relative_valuation(
-            sample_data["target"], sample_data["peers"]
-        )
+        result = calc_relative_valuation(sample_data["target"], sample_data["peers"])
         assert isclose(result["PE"]["peer_min"], 22.0)
         assert isclose(result["PE"]["peer_max"], 30.0)
 

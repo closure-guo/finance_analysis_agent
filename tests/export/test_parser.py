@@ -1,7 +1,5 @@
 """export/parser.py 单元测试。"""
 
-import pytest
-
 from finance_agent.export.parser import Section, parse_markdown, split_by_chapters
 
 

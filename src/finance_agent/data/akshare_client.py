@@ -17,7 +17,6 @@ from __future__ import annotations
 import akshare as ak
 import pandas as pd
 
-
 # AKShare 返回中文列名，下游使用英文 key，在此做映射。
 _QUOTE_KEY_MAP = {
     "名称": "name",
@@ -74,27 +73,21 @@ class AKShareClient:
     def _trim_years(self, df: pd.DataFrame, years: int = 5) -> pd.DataFrame:
         return df.head(years)
 
-    def fetch_balance_sheet(
-        self, stock_code: str, years: int = 5
-    ) -> pd.DataFrame:
+    def fetch_balance_sheet(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
         df = ak.stock_financial_report_sina(stock=stock, symbol="资产负债表")
         df = self._filter_annual(df)
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)
 
-    def fetch_income_statement(
-        self, stock_code: str, years: int = 5
-    ) -> pd.DataFrame:
+    def fetch_income_statement(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
         df = ak.stock_financial_report_sina(stock=stock, symbol="利润表")
         df = self._filter_annual(df)
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)
 
-    def fetch_cash_flow(
-        self, stock_code: str, years: int = 5
-    ) -> pd.DataFrame:
+    def fetch_cash_flow(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
         df = ak.stock_financial_report_sina(stock=stock, symbol="现金流量表")
         df = self._filter_annual(df)
@@ -102,9 +95,7 @@ class AKShareClient:
         return self._trim_years(df, years)
 
     def fetch_indicators(self, stock_code: str, start_year: str = "2020") -> pd.DataFrame:
-        df = ak.stock_financial_analysis_indicator(
-            symbol=stock_code, start_year=start_year
-        )
+        df = ak.stock_financial_analysis_indicator(symbol=stock_code, start_year=start_year)
         # 只保留年报（日期以 12-31 结尾）
         if not df.empty and "日期" in df.columns:
             mask = df["日期"].astype(str).str.endswith("12-31")
@@ -147,10 +138,9 @@ class AKShareClient:
 
             # 2. 获取全部行业PE（证监会行业分类）
             from datetime import datetime
+
             date_str = datetime.now().strftime("%Y%m%d")
-            pe_df = ak.stock_industry_pe_ratio_cninfo(
-                symbol="证监会行业分类", date=date_str
-            )
+            pe_df = ak.stock_industry_pe_ratio_cninfo(symbol="证监会行业分类", date=date_str)
             # 列名映射
             pe_df = pe_df.rename(columns=_INDUSTRY_PE_KEY_MAP)
 

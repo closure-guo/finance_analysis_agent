@@ -19,8 +19,20 @@ def ia_state():
         },
         "industry_info": {"industry": "白酒"},
         "relative_valuation": {
-            "PE": {"target": 25.0, "peer_avg": 30.0, "peer_min": 20.0, "peer_max": 40.0, "conclusion": "undervalued"},
-            "PB": {"target": 8.0, "peer_avg": 9.0, "peer_min": 6.0, "peer_max": 12.0, "conclusion": "fair"},
+            "PE": {
+                "target": 25.0,
+                "peer_avg": 30.0,
+                "peer_min": 20.0,
+                "peer_max": 40.0,
+                "conclusion": "undervalued",
+            },
+            "PB": {
+                "target": 8.0,
+                "peer_avg": 9.0,
+                "peer_min": 6.0,
+                "peer_max": 12.0,
+                "conclusion": "fair",
+            },
         },
         "garp_result": {
             "pass": True,

@@ -32,13 +32,7 @@ def merge_reports(state: dict) -> dict:
     synthesis = _generate_synthesis(fa_analysis, ia_analysis)
 
     final = (
-        "# 综合分析报告\n\n"
-        "## 综合结论\n\n"
-        f"{synthesis}\n\n"
-        "---\n\n"
-        f"{fa_report}\n\n"
-        "---\n\n"
-        f"{ia_report}"
+        f"# 综合分析报告\n\n## 综合结论\n\n{synthesis}\n\n---\n\n{fa_report}\n\n---\n\n{ia_report}"
     )
 
     return {"final_report": final}

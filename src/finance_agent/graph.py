@@ -1,17 +1,17 @@
 """LangGraph 主图定义：11 节点 + 条件路由"""
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
-from finance_agent.state import AnalysisState
 from finance_agent.nodes.cache import check_cache
-from finance_agent.nodes.fetch import fetch_data
 from finance_agent.nodes.compute import compute_metrics
 from finance_agent.nodes.fa import fa_analyze
+from finance_agent.nodes.fetch import fetch_data
 from finance_agent.nodes.ia import ia_analyze
 from finance_agent.nodes.merge import merge_reports
 from finance_agent.nodes.output import generate_file
 from finance_agent.nodes.validate import validate_node
-from finance_agent.routing import after_check_cache, route_to_agent, after_agent, after_validate
+from finance_agent.routing import after_agent, after_check_cache, after_validate, route_to_agent
+from finance_agent.state import AnalysisState
 
 
 def build_graph() -> StateGraph:

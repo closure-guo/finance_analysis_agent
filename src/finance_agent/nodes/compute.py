@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from finance_agent.metrics.solvency import calc_solvency
-from finance_agent.metrics.profitability import calc_profitability
-from finance_agent.metrics.efficiency import calc_efficiency
 from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
-from finance_agent.metrics.traffic_light import assess_traffic_lights, compute_health_score
-from finance_agent.metrics.relative import calc_relative_valuation
+from finance_agent.metrics.efficiency import calc_efficiency
 from finance_agent.metrics.garp import calc_garp
+from finance_agent.metrics.profitability import calc_profitability
+from finance_agent.metrics.relative import calc_relative_valuation
+from finance_agent.metrics.solvency import calc_solvency
+from finance_agent.metrics.traffic_light import assess_traffic_lights, compute_health_score
 
 
 def compute_metrics(state: dict) -> dict:
@@ -82,7 +82,8 @@ def compute_metrics(state: dict) -> dict:
 
 
 def _calc_growth_rates(
-    all_metrics: dict[str, dict], years: list[str],
+    all_metrics: dict[str, dict],
+    years: list[str],
 ) -> dict[str, dict[str, float | None]]:
     if len(years) < 2:
         return {}
@@ -101,7 +102,9 @@ def _calc_growth_rates(
 
 
 def _detect_anomalies(
-    traffic_lights: dict, growth_rates: dict, latest_year: str | None,
+    traffic_lights: dict,
+    growth_rates: dict,
+    latest_year: str | None,
 ) -> list[str]:
     anomalies: list[str] = []
     if not latest_year:
@@ -119,6 +122,7 @@ def _detect_anomalies(
 
 def _build_peers_list(peer_financials) -> list[dict]:
     import pandas as pd
+
     if not isinstance(peer_financials, pd.DataFrame) or peer_financials.empty:
         return []
     peers = []

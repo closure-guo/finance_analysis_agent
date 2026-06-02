@@ -58,24 +58,28 @@ class TestGARP:
         assert len(result["failures"]) == 2
 
     def test_none_values(self):
-        result = calc_garp({
-            "PE": None,
-            "industry_avg_PE": 25.0,
-            "net_profit_growth": None,
-            "ROE": 0.20,
-            "debt_ratio": 0.45,
-        })
+        result = calc_garp(
+            {
+                "PE": None,
+                "industry_avg_PE": 25.0,
+                "net_profit_growth": None,
+                "ROE": 0.20,
+                "debt_ratio": 0.45,
+            }
+        )
         assert result["pass"] is False
         assert len(result["failures"]) == 2  # PE None and growth None
 
     def test_boundary_values(self):
         # Exactly at boundaries should pass
-        result = calc_garp({
-            "PE": 25.0,            # == industry_avg → should NOT pass (need <)
-            "industry_avg_PE": 25.0,
-            "net_profit_growth": 0.15,  # == 15% → should NOT pass (need >)
-            "ROE": 0.15,           # == 15% → should NOT pass (need >)
-            "debt_ratio": 0.60,    # == 60% → should NOT pass (need <)
-        })
+        result = calc_garp(
+            {
+                "PE": 25.0,  # == industry_avg → should NOT pass (need <)
+                "industry_avg_PE": 25.0,
+                "net_profit_growth": 0.15,  # == 15% → should NOT pass (need >)
+                "ROE": 0.15,  # == 15% → should NOT pass (need >)
+                "debt_ratio": 0.60,  # == 60% → should NOT pass (need <)
+            }
+        )
         assert result["pass"] is False
         assert len(result["failures"]) == 4

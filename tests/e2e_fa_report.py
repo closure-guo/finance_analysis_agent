@@ -66,6 +66,7 @@ def main():
     report = result["financial_report"]
 
     from pathlib import Path
+
     out_path = Path(__file__).parent / "e2e" / f"report_{STOCK_CODE}_fa.md"
     out_path.parent.mkdir(exist_ok=True)
     out_path.write_text(report, encoding="utf-8")

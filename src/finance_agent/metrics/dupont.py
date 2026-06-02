@@ -57,9 +57,7 @@ def calc_dupont(
         # L2: 净利率拆解
         gross_margin = (revenue - cost) / revenue if revenue != 0 else 0
         total_expense_rate = (
-            (sales_exp + admin_exp + rd_exp + finance_exp) / revenue
-            if revenue != 0
-            else 0
+            (sales_exp + admin_exp + rd_exp + finance_exp) / revenue if revenue != 0 else 0
         )
 
         result["L2"][year] = {

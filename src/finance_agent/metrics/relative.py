@@ -33,9 +33,7 @@ def calc_relative_valuation(
     for metric in ["PE", "PB"]:
         target_val = target.get(metric)
 
-        peer_values = [
-            p[metric] for p in peers if p.get(metric) is not None
-        ]
+        peer_values = [p[metric] for p in peers if p.get(metric) is not None]
 
         if not peer_values or target_val is None:
             result[metric] = {

@@ -92,9 +92,7 @@ def calc_solvency(
             and current_liabilities
             and current_liabilities != 0
         ):
-            result["速动比率"][year] = float(
-                (current_assets - inventory) / current_liabilities
-            )
+            result["速动比率"][year] = float((current_assets - inventory) / current_liabilities)
         else:
             result["速动比率"][year] = None
 

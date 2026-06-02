@@ -6,12 +6,7 @@ from finance_agent.export.pptx_exporter import markdown_to_pptx
 
 
 def test_pptx_generation(tmp_path):
-    markdown = (
-        "## Chapter 1\n\n"
-        "Content here.\n\n"
-        "## Chapter 2\n\n"
-        "More content.\n"
-    )
+    markdown = "## Chapter 1\n\nContent here.\n\n## Chapter 2\n\nMore content.\n"
     output = tmp_path / "test.pptx"
     result = markdown_to_pptx(markdown, str(output), "Test Stock")
 

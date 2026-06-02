@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 @patch("finance_agent.llm.litellm.completion")
 def test_call_llm_basic(mock_completion):
