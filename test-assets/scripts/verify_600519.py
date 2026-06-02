@@ -1,9 +1,10 @@
 """茅台(600519)指标验证脚本 — 输出所有计算公式、参数、结果。"""
 
-import sys
-import json
-import traceback
+# ruff: noqa: E402
+
 import io
+import json
+import sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
@@ -12,11 +13,11 @@ import pandas as pd
 sys.path.insert(0, "src")
 
 from finance_agent.data.akshare_client import AKShareClient
-from finance_agent.metrics.solvency import calc_solvency
-from finance_agent.metrics.profitability import calc_profitability
-from finance_agent.metrics.efficiency import calc_efficiency
 from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
+from finance_agent.metrics.efficiency import calc_efficiency
+from finance_agent.metrics.profitability import calc_profitability
+from finance_agent.metrics.solvency import calc_solvency
 from finance_agent.metrics.traffic_light import assess_traffic_lights, compute_health_score
 
 STOCK = "600519"
@@ -53,22 +54,46 @@ row_is = inc.iloc[0]
 row_cf = cf.iloc[0]
 
 print(f"\n--- 资产负债表 ({row_bs.get('报告日', 'N/A')}) ---")
-for col in ["资产总计", "负债合计", "所有者权益(或股东权益)合计", "流动资产合计", "流动负债合计",
-             "存货", "货币资金", "短期借款", "长期借款", "应付债券", "一年内到期的非流动负债",
-             "累计折旧", "应付账款"]:
+for col in [
+    "资产总计",
+    "负债合计",
+    "所有者权益(或股东权益)合计",
+    "流动资产合计",
+    "流动负债合计",
+    "存货",
+    "货币资金",
+    "短期借款",
+    "长期借款",
+    "应付债券",
+    "一年内到期的非流动负债",
+    "累计折旧",
+    "应付账款",
+]:
     val = row_bs.get(col, "N/A")
     print(f"  {col}: {val}")
 
 print(f"\n--- 利润表 ({row_is.get('报告日', 'N/A')}) ---")
-for col in ["营业收入", "营业成本", "净利润", "利润总额", "所得税费用", "利息费用",
-             "销售费用", "管理费用", "研发费用", "财务费用"]:
+for col in [
+    "营业收入",
+    "营业成本",
+    "净利润",
+    "利润总额",
+    "所得税费用",
+    "利息费用",
+    "销售费用",
+    "管理费用",
+    "研发费用",
+    "财务费用",
+]:
     val = row_is.get(col, "N/A")
     print(f"  {col}: {val}")
 
 print(f"\n--- 现金流量表 ({row_cf.get('报告日', 'N/A')}) ---")
-for col in ["经营活动产生的现金流量净额",
-             "购建固定资产、无形资产和其他长期资产所支付的现金",
-             "分配股利、利润或偿付利息所支付的现金"]:
+for col in [
+    "经营活动产生的现金流量净额",
+    "购建固定资产、无形资产和其他长期资产所支付的现金",
+    "分配股利、利润或偿付利息所支付的现金",
+]:
     val = row_cf.get(col, "N/A")
     print(f"  {col}: {val}")
 
@@ -83,16 +108,18 @@ efficiency = calc_efficiency(bs, inc, ind)
 cashflow = calc_cashflow(bs, inc, cf)
 dupont = calc_dupont(bs, inc)
 
+
 def fmt_val(v):
     if v is None:
         return "N/A"
     if isinstance(v, float):
         if abs(v) >= 1e8:
-            return f"{v/1e8:.2f}亿"
+            return f"{v / 1e8:.2f}亿"
         if abs(v) >= 1e4:
-            return f"{v/1e4:.2f}万"
+            return f"{v / 1e4:.2f}万"
         return f"{v:.4f}"
     return str(v)
+
 
 def print_metrics(name, data):
     print(f"\n## {name}")
@@ -109,12 +136,13 @@ def print_metrics(name, data):
         row = f"{metric:<15}" + "".join(f"{fmt_val(vals.get(y)):>12}" for y in years)
         print(row)
 
+
 print_metrics("偿债能力 (Solvency)", solvency)
 print_metrics("盈利能力 (Profitability)", profitability)
 print_metrics("运营效率 (Efficiency)", efficiency)
 print_metrics("现金流健康 (Cash Flow)", cashflow)
 
-print(f"\n## 杜邦分解 (DuPont)")
+print("\n## 杜邦分解 (DuPont)")
 for level in ["L1", "L2", "L3"]:
     print(f"\n### {level}")
     years = sorted(dupont[level].keys(), reverse=True)
@@ -130,7 +158,7 @@ for level in ["L1", "L2", "L3"]:
         print(row_str)
 
 # 红黄绿灯
-print(f"\n## 红黄绿灯 (Traffic Lights)")
+print("\n## 红黄绿灯 (Traffic Lights)")
 all_metrics = {
     "solvency": solvency,
     "profitability": profitability,
@@ -150,8 +178,10 @@ for dim, dim_data in lights.items():
         print(f"  {metric:<15} {' '.join(parts)}")
 
 # 健康度评分
-years_list = sorted(set().union(*(d.keys() for dim in all_metrics.values() for d in dim.values())), reverse=True)
-print(f"\n## 健康度评分")
+years_list = sorted(
+    set().union(*(d.keys() for dim in all_metrics.values() for d in dim.values())), reverse=True
+)
+print("\n## 健康度评分")
 for y in years_list:
     score = compute_health_score(lights, y)
     dim_parts = " | ".join(f"{k}={v:.1f}" for k, v in score["dimensions"].items())
@@ -168,6 +198,7 @@ output = {
     "lights": lights,
 }
 
+
 # 把 NaN 转成 None
 def clean(obj):
     if isinstance(obj, float) and pd.isna(obj):
@@ -178,9 +209,10 @@ def clean(obj):
         return [clean(x) for x in obj]
     return obj
 
+
 output = clean(output)
 
 with open("reports/600519_metrics_raw.json", "w", encoding="utf-8") as f:
     json.dump(output, f, ensure_ascii=False, indent=2, default=str)
 
-print(f"\n\n原始数据已保存到 reports/600519_metrics_raw.json")
+print("\n\n原始数据已保存到 reports/600519_metrics_raw.json")
