@@ -37,14 +37,7 @@ def build_graph() -> CompiledStateGraph:
     graph.add_conditional_edges("check_cache", after_check_cache)
     graph.add_edge("fetch_data", "validate_financials")
     graph.add_conditional_edges("validate_financials", after_validate)
-    graph.add_edge("compute_metrics", "route")
-
-    # 虚拟路由节点（fan-out 到 Agent 子图）
-    def route_node(state: dict) -> dict:
-        return state
-
-    graph.add_node("route", route_node)
-    graph.add_conditional_edges("route", route_to_agent)
+    graph.add_conditional_edges("compute_metrics", route_to_agent)
 
     # Agent → 条件路由（comprehensive → merge，single-agent → generate_file）
     graph.add_conditional_edges("fa_analyze", after_agent)

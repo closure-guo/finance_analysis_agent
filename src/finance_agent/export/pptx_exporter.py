@@ -8,17 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
 from finance_agent.export.parser import Section, parse_markdown, split_by_chapters
-
-_DISCLAIMER = (
-    "本报告由 AI 系统基于公开财务数据自动生成，仅供参考，不构成任何投资建议。"
-    "报告中的分析和结论基于历史数据和公开市场信息，不保证未来表现。"
-    "投资者应结合自身情况独立判断，并咨询专业投资顾问。"
-)
 
 
 def markdown_to_pptx(markdown_text: str, output_path: str, stock_name: str = "") -> str:
@@ -51,9 +44,6 @@ def markdown_to_pptx(markdown_text: str, output_path: str, stock_name: str = "")
         if not chapter_title:
             continue
         _add_chapter_slide(prs, chapter_title, chapter_sections)
-
-    # Disclaimer slide
-    _add_disclaimer_slide(prs)
 
     # Save
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -120,16 +110,3 @@ def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -
         elif sec.type == "separator":
             p = body.add_paragraph()
             p.text = ""
-
-
-def _add_disclaimer_slide(prs: Presentation) -> None:  # pyrefly: ignore[not-a-type]
-    slide_layout = prs.slide_layouts[1]  # Title and Content
-    slide = prs.slides.add_slide(slide_layout)
-    slide.shapes.title.text = "免责声明"
-
-    body = slide.shapes.placeholders[1].text_frame
-    body.clear()
-    p = body.paragraphs[0]
-    p.text = _DISCLAIMER
-    p.font.size = Pt(16)
-    p.font.color.rgb = RGBColor(128, 128, 128)

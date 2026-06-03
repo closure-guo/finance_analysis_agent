@@ -1,4 +1,4 @@
-"""generate_file: 生成 Word/PPT 文件。"""
+"""generate_file: 生成 Word/PPT 文件（统一追加免责声明）。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,12 @@ from pathlib import Path
 from finance_agent.export.docx_exporter import markdown_to_docx
 from finance_agent.export.pptx_exporter import markdown_to_pptx
 
+_DISCLAIMER = (
+    "\n\n---\n\n**免责声明**：本报告由 AI 系统基于公开财务数据自动生成，仅供参考，不构成任何投资建议。"
+    "报告中的分析和结论基于历史数据和公开市场信息，不保证未来表现。"
+    "投资者应结合自身情况独立判断，并咨询专业投资顾问。"
+)
+
 
 def generate_file(state: dict) -> dict:
     final_report = state.get("final_report", "")
@@ -16,6 +22,10 @@ def generate_file(state: dict) -> dict:
         final_report = state.get("investment_report", "") or state.get("financial_report", "")
     if not final_report:
         return {"file_path": None, "file_paths": None}
+
+    # 统一追加免责声明（避免重复）
+    if "免责声明" not in final_report:
+        final_report += _DISCLAIMER
 
     stock_code = state.get("stock_code", "unknown")
     stock_name = _get_stock_name(state)

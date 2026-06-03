@@ -12,9 +12,9 @@ def get_stock_list() -> list[dict]:
     global _STOCK_LIST_CACHE
     if _STOCK_LIST_CACHE is None:
         try:
-            df = ak.stock_zh_a_spot_em()
+            df = ak.stock_info_a_code_name()
             _STOCK_LIST_CACHE = [
-                {"code": str(row["代码"]), "name": str(row["名称"])} for _, row in df.iterrows()
+                {"code": str(row["code"]), "name": str(row["name"])} for _, row in df.iterrows()
             ]
         except Exception:
             _STOCK_LIST_CACHE = []

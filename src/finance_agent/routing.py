@@ -1,5 +1,7 @@
 """条件路由函数"""
 
+from langgraph.types import Send
+
 
 def after_check_cache(state: dict) -> str:
     result = state.get("cache_result", "MISS")
@@ -8,13 +10,13 @@ def after_check_cache(state: dict) -> str:
     return "fetch_data"
 
 
-def route_to_agent(state: dict) -> list[str]:
+def route_to_agent(state: dict) -> list[Send]:
     analysis_type = state.get("analysis_type", "financial")
     if analysis_type == "comprehensive":
-        return ["fa_analyze", "ia_analyze"]
+        return [Send("fa_analyze", state), Send("ia_analyze", state)]
     if analysis_type == "investment":
-        return ["ia_analyze"]
-    return ["fa_analyze"]
+        return [Send("ia_analyze", state)]
+    return [Send("fa_analyze", state)]
 
 
 def after_validate(state: dict) -> str:

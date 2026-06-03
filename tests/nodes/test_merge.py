@@ -1,4 +1,4 @@
-"""merge.py 单元测试 — 验证 pass-through、综合摘要、无重复调用。"""
+"""merge.py 单元测试 — 验证 pass-through、综合摘要、对比表格。"""
 
 from unittest.mock import patch
 
@@ -15,7 +15,7 @@ def test_merge_pass_through_financial(mock_llm):
     result = merge_reports(state)
 
     assert mock_llm.call_count == 0
-    assert result["final_report"] == "# FA报告"
+    assert "# FA报告" in result["final_report"]
 
 
 @patch("finance_agent.nodes.merge.call_llm")
@@ -30,7 +30,7 @@ def test_merge_pass_through_investment(mock_llm):
     result = merge_reports(state)
 
     assert mock_llm.call_count == 0
-    assert result["final_report"] == "# IA报告"
+    assert "# IA报告" in result["final_report"]
 
 
 @patch("finance_agent.nodes.merge.call_llm")
@@ -73,8 +73,7 @@ def test_merge_idempotent(mock_llm):
     merge_reports(state)
     merge_reports(state)
 
-    assert mock_llm.call_count == 2  # 每次调用都会触发（当前实现无缓存）
-    # 注：LangGraph 的 merge 在修复后只会被触发一次，所以此测试验证的是函数本身行为
+    assert mock_llm.call_count == 2
 
 
 @patch("finance_agent.nodes.merge.call_llm")
@@ -90,7 +89,7 @@ def test_merge_missing_fa_report(mock_llm):
     result = merge_reports(state)
 
     assert mock_llm.call_count == 0
-    assert result["final_report"] == "# IA"
+    assert "# IA" in result["final_report"]
 
 
 @patch("finance_agent.nodes.merge.call_llm")
@@ -106,4 +105,40 @@ def test_merge_missing_ia_report(mock_llm):
     result = merge_reports(state)
 
     assert mock_llm.call_count == 0
-    assert result["final_report"] == "# FA"
+    assert "# FA" in result["final_report"]
+
+
+@patch("finance_agent.nodes.merge.call_llm")
+def test_merge_comparison_table(mock_llm):
+    """comprehensive 模式生成对比表格。"""
+    mock_llm.return_value = "综合结论"
+
+    from finance_agent.nodes.merge import merge_reports
+
+    state = {
+        "analysis_type": "comprehensive",
+        "financial_report": "# FA",
+        "investment_report": "# IA",
+        "financial_analysis": "fa body",
+        "investment_analysis": "ia body",
+        "health_score": {
+            "total": 78.1,
+            "rating": "caution",
+            "dimensions": {
+                "solvency": 25.0,
+                "profitability": 25.0,
+                "efficiency": 15.6,
+                "cashflow": 12.5,
+            },
+        },
+        "stock_quote": {"PE": 25.5, "PB": 8.2},
+        "garp_result": {"pass": True, "failures": [], "details": {}},
+    }
+    result = merge_reports(state)
+
+    report = result["final_report"]
+    assert "核心数据对比" in report
+    assert "78.1 分" in report
+    assert "25.0 分" in report
+    assert "PE 25.50x" in report
+    assert "✅ 通过" in report

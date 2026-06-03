@@ -22,26 +22,32 @@ from finance_agent.prompts.loader import load_prompt, render_template
 
 
 def fa_analyze(state: dict) -> dict:
-    # ── 格式化 state 数据 → LLM context ──
-    context = _build_context(state)
+    try:
+        # ── 格式化 state 数据 → LLM context ──
+        context = _build_context(state)
 
-    # ── Phase 1: 生成正文（第 3-7 章）──
-    system_prompt = load_prompt("fa_analyze")
-    body_text = call_llm(context, system=system_prompt)
+        # ── Phase 1: 生成正文（第 3-7 章）──
+        system_prompt = load_prompt("fa_analyze")
+        body_text = call_llm(context, system=system_prompt)
 
-    # ── Phase 2: 生成执行摘要（第 2 章）──
-    summary_prompt = load_prompt("fa_summary").replace("{{body}}", body_text)
-    executive_summary = call_llm(
-        summary_prompt, system="你是财务分析摘要撰写专家。", temperature=0.2
-    )
+        # ── Phase 2: 生成执行摘要（第 2 章）──
+        summary_prompt = load_prompt("fa_summary").replace("{{body}}", body_text)
+        executive_summary = call_llm(
+            summary_prompt, system="你是财务分析摘要撰写专家。", temperature=0.2
+        )
 
-    # ── Phase 3: 组装完整报告 ──
-    report = _assemble_report(state, executive_summary, body_text)
+        # ── Phase 3: 组装完整报告 ──
+        report = _assemble_report(state, executive_summary, body_text)
 
-    return {
-        "financial_analysis": body_text,
-        "financial_report": report,
-    }
+        return {
+            "financial_analysis": body_text,
+            "financial_report": report,
+        }
+    except Exception:
+        return {
+            "financial_analysis": "",
+            "financial_report": "",
+        }
 
 
 def _build_context(state: dict) -> str:

@@ -12,13 +12,6 @@ from docx.shared import Pt
 
 from finance_agent.export.parser import parse_markdown
 
-# 免责声明（追加到报告末尾）
-_DISCLAIMER = (
-    "免责声明：本报告由 AI 系统基于公开财务数据自动生成，仅供参考，不构成任何投资建议。"
-    "报告中的分析和结论基于历史数据和公开市场信息，不保证未来表现。"
-    "投资者应结合自身情况独立判断，并咨询专业投资顾问。"
-)
-
 
 def markdown_to_docx(markdown_text: str, output_path: str, stock_name: str = "") -> str:
     """Convert markdown report to Word document.
@@ -62,13 +55,6 @@ def markdown_to_docx(markdown_text: str, output_path: str, stock_name: str = "")
             _add_paragraph(doc, sec.text)
         elif sec.type == "separator":
             doc.add_paragraph()
-
-    # Disclaimer
-    doc.add_paragraph()
-    p = doc.add_paragraph()
-    run = p.add_run(_DISCLAIMER)
-    _set_run_font(run, italic=True, size=9)
-    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     # Save
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
