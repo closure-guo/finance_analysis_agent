@@ -40,10 +40,13 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     result["dupont_tree"] = calc_dupont(bs, inc)
 
     # ── 红黄绿灯 + 评分 ──
+    # 保留 source 标注，但 all_metrics 只含数值指标
+    efficiency_numeric = {k: v for k, v in efficiency.items() if not k.endswith("_source")}
+
     all_metrics = {
         "solvency": solvency,
         "profitability": profitability,
-        "efficiency": efficiency,
+        "efficiency": efficiency_numeric,
         "cashflow": cashflow,
     }
     industry = (state.get("industry_info") or {}).get("industry")

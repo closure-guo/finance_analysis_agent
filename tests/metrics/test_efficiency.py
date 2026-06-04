@@ -20,7 +20,13 @@ from finance_agent.metrics.efficiency import calc_efficiency
 class TestCalcEfficiency:
     def test_returns_all_metrics(self, balance_sheet, income_statement, indicators):
         result = calc_efficiency(balance_sheet, income_statement, indicators)
-        expected_keys = {"存货周转率", "应收账款周转率", "总资产周转率", "应付账款周转率"}
+        expected_keys = {
+            "存货周转率",
+            "存货周转率_source",
+            "应收账款周转率",
+            "总资产周转率",
+            "应付账款周转率",
+        }
         assert set(result.keys()) == expected_keys
 
     def test_each_metric_has_all_years(self, balance_sheet, income_statement, indicators):
@@ -77,3 +83,119 @@ class TestCalcEfficiency:
         )
         result = calc_efficiency(bs, is_, ind)
         assert result["应付账款周转率"]["2024"] is None
+
+    def test_date_alignment_indicators_ascending(self):
+        """indicators 升序 + BS 降序 + 年份不完全重叠 → 按日期匹配，非行号。
+
+        模拟生产环境：BS/IS 含 2025 但 indicators 只到 2024。
+        当前 bug 会按行号取到错误年份的数据。
+        """
+        import pandas as pd
+
+        bs = pd.DataFrame(
+            {
+                "报告日": ["20251231", "20241231", "20231231", "20221231"],
+                "资产总计": [1200.0, 1000.0, 900.0, 800.0],
+                "应收账款": [50.0, 40.0, 35.0, 30.0],
+                "应付账款": [70.0, 60.0, 50.0, 45.0],
+                "存货": [120.0, 100.0, 90.0, 80.0],
+            }
+        )
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20251231", "20241231", "20231231", "20221231"],
+                "营业收入": [1200.0, 1000.0, 900.0, 800.0],
+                "营业成本": [720.0, 600.0, 550.0, 500.0],
+            }
+        )
+        # 升序（生产环境真实顺序），只有 2022-2024
+        ind = pd.DataFrame(
+            {
+                "日期": ["2022-12-31", "2023-12-31", "2024-12-31"],
+                "存货周转率(次)": [6.0, 6.5, 7.0],
+            }
+        )
+
+        result = calc_efficiency(bs, is_, ind)
+
+        # 2024 应取 indicators 的 7.0，不是行号错位取的 6.0
+        assert isclose(result["存货周转率"]["2024"], 7.0, rel_tol=1e-2)
+        # 2023 应取 6.5，不是行号错位取的 6.5（碰巧对了但逻辑错）
+        assert isclose(result["存货周转率"]["2023"], 6.5, rel_tol=1e-2)
+        # 2022 应取 6.0
+        assert isclose(result["存货周转率"]["2022"], 6.0, rel_tol=1e-2)
+
+    def test_missing_year_self_calculated(self):
+        """indicators 无 2025 数据时，自算 营业成本/平均存货。
+
+        2025: 营业成本=720, 存货(2025)=120, 存货(2024)=100
+        平均存货 = (120+100)/2 = 110
+        存货周转率 = 720/110 = 6.545
+        """
+        import pandas as pd
+
+        bs = pd.DataFrame(
+            {
+                "报告日": ["20251231", "20241231", "20231231"],
+                "资产总计": [1200.0, 1000.0, 900.0],
+                "应收账款": [50.0, 40.0, 35.0],
+                "应付账款": [70.0, 60.0, 50.0],
+                "存货": [120.0, 100.0, 90.0],
+            }
+        )
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20251231", "20241231", "20231231"],
+                "营业收入": [1200.0, 1000.0, 900.0],
+                "营业成本": [720.0, 600.0, 550.0],
+            }
+        )
+        # indicators 只有 2023-2024，无 2025
+        ind = pd.DataFrame(
+            {
+                "日期": ["2023-12-31", "2024-12-31"],
+                "存货周转率(次)": [6.5, 7.0],
+            }
+        )
+
+        result = calc_efficiency(bs, is_, ind)
+
+        # 2025 自算: 720 / ((120+100)/2) = 6.545
+        assert isclose(result["存货周转率"]["2025"], 720 / 110, rel_tol=1e-2)
+
+    def test_source_annotation(self):
+        """返回值包含来源标注：official（indicators 有数据）vs calc（自算）。"""
+        import pandas as pd
+
+        bs = pd.DataFrame(
+            {
+                "报告日": ["20251231", "20241231", "20231231"],
+                "资产总计": [1200.0, 1000.0, 900.0],
+                "应收账款": [50.0, 40.0, 35.0],
+                "应付账款": [70.0, 60.0, 50.0],
+                "存货": [120.0, 100.0, 90.0],
+            }
+        )
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20251231", "20241231", "20231231"],
+                "营业收入": [1200.0, 1000.0, 900.0],
+                "营业成本": [720.0, 600.0, 550.0],
+            }
+        )
+        ind = pd.DataFrame(
+            {
+                "日期": ["2023-12-31", "2024-12-31"],
+                "存货周转率(次)": [6.5, 7.0],
+            }
+        )
+
+        result = calc_efficiency(bs, is_, ind)
+        source = result.get("存货周转率_source", {})
+
+        # 2025: indicators 无数据 → calc
+        assert source["2025"] == "calc"
+        # 2024: indicators 有数据 → official
+        assert source["2024"] == "official"
+        # 2023: indicators 有数据 → official
+        assert source["2023"] == "official"
