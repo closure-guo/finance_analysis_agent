@@ -93,6 +93,15 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
     except Exception as e:
         logger.warning("行业PE拉取失败: %s", e)
 
+    # Step 1: 季度数据（非必需，失败不阻塞）
+    try:
+        q_income = ak.fetch_quarterly_income(code)
+        c.set(f"{code}:quarterly_income", q_income)
+        result["quarterly_income"] = q_income
+    except Exception as e:
+        logger.warning("季度利润表拉取失败: %s", e)
+        result["quarterly_income"] = None
+
     # Step 2: 同业数据（依赖行业归属）
     try:
         peers = _fetch_peers(ak, code, state, result.get("industry_info"))

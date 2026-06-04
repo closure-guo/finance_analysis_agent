@@ -45,6 +45,10 @@ class AnalysisState(TypedDict, total=False):
     relative_valuation: dict | None
     garp_result: dict | None
 
+    # ── Layer 3 扩展: 季度趋势 ──
+    quarterly_income: pd.DataFrame | None
+    quarterly_trend: dict | None
+
     # ── Agent 输出 ──
     financial_analysis: str | None
     financial_report: str | None

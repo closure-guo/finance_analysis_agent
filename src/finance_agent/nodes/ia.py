@@ -11,6 +11,7 @@ from datetime import datetime
 
 from finance_agent.formatters import (
     format_growth_rates,
+    format_quarterly_trend,
     format_risk_summary,
     format_stock_header,
     format_valuation_section,
@@ -74,6 +75,10 @@ def _build_context(state: dict) -> str:
         state.get("anomalies") or [],
     )
     sections.append(risk)
+
+    # 季度趋势
+    quarterly = format_quarterly_trend(state.get("quarterly_trend"))
+    sections.append(quarterly)
 
     # 同业对比标记
     peer = state.get("peer_comparison")

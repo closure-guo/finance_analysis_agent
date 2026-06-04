@@ -231,6 +231,45 @@ def format_valuation_section(
     return "\n".join(lines)
 
 
+def format_quarterly_trend(quarterly_trend: dict | None) -> str:
+    if not quarterly_trend:
+        return "无季度趋势数据"
+    lines = ["### 季度利润趋势（单季归母净利润）"]
+
+    quarters = quarterly_trend.get("quarters", [])
+    net_profit = quarterly_trend.get("net_profit", [])
+    qoq = quarterly_trend.get("qoq", [])
+    yoy = quarterly_trend.get("yoy", [])
+    warnings = quarterly_trend.get("warnings", [])
+
+    # 表格
+    header = "| 季度 | 归母净利润(亿) | 环比 | 同比 |"
+    sep = "| --- | ---: | ---: | ---: |"
+    lines.extend([header, sep])
+    for i in range(len(quarters)):
+        np_val = f"{net_profit[i]:.2f}" if net_profit[i] is not None else "N/A"
+        qoq_str = _fmt_pct(qoq[i])
+        yoy_str = _fmt_pct(yoy[i])
+        lines.append(f"| {quarters[i]} | {np_val} | {qoq_str} | {yoy_str} |")
+
+    # 拐点预警
+    if warnings:
+        lines.append("\n**季度拐点预警**:")
+        for w in warnings:
+            lines.append(f"- {w}")
+    else:
+        lines.append("\n**季度拐点预警**: 无显著异常")
+
+    return "\n".join(lines)
+
+
+def _fmt_pct(v: float | None) -> str:
+    if v is None:
+        return "N/A"
+    arrow = "↑" if v > 0 else "↓"
+    return f"{arrow} {abs(v):.1f}%"
+
+
 def _fmt_val(v: Any) -> str:
     if v is None:
         return "N/A"

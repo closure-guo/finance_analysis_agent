@@ -84,6 +84,11 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
         quote, profitability, solvency, ind, net_profit_growth, latest_year
     )
 
+    # ── 季度趋势 ──
+    q_income = state.get("quarterly_income")
+    if q_income is not None and not q_income.empty:
+        result["quarterly_trend"] = _calc_quarterly_trend(q_income)
+
     # ── 同业对比（如果有 peer 数据）──
     # TODO(Issue #4): peer_comparison 目前仅是标志位，需添加同业指标格式化器注入 LLM context
     if peer_financials is not None:
@@ -201,3 +206,55 @@ def _try_garp(
         "debt_ratio": debt,
     }
     return calc_garp(data)
+
+
+def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
+    """计算季度趋势：同比/环比序列 + 拐点检测。"""
+    if q_income.empty or "归母净利润(单季)" not in q_income.columns:
+        return {}
+
+    trend: dict = {
+        "quarters": [],
+        "net_profit": [],
+        "qoq": [],
+        "yoy": [],
+        "warnings": [],
+    }
+
+    for _, row in q_income.iterrows():
+        trend["quarters"].append(row.get("季度", ""))
+        np_val = row.get("归母净利润(单季)")
+        trend["net_profit"].append(round(np_val / 1e8, 2) if pd.notna(np_val) else None)
+        qoq = row.get("环比")
+        trend["qoq"].append(qoq)
+        yoy = row.get("同比")
+        trend["yoy"].append(yoy)
+
+    # 拐点检测
+    yoy_vals = [v for v in trend["yoy"] if v is not None]
+    q_vals = trend["quarters"]
+    if yoy_vals:
+        # 1. 最近季度同比为负或大幅下降
+        if yoy_vals[0] < -20:
+            trend["warnings"].append(
+                f"最近季度 ({q_vals[0]}) 归母净利润同比大幅下降 {yoy_vals[0]:.1f}%"
+            )
+        elif yoy_vals[0] < 0:
+            trend["warnings"].append(
+                f"最近季度 ({q_vals[0]}) 归母净利润同比下降 {yoy_vals[0]:.1f}%"
+            )
+
+        # 2. 最近 4 个季度中存在同比大幅下降（即使不是最近季度）
+        for i, yoy in enumerate(yoy_vals):
+            if yoy is not None and yoy < -20 and i > 0:
+                trend["warnings"].append(f"{q_vals[i]} 归母净利润同比大幅下降 {yoy:.1f}%")
+                break  # 只报告第一个历史大幅下降
+
+        # 3. 连续两个季度同比下降
+        if len(yoy_vals) >= 2 and yoy_vals[0] < 0 and yoy_vals[1] < 0:
+            trend["warnings"].append(
+                f"连续两个季度同比下降 ({q_vals[0]}: {yoy_vals[0]:.1f}%, "
+                f"{q_vals[1]}: {yoy_vals[1]:.1f}%)"
+            )
+
+    return trend

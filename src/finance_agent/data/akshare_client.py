@@ -200,6 +200,79 @@ class AKShareClient:
             fallback["code"] = stock_code
         return fallback
 
+    def fetch_quarterly_income(self, stock_code: str, quarters: int = 4) -> pd.DataFrame:
+        """拉取单季度利润表，计算同比/环比变化率。
+
+        使用 stock_profit_sheet_by_quarterly_em（东方财富），返回数据中的
+        PARENT_NETPROFIT 为单季度归母净利润。
+
+        返回列：报告日, 归母净利润(单季), 环比(%), 同比(%)
+        """
+        # symbol 需要大写 SH/SZ 前缀
+        prefix = "SH" if stock_code.startswith(("6", "9")) else "SZ"
+        symbol = f"{prefix}{stock_code.lstrip('sh').lstrip('sz')}"
+
+        df = ak.stock_profit_sheet_by_quarterly_em(symbol=symbol)
+        if df.empty or "PARENT_NETPROFIT" not in df.columns:
+            raise ValueError(f"股票 {stock_code} 季度利润表数据不可用")
+
+        # 按报告日排序（最新的在前），copy 避免 fragmentation warning
+        df = df.sort_values("REPORT_DATE", ascending=False).reset_index(drop=True).copy()
+
+        # 过滤掉未来季度（报告日晚于当前日期）
+        from datetime import datetime
+
+        today = datetime.now()
+        df["_dt"] = pd.to_datetime(df["REPORT_DATE"])
+        df = df[df["_dt"] <= today].reset_index(drop=True)
+
+        # 提取季度标签 (YYYY-Qx)
+        def _quarter_label(dt) -> str:
+            month = dt.month
+            year = dt.year
+            q = {3: "Q1", 6: "Q2", 9: "Q3", 12: "Q4"}.get(month, "")
+            return f"{year}{q}"
+
+        df["季度"] = df["_dt"].apply(_quarter_label)
+        df = df[df["季度"] != ""]  # 过滤非季度报告
+
+        # 取最近 N 个季度
+        df = df.head(quarters * 2 + 2)  # 多取一些用于计算同比
+
+        # 构建结果
+        records = []
+        for _i, row in df.iterrows():
+            curr_np = row["PARENT_NETPROFIT"]
+            if pd.isna(curr_np):
+                continue
+            qoq = row.get("PARENT_NETPROFIT_QOQ")
+
+            # 计算同比：找去年同期（同季度标签，上一年）
+            curr_q = row["季度"]
+            curr_year = int(curr_q[:4])
+            prev_year_q = f"{curr_year - 1}{curr_q[4:]}"
+            prev_rows = df[df["季度"] == prev_year_q]
+            yoy = None
+            if not prev_rows.empty:
+                prev_np = prev_rows.iloc[0]["PARENT_NETPROFIT"]
+                if not pd.isna(prev_np) and prev_np != 0:
+                    yoy = (float(curr_np) - float(prev_np)) / abs(float(prev_np)) * 100
+
+            records.append(
+                {
+                    "报告日": str(row["REPORT_DATE"])[:10],
+                    "季度": curr_q,
+                    "归母净利润(单季)": float(curr_np),
+                    "环比": float(qoq) if not pd.isna(qoq) else None,
+                    "同比": yoy,
+                }
+            )
+
+        result = pd.DataFrame(records)
+        # 只保留最近 N 个季度
+        result = result.head(quarters)
+        return self._normalize_nan(result)
+
     def fetch_industry_pe(self, stock_code: str) -> dict | None:
         """获取个股所属行业的平均静态PE。
 
