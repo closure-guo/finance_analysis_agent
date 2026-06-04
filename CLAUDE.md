@@ -14,6 +14,10 @@
 
 **禁止在根目录创建新目录存放测试产物。** 如果需要新的子目录，在上述位置下创建。
 
+## Incident tracking
+
+问题记录和解决方案维护在 `docs/incidents/`。发现系统性问题时，新建编号文档并更新 README.md 索引。
+
 ## Agent skills
 
 ### Issue tracker
