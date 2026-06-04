@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from finance_agent.metrics.efficiency import _find_indicator
+
 
 def _year(date_str: str) -> str:
     return str(date_str)[:4]
@@ -76,11 +78,30 @@ def calc_profitability(
         else:
             result["净利率"][year] = None
 
-        # ROE
-        if equity != 0:
-            result["ROE"][year] = net_income / equity * 100
+        # ROE — 优先用 indicators 加权净资产收益率（证监会口径）
+        ind_row = _find_indicator(indicators, year)
+        weighted_roe = None
+        if ind_row is not None:
+            val = ind_row.get("加权净资产收益率(%)")
+            if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                weighted_roe = float(val)
+
+        if weighted_roe is not None:
+            result["ROE"][year] = weighted_roe
         else:
-            result["ROE"][year] = None
+            # fallback: 归母净利润 / 平均归母权益
+            avg_equity = equity
+            if i < len(years) - 1:
+                prev_row_bs = balance_sheet.iloc[i + 1]
+                prev_equity = _safe(prev_row_bs.get("归母所有者权益"))
+                if prev_equity == 0:
+                    prev_equity = _safe(prev_row_bs.get("所有者权益(或股东权益)合计"))
+                if prev_equity != 0:
+                    avg_equity = (equity + prev_equity) / 2
+            if avg_equity != 0:
+                result["ROE"][year] = net_income / avg_equity * 100
+            else:
+                result["ROE"][year] = None
 
         # ROA
         total_assets = _safe(row_bs.get("资产总计"))
