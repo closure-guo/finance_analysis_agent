@@ -22,7 +22,7 @@ import pandas as pd
 class DataCache:
     def __init__(self, db_path: str = "cache.db"):
         self._db_path = db_path
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS cache (

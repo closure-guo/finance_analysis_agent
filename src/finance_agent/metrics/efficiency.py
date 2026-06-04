@@ -16,10 +16,10 @@ def _year(date_str: str) -> str:
     return str(date_str)[:4]
 
 
-def _safe(val, default=0.0):
+def _safe(val: object, default: float = 0.0) -> float:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return default
-    return float(val)
+    return float(val)  # type: ignore[arg-type]
 
 
 def _find_indicator(indicators: pd.DataFrame | None, year: str) -> pd.Series | None:
@@ -34,9 +34,9 @@ def calc_efficiency(
     balance_sheet: pd.DataFrame,
     income_statement: pd.DataFrame,
     indicators: pd.DataFrame | None,
-) -> dict[str, dict[str, float | None]]:
+) -> dict[str, dict[str, float | str | None]]:
     years = [_year(d) for d in income_statement["报告日"]]
-    result: dict[str, dict[str, float | None]] = {
+    result: dict[str, dict[str, float | str | None]] = {
         "存货周转率": {},
         "存货周转率_source": {},
         "应收账款周转率": {},

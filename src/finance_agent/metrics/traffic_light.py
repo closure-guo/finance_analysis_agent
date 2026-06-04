@@ -188,6 +188,8 @@ def assess_traffic_lights(
     for dim_name, dim_metrics in metrics.items():
         result[dim_name] = {}
         for metric_name, year_values in dim_metrics.items():
+            if metric_name.endswith("_source"):
+                continue
             result[dim_name][metric_name] = {}
 
             for idx, year in enumerate(sorted_years):

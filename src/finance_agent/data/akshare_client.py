@@ -15,11 +15,31 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import akshare as ak
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_SINA_MAX_RETRIES = 3
+_SINA_RETRY_DELAY = 5
+
+
+def _sina_report(stock: str, symbol: str) -> pd.DataFrame:
+    """Call stock_financial_report_sina with retry — the Sina API is flaky."""
+    for attempt in range(1, _SINA_MAX_RETRIES + 1):
+        try:
+            df = ak.stock_financial_report_sina(stock=stock, symbol=symbol)
+            if df is not None and not df.empty:
+                return df
+            logger.warning("Sina API returned empty for %s/%s (attempt %d)", stock, symbol, attempt)
+        except (TypeError, KeyError) as e:
+            logger.warning("Sina API error for %s/%s (attempt %d): %s", stock, symbol, attempt, e)
+        if attempt < _SINA_MAX_RETRIES:
+            time.sleep(_SINA_RETRY_DELAY)
+    raise RuntimeError(f"新浪财经接口连续 {_SINA_MAX_RETRIES} 次无响应，请稍后再试")
+
 
 # AKShare 返回中文列名，下游使用英文 key，在此做映射。
 _QUOTE_KEY_MAP = {
@@ -111,7 +131,7 @@ class AKShareClient:
 
     def fetch_balance_sheet(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
-        df = ak.stock_financial_report_sina(stock=stock, symbol="资产负债表")
+        df = _sina_report(stock, "资产负债表")
         df = self._filter_annual(df)
         df = self._rename_parent_cols(df)
         self._check_min_years(df, stock_code)
@@ -119,7 +139,7 @@ class AKShareClient:
 
     def fetch_income_statement(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
-        df = ak.stock_financial_report_sina(stock=stock, symbol="利润表")
+        df = _sina_report(stock, "利润表")
         df = self._filter_annual(df)
         df = self._rename_parent_cols(df)
         self._check_min_years(df, stock_code)
@@ -127,7 +147,7 @@ class AKShareClient:
 
     def fetch_cash_flow(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
-        df = ak.stock_financial_report_sina(stock=stock, symbol="现金流量表")
+        df = _sina_report(stock, "现金流量表")
         df = self._filter_annual(df)
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)

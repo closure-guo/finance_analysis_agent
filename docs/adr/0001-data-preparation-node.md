@@ -14,12 +14,13 @@
 
 ## Decision
 
-在 Supervisor 路由之前插入一个**数据准备子图**（check_cache → fetch_data → compute_metrics），统一负责所有数据拉取和计算，结果写入 LangGraph State。
+在 Supervisor 路由之前插入一个**数据准备子图**（check_cache → fetch_data → validate_financials → compute_metrics），统一负责所有数据拉取、校验和计算，结果写入 LangGraph State。
 
 数据准备子图实现为 LangGraph 子图，包含条件边：
 
-- HIT → 报表持久化命中 + 行情未过期，跳过 fetch，只执行 compute（重算 L3 衍生指标）
-- MISS → 首次分析，执行 fetch（拉取 + 持久化报表 + 缓存行情）→ compute
+- HIT → 报表持久化命中 + 行情未过期，跳过 fetch，走 validate → compute
+- MISS → 首次分析，执行 fetch（拉取 + 持久化报表 + 缓存行情）→ validate → compute
+- validate FAIL → 硬等式校验失败，短路终止到 END
 
 两条路径都继续走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
 

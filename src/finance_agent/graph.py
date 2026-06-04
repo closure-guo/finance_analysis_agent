@@ -1,4 +1,4 @@
-"""LangGraph 主图定义：9 节点（8 实际 + 1 虚拟路由）+ 条件路由"""
+"""LangGraph 主图定义：8 节点 + 条件路由 + Send 并行派发"""
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph

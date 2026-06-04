@@ -15,28 +15,21 @@ flowchart TB
             direction TB
             CC["① check_cache<br/>查持久化报表+缓存行情"]
             FP["② fetch_data<br/>AKShare拉取+持久化报表"]
-            CM["③ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP"]
-            CC -->|"MISS 首次"| FP --> CM
-            CC -->|"HIT 报表已有"| CM
+            VF["③ validate_financials<br/>4条勾稽校验"]
+            CM["④ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP"]
+            CC -->|"MISS 首次"| FP --> VF
+            CC -->|"HIT 报表已有"| VF
+            VF -->|"PASS"| CM
+            VF -->|"FAIL"| END_ERR(["终止: 数据校验失败"])
         end
 
-        Route{"④ route"}
+        Route{"route_to_agent"}
 
-        subgraph FA["财务分析子图"]
-            FA1["⑤ fa_analyze<br/>LLM解读四维度数据"]
-            FA2["⑥ fa_report<br/>填充8章报告模板"]
-            FA1 --> FA2
-        end
+        FA["⑤ fa_analyze<br/>LLM生成正文+摘要+组装8章报告"]
+        IA["⑥ ia_analyze<br/>LLM生成正文+摘要+组装7章报告"]
 
-        subgraph IA["投资分析子图"]
-            IA1["⑦ ia_analyze<br/>LLM解读估值+风险"]
-            IA2["⑧ ia_report<br/>填充7章报告模板"]
-            IA1 --> IA2
-        end
-
-        Merge["⑨ merge<br/>拼接FA+IA + LLM综合摘要"]
-        GenFile["⑩ generate_file<br/>Word/PPT导出"]
-        Output(["⑪ Gradio展示"])
+        Merge["⑦ merge<br/>拼接FA+IA报告 + LLM综合摘要"]
+        GenFile["⑧ generate_file<br/>Word/PPT导出"]
     end
 
     PREP --> Route
@@ -51,7 +44,7 @@ flowchart TB
     FA -->|"单Agent"| GenFile
     IA -->|"单Agent"| GenFile
     Merge --> GenFile
-    GenFile --> Output
+    GenFile --> END([END])
 
     style PREP fill:#e8f5e9
     style Route fill:#ff9800,color:#fff
@@ -66,9 +59,9 @@ flowchart TB
 | 层级     | 选型            | 职责                                               |
 | -------- | --------------- | -------------------------------------------------- |
 | L1 前端  | Gradio 5.x      | 表单输入 + 报告展示 + 文件下载                     |
-| L2 Agent | LangGraph       | 11 节点 + 条件路由 + 并行子图                      |
+| L2 Agent | LangGraph       | 8 节点 + 条件路由 + 并行派发                       |
 | L3 数据  | pandas + SQLite | AKShare 拉取 + 20 指标计算 + 报表持久化 + 行情缓存 |
-| L4 LLM   | DeepSeek / Qwen | LiteLLM 路由                                       |
+| L4 LLM   | DeepSeek        | LiteLLM 路由                                       |
 
 ## 快速开始
 
@@ -91,27 +84,41 @@ src/finance_agent/
 ├── graph.py              # LangGraph 主图 + 条件路由
 ├── state.py              # AnalysisState TypedDict
 ├── app.py                # Gradio 前端入口
+├── app_search.py         # 股票搜索
+├── formatters.py         # LLM 上下文格式化
 ├── routing.py            # 路由函数
+├── llm.py                # LLM 调用封装
 ├── nodes/                # 图节点
 │   ├── cache.py          # check_cache
 │   ├── fetch.py          # fetch_data
+│   ├── validate.py       # validate_financials (勾稽校验)
 │   ├── compute.py        # compute_metrics
-│   ├── fa.py             # 财务分析子图
-│   ├── ia.py             # 投资分析子图
-│   ├── merge.py          # 综合合并
-│   └── output.py         # Word/PPT 生成
+│   ├── fa.py             # fa_analyze (正文+摘要+8章组装)
+│   ├── ia.py             # ia_analyze (正文+摘要+7章组装)
+│   ├── merge.py          # merge (综合报告合并)
+│   └── output.py         # generate_file (Word/PPT 生成)
 ├── metrics/              # 指标计算（纯函数）
+│   ├── validate.py       # 勾稽校验 4 规则
 │   ├── solvency.py       # 偿债 5 指标
 │   ├── profitability.py  # 盈利 5 指标
 │   ├── efficiency.py     # 运营 4 指标
 │   ├── cashflow.py       # 现金流 6 指标
 │   ├── dupont.py         # 杜邦 3 层分解
-│   ├── traffic_light.py  # 红黄绿灯 + 评分
+│   ├── traffic_light.py  # 红黄绿灯 + 健康度评分
 │   ├── relative.py       # 相对估值
 │   └── garp.py           # GARP 筛选
 ├── data/                 # 数据层
 │   ├── akshare_client.py # AKShare API 封装
 │   └── cache.py          # SQLite 持久化 + 缓存
+├── events/               # 关键事件获取
+│   ├── pipeline.py       # 事件管线（3 级降级）
+│   ├── preset_loader.py  # L1 预设事件
+│   ├── web_fetcher.py    # L2 DuckDuckGo 搜索
+│   └── fallback.py       # L3 兜底注释
+├── export/               # 报告导出
+│   ├── parser.py         # Markdown 解析器
+│   ├── docx_exporter.py  # Word 导出
+│   └── pptx_exporter.py  # PPT 导出
 ├── prompts/              # LLM prompt
 └── templates/            # 报告模板
 ```
@@ -119,9 +126,9 @@ src/finance_agent/
 ## 实施阶段
 
 - [x] **P0 骨架** — 脚手架 + 空图 + Gradio 表单 + stub happy path
-- [ ] **P1 数据层** — AKShare + 20 指标 + 缓存 + FA 报告
-- [ ] **P2 分析层** — IA Agent + prompt 工程 + 投资报告
-- [ ] **P3 输出层** — 综合分析 + Word/PPT 导出 + UI 打磨
+- [x] **P1 数据层** — AKShare + 20 指标 + 缓存 + FA 报告
+- [x] **P2 分析层** — IA Agent + prompt 工程 + 投资报告
+- [x] **P3 输出层** — 综合分析 + Word/PPT 导出 + UI 打磨
 
 ## 文档
 

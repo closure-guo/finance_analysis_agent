@@ -13,7 +13,7 @@
 | L1 前端  | Gradio 5.x Blocks API         | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
 | L2 Agent | LangGraph                     | 12 节点 + 2 子图 + 数据准备子图 + 条件路由                          |
 | L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（MVP 不含 Chroma/Tavily） |
-| L4 LLM   | DeepSeek(开发) / GPT-4o(Demo) | LiteLLM 路由 + 降级链                                               |
+| L4 LLM   | DeepSeek (deepseek-v4-pro) | LiteLLM 路由                                               |
 
 ### 1.2 核心原则
 
@@ -25,7 +25,7 @@
 
 ---
 
-## 二、图拓扑：12 节点
+## 二、图拓扑：8 节点
 
 ```mermaid
 flowchart TB
@@ -46,14 +46,12 @@ flowchart TB
             VF -->|"FAIL 硬等式"| END_ERR(["终止: 数据校验失败"])
         end
 
-        Route{"⑤ route"}
+        FA["⑤ fa_analyze<br/>读State全部分析数据<br/>LLM生成正文+摘要+组装8章报告"]
 
-        FA["⑥ fa_analyze<br/>读State全部分析数据<br/>LLM生成正文+摘要+组装8章报告"]
+        IA["⑥ ia_analyze<br/>读State行业+估值+风险<br/>LLM生成正文+摘要+组装7章报告"]
 
-        IA["⑦ ia_analyze<br/>读State行业+估值+风险<br/>LLM生成正文+摘要+组装7章报告"]
-
-        Merge["⑧ merge_reports<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
-        GenFile["⑨ generate_file<br/>python-docx/pptx生成Word/PPT"]
+        Merge["⑦ merge<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
+        GenFile["⑧ generate_file<br/>python-docx/pptx生成Word/PPT"]
     end
 
     PREP --> Route
@@ -93,13 +91,12 @@ flowchart TB
 | ②   | fetch_data          | missing_items                        | L1+L2+L4 全部原始数据                    | 否  |
 | ③   | validate_financials | L1 三大报表                          | validation_result + warnings             | 否  |
 | ④   | compute_metrics     | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP+健康度 | 否  |
-| ⑤   | route               | analysis_type                        | 无                                       | 否  |
-| ⑥   | fa_analyze          | 四维度+灯+杜邦+同业+异常+warnings    | financial_analysis + financial_report    | 是  |
-| ⑦   | ia_analyze          | 行业+估值+GARP+风险                  | investment_analysis + investment_report  | 是  |
-| ⑧   | merge               | financial_report + investment_report | final_report                             | 是  |
-| ⑨   | generate_file       | final_report                         | file_path + file_paths                   | 否  |
+| ⑤   | fa_analyze          | 四维度+灯+杜邦+同业+异常+warnings    | financial_analysis + financial_report    | 是  |
+| ⑥   | ia_analyze          | 行业+估值+GARP+风险                  | investment_analysis + investment_report  | 是  |
+| ⑦   | merge               | financial_report + investment_report | final_report                             | 是  |
+| ⑧   | generate_file       | final_report                         | file_path + file_paths                   | 否  |
 
-> 注：fa_analyze / ia_analyze 采用双阶段生成（Phase 1 正文 → Phase 2 摘要 → Phase 3 模板组装），原设计的独立 fa_report / ia_report 节点已合并，以简化图拓扑。
+> 注：fa_analyze / ia_analyze 采用双阶段生成（Phase 1 正文 → Phase 2 摘要 → Phase 3 模板组装），原设计的独立 fa_report / ia_report 节点已合并，以简化图拓扑。路由通过 LangGraph `Send` API 实现并行派发，不是独立节点。
 
 ---
 
@@ -110,18 +107,18 @@ flowchart TB
 | 策略       | 数据               | 存储方式                 | 原因                                     |
 | ---------- | ------------------ | ------------------------ | ---------------------------------------- |
 | **持久化** | 三大报表           | SQLite                   | 历史事实不可变，拉一次存下来，新季度追加 |
-| **持久化** | 分析报告快照       | SQLite 主表              | 用户历史报告，按标的/时间检索            |
 | **缓存**   | 行情数据           | SQLite（TTL 到当日收盘） | 每天变动                                 |
 | **缓存**   | 行业归属           | SQLite（TTL 30 天）      | 极少变                                   |
 | **缓存**   | AKShare 预计算指标 | SQLite（TTL 同报表）     | 跟随报表时效                             |
+| **缓存**   | 行业 PE            | SQLite（TTL 1 天）       | 每天变动                                 |
 | **不存储** | L3 衍生计算        | 每次重算                 | 纯 pandas，无 API，毫秒级                |
 
-### 4.2 自动追踪
+### 4.2 自动追踪（v2.0 计划）
 
 | 用途                                         | 方式        | 备注                    |
 | -------------------------------------------- | ----------- | ----------------------- |
-| 断点恢复                                     | SqliteSaver | 本地，不跨会话          |
-| 历史观测（每节点 I/O + 耗时 + token + 异常） | LangSmith   | 云端，30 天保留，零代码 |
+| 断点恢复                                     | SqliteSaver | 本地，不跨会话（未接入）|
+| 历史观测（每节点 I/O + 耗时 + token + 异常） | LangSmith   | 云端，30 天保留，零代码（未接入）|
 
 ### 4.3 缓存状态机
 
@@ -163,30 +160,28 @@ stateDiagram-v2
 
 ### 5.1 指标清单与数据来源
 
-| 维度      | 指标              | 来源    |
-| --------- | ----------------- | ------- |
-| 偿债(5)   | 资产负债率        | AKShare |
-|           | 流动比率          | AKShare |
-|           | 速动比率          | AKShare |
-|           | 利息覆盖倍数      | 自算    |
-|           | 净债务/EBITDA     | 自算    |
-| 盈利(5)   | 毛利率            | AKShare |
-|           | 净利率            | AKShare |
-|           | ROE               | AKShare |
-|           | ROA               | AKShare |
-|           | ROIC              | 自算    |
-| 运营(4)   | 存货周转率        | AKShare |
-|           | 应收账款周转率    | AKShare |
-|           | 总资产周转率      | AKShare |
-|           | 应付账款周转率    | 自算    |
-| 现金流(6) | 经营现金流/净利润 | 自算    |
-|           | FCF               | 自算    |
-|           | 资本支出/折旧     | 自算    |
-|           | 现金流覆盖比率    | 自算    |
-|           | FCF 收益率        | 自算    |
-|           | 留存现金流比率    | 自算    |
-
-10 个 AKShare 预计算 + 11 个自算。
+| 维度      | 指标              | 来源   | 说明                                           |
+| --------- | ----------------- | ------ | ---------------------------------------------- |
+| 偿债(5)   | 资产负债率        | 自算   | 负债合计 / 资产总计                            |
+|           | 流动比率          | 自算   | 流动资产 / 流动负债                            |
+|           | 速动比率          | 自算   | (流动资产 - 存货) / 流动负债                   |
+|           | 利息覆盖倍数      | 自算   | EBIT / 利息费用                                |
+|           | 净债务/EBITDA     | 自算   | (有息负债 - 货币资金) / EBITDA                 |
+| 盈利(5)   | 毛利率            | 自算   | (营业收入 - 营业成本) / 营业收入               |
+|           | 净利率            | 自算   | 归母净利润 / 营业收入                          |
+|           | ROE               | 混合   | 优先取 AKShare 加权 ROE；降级自算              |
+|           | ROA               | 自算   | 净利润 / 资产总计                              |
+|           | ROIC              | 自算   | NOPAT / 投入资本                               |
+| 运营(4)   | 存货周转率        | 混合   | 优先取 AKShare 预计算；降级自算                |
+|           | 应收账款周转率    | 自算   | 营业收入 / 应收账款平均余额                    |
+|           | 总资产周转率      | 自算   | 营业收入 / 资产总计                            |
+|           | 应付账款周转率    | 自算   | 营业成本 / 应付账款                            |
+| 现金流(6) | 经营现金流/净利润 | 自算   | 经营现金流净额 / 净利润                        |
+|           | FCF               | 自算   | 经营现金流净额 - 资本支出                      |
+|           | 资本支出/折旧     | 自算   | 资本支出 / 折旧变动                            |
+|           | 现金流覆盖比率    | 自算   | FCF / (资本支出 + 利息)                        |
+|           | FCF 收益率        | 自算   | FCF / 营业收入 (MVP 简化版)                    |
+|           | 留存现金流比率    | 自算   | (FCF - 分红) / FCF                             |
 
 ### 5.2 红黄绿灯阈值
 
@@ -199,7 +194,7 @@ stateDiagram-v2
 | ROE        | >15%     | 8-15%    | <8%     |
 | FCF        | 正且增长 | 正但下降 | 负值    |
 
-运营效率维度使用行业均值倍数：> 行业均值×1.2 = 🟢。
+运营效率维度使用固定阈值，白酒/酿酒行业通过 `INDUSTRY_OVERRIDES` 覆盖存货周转率阈值（因基酒需长期陈酿）。
 
 **变化率阈值（统一）**：<20% 🟢 / 20-50% 🟡 / >50% 🔴
 
@@ -212,7 +207,7 @@ stateDiagram-v2
 
 ```
 L1: ROE = 净利率 × 总资产周转率 × 权益乘数
-L2: 净利率 → 毛利率-费用率；周转率 → 存货/应收/固定资产；权益乘数 → 负债结构
+L2: 净利率 → 毛利率 - 费用率
 L3: 费用率 → 销售费用率 + 管理费用率 + 研发费用率 + 财务费用率
 ```
 
@@ -221,37 +216,34 @@ L3: 费用率 → 销售费用率 + 管理费用率 + 研发费用率 + 财务�
 ## 六、LangGraph State 结构
 
 ```python
-from typing import TypedDict, Optional, Literal
+from typing import TypedDict, Literal
 import pandas as pd
 
-class AnalysisState(TypedDict):
+class AnalysisState(TypedDict, total=False):
     # ── 输入 ──
     query: str
     stock_code: str
     analysis_type: Literal["financial", "investment", "comprehensive"]
-    peer_codes: Optional[list[str]]  # 用户手动指定的对标股票，None 则自动选取
+    peer_codes: list[str] | None
+    enable_web_search: bool  # Gradio 开关：是否启用实时事件搜索
 
     # ── Cache ──
     cache_result: str  # HIT | MISS
 
-    # ── Layer 1: 基础公共 ──
+    # ── Validation ──
+    validation_result: str  # PASS | FAIL
+    validation_warnings: list[str]
+
+    # ── Layer 1: 基础公共数据 ──
     balance_sheet: pd.DataFrame
     income_statement: pd.DataFrame
     cash_flow_statement: pd.DataFrame
     stock_quote: dict
     industry_info: dict
 
-    # ── Layer 2: 分析导向 (MVP: 仅预计算指标) ──
-    financial_indicators: Optional[pd.DataFrame]
-
-    # ── Layer 2 扩展 (v2.0) ──
-    # annual_report_text: Optional[str]
-    # research_reports: Optional[list[dict]]
-    # industry_search: Optional[list[dict]]
-
-    # ── Validation ──
-    validation_result: str  # PASS | FAIL
-    validation_warnings: list[str]  # 软规则告警（LLM 报告可引用）
+    # ── Layer 2: 分析导向 ──
+    financial_indicators: pd.DataFrame | None
+    industry_pe: dict | None
 
     # ── Layer 3: 衍生计算 ──
     solvency_metrics: dict
@@ -262,23 +254,29 @@ class AnalysisState(TypedDict):
     growth_rates: dict
     anomalies: list
     traffic_lights: dict
+    health_score: dict | None
 
     # ── Layer 3 扩展: 同业+估值 ──
-    peer_financials: Optional[pd.DataFrame]
-    peer_comparison: Optional[dict]
-    relative_valuation: Optional[dict]
-    garp_result: Optional[dict]
+    peer_financials: pd.DataFrame | None
+    peer_comparison: dict | None
+    relative_valuation: dict | None
+    garp_result: dict | None
 
-    # ── Layer 3 扩展: DCF (v2.0) ──
-    # dcf_base: Optional[dict]
+    # ── Layer 3 扩展: 季度趋势 ──
+    quarterly_income: pd.DataFrame | None
+    quarterly_trend: dict | None
+
+    # ── Layer 2.5: 关键非财务事件（仅 IA 使用）──
+    key_events: list[dict] | None
 
     # ── Agent 输出 ──
-    financial_analysis: Optional[str]
-    financial_report: Optional[str]
-    investment_analysis: Optional[str]
-    investment_report: Optional[str]
-    final_report: Optional[str]
-    file_path: Optional[str]
+    financial_analysis: str | None
+    financial_report: str | None
+    investment_analysis: str | None
+    investment_report: str | None
+    final_report: str | None
+    file_path: str | None
+    file_paths: dict | None
 ```
 
 ---
@@ -319,8 +317,7 @@ def after_agent(state):
 | --------- | ----------------- | --------------- | ------------------------------- |
 | 前端      | Gradio 5.x Blocks | Streamlit       | 表单布局灵活 + share 链接       |
 | Agent     | LangGraph         | CrewAI          | Supervisor + Sub-graph 原生支持 |
-| LLM(开发) | DeepSeek-V3.2     | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
-| LLM(Demo) | GPT-4o            | Claude 3.5      | 长链推理最强                    |
+| LLM(开发) | DeepSeek-V4-Pro  | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
 | LLM 路由  | LiteLLM           | 自定义          | 100+ 模型统一接口               |
 | PDF       | pdfplumber        | Unstructured.io | 表格准确率 98.3%，速度快 6x     |
 | 数据      | AKShare           | Tushare         | 免费无 API Key                  |

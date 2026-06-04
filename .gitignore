@@ -225,6 +225,9 @@ test-assets/cache/
 reports/
 screenshots/
 
+# Playwright MCP cache
+.playwright-mcp/
+
 # SQLite cache files
 cache.db*
 

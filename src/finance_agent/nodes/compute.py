@@ -62,7 +62,17 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
         result["health_score"] = compute_health_score(traffic_lights, latest_year)
 
     # ── 增长率 ──
-    result["growth_rates"] = _calc_growth_rates(all_metrics, years)
+    growth = _calc_growth_rates(all_metrics, years)
+
+    # 补算营收和净利润绝对值增长率，避免 LLM 自行计算
+    if len(years) >= 2:
+        _append_absolute_growth(growth, inc, years, "营业收入", "profitability")
+        _append_absolute_growth(growth, inc, years, "归母净利润", "profitability")
+        _append_absolute_growth(
+            growth, inc, years, "净利润", "profitability", fallback_col="归母净利润"
+        )
+
+    result["growth_rates"] = growth
 
     # ── 异常检测 ──
     result["anomalies"] = _detect_anomalies(traffic_lights, result["growth_rates"], latest_year)
@@ -118,6 +128,35 @@ def _calc_growth_rates(
                 rate = None
             growth.setdefault(dim_name, {})[metric_name] = rate
     return growth
+
+
+def _append_absolute_growth(
+    growth: dict[str, dict[str, float | None]],
+    income_statement: pd.DataFrame,
+    years: list[str],
+    col_name: str,
+    dim_name: str,
+    fallback_col: str | None = None,
+) -> None:
+    """从利润表取绝对值计算同比增长率，追加到 growth dict。"""
+    latest, prev = years[0], years[1]
+
+    def _get_val(year: str) -> float | None:
+        mask = income_statement["报告日"].astype(str).str.startswith(year)
+        rows = income_statement[mask]
+        if rows.empty:
+            return None
+        v = rows.iloc[0].get(col_name)
+        if (v is None or (isinstance(v, float) and pd.isna(v))) and fallback_col:
+            v = rows.iloc[0].get(fallback_col)
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        return float(v)
+
+    v_new = _get_val(latest)
+    v_old = _get_val(prev)
+    if v_new is not None and v_old is not None and v_old != 0:
+        growth.setdefault(dim_name, {})[col_name] = (v_new - v_old) / abs(v_old)
 
 
 def _detect_anomalies(

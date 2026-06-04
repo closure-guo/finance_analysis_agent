@@ -69,14 +69,14 @@
 
 ## Implementation Decisions
 
-### Architecture: 4-Layer, 12 Nodes
+### Architecture: 4-Layer, 8 Nodes
 
 系统采用 4 层架构，MVP 去掉 MCP 层：
 
 - **L1 前端**：Gradio 5.x Blocks API，表单输入 + 报告展示 + 文件下载
-- **L2 Agent**：LangGraph，12 个节点 + 2 个 Agent 子图 + 数据准备子图 + 条件路由
+- **L2 Agent**：LangGraph，8 个节点 + 条件路由 + Send 并行派发
 - **L3 数据**：pandas + SQLite，AKShare 数据拉取 + 全部计算 + 缓存
-- **L4 LLM**：DeepSeek-V3.2（开发）/ GPT-4o（Demo），LiteLLM 路由
+- **L4 LLM**：DeepSeek-V4-Pro，LiteLLM 路由
 
 ### Graph Topology
 
@@ -85,12 +85,11 @@ START(用户输入 stock_code + analysis_type)
   → check_cache
   → [HIT: validate_financials] / [MISS: fetch_data → validate_financials]
   → [PASS: compute_metrics] / [FAIL: END]
-  → route(按 analysis_type)
-  → financial: fa_analyze → fa_report
-  → investment: ia_analyze → ia_report
-  → comprehensive: (fa_analyze → fa_report) ∥ (ia_analyze → ia_report) → merge
+  → route_to_agent(Send 并行派发)
+  → financial: fa_analyze
+  → investment: ia_analyze
+  → comprehensive: fa_analyze ∥ ia_analyze → merge
   → generate_file(python-docx/pptx)
-  → output(Gradio)
 ```
 
 数据准备子图有三条路径：MISS（首次分析，拉取+持久化+校验+计算）、HIT（报表已有，校验+计算）和 FAIL（硬等式校验失败，终止）。PASS 路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
@@ -111,7 +110,7 @@ LangGraph State 使用 TypedDict（非 Pydantic BaseModel），因为 LangGraph 
 
 ### Agent Nodes Are Pure LLM Consumers
 
-Agent 节点（fa_analyze, fa_report, ia_analyze, ia_report, merge）只读 State + 调 LLM，不拉数据、不做计算。所有数据拉取和计算集中在数据准备子图。
+Agent 节点（fa_analyze, ia_analyze, merge）只读 State + 调 LLM，不拉数据、不做计算。所有数据拉取和计算集中在数据准备子图。fa_analyze / ia_analyze 各自完成正文生成 + 摘要生成 + 模板组装，无独立 report 节点。
 
 ### Data Preparation: AKShare Only (MVP)
 
@@ -128,7 +127,7 @@ fetch_data 分两步：
 
 compute_metrics 节点执行所有计算，纯 pandas 无 LLM：
 
-- 四维度 20 指标（10 个 AKShare 预计算 + 11 个自算）
+- 四维度 20 指标（绝大多数自算，ROE 和存货周转率优先取 AKShare 预计算值）
 - 3 层杜邦分解
 - 红黄绿灯矩阵（双重阈值：绝对值水平 + 同比变化率）
 - 健康度评分（四维度各 25 分）
@@ -173,7 +172,7 @@ MVP 报告纯 Markdown + 表格，不引入图表库。
 
 每个指标通过双重阈值评判：
 
-- 绝对值水平：优良/关注/警告（各指标阈值不同，运营效率用行业均值倍数）
+- 绝对值水平：优良/关注/警告（各指标阈值不同，白酒/酿酒等行业通过 `INDUSTRY_OVERRIDES` 覆盖）
 - 同比变化率：<20% 稳定 / 20-50% 波动 / >50% 异动
 - 最终灯色 = max(绝对值灯, 变化率灯)
 
@@ -182,8 +181,7 @@ MVP 报告纯 Markdown + 表格，不引入图表库。
 ### Persistence
 
 - **LangGraph State**：内存，节点间数据传递
-- **LangGraph Checkpoint**：SQLite（SqliteSaver），中断恢复
-- **SQLite Cache**：跨会话数据复用，按 TTL 过期（三大报表到下个财报季，行情到当日收盘，行业归属 30 天）
+- **SQLite Cache**：跨会话数据复用，按 TTL 过期（三大报表永久，行情到当日收盘，行业归属 30 天）
 
 ### DCF Parameters (v2.0, Recorded for Future)
 
@@ -200,8 +198,8 @@ src/finance_agent/
 │   ├── fetch.py          # fetch_data 节点（编排 AKShare 调用）
 │   ├── validate.py       # validate_financials 节点（编排勾稽校验）
 │   ├── compute.py        # compute_metrics 节点（编排 metrics/ 计算）
-│   ├── fa.py             # FA 子图：fa_analyze + fa_report
-│   ├── ia.py             # IA 子图：ia_analyze + ia_report
+│   ├── fa.py             # fa_analyze (正文+摘要+8章组装)
+│   ├── ia.py             # ia_analyze (正文+摘要+7章组装)
 │   ├── merge.py          # merge 节点（拼接 + LLM 摘要）
 │   └── output.py         # generate_file 节点（Word/PPT）
 ├── metrics/
@@ -261,7 +259,7 @@ src/finance_agent/
 - validate.py: 4 条勾稽规则 + 硬/软分级 + 阈值边界（试算平衡通过/失败、利润表勾稽偏差在阈值内/外）
 - solvency.py: 5 个指标计算 + 阈值边界
 - profitability.py: 5 个指标计算 + 阈值边界
-- efficiency.py: 4 个指标计算 + 行业均值倍数阈值
+- efficiency.py: 4 个指标计算 + 行业阈值覆盖边界
 - cashflow.py: 6 个指标计算 + FCF 正负值边界
 - dupont.py: 3 层分解数值验证
 - traffic_light.py: 双重阈值矩阵 + max 规则 + 评分计算
