@@ -80,10 +80,40 @@ class AKShareClient:
     def _trim_years(self, df: pd.DataFrame, years: int = 5) -> pd.DataFrame:
         return df.head(years)
 
+    def _rename_parent_cols(self, df: pd.DataFrame) -> pd.DataFrame:
+        """重命名归母口径列，解决终端编码不一致问题。
+
+         AKShare 返回的中文列名在部分环境中出现编码差异，导致
+         row.get('归属于母公司股东的净利润') 返回 None。
+        通过列位置定位并统一重命名为标准列名。
+        """
+        if df.empty:
+            return df
+        cols = list(df.columns)
+
+        # 利润表：索引 50 = 归属于母公司股东的净利润, 索引 137 = 归属于母公司股东权益合计
+        # 资产负债表：索引 137 = 归属于母公司股东权益合计
+        # 这些索引基于 AKShare stock_financial_report_sina 的稳定列序
+        _rename_map = {
+            50: "归母净利润",
+            137: "归母所有者权益",
+        }
+        rename_dict: dict[str, str] = {}
+        for idx, new_name in _rename_map.items():
+            if idx < len(cols):
+                old_name = cols[idx]
+                # 仅当该列尚未被重命名时才处理
+                if old_name != new_name and new_name not in cols:
+                    rename_dict[old_name] = new_name
+        if rename_dict:
+            df = df.rename(columns=rename_dict)
+        return df
+
     def fetch_balance_sheet(self, stock_code: str, years: int = 5) -> pd.DataFrame:
         stock = _add_prefix(stock_code)
         df = ak.stock_financial_report_sina(stock=stock, symbol="资产负债表")
         df = self._filter_annual(df)
+        df = self._rename_parent_cols(df)
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)
 
@@ -91,6 +121,7 @@ class AKShareClient:
         stock = _add_prefix(stock_code)
         df = ak.stock_financial_report_sina(stock=stock, symbol="利润表")
         df = self._filter_annual(df)
+        df = self._rename_parent_cols(df)
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)
 

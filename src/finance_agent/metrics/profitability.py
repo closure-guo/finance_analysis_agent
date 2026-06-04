@@ -47,11 +47,18 @@ def calc_profitability(
 
         revenue = _safe(row_is.get("营业收入"))
         cost = _safe(row_is.get("营业成本"))
-        net_income = _safe(row_is.get("净利润"))
+        # 使用归母净利润口径（投资者关注的核心指标）
+        net_income = _safe(row_is.get("归母净利润"))
+        # 回退：如果归母净利润缺失，使用合并净利润
+        if net_income == 0:
+            net_income = _safe(row_is.get("净利润"))
         profit_before_tax = _safe(row_is.get("利润总额"))
         tax = _safe(row_is.get("所得税费用"))
         interest = _safe(row_is.get("利息费用"))
-        equity = _safe(row_bs.get("所有者权益(或股东权益)合计"))
+        # ROE 分母使用归母权益；回退到所有者权益合计
+        equity = _safe(row_bs.get("归母所有者权益"))
+        if equity == 0:
+            equity = _safe(row_bs.get("所有者权益(或股东权益)合计"))
         short_debt = _safe(row_bs.get("短期借款"))
         long_debt = _safe(row_bs.get("长期借款"))
         bonds = _safe(row_bs.get("应付债券"))
