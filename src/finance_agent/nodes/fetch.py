@@ -102,6 +102,22 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
         logger.warning("季度利润表拉取失败: %s", e)
         result["quarterly_income"] = None
 
+    # Step 1: 关键非财务事件（非必需，失败不阻塞，降级安全）
+    try:
+        from finance_agent.events.pipeline import fetch_key_events
+
+        use_web = state.get("enable_web_search", True)
+        events = fetch_key_events(
+            code,
+            (result.get("industry_info") or {}).get("name", ""),
+            use_web_search=use_web,
+        )
+        c.set(f"{code}:key_events", events)
+        result["key_events"] = events
+    except Exception as e:
+        logger.warning("关键事件获取失败: %s", e)
+        result["key_events"] = []
+
     # Step 2: 同业数据（依赖行业归属）
     try:
         peers = _fetch_peers(ak, code, state, result.get("industry_info"))

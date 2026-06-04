@@ -280,6 +280,35 @@ def _fmt_val(v: Any) -> str:
     return str(v)
 
 
+def format_key_events(key_events: list[dict] | None) -> str:
+    if not key_events:
+        return "暂无重大非财务事件记录。"
+
+    # 检测是否为兜底事件
+    if len(key_events) == 1 and key_events[0].get("type") == "数据状态":
+        return "### 关键事件\n> 事件数据暂时不可用。当前仅展示预构建库数据。"
+
+    lines = ["### 关键非财务事件"]
+    for e in key_events:
+        date = e.get("date", "")
+        etype = e.get("type", "")
+        title = e.get("title", "")
+        summary = e.get("summary", "")
+        impact = e.get("impact", "neutral")
+        level = e.get("level", "L1")
+        ongoing = " [持续中]" if e.get("ongoing") else ""
+        impact_emoji = {"positive": "▲", "negative": "▼", "neutral": "●"}.get(impact, "●")
+
+        # L2 事件附加前瞻信号标注
+        level_tag = "【前瞻信号】" if level == "L2" else ""
+
+        lines.append(f"- **{date}** {impact_emoji} **{etype}**：{title}{ongoing} {level_tag}")
+        if summary:
+            lines.append(f"  - {summary}")
+
+    return "\n".join(lines)
+
+
 def _get_light(tl_dim: dict, metric_name: str, year: str | None) -> str:
     if not year:
         return ""

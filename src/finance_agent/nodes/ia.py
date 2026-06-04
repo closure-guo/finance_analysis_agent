@@ -11,6 +11,7 @@ from datetime import datetime
 
 from finance_agent.formatters import (
     format_growth_rates,
+    format_key_events,
     format_quarterly_trend,
     format_risk_summary,
     format_stock_header,
@@ -79,6 +80,10 @@ def _build_context(state: dict) -> str:
     # 季度趋势
     quarterly = format_quarterly_trend(state.get("quarterly_trend"))
     sections.append(quarterly)
+
+    # 关键非财务事件（Layer 2.5，仅 IA）
+    key_events = format_key_events(state.get("key_events"))
+    sections.append(key_events)
 
     # 同业对比标记
     peer = state.get("peer_comparison")

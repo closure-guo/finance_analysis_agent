@@ -14,6 +14,7 @@ def analyze(
     stock_code: str,
     analysis_type: str,
     peer_codes: str,
+    enable_web_search: bool,
 ) -> tuple[str, str | None, str | None, dict, dict]:
     """Run analysis and return report + file paths."""
     if not stock_code or not stock_code.strip():
@@ -33,6 +34,7 @@ def analyze(
                 "stock_code": stock_code.strip(),
                 "analysis_type": analysis_type,
                 "peer_codes": peers,
+                "enable_web_search": enable_web_search,
             }
         )
     except ValueError as e:
@@ -111,6 +113,11 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
                 label="对标股票（可选，逗号分隔）",
                 placeholder="例：000858,000568",
             )
+            enable_web_search = gr.Checkbox(
+                label="启用实时事件搜索（WebSearch）",
+                value=True,
+                info="开启后优先通过网络搜索获取最新事件，失败时自动降级到预构建库。关闭后只读取本地预构建事件。",
+            )
             submit_btn = gr.Button("开始分析", variant="primary")
 
         # ── Right column: outputs ──
@@ -141,7 +148,7 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
     # Wire up analysis
     submit_btn.click(
         fn=analyze,
-        inputs=[stock_code, analysis_type, peer_codes],
+        inputs=[stock_code, analysis_type, peer_codes, enable_web_search],
         outputs=[
             output,
             docx_download,

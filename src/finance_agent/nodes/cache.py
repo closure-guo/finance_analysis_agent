@@ -62,4 +62,9 @@ def check_cache(state: dict, cache=None) -> dict:
     if industry_pe is not None:
         result["industry_pe"] = industry_pe
 
+    # key_events 有则附带
+    key_events = c.get(f"{code}:key_events")
+    if key_events is not None:
+        result["key_events"] = key_events
+
     return result

@@ -9,6 +9,7 @@ class AnalysisState(TypedDict, total=False):
     stock_code: str
     analysis_type: Literal["financial", "investment", "comprehensive"]
     peer_codes: list[str] | None
+    enable_web_search: bool  # Gradio 开关：是否启用实时事件搜索
 
     # ── Cache ──
     cache_result: str  # HIT | MISS
@@ -48,6 +49,9 @@ class AnalysisState(TypedDict, total=False):
     # ── Layer 3 扩展: 季度趋势 ──
     quarterly_income: pd.DataFrame | None
     quarterly_trend: dict | None
+
+    # ── Layer 2.5: 关键非财务事件（仅 IA 使用）──
+    key_events: list[dict] | None
 
     # ── Agent 输出 ──
     financial_analysis: str | None
