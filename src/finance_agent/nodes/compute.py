@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+
 from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
 from finance_agent.metrics.efficiency import calc_efficiency
@@ -74,8 +76,13 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
             if peers_list:
                 result["relative_valuation"] = calc_relative_valuation(target, peers_list)
 
+    # ── 净利润增长率（用于 GARP）──
+    net_profit_growth = _calc_net_profit_growth(inc, latest_year, years)
+
     # ── GARP（需要估值数据）──
-    result["garp_result"] = _try_garp(quote, profitability, solvency, ind, latest_year)
+    result["garp_result"] = _try_garp(
+        quote, profitability, solvency, ind, net_profit_growth, latest_year
+    )
 
     # ── 同业对比（如果有 peer 数据）──
     # TODO(Issue #4): peer_comparison 目前仅是标志位，需添加同业指标格式化器注入 LLM context
@@ -140,18 +147,56 @@ def _build_peers_list(peer_financials) -> list[dict]:
     return peers
 
 
-def _try_garp(quote, profitability, solvency, indicators, latest_year) -> dict | None:
+def _calc_net_profit_growth(
+    income_statement: pd.DataFrame,
+    latest_year: str | None,
+    years: list[str],
+) -> float | None:
+    """计算归母净利润的同比增长率（用于 GARP）。"""
+    if not latest_year or len(years) < 2:
+        return None
+    prev_year = years[1] if years[0] == latest_year else None
+    if not prev_year:
+        return None
+
+    def _get_np(df: pd.DataFrame, year: str) -> float | None:
+        mask = df["报告日"].astype(str).str.startswith(year)
+        rows = df[mask]
+        if rows.empty:
+            return None
+        # 优先使用归母净利润，回退到合并净利润
+        val = rows.iloc[0].get("归母净利润") or rows.iloc[0].get("净利润")
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return None
+        return float(val)
+
+    latest_np = _get_np(income_statement, latest_year)
+    prev_np = _get_np(income_statement, prev_year)
+    if latest_np is not None and prev_np is not None and prev_np != 0:
+        return (latest_np - prev_np) / abs(prev_np)
+    return None
+
+
+def _try_garp(
+    quote,
+    profitability,
+    solvency,
+    indicators,
+    net_profit_growth: float | None,
+    latest_year: str | None,
+) -> dict | None:
     pe = (quote or {}).get("PE") or (quote or {}).get("pe")
     industry_pe = (quote or {}).get("industry_avg_PE")
     if not latest_year:
         return None
-    growth = profitability.get("净利率", {}).get(latest_year)
     roe = profitability.get("ROE", {}).get(latest_year)
-    debt = solvency.get("资产负债率", {}).get(latest_year)
+    # 负债率从百分比转为小数（如 16.42 → 0.1642）
+    debt_pct = solvency.get("资产负债率", {}).get(latest_year)
+    debt = debt_pct / 100 if debt_pct is not None else None
     data = {
         "PE": pe,
         "industry_avg_PE": industry_pe,
-        "net_profit_growth": growth,
+        "net_profit_growth": net_profit_growth,
         "ROE": roe,
         "debt_ratio": debt,
     }
