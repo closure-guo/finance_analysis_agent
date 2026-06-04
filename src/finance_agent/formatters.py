@@ -222,7 +222,12 @@ def format_valuation_section(
         if details:
             lines.append("- 指标详情:")
             for k, v in details.items():
-                val = f"{v:.2f}" if isinstance(v, float) else (str(v) if v is not None else "N/A")
+                if v is None:
+                    val = "N/A"
+                elif isinstance(v, float):
+                    val = f"{v:.2%}" if k in ("净利润增长率", "负债率") else f"{v:.2f}"
+                else:
+                    val = str(v)
                 lines.append(f"  - {k}: {val}")
     else:
         lines.append("\n### GARP 筛选结果")

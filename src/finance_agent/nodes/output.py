@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def generate_file(state: dict) -> dict:
     stock_code = state.get("stock_code", "unknown")
     stock_name = _get_stock_name(state)
 
-    reports_dir = Path("reports")
+    reports_dir = Path(os.environ.get("REPORTS_DIR", "reports"))
     reports_dir.mkdir(exist_ok=True)
 
     date_str = datetime.now().strftime("%Y%m%d")

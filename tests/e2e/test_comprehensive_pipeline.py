@@ -2,9 +2,11 @@
 
 from unittest.mock import patch
 
+import pytest
+
 
 @patch("finance_agent.llm.call_llm")
-def test_comprehensive_pipeline(mock_llm):
+def test_comprehensive_pipeline(mock_llm, tmp_path):
     """验证 comprehensive 模式下：
     1. fa_analyze 和 ia_analyze 都被调用
     2. merge 在两者之后被调用
@@ -30,6 +32,10 @@ def test_comprehensive_pipeline(mock_llm):
         return f"LLM响应-{call_count}"
 
     mock_llm.side_effect = side_effect
+
+    # 将报告输出重定向到临时目录，避免污染 reports/
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
 
     graph = build_graph()
 
@@ -94,6 +100,12 @@ def test_comprehensive_pipeline(mock_llm):
     assert "核心数据对比" in final_report, "对比表格缺失"
     assert "免责声明" in final_report, "免责声明缺失"
     assert result.get("file_paths") is not None, "文件路径缺失"
+
+    # 验证文件输出到临时目录，而非 reports/
+    docx_path = result["file_paths"]["docx"]
+    assert str(tmp_path) in docx_path, f"报告写入了非临时目录：{docx_path}"
+
+    monkeypatch.undo()
 
     # 验证 LLM 调用次数：fa正文 + fa摘要 + ia正文 + ia摘要 + synthesis = 5 次
     # 但并行执行时 fa 和 ia 各自 2 次，synthesis 1 次

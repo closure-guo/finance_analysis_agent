@@ -33,9 +33,15 @@ def calc_dupont(
 
         revenue = _safe(row_is.get("营业收入"))
         cost = _safe(row_is.get("营业成本"))
-        net_income = _safe(row_is.get("净利润"))
+        # 使用归母净利润口径，与 profitability.py 保持一致
+        net_income = _safe(row_is.get("归母净利润"))
+        if net_income == 0:
+            net_income = _safe(row_is.get("净利润"))
         total_assets = _safe(row_bs.get("资产总计"))
-        equity = _safe(row_bs.get("所有者权益(或股东权益)合计"))
+        # 使用归母权益，与 profitability ROE 保持一致
+        equity = _safe(row_bs.get("归母所有者权益"))
+        if equity == 0:
+            equity = _safe(row_bs.get("所有者权益(或股东权益)合计"))
         sales_exp = _safe(row_is.get("销售费用"))
         admin_exp = _safe(row_is.get("管理费用"))
         rd_exp = _safe(row_is.get("研发费用"))
