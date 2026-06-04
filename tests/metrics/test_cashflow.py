@@ -94,3 +94,55 @@ class TestCalcCashflow:
         )
         result = calc_cashflow(bs, is_, cf)
         assert result["经营现金流/净利润"]["2024"] is None
+
+    def test_fcf_growth_rate_in_growth_rates(self):
+        """FCF 增长率应通过 growth_rates 传递给 LLM，而非由 LLM 自算。
+
+        fixture: FCF(2024)=170, FCF(2023)=150
+        growth = (170-150)/150 = 13.3%
+        """
+        from finance_agent.nodes.compute import _calc_growth_rates
+
+        cfm = calc_cashflow(self._bs(), self._is(), self._cf())
+        all_metrics = {"cashflow": cfm}
+        years = sorted({y for v in cfm.values() for y in v}, reverse=True)
+        gr = _calc_growth_rates(all_metrics, years)
+
+        fcf_growth = gr.get("cashflow", {}).get("FCF")
+        assert fcf_growth is not None
+        expected = (170 - 150) / 150
+        assert isclose(fcf_growth, expected, rel_tol=1e-2)
+
+    def _bs(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231", "20221231"],
+                "营业收入": [1000.0, 900.0, 800.0],
+                "累计折旧": [120.0, 100.0, 80.0],
+            }
+        )
+
+    def _is(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231", "20221231"],
+                "净利润": [170.0, 153.0, 136.0],
+                "利息费用": [20.0, 18.0, 16.0],
+            }
+        )
+
+    def _cf(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231", "20221231"],
+                "经营活动产生的现金流量净额": [250.0, 220.0, 200.0],
+                "购建固定资产、无形资产和其他长期资产所支付的现金": [80.0, 70.0, 60.0],
+                "分配股利、利润或偿付利息所支付的现金": [50.0, 45.0, 40.0],
+            }
+        )
