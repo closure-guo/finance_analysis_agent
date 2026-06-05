@@ -47,3 +47,33 @@ def test_call_llm_env_model(mock_completion):
     call_kwargs = mock_completion.call_args[1]
     assert call_kwargs["model"] == "gpt-4o"
     assert call_kwargs["api_key"] == "sk-test"
+
+
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_param_api_key_overrides_env(mock_completion):
+    """传入 api_key 参数时优先使用，忽略环境变量。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "ok"
+    mock_completion.return_value = mock_resp
+
+    from finance_agent.llm import call_llm
+
+    with patch.dict("os.environ", {"LLM_API_KEY": "sk-env-value"}):
+        call_llm("hi", api_key="sk-param-value")
+    call_kwargs = mock_completion.call_args[1]
+    assert call_kwargs["api_key"] == "sk-param-value"
+
+
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_no_api_key_no_env(mock_completion):
+    """api_key 参数和 env 都没有时，不传 api_key 给 litellm。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "ok"
+    mock_completion.return_value = mock_resp
+
+    from finance_agent.llm import call_llm
+
+    with patch.dict("os.environ", {}, clear=True):
+        call_llm("hi", api_key="")
+    call_kwargs = mock_completion.call_args[1]
+    assert "api_key" not in call_kwargs

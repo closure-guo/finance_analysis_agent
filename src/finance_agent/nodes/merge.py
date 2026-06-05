@@ -36,7 +36,9 @@ def merge_reports(state: dict) -> dict:
     comparison_table = _build_comparison_table(state)
 
     # 综合结论
-    synthesis = _generate_synthesis(fa_analysis, ia_analysis, comparison_table)
+    synthesis = _generate_synthesis(
+        fa_analysis, ia_analysis, comparison_table, api_key=state.get("api_key")
+    )
 
     final = (
         f"# 综合分析报告\n\n"
@@ -97,7 +99,9 @@ def _build_comparison_table(state: dict) -> str:
     return "\n".join(rows) if len(rows) > 2 else "*暂无对比数据*"
 
 
-def _generate_synthesis(fa_analysis: str, ia_analysis: str, comparison_table: str) -> str:
+def _generate_synthesis(
+    fa_analysis: str, ia_analysis: str, comparison_table: str, api_key: str | None = None
+) -> str:
     """调用 LLM 生成 300-500 字综合摘要。"""
     if not fa_analysis and not ia_analysis:
         return "暂无分析数据。"
@@ -113,4 +117,5 @@ def _generate_synthesis(fa_analysis: str, ia_analysis: str, comparison_table: st
         system="你是资深投资顾问，擅长整合财务分析与投资分析观点，撰写简明扼要的综合结论。",
         temperature=0.3,
         max_tokens=1024,
+        api_key=api_key,
     )

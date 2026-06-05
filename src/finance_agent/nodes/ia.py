@@ -25,15 +25,19 @@ def ia_analyze(state: dict) -> dict:
     try:
         # ── 格式化 state 数据 → LLM context ──
         context = _build_context(state)
+        api_key = state.get("api_key")
 
         # ── Phase 1: 生成正文（第 3-6 章）──
         system_prompt = load_prompt("ia_analyze")
-        body_text = call_llm(context, system=system_prompt)
+        body_text = call_llm(context, system=system_prompt, api_key=api_key)
 
         # ── Phase 2: 生成执行摘要（第 2 章）──
         summary_prompt = load_prompt("ia_summary").replace("{{body}}", body_text)
         executive_summary = call_llm(
-            summary_prompt, system="你是投资分析摘要撰写专家。", temperature=0.2
+            summary_prompt,
+            system="你是投资分析摘要撰写专家。",
+            temperature=0.2,
+            api_key=api_key,
         )
 
         # ── Phase 3: 组装完整报告 ──

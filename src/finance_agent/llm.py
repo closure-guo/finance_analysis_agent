@@ -25,9 +25,10 @@ def call_llm(
     system: str = "",
     temperature: float = 0.3,
     max_tokens: int = 4096,
+    api_key: str | None = None,
 ) -> str:
     model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
-    api_key = os.environ.get("LLM_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
+    resolved_key = api_key or os.environ.get("LLM_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
     base_url = os.environ.get("LLM_BASE_URL", _DEFAULT_BASE_URL)
     thinking = os.environ.get("LLM_THINKING", "enabled")
     reasoning_effort = os.environ.get("LLM_REASONING_EFFORT", "max")
@@ -42,8 +43,8 @@ def call_llm(
         "messages": messages,
         "max_tokens": max_tokens,
     }
-    if api_key:
-        kwargs["api_key"] = api_key
+    if resolved_key:
+        kwargs["api_key"] = resolved_key
     if base_url:
         kwargs["api_base"] = base_url
 

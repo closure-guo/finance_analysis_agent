@@ -10,6 +10,7 @@ class AnalysisState(TypedDict, total=False):
     analysis_type: Literal["financial", "investment", "comprehensive"]
     peer_codes: list[str] | None
     enable_web_search: bool  # Gradio 开关：是否启用实时事件搜索
+    api_key: str | None  # 用户自带的 DeepSeek API Key（HF Spaces 用）
 
     # ── Cache ──
     cache_result: str  # HIT | MISS

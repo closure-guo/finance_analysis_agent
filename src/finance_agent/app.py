@@ -90,6 +90,7 @@ CUSTOM_CSS = """
 def analyze(
     stock_code: str,
     analysis_type: str,
+    api_key: str,
     peer_codes: str,
     enable_web_search: bool,
     progress: gr.Progress | None = None,
@@ -102,6 +103,8 @@ def analyze(
             gr.update(value=None, visible=False),
             gr.update(value=None, visible=False),
         )
+    if not api_key or not api_key.strip():
+        raise gr.Error("请先输入 DeepSeek API Key")
 
     peers = [c.strip() for c in (peer_codes or "").split(",") if c.strip()] or None
 
@@ -113,6 +116,7 @@ def analyze(
                 "analysis_type": analysis_type,
                 "peer_codes": peers,
                 "enable_web_search": enable_web_search,
+                "api_key": api_key.strip() or None,
             }
         )
         _progress(0.95, desc="分析完成，正在生成报告...")
@@ -193,6 +197,12 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
             )
 
             gr.HTML('<div class="section-label">分析配置</div>')
+            api_key_input = gr.Textbox(
+                label="DeepSeek API Key",
+                type="password",
+                placeholder="sk-...",
+                info="你的 Key 仅用于本次请求，不会存储或发送给第三方。",
+            )
             analysis_type = gr.Dropdown(
                 choices=[
                     ("财务分析", "financial"),
@@ -285,7 +295,7 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
     # Wire up analysis
     submit_btn.click(
         fn=analyze,
-        inputs=[stock_code, analysis_type, peer_codes, enable_web_search],
+        inputs=[stock_code, analysis_type, api_key_input, peer_codes, enable_web_search],
         outputs=[
             output,
             docx_download,
