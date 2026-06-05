@@ -95,7 +95,7 @@ def analyze(
     progress: gr.Progress | None = None,
 ) -> tuple:
     """Run analysis and return report + file paths."""
-    _progress = progress or gr.Progress(tracking=False)
+    _progress = progress or gr.Progress()
     if not stock_code or not stock_code.strip():
         return (
             "❌ 请输入股票代码",
