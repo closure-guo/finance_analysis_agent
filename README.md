@@ -1,32 +1,18 @@
----
-title: Finance Analysis Agent
-emoji: 📊
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-sdk_version: "5.31.0"
-python_version: "3.12"
-app_file: app.py
-pinned: false
----
-
 # Finance Analysis Agent
 
 基于 LangGraph 的 A 股上市公司 AI 分析报告系统。输入股票代码，自动生成财务分析 / 投资分析 / 综合分析报告。
 
 ## 在线演示
 
-**[Hugging Face Spaces Demo](https://closure-guo-finance-analysis-agent.hf.space)** — 打开网页即可体验，输入自己的 DeepSeek API Key 即可使用。
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://closure-guo-finance-analysis-agent.hf.space)
 
-<p align="center">
-  <img src="docs/assets/demo-search.gif" width="700" alt="股票搜索与配置" />
-</p>
+**股票搜索与配置**
 
-<h3 align="center">报告生成与下载</h3>
+<img src="https://github.com/closure-guo/finance_analysis_agent/raw/main/docs/assets/demo-search.gif" width="700" />
 
-<p align="center">
-  <img src="docs/assets/demo-report.gif" width="700" alt="报告展示" />
-</p>
+**报告生成与下载**
+
+<img src="https://github.com/closure-guo/finance_analysis_agent/raw/main/docs/assets/demo-report.gif" width="700" />
 
 ## 架构
 
