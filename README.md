@@ -14,6 +14,18 @@ pinned: false
 
 基于 LangGraph 的 A 股上市公司 AI 分析报告系统。输入股票代码，自动生成财务分析 / 投资分析 / 综合分析报告。
 
+## 在线演示
+
+**[Hugging Face Spaces Demo](https://closure-guo-finance-analysis-agent.hf.space)** — 打开网页即可体验，输入自己的 DeepSeek API Key 即可使用。
+
+### 股票搜索与配置
+
+![股票搜索](docs/assets/demo-search.gif)
+
+### 报告生成与下载
+
+![报告展示](docs/assets/demo-report.gif)
+
 ## 架构
 
 ```mermaid
