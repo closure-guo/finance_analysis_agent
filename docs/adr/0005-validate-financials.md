@@ -61,7 +61,7 @@ def after_validate(state):
 
 ## Consequences
 
-- 新增 1 个节点 + 1 个纯函数模块（`metrics/validate.py`），图从 11 节点变为 12 节点
+- 新增 1 个节点 + 1 个纯函数模块（`metrics/validate.py`）。后续架构简化，当前图共 8 节点（详见 architecture.md）
 - compute_metrics 无需任何修改
 - 试算平衡失败时用户看到明确错误信息而非错误报告
 - 软规则告警会在 LLM 上下文中体现，报告可提及数据偏差

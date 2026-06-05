@@ -100,13 +100,13 @@ LangGraph State 使用 TypedDict（非 Pydantic BaseModel），因为 LangGraph 
 
 关键字段：
 
-- 输入：stock_code, analysis_type, peer_codes（可选）
+- 输入：stock_code, analysis_type, peer_codes（可选）, enable_web_search
 - Cache：cache_result（HIT | MISS）
 - Layer 1 基础数据：三大报表（DataFrame）、行情、行业归属
 - Layer 2 预计算指标：financial_indicators
 - Validation：validation_result（PASS | FAIL）、validation_warnings（软规则告警）
 - Layer 3 衍生计算：四维度 metrics dict、杜邦树、红黄绿灯、同业对比、相对估值、GARP 结果
-- Agent 输出：financial_analysis, financial_report, investment_analysis, investment_report, final_report, file_path
+- Agent 输出：financial_analysis, financial_report, investment_analysis, investment_report, final_report, file_path, file_paths
 
 ### Agent Nodes Are Pure LLM Consumers
 
