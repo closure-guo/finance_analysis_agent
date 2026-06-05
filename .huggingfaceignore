@@ -1,0 +1,13 @@
+tests/
+reports/
+docs/
+*.pyc
+__pycache__/
+.cache/
+.venv/
+.pytest_cache/
+*.db
+*.docx
+*.pptx
+.env
+.git/
