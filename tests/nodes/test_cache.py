@@ -40,6 +40,8 @@ class TestCheckCacheHit:
                 "600519:balance_sheet": pd.DataFrame({"报告日": ["20241231"]}),
                 "600519:income_statement": pd.DataFrame({"报告日": ["20241231"]}),
                 "600519:cash_flow_statement": pd.DataFrame({"报告日": ["20241231"]}),
+                "600519:industry_info": {"industry": "白酒"},
+                "600519:stock_quote": {"price": 1800.0},
             }
             return data.get(key)
 
@@ -59,6 +61,8 @@ class TestCheckCacheHit:
                 "600519:balance_sheet": bs,
                 "600519:income_statement": is_df,
                 "600519:cash_flow_statement": cf,
+                "600519:industry_info": {"industry": "白酒"},
+                "600519:stock_quote": {"price": 1800.0},
             }.get(key)
 
         mock_cache.get.side_effect = fake_get
