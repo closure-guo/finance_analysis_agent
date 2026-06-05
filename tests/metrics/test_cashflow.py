@@ -95,6 +95,60 @@ class TestCalcCashflow:
         result = calc_cashflow(bs, is_, cf)
         assert result["经营现金流/净利润"]["2024"] is None
 
+    def test_ocf_ratio_uses_parent_net_income(self):
+        """经营现金流/净利润 应使用归母净利润口径 (#20)。
+
+        归母净利润 (168) < 合并净利润 (170)，OCF=250。
+        用归母作分母 → 250/168 ≈ 1.488，不是 250/170 ≈ 1.471。
+        """
+        import pandas as pd
+
+        bs = pd.DataFrame({"报告日": ["20241231"], "累计折旧": [100.0]})
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20241231"],
+                "净利润": [170.0],
+                "归母净利润": [168.0],
+                "利息费用": [20.0],
+                "营业收入": [1000.0],
+            }
+        )
+        cf = pd.DataFrame(
+            {
+                "报告日": ["20241231"],
+                "经营活动产生的现金流量净额": [250.0],
+                "购建固定资产、无形资产和其他长期资产所支付的现金": [80.0],
+                "分配股利、利润或偿付利息所支付的现金": [50.0],
+            }
+        )
+        result = calc_cashflow(bs, is_, cf)
+        # 250/168 ≈ 1.488, NOT 250/170 ≈ 1.471
+        assert isclose(result["经营现金流/净利润"]["2024"], 250 / 168, rel_tol=1e-3)
+
+    def test_ocf_ratio_falls_back_when_parent_missing(self):
+        """归母净利润缺失时应回退到合并净利润 (#20)。"""
+        import pandas as pd
+
+        bs = pd.DataFrame({"报告日": ["20241231"], "累计折旧": [100.0]})
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20241231"],
+                "净利润": [170.0],
+                "利息费用": [20.0],
+                "营业收入": [1000.0],
+            }
+        )
+        cf = pd.DataFrame(
+            {
+                "报告日": ["20241231"],
+                "经营活动产生的现金流量净额": [250.0],
+                "购建固定资产、无形资产和其他长期资产所支付的现金": [80.0],
+                "分配股利、利润或偿付利息所支付的现金": [50.0],
+            }
+        )
+        result = calc_cashflow(bs, is_, cf)
+        assert isclose(result["经营现金流/净利润"]["2024"], 250 / 170, rel_tol=1e-3)
+
     def test_fcf_growth_rate_in_growth_rates(self):
         """FCF 增长率应通过 growth_rates 传递给 LLM，而非由 LLM 自算。
 

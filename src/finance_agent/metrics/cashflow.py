@@ -1,7 +1,7 @@
 """现金流健康 6 指标计算。
 
 指标：
-1. 经营现金流/净利润 — OCF / 净利润
+1. 经营现金流/净利润 — OCF / 归母净利润（缺失时回退合并净利润）
 2. FCF — OCF - CapEx
 3. 资本支出/折旧 — CapEx / 折旧变动
 4. 现金流覆盖比率 — FCF / (CapEx + 利息费用)
@@ -49,7 +49,10 @@ def calc_cashflow(
         ocf = _safe(row_cf.get("经营活动产生的现金流量净额"))
         capex = _safe(row_cf.get("购建固定资产、无形资产和其他长期资产所支付的现金"))
         dividends = _safe(row_cf.get("分配股利、利润或偿付利息所支付的现金"))
-        net_income = _safe(row_is.get("净利润"))
+        # 使用归母净利润口径，与 profitability/dupont 保持一致
+        net_income = _safe(row_is.get("归母净利润"))
+        if net_income == 0:
+            net_income = _safe(row_is.get("净利润"))
         interest = _safe(row_is.get("利息费用"))
         revenue = _safe(row_is.get("营业收入"))
         depreciation = _safe(row_bs.get("累计折旧"))
