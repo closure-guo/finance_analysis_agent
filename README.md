@@ -18,13 +18,15 @@ pinned: false
 
 **[Hugging Face Spaces Demo](https://closure-guo-finance-analysis-agent.hf.space)** — 打开网页即可体验，输入自己的 DeepSeek API Key 即可使用。
 
-### 股票搜索与配置
+<p align="center">
+  <img src="docs/assets/demo-search.gif" width="700" alt="股票搜索与配置" />
+</p>
 
-![股票搜索](docs/assets/demo-search.gif)
+<h3 align="center">报告生成与下载</h3>
 
-### 报告生成与下载
-
-![报告展示](docs/assets/demo-report.gif)
+<p align="center">
+  <img src="docs/assets/demo-report.gif" width="700" alt="报告展示" />
+</p>
 
 ## 架构
 
