@@ -219,6 +219,37 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
                 value="等待分析结果...\n\n> ⏳ 分析生成通常需要 **2-5 分钟**，请耐心等待",
                 elem_classes="report-area",
             )
+            gr.HTML(
+                value=(
+                    '<button onclick="copyReport()" '
+                    'style="margin-top:0.5rem;padding:6px 16px;border:1px solid #bfdbfe;'
+                    "border-radius:6px;background:#eff6ff;color:#1d4ed8;font-size:0.85rem;"
+                    'cursor:pointer;transition:all .2s;" '
+                    "onmouseover=\"this.style.background='#dbeafe'\" "
+                    "onmouseout=\"this.style.background='#eff6ff'\">"
+                    "&#x1f4cb; 复制报告全文</button>"
+                    "<script>"
+                    "function copyReport(){"
+                    "  var el=document.querySelector('.report-area');"
+                    "  if(!el){alert('未找到报告内容');return}"
+                    "  navigator.clipboard.writeText(el.innerText).then(function(){"
+                    "    var btn=document.querySelector('button[onclick=\"copyReport()\"]');"
+                    "    var orig=btn.innerHTML;"
+                    "    btn.innerHTML='&#x2705; 已复制！';"
+                    "    btn.style.background='#d1fae5';"
+                    "    btn.style.borderColor='#6ee7b7';"
+                    "    btn.style.color='#065f46';"
+                    "    setTimeout(function(){"
+                    "      btn.innerHTML=orig;"
+                    "      btn.style.background='#eff6ff';"
+                    "      btn.style.borderColor='#bfdbfe';"
+                    "      btn.style.color='#1d4ed8';"
+                    "    },2000);"
+                    "  }).catch(function(){alert('复制失败，请手动选择文本复制')});"
+                    "}"
+                    "</script>"
+                ),
+            )
             with gr.Row(elem_classes="download-row"):
                 docx_download = gr.File(
                     label="下载 Word 报告",
