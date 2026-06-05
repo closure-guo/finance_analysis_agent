@@ -220,11 +220,11 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
                 elem_classes="report-area",
             )
             with gr.Row(elem_classes="download-row"):
-                docx_download = gr.File(
+                docx_download = gr.DownloadButton(
                     label="下载 Word 报告",
                     visible=False,
                 )
-                pptx_download = gr.File(
+                pptx_download = gr.DownloadButton(
                     label="下载 PPT 报告",
                     visible=False,
                 )
