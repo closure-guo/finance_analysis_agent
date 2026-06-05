@@ -34,7 +34,7 @@ def generate_file(state: dict) -> dict:
     reports_dir = Path(os.environ.get("REPORTS_DIR", "reports"))
     reports_dir.mkdir(exist_ok=True)
 
-    date_str = datetime.now().strftime("%Y%m%d")
+    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_name = f"{stock_code}_{date_str}"
 
     docx_target = str(reports_dir / f"{base_name}_report.docx")
