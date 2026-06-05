@@ -92,8 +92,10 @@ def analyze(
     analysis_type: str,
     peer_codes: str,
     enable_web_search: bool,
+    progress: gr.Progress | None = None,
 ) -> tuple:
     """Run analysis and return report + file paths."""
+    _progress = progress or gr.Progress(tracking=False)
     if not stock_code or not stock_code.strip():
         return (
             "❌ 请输入股票代码",
@@ -104,6 +106,7 @@ def analyze(
     peers = [c.strip() for c in (peer_codes or "").split(",") if c.strip()] or None
 
     try:
+        _progress(0.1, desc="正在获取财务数据...")
         result = graph.invoke(
             {
                 "stock_code": stock_code.strip(),
@@ -112,6 +115,7 @@ def analyze(
                 "enable_web_search": enable_web_search,
             }
         )
+        _progress(0.95, desc="分析完成，正在生成报告...")
     except ValueError as e:
         return (
             f"❌ 数据错误：{e}",
@@ -291,6 +295,7 @@ with gr.Blocks(title="金融AI分析报告系统") as demo:
 
 
 def main() -> None:
+    demo.queue(max_size=3)
     demo.launch(theme=CUSTOM_THEME, css=CUSTOM_CSS)
 
 
