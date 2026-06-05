@@ -16,55 +16,11 @@
 
 ## 架构
 
-```mermaid
-flowchart TB
-    START([用户输入 stock_code + analysis_type]) --> PREP
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/closure-guo/finance_analysis_agent@main/docs/assets/graph.png" alt="LangGraph 运行时拓扑" width="700" />
+</p>
 
-    subgraph MAIN["主图"]
-        direction TB
-
-        subgraph PREP["数据准备子图"]
-            direction TB
-            CC["① check_cache<br/>查持久化报表+缓存行情"]
-            FP["② fetch_data<br/>AKShare拉取+持久化报表"]
-            VF["③ validate_financials<br/>4条勾稽校验"]
-            CM["④ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP"]
-            CC -->|"MISS 首次"| FP --> VF
-            CC -->|"HIT 报表已有"| VF
-            VF -->|"PASS"| CM
-            VF -->|"FAIL"| END_ERR(["终止: 数据校验失败"])
-        end
-
-        Route{"route_to_agent"}
-
-        FA["⑤ fa_analyze<br/>LLM生成正文+摘要+组装8章报告"]
-        IA["⑥ ia_analyze<br/>LLM生成正文+摘要+组装7章报告"]
-
-        Merge["⑦ merge<br/>拼接FA+IA报告 + LLM综合摘要"]
-        GenFile["⑧ generate_file<br/>Word/PPT导出"]
-    end
-
-    PREP --> Route
-
-    Route -->|"financial"| FA
-    Route -->|"investment"| IA
-    Route -->|"comprehensive 并行"| FA
-    Route -->|"comprehensive 并行"| IA
-
-    FA -->|"comprehensive"| Merge
-    IA -->|"comprehensive"| Merge
-    FA -->|"单Agent"| GenFile
-    IA -->|"单Agent"| GenFile
-    Merge --> GenFile
-    GenFile --> END([END])
-
-    style PREP fill:#e8f5e9
-    style Route fill:#ff9800,color:#fff
-    style FA fill:#e3f2fd
-    style IA fill:#f3e5f5
-    style Merge fill:#ab47bc,color:#fff
-    style GenFile fill:#ef9a9a
-```
+> 图由路由函数自动发现生成: <code>uv run python tests/scripts/gen_graph_mermaid.py</code>
 
 四层架构：
 

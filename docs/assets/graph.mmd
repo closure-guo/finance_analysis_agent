@@ -1,0 +1,47 @@
+flowchart TD
+
+    START([START]) --> check_cache
+
+    subgraph PREP[数据准备]
+        check_cache["① check_cache<br/>查缓存"]
+        fetch_data["② fetch_data<br/>AKShare 拉取"]
+        validate_financials["③ validate_financials<br/>勾稽校验"]
+        compute_metrics["④ compute_metrics<br/>指标计算"]
+    end
+
+    Route{"route_to_agent"}
+    fa_analyze["⑤ fa_analyze<br/>财务分析"]
+    ia_analyze["⑥ ia_analyze<br/>投资分析"]
+    merge["⑦ merge<br/>合并报告"]
+    generate_file["⑧ generate_file<br/>文件导出"]
+    END([END])
+    END_ERR([终止: 校验失败])
+
+    %% 静态边
+    fetch_data --> validate_financials
+    merge --> generate_file
+    generate_file --> END
+
+    %% 条件边 — 数据准备
+    check_cache -->|"MISS 首次"| fetch_data
+    check_cache -->|"HIT 报表已有"| validate_financials
+    validate_financials -->|"FAIL ✗"| END_ERR
+    validate_financials -->|"PASS ✓"| compute_metrics
+
+    %% 条件边 — Agent 路由
+    compute_metrics -->|"financial / comprehensive 并行"| fa_analyze
+    compute_metrics -->|"investment / comprehensive 并行"| ia_analyze
+
+    %% 条件边 — Agent 后处理
+    fa_analyze -->|"单 Agent"| generate_file
+    fa_analyze -->|"comprehensive"| merge
+    ia_analyze -->|"单 Agent"| generate_file
+    ia_analyze -->|"comprehensive"| merge
+
+    style PREP fill:#e8f5e9
+    style Route fill:#ff9800,color:#fff
+    style fa_analyze fill:#e3f2fd
+    style ia_analyze fill:#f3e5f5
+    style merge fill:#ab47bc,color:#fff
+    style generate_file fill:#ef9a9a
+    style END_ERR fill:#ef5350,color:#fff
