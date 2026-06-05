@@ -8,11 +8,11 @@
 
 **股票搜索与配置**
 
-<img src="https://github.com/closure-guo/finance_analysis_agent/raw/main/docs/assets/demo-search.gif" width="700" />
+<img src="https://raw.githubusercontent.com/closure-guo/finance_analysis_agent/main/docs/assets/demo-search.gif" width="700" />
 
 **报告生成与下载**
 
-<img src="https://github.com/closure-guo/finance_analysis_agent/raw/main/docs/assets/demo-report.gif" width="700" />
+<img src="https://raw.githubusercontent.com/closure-guo/finance_analysis_agent/main/docs/assets/demo-report.gif" width="700" />
 
 ## 架构
 
