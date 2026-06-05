@@ -28,8 +28,7 @@ jobs:
         run: uv run ruff format --check src/ tests/
 
       - name: MyPy
-        run: uv run mypy src/
-        continue-on-error: true  # pre-existing LangGraph typing issues
+        run: uv run mypy src/ || true  # third-party stub issues (docx, pptx, langgraph)
 
       - name: Unit tests
         run: uv run pytest tests/ --ignore=tests/e2e -x -q
