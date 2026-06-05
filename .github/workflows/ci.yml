@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Ruff check
+        run: uv run ruff check src/ tests/
+
+      - name: Ruff format check
+        run: uv run ruff format --check src/ tests/
+
+      - name: MyPy
+        run: uv run mypy src/
+        continue-on-error: true  # pre-existing LangGraph typing issues
+
+      - name: Unit tests
+        run: uv run pytest tests/ --ignore=tests/e2e -x -q
+
+  e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Install Playwright browsers
+        run: uv run playwright install chromium --with-deps
+
+      - name: Start Gradio app
+        run: uv run python -m finance_agent.app &
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+      - name: Wait for app ready
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:7860 > /dev/null && break
+            sleep 2
+          done
+
+      - name: E2E tests
+        run: uv run pytest tests/e2e/ -x -q
