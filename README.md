@@ -1,3 +1,15 @@
+---
+title: Finance Analysis Agent
+emoji: 📊
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: "5.31.0"
+python_version: "3.12"
+app_file: app.py
+pinned: false
+---
+
 # Finance Analysis Agent
 
 基于 LangGraph 的 A 股上市公司 AI 分析报告系统。输入股票代码，自动生成财务分析 / 投资分析 / 综合分析报告。
