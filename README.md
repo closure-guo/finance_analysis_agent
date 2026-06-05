@@ -77,6 +77,45 @@ uv run python -m finance_agent.app
 
 浏览器打开 Gradio 页面，输入股票代码（如 600519）即可。
 
+## 环境变量配置
+
+首次运行前需要配置 LLM API Key，否则会报错。
+
+```bash
+# 复制模板并填入你的 API Key
+cp .env.example .env
+```
+
+### 变量一览
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `LLM_API_KEY` | **是** | — | LLM API Key；也可用 `DEEPSEEK_API_KEY` 作为回退 |
+| `LLM_MODEL` | 否 | `deepseek/deepseek-v4-pro` | 模型名，litellm 格式 |
+| `LLM_BASE_URL` | 否 | `https://api.deepseek.com` | API 端点 |
+| `LLM_THINKING` | 否 | `enabled` | 思考模式 `enabled` / `disabled` |
+| `LLM_REASONING_EFFORT` | 否 | `max` | 思考强度 `low` / `high` / `max` |
+| `REPORTS_DIR` | 否 | `reports` | 报告输出目录 |
+| `EVENT_SOURCE` | 否 | `auto` | 事件数据源 `builtin` / `web` / `auto` |
+
+### 示例
+
+**使用 DeepSeek（默认）**：
+
+```bash
+# .env
+LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
+```
+
+**使用其他 LLM（通过 litellm 格式）**：
+
+```bash
+# .env
+LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
+LLM_MODEL=openai/gpt-4o
+LLM_BASE_URL=https://api.openai.com/v1
+```
+
 ## 项目结构
 
 ```
