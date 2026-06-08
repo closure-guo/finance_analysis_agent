@@ -125,22 +125,29 @@ def create_server() -> FastMCP:
 
     @mcp.tool
     def get_financial_health(stock_code: str) -> dict:
+        """获取股票四维度财务健康分析。返回偿债/盈利/运营/现金流四大维度指标，
+        每个指标包含数值、红黄绿灯评级和阈值上下文，以及综合健康度评分。"""
         return _serialize(_self.get_financial_health(stock_code))
 
     @mcp.tool
     def get_valuation(stock_code: str) -> dict:
+        """获取股票估值分析。返回 PE/PB 相对估值（与同业均值对比）和 GARP 筛选结果。"""
         return _serialize(_self.get_valuation(stock_code))
 
     @mcp.tool
     def get_dupont_analysis(stock_code: str) -> dict:
+        """获取杜邦分析。将 ROE 逐层拆解为净利率×总资产周转率×权益乘数，
+        揭示盈利能力变动的驱动因素。"""
         return _serialize(_self.get_dupont_analysis(stock_code))
 
     @mcp.tool
     def get_peer_comparison(stock_code: str) -> dict:
+        """获取同业对比数据。返回同行业公司的财务数据对比表。"""
         return _serialize(_self.get_peer_comparison(stock_code))
 
     @mcp.tool
     def get_financial_statements(stock_code: str) -> dict:
+        """获取原始三大财务报表：资产负债表、利润表、现金流量表。"""
         return _serialize(_self.get_financial_statements(stock_code))
 
     return mcp
