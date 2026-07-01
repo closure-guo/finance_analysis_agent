@@ -1,19 +1,19 @@
-# PRD: 金融AI分析报告系统 MVP
+# PRD: 多 Agent 交易决策分析系统
 
 ## Problem Statement
 
-个人投资者在分析 A 股上市公司时，需要手动从多个数据源收集财务数据、计算指标、对比同业、撰写报告。这个过程耗时 3-5 小时，且容易因人为疏忽遗漏关键风险点。需要一个自动化系统，输入一个股票代码，在几分钟内生成结构化的专业级财务/投资分析报告。
+个人投资者在分析 A 股上市公司时，需要手动从多个数据源收集财务数据、计算指标、对比同业、撰写报告。这个过程耗时 3-5 小时，且容易因人为疏忽遗漏关键风险点，且单一视角容易产生确证偏误。需要一个自动化系统，输入一个股票代码，在几分钟内生成结构化的多 Agent 交易决策分析报告，包含宏观/基本面/技术面/舆情 4 维度分析 + Bull/Bear 辩论 + 风险压力测试 + 交易建议。
 
 ## Solution
 
-构建一个基于 LangGraph 的多 Agent 分析系统。用户通过 Gradio 表单输入股票代码和分析类型，系统自动完成数据拉取（AKShare）、指标计算（四维度 20 指标 + 杜邦 + 红黄绿灯 + 相对估值 + GARP）、LLM 分析解读、报告生成全流程，输出 Markdown 报告并可导出 Word/PPT。
+构建一个基于 LangGraph 的多 Agent 交易决策分析系统。用户通过 Gradio 表单输入股票代码，系统自动执行 5 层架构分析（4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager），完成数据拉取（AKShare）、指标计算、LLM 多 Agent 辩论与决策、报告生成全流程，输出 Markdown 报告并可导出 Word/PPT。
 
 ## User Stories
 
 ### 输入与路由
 
 1. 作为一个投资者，我能在搜索框输入股票名称或代码并从下拉列表选择目标股票，这样我不需要记住精确代码
-2. 作为一个投资者，我能从下拉框选择分析类型（财务分析/投资分析/综合分析），这样系统能按需生成对应报告
+2. 作为一个投资者，我输入股票代码后系统自动执行 5 层架构分析，无需选择分析类型
 3. 作为一个投资者，我能选择性地输入对标股票代码（如 `000858,000568`），这样报告中的同业对比使用我指定的公司而非自动选取
 4. 作为一个投资者，如果我没有输入对标股票，系统能自动选取同行业市值 Top 5 的公司作为对比对象
 5. 作为一个投资者，如果我输入的股票代码不存在，系统能给出明确的错误提示
@@ -34,65 +34,76 @@
 14. 作为一个投资者，如果利润表/现金流表/留存收益勾稽存在偏差，系统在报告中标注数据偏差提示，而非静默忽略
 15. 作为一个投资者，校验告警信息（如"利润表存在较大营业外收支"）能在 LLM 分析中被引用，帮助理解数据偏差的财务含义
 
-### 财务分析
+### 基本面分析
 
-12. 作为一个投资者，我能在报告中看到偿债能力的 5 个指标（资产负债率、流动比率、速动比率、利息覆盖倍数、净债务/EBITDA）及其红黄绿灯评判
-13. 作为一个投资者，我能在报告中看到盈利能力的 5 个指标（毛利率、净利率、ROE、ROA、ROIC）及其红黄绿灯评判
-14. 作为一个投资者，我能在报告中看到运营效率的 4 个指标（存货周转率、应收账款周转率、总资产周转率、应付账款周转率）及其红黄绿灯评判
-15. 作为一个投资者，我能在报告中看到现金流健康的 6 个指标（经营现金流/净利润、FCF、资本支出/折旧、现金流覆盖比率、FCF收益率、留存现金流比率）及其红黄绿灯评判
-16. 作为一个投资者，我能在报告中看到每个指标的双重阈值评判结果：绝对值水平（优良/关注/警告）+ 同比变化率（稳定/<20%/波动/20-50%/异动/>50%）
-17. 作为一个投资者，我能在报告中看到四维度健康度评分（各 25 分，总计 100 分）及整体评级（85-100 健康/60-84 关注/<60 警告）
-18. 作为一个投资者，我能在报告中看到 3 层杜邦分解树，理解 ROE 变动的核心驱动因素
-19. 作为一个投资者，我能在报告中看到与同业公司的四维度对比表，了解目标公司的相对位置
-20. 作为一个投资者，我能在报告中看到所有红灯指标的汇总清单和 LLM 解读的风险提示
+12. 作为一个投资者，我能在基本面分析师的输出中看到偿债能力的 5 个指标（资产负债率、流动比率、速动比率、利息覆盖倍数、净债务/EBITDA）及其红黄绿灯评判
+13. 作为一个投资者，我能在基本面分析师的输出中看到盈利能力的 5 个指标（毛利率、净利率、ROE、ROA、ROIC）及其红黄绿灯评判
+14. 作为一个投资者，我能在基本面分析师的输出中看到运营效率的 4 个指标（存货周转率、应收账款周转率、总资产周转率、应付账款周转率）及其红黄绿灯评判
+15. 作为一个投资者，我能在基本面分析师的输出中看到现金流健康的 6 个指标（经营现金流/净利润、FCF、资本支出/折旧、现金流覆盖比率、FCF收益率、留存现金流比率）及其红黄绿灯评判
+16. 作为一个投资者，我能在基本面分析师的输出中看到每个指标的双重阈值评判结果：绝对值水平（优良/关注/警告）+ 同比变化率（稳定/<20%/波动/20-50%/异动/>50%）
+17. 作为一个投资者，我能在基本面分析师的输出中看到四维度健康度评分（各 25 分，总计 100 分）及整体评级（85-100 健康/60-84 关注/<60 警告）
+18. 作为一个投资者，我能在基本面分析师的输出中看到 3 层杜邦分解树，理解 ROE 变动的核心驱动因素
+19. 作为一个投资者，我能在基本面分析师的输出中看到与同业公司的四维度对比表，了解目标公司的相对位置
+20. 作为一个投资者，我能在基本面分析师的输出中看到所有红灯指标的汇总清单和 LLM 解读的风险提示
 
-### 投资分析
+### 技术面分析
 
-21. 作为一个投资者，我能在报告中看到目标公司所属行业的基本概况和竞争格局（基于 LLM 知识）
-22. 作为一个投资者，我能在报告中看到 PE/PB 同业对比表和相对估值结论（低估/合理/高估）
-23. 作为一个投资者，我能在报告中看到 GARP 筛选结果（PE < 行业平均 ∧ 净利润增长率 > 15% ∧ ROE > 15% ∧ 负债率 < 60%）
-24. 作为一个投资者，我能在报告中看到基于财务红灯指标的风险提示和 LLM 补充的风险分析
-25. 作为一个投资者，我能在报告中看到明确的投资建议（积极/中性/谨慎）及核心逻辑
+21. 作为一个投资者，我能在技术面分析师的输出中看到目标公司的价格走势和关键技术指标（MACD、RSI、布林带、KDJ）
+22. 作为一个投资者，我能在技术面分析师的输出中看到关键支撑位和压力位，辅助判断买卖时机
+23. 作为一个投资者，我能在技术面分析师的输出中看到技术形态解读和趋势判断（多头/空头/震荡）
 
-### 综合分析
+### 舆情与事件分析
 
-26. 作为一个投资者，当选择综合分析时，我能同时获得财务分析报告和投资分析报告
-27. 作为一个投资者，当选择综合分析时，报告开头有一段 300-500 字的综合摘要，提炼两份报告的关键发现
+24. 作为一个投资者，我能在舆情分析师的输出中看到近期相关新闻列表和事件梳理
+25. 作为一个投资者，我能在舆情分析师的输出中看到新闻舆情情感分析（正面/负面/中性）及事件影响评估
+
+### 多空辩论与交易决策
+
+26. 作为一个投资者，我能在报告的多空辩论摘要中看到 Bull/Bear 双方的核心论点和反驳逻辑
+27. 作为一个投资者，我能在报告中看到 Trader 基于辩论结论产出的交易建议（买卖方向 + 核心逻辑）
+28. 作为一个投资者，我能在报告中看到 Risk Management 风险压力测试的结论和风险提示（回撤/波动率/Beta/VaR）
+29. 作为一个投资者，我能在报告中看到 Fund Manager 的最终审批决策及理由
 
 ### 报告输出
 
-28. 作为一个投资者，我能在报告中首先看到执行摘要（全文的 1 页总结），快速把握公司整体状况
-29. 作为一个投资者，我能将分析报告导出为 Word 文档
-30. 作为一个投资者，我能将分析报告导出为 PPT 演示文稿
-31. 作为一个投资者，报告末尾有明确的免责声明（AI 生成、数据来源、不构成投资建议）
-32. 作为一个投资者，报告中所有数据表格使用 Markdown 表格格式，在 Gradio 中可直接渲染
+30. 作为一个投资者，我能在报告中首先看到执行摘要（全文的 1 页总结），快速把握公司整体状况
+31. 作为一个投资者，我能将分析报告导出为 Word 文档
+32. 作为一个投资者，我能将分析报告导出为 PPT 演示文稿
+33. 作为一个投资者，报告末尾有明确的免责声明（AI 生成、数据来源、不构成投资建议）
+34. 作为一个投资者，报告中所有数据表格使用 Markdown 表格格式，在 Gradio 中可直接渲染
 
 ## Implementation Decisions
 
-### Architecture: 4-Layer, 8 Nodes
+### Architecture: 5-Layer Multi-Agent
 
-系统采用 4 层架构，MVP 去掉 MCP 层：
+系统采用 4 层基础设施 + L2 内 5 层多 Agent 架构：
 
 - **L1 前端**：Gradio 5.x Blocks API，表单输入 + 报告展示 + 文件下载
-- **L2 Agent**：LangGraph，8 个节点 + 条件路由 + Send 并行派发
+- **L2 Agent**：LangGraph，5 层架构: 4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager
 - **L3 数据**：pandas + SQLite，AKShare 数据拉取 + 全部计算 + 缓存
 - **L4 LLM**：DeepSeek-V4-Pro，LiteLLM 路由
 
 ### Graph Topology
 
 ```
-START(用户输入 stock_code + analysis_type)
+START(用户输入 stock_code)
   → check_cache
-  → [HIT: validate_financials] / [MISS: fetch_data → validate_financials]
+  → [HIT: validate] / [MISS: fetch_data → validate]
   → [PASS: compute_metrics] / [FAIL: END]
-  → route_to_agent(Send 并行派发)
-  → financial: fa_analyze
-  → investment: ia_analyze
-  → comprehensive: fa_analyze ∥ ia_analyze → merge
-  → generate_file(python-docx/pptx)
+  → Send([macro, fundamental, technical, sentiment])
+  → Send([bull_r1, bear_r1])
+  → Send([bull_r2, bear_r2])
+  → research_manager
+  → trader
+  → Send([aggressive_r1, conservative_r1, neutral_r1])
+  → Send([aggressive_r2, conservative_r2, neutral_r2])
+  → risk_judge
+  → fund_manager
+  → [trader（如果退回）] 或 generate_report(python-docx/pptx)
+  → END
 ```
 
-数据准备子图有三条路径：MISS（首次分析，拉取+持久化+校验+计算）、HIT（报表已有，校验+计算）和 FAIL（硬等式校验失败，终止）。PASS 路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
+数据准备子图（PREP）有三条路径：MISS（首次分析，拉取+持久化+校验+计算）、HIT（报表已有，校验+计算）和 FAIL（硬等式校验失败，终止）。PASS 路径进入 5 层多 Agent 架构：Layer I 4 个分析师并行 → Layer II Bull/Bear 2 轮辩论 → Layer III Trader → Layer IV Risk Management 3 方辩论 → Layer V Fund Manager 审批。Fund Manager 可退回 Trader（最多 1 次），否则进入报告生成。
 
 ### State Definition (TypedDict)
 
@@ -100,17 +111,21 @@ LangGraph State 使用 TypedDict（非 Pydantic BaseModel），因为 LangGraph 
 
 关键字段：
 
-- 输入：stock_code, analysis_type, peer_codes（可选）, enable_web_search
+- 输入：stock_code, peer_codes（可选）, enable_web_search
 - Cache：cache_result（HIT | MISS）
-- Layer 1 基础数据：三大报表（DataFrame）、行情、行业归属
+- Layer 1 基础数据：三大报表（DataFrame）、行情、行业归属、日 K 线、沪深 300 K 线、宏观指标、新闻列表
 - Layer 2 预计算指标：financial_indicators
 - Validation：validation_result（PASS | FAIL）、validation_warnings（软规则告警）
-- Layer 3 衍生计算：四维度 metrics dict、杜邦树、红黄绿灯、同业对比、相对估值、GARP 结果
-- Agent 输出：financial_analysis, financial_report, investment_analysis, investment_report, final_report, file_path, file_paths
+- Layer 3 衍生计算：四维度 metrics dict、杜邦树、红黄绿灯、同业对比、相对估值、GARP 结果、技术指标、风控指标、宏观指标计算、舆情统计
+- Agent 输出（嵌套结构）：
+  - `analyst_reports: dict[str, AnalystReport]` — 4 个分析师的结构化报告
+  - `debate_history: list[DebateMessage]` — Bull/Bear + Risk Management 辩论记录
+  - `trade_decision: TradeDecision` — Trader/Risk Judge/Fund Manager 决策链
+  - `final_report`, `file_path`, `file_paths` — 最终报告与导出文件
 
 ### Agent Nodes Are Pure LLM Consumers
 
-Agent 节点（fa_analyze, ia_analyze, merge）只读 State + 调 LLM，不拉数据、不做计算。所有数据拉取和计算集中在数据准备子图。fa_analyze / ia_analyze 各自完成正文生成 + 摘要生成 + 模板组装，无独立 report 节点。
+Agent 节点（macro, fundamental, technical, sentiment 分析师 + bull/bear 辩论 + research_manager + trader + aggressive/conservative/neutral 风险辩论 + risk_judge + fund_manager）只读 State + 调 LLM，不拉数据、不做计算。所有数据拉取和计算集中在 PREP 数据准备子图。分析师各自完成结构化分析输出，辩论节点读取上游报告进行对抗推理，决策节点综合辩论结论产出最终交易决策。
 
 ### Data Preparation: AKShare Only (MVP)
 
@@ -147,26 +162,18 @@ compute_metrics 节点执行所有计算，纯 pandas 无 LLM：
 
 MVP 报告纯 Markdown + 表格，不引入图表库。
 
-### Financial Report Structure (8 Chapters)
+### Report Structure (10 Chapters)
 
-1. 封面（股票名称 + 代码 + 日期 + 数据范围）
-2. 执行摘要（后生成）
-3. 核心指标分析（四维度表格 + 红黄绿灯 + 评分 + LLM 解读）
-4. 杜邦归因分析（3 层分解树 + ROE 变动归因 + LLM 解读）
-5. 同业对比（Top 5 四维度对比表 + 排名 + LLM 解读，无数据则略）
-6. 风险提示（红灯指标清单 + 异常值 + LLM 风险总结）
-7. 结论与评级（健康度评分 + 核心指标摘要表 + 评级）
-8. 免责声明
-
-### Investment Report Structure (7 Chapters)
-
-1. 封面
-2. 执行摘要（后生成）
-3. 行业概况（LLM 内部知识，非外部搜索）
-4. 估值分析（PE/PB 同业对比表 + 相对估值结论 + GARP）
-5. 风险提示（财务红灯指标继承 + LLM 补充）
-6. 投资建议（综合评级 + 核心逻辑 + 关键假设）
-7. 免责声明
+1. 封面（股票名称 + 代码 + 日期 + 评级）
+2. 执行摘要（Fund Manager 最终决策 + 关键理由）
+3. 宏观环境分析（宏观分析师输出）
+4. 基本面分析（基本面分析师输出：四维度 + 杜邦 + 估值）
+5. 技术面分析（技术面分析师输出：趋势 + 指标 + 关键价位）
+6. 舆情与事件分析（舆情分析师输出：新闻 + 事件 + 情感）
+7. 多空辩论摘要（Bull/Bear 辩论核心论点 + Research Manager 结论）
+8. 交易建议（Trader 计划 + Risk Management 评估 + Fund Manager 批准）
+9. 风险提示（Risk Management 辩论中的风险点 + PREP 风控指标）
+10. 免责声明（AI 生成 + 仅供参考 + 不构成投资建议）
 
 ### Scoring Model
 
@@ -191,17 +198,28 @@ MVP 报告纯 Markdown + 表格，不引入图表库。
 
 ```
 src/finance_agent/
-├── graph.py              # 主图 + 条件路由
-├── state.py              # AnalysisState TypedDict
+├── graph.py              # 主图 + 条件路由 + Send 并行派发
+├── state.py              # AnalysisState TypedDict（含嵌套结构）
 ├── nodes/
 │   ├── cache.py          # check_cache 节点
 │   ├── fetch.py          # fetch_data 节点（编排 AKShare 调用）
-│   ├── validate.py       # validate_financials 节点（编排勾稽校验）
+│   ├── validate.py       # validate 节点（编排勾稽校验）
 │   ├── compute.py        # compute_metrics 节点（编排 metrics/ 计算）
-│   ├── fa.py             # fa_analyze (正文+摘要+8章组装)
-│   ├── ia.py             # ia_analyze (正文+摘要+7章组装)
-│   ├── merge.py          # merge 节点（拼接 + LLM 摘要）
-│   └── output.py         # generate_file 节点（Word/PPT）
+│   ├── analysts/         # Layer I: 4 个分析师
+│   │   ├── macro.py      # 宏观分析师
+│   │   ├── fundamental.py # 基本面分析师
+│   │   ├── technical.py  # 技术面分析师
+│   │   └── sentiment.py  # 舆情分析师
+│   ├── debate/           # Layer II + IV: 辩论节点
+│   │   ├── bull.py       # Bull 辩论（2 轮）
+│   │   ├── bear.py       # Bear 辩论（2 轮）
+│   │   ├── research_manager.py # Research Manager 综合
+│   │   ├── risk_debaters.py    # 激进/保守/中性风险辩论（2 轮）
+│   │   └── risk_judge.py # Risk Judge 综合辩论结论
+│   ├── decision/         # Layer III + V: 决策节点
+│   │   ├── trader.py     # Trader 交易计划
+│   │   └── fund_manager.py # Fund Manager 审批
+│   └── output.py         # generate_report 节点（Word/PPT）
 ├── metrics/
 │   ├── validate.py       # 勾稽校验 4 规则（纯函数）
 │   ├── solvency.py       # 偿债 5 指标
@@ -211,19 +229,29 @@ src/finance_agent/
 │   ├── dupont.py         # 杜邦 3 层分解
 │   ├── traffic_light.py  # 红黄绿灯 + 评分
 │   ├── relative.py       # 相对估值（PE/PB 同业对比）
-│   └── garp.py           # GARP 筛选
+│   ├── garp.py           # GARP 筛选
+│   ├── macro.py          # 宏观指标计算
+│   ├── technical.py      # 技术指标计算（MACD/RSI/布林带/KDJ）
+│   ├── risk.py           # 风控指标计算（回撤/波动率/Beta/VaR）
+│   └── sentiment.py      # 舆情统计（count/density）
 ├── data/
 │   ├── akshare_client.py # AKShare API 封装
 │   └── cache.py          # SQLite 缓存读写 + TTL
 ├── prompts/
-│   ├── fa_analyze.md     # 财务分析 prompt（正文生成）
-│   ├── fa_summary.md     # 财务执行摘要 prompt
-│   ├── ia_analyze.md     # 投资分析 prompt（正文生成）
-│   ├── ia_summary.md     # 投资执行摘要 prompt
-│   └── synthesis.md      # 综合分析摘要 prompt
+│   ├── analysts/         # 4 个分析师 prompt
+│   │   ├── macro.md
+│   │   ├── fundamental.md
+│   │   ├── technical.md
+│   │   └── sentiment.md
+│   ├── debate/           # 辩论 prompt
+│   │   ├── bull.md
+│   │   ├── bear.md
+│   │   └── risk_debaters.md
+│   └── decision/         # 决策 prompt
+│       ├── trader.md
+│       └── fund_manager.md
 └── templates/
-    ├── financial_report.md  # 财务报告 8 章模板
-    └── investment_report.md # 投资报告 7 章模板
+    └── report.md         # 10 章报告模板
 ```
 
 ### Key Module Interfaces
@@ -286,7 +314,6 @@ src/finance_agent/
 - **巨潮资讯网 PDF 解析**：年报 MD&A、风险披露
 - **图表渲染**：雷达图、趋势图、柱状图
 - **港股/美股支持**：仅支持 A 股
-- **MCP Server 封装**：MVP 直接用 Python 模块，后期可将整个 Agent 封装为 MCP Server
 - **自由对话输入**：MVP 使用结构化表单，不支持自然语言输入
 - **用户认证/多用户**：单用户本地使用
 
@@ -307,7 +334,6 @@ src/finance_agent/
 
 - 数据层：DataFetcher 接口抽象，美股换 yfinance / Financial Modeling Prep
 - 阈值：从硬编码抽到 `thresholds/{market}.yaml`
-- MCP：整个 Agent 封装为 MCP Server
 - 图表：引入 matplotlib/plotly，报告模板加入图表占位
 - 市场：加 market 参数，适配港股/美股报表格式和阈值
 
@@ -315,8 +341,14 @@ src/finance_agent/
 
 实现时遵循以下架构决策记录：
 
-- ADR-0001: 数据准备子图（Strategy C，统一数据拉取）
-- ADR-0002: Agent 节点纯 LLM 消费者
-- ADR-0003: 双重阈值红黄绿灯评分模型
-- ADR-0004: 四层持久化策略
-- ADR-0005: 勾稽校验（compute 前置数据质量门卫）
+- ADR-0001: 数据准备子图（Strategy C，统一数据拉取）— Amended by ADR-0011
+- ADR-0002: Agent 节点纯 LLM 消费者 — Superseded by ADR-0011
+- ADR-0003: 双重阈值红黄绿灯评分模型 — Accepted
+- ADR-0004: 四层持久化策略 — Accepted
+- ADR-0005: 勾稽校验（compute 前置数据质量门卫）— Accepted
+- ADR-0006: Comprehensive 模式并行执行架构 — Superseded by ADR-0011
+- ADR-0007: Comprehensive 报告分层结构 — Superseded by ADR-0011
+- ADR-0008: MCP Server — Superseded by ADR-0011
+- ADR-0009: 延后多 Agent 辩论 — Reversed by ADR-0011
+- ADR-0010: 工具使用重构 — Partially Superseded by ADR-0011（Step 1 撤销，Step 2/3 保留）
+- ADR-0011: 5 层多 Agent 架构 — Accepted

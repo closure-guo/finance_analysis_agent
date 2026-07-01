@@ -2,6 +2,8 @@
 
 > 基于架构设计文档讨论的最终确定方案。所有决策记录在 `docs/adr/` 中。
 
+> **注意**: 本文档已按 ADR-0011 更新为 5 层多 Agent 架构。FA/IA 双 Agent 模型已废弃。
+
 ---
 
 ## 一、系统全景
@@ -11,62 +13,78 @@
 | 层级     | 选型                          | 职责                                                                |
 | -------- | ----------------------------- | ------------------------------------------------------------------- |
 | L1 前端  | Gradio 5.x Blocks API         | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
-| L2 Agent | LangGraph                     | 8 节点 + 条件路由 + Send 并行派发                                   |
+| L2 Agent | LangGraph                     | 5 层架构: 4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager |
 | L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（MVP 不含 Chroma/Tavily） |
 | L4 LLM   | DeepSeek (deepseek-v4-pro) | LiteLLM 路由                                               |
 
 ### 1.2 核心原则
 
 - **分层单向**：L3 管数据进出 → L2 管思考 → L1 管展示
-- **Agent 纯 LLM**：Agent 只读 State + 调 LLM，不拉数据、不做计算
-- **指标硬编码**：四维度 20 指标 + 阈值 + 杜邦 + 红黄绿灯，全部代码硬编码
-- **MVP 无 MCP**：数据拉取和计算直接用 Python 模块，不包 MCP 层
-- **MCP 扩展预留**：后期可将整个 Agent 封装为 MCP Server，对外暴露分析能力
+- **PREP 一次性注入**：PREP 子图全量拉取数据并计算指标后，一次性注入各 Agent 的 prompt context，Agent 无 tool calling（数据需求确定性，LLM 无决策空间）
+- **结构化输出 + Claim 校验**：Agent 间通信使用 Pydantic 结构化对象（AnalystReport/DebateMessage/TradeDecision），按 Agent 粒度嵌入 Claim 并校验（data/computational/event 溯源）
+- **指标硬编码**：四维度 20 指标 + 阈值 + 杜邦 + 红黄绿灯 + 技术指标 + 风控指标，全部代码硬编码
 
 ---
 
-## 二、图拓扑：8 节点
+## 二、图拓扑：5 层多 Agent
 
 ```mermaid
 flowchart TB
-    START([用户输入 stock_code + analysis_type]) --> PREP
+    START([用户输入 stock_code]) --> check_cache
 
-    subgraph MAIN["主图"]
+    subgraph PREP["数据准备子图 L3"]
         direction TB
-
-        subgraph PREP["数据准备子图 L3"]
-            direction TB
-            CC["① check_cache<br/>查持久化报表+缓存行情"]
-            FP["② fetch_data<br/>Step1: AKShare并行拉取<br/>Step2: 同业数据(依赖行业归属)"]
-            VF["③ validate_financials<br/>4条勾稽校验<br/>硬等式FAIL→终止 软等式→warning"]
-            CM["④ compute_metrics<br/>20指标+杜邦+红黄绿灯<br/>+同业对比+相对估值+GARP<br/>纯pandas无LLM"]
-            CC -->|"MISS 首次"| FP --> VF
-            CC -->|"HIT 报表已有"| VF
-            VF -->|"PASS"| CM
-            VF -->|"FAIL 硬等式"| END_ERR(["终止: 数据校验失败"])
-        end
-
-        FA["⑤ fa_analyze<br/>读State全部分析数据<br/>LLM生成正文+摘要+组装8章报告"]
-
-        IA["⑥ ia_analyze<br/>读State行业+估值+风险<br/>LLM生成正文+摘要+组装7章报告"]
-
-        Merge["⑦ merge<br/>拼接FA+IA报告<br/>LLM写300-500字综合摘要(仅comprehensive)"]
-        GenFile["⑧ generate_file<br/>python-docx/pptx生成Word/PPT"]
+        CC["① check_cache<br/>查持久化报表+缓存行情"]
+        FP["② fetch_data<br/>Step1: 三大报表+行情+行业+预计算指标<br/>+日K线+沪深300K线+宏观指标+新闻列表<br/>Step2: 同业数据(依赖行业归属)"]
+        VF["③ validate_financials<br/>4条勾稽校验<br/>硬等式FAIL→终止 软等式→warning"]
+        CM["④ compute_metrics<br/>四维度+杜邦+灯+同业+估值+GARP<br/>+技术指标(MACD/RSI/布林带/KDJ)<br/>+风控指标(回撤/波动率/Beta/VaR)<br/>+宏观指标统计+舆情统计"]
+        CC -->|"MISS 首次"| FP --> VF
+        CC -->|"HIT 报表已有"| VF
+        VF -->|"PASS"| CM
+        VF -->|"FAIL 硬等式"| END_ERR(["终止: 数据校验失败"])
     end
 
-    PREP --> Route
+    subgraph L1["Layer I: Analyst Team（4 并行）"]
+        direction LR
+        MA["宏观分析师<br/>macro"]
+        FA["基本面分析师<br/>fundamental"]
+        TA["技术面分析师<br/>technical"]
+        SA["舆情分析师<br/>sentiment"]
+    end
 
-    Route -->|"financial"| FA
-    Route -->|"investment"| IA
-    Route -->|"comprehensive 并行"| FA
-    Route -->|"comprehensive 并行"| IA
+    subgraph L2["Layer II: Bull/Bear 辩论"]
+        direction TB
+        BR1["Bull R1 / Bear R1<br/>各自立论(并行)"]
+        BR2["Bull R2 / Bear R2<br/>反驳对方R1(并行)"]
+        RM["Research Manager<br/>综合辩论结论"]
+        BR1 --> BR2 --> RM
+    end
 
-    FA -->|"comprehensive"| Merge
-    IA -->|"comprehensive"| Merge
-    FA -->|"单Agent"| GenFile
-    IA -->|"单Agent"| GenFile
-    Merge --> GenFile
-    GenFile --> END([END])
+    subgraph L3L["Layer III: Trader"]
+        TR["trader<br/>基于辩论结论+分析师报告<br/>产出交易计划(买卖方向+逻辑)"]
+    end
+
+    subgraph L4["Layer IV: Risk Management 辩论"]
+        direction TB
+        RR1["激进/保守/中性 R1(并行)"]
+        RR2["激进/保守/中性 R2(并行)"]
+        RJ["Risk Judge<br/>综合辩论→final_trade_decision"]
+        RR1 --> RR2 --> RJ
+    end
+
+    subgraph L5["Layer V: Fund Manager"]
+        FM["fund_manager<br/>审阅final_trade_decision"]
+    end
+
+    CM -->|"Send([macro, fundamental,<br/>technical, sentiment])"| L1
+    L1 -->|"Send([bull_r1, bear_r1])"| BR1
+    RM --> TR
+    TR -->|"Send([aggressive_r1,<br/>conservative_r1, neutral_r1])"| RR1
+    RJ --> FM
+    FM -->|"approve"| GR["generate_report<br/>10章报告生成"]
+    FM -->|"reject"| END_REJ(["END: 标注未通过审批"])
+    FM -->|"return"| TR
+    GR --> END([END])
 
     style PREP fill:#e8f5e9
     style CC fill:#81c784,color:#fff
@@ -74,29 +92,92 @@ flowchart TB
     style VF fill:#ffcc80,color:#fff
     style CM fill:#81c784,color:#fff
     style END_ERR fill:#ef5350,color:#fff
-    style Route fill:#ff9800,color:#fff
-    style FA fill:#e3f2fd
-    style IA fill:#f3e5f5
-    style GenFile fill:#ef9a9a
-    style Merge fill:#ab47bc,color:#fff
+    style L1 fill:#e3f2fd
+    style L2 fill:#f3e5f5
+    style L3L fill:#fff3e0
+    style L4 fill:#fce4ec
+    style L5 fill:#e8eaf6
+    style FM fill:#9fa8da,color:#fff
+    style GR fill:#ef9a9a
 ```
+
+**静态拓扑顺序（LangGraph 静态展开，无循环边）：**
+
+```
+START → check_cache → [fetch_data →] validate → compute_metrics
+  → Send([macro, fundamental, technical, sentiment])
+  → Send([bull_r1, bear_r1])
+  → Send([bull_r2, bear_r2])
+  → research_manager
+  → trader
+  → Send([aggressive_r1, conservative_r1, neutral_r1])
+  → Send([aggressive_r2, conservative_r2, neutral_r2])
+  → risk_judge
+  → fund_manager
+  → [trader（如果退回）] 或 generate_report
+  → END
+```
+
+> 注：Fund Manager 的 `return → trader` 退回最多 1 次（防死循环），通过条件路由实现，不计入静态展开的循环边。各层 `Send` 并行派发由 LangGraph `Send` API 实现，不是独立节点。
 
 ---
 
 ## 三、节点详细规格
 
+### 3.1 PREP 子图（L3 数据准备，无 LLM）
+
 | #   | 节点                | 读 State                             | 写 State                                 | LLM |
 | --- | ------------------- | ------------------------------------ | ---------------------------------------- | --- |
-| ①   | check_cache         | stock_code                           | 命中时填充 L1-L3 全部                    | 否  |
-| ②   | fetch_data          | missing_items                        | L1+L2+L4 全部原始数据                    | 否  |
-| ③   | validate_financials | L1 三大报表                          | validation_result + warnings             | 否  |
-| ④   | compute_metrics     | L1-L4 原始数据                       | 四维度+杜邦+灯+同业+相对估值+GARP+健康度 | 否  |
-| ⑤   | fa_analyze          | 四维度+灯+杜邦+同业+异常+warnings    | financial_analysis + financial_report    | 是  |
-| ⑥   | ia_analyze          | 行业+估值+GARP+风险                  | investment_analysis + investment_report  | 是  |
-| ⑦   | merge               | financial_report + investment_report | final_report                             | 是  |
-| ⑧   | generate_file       | final_report                         | file_path + file_paths                   | 否  |
+| ①   | check_cache         | stock_code                           | 命中时填充 PREP 全部字段                  | 否  |
+| ②   | fetch_data          | missing_items                        | 三大报表+行情+行业+预计算指标+日K线+沪深300K线+宏观指标+新闻列表+同业数据 | 否  |
+| ③   | validate_financials | 三大报表                             | validation_result + warnings             | 否  |
+| ④   | compute_metrics     | PREP 原始数据                        | 四维度+杜邦+灯+同业+相对估值+GARP+技术指标+风控指标+宏观统计+舆情统计 | 否  |
 
-> 注：fa_analyze / ia_analyze 采用双阶段生成（Phase 1 正文 → Phase 2 摘要 → Phase 3 模板组装），原设计的独立 fa_report / ia_report 节点已合并，以简化图拓扑。路由通过 LangGraph `Send` API 实现并行派发，不是独立节点。
+### 3.2 Layer I: Analyst Team（4 并行，LLM）
+
+| #   | 节点            | 读 State                                          | 写 State                              | LLM |
+| --- | --------------- | ------------------------------------------------- | ------------------------------------- | --- |
+| ⑤a  | macro           | 宏观指标+政策动态+key_events                       | analyst_reports["macro"]              | 是  |
+| ⑤b  | fundamental     | 三大报表+四维度+杜邦+估值+同业                     | analyst_reports["fundamental"]        | 是  |
+| ⑤c  | technical       | K线序列+MACD/RSI/布林带/KDJ                        | analyst_reports["technical"]          | 是  |
+| ⑤d  | sentiment       | 新闻列表+key_events                               | analyst_reports["sentiment"]          | 是  |
+
+### 3.3 Layer II: Bull/Bear 辩论（LLM）
+
+| #   | 节点              | 读 State                              | 写 State                          | LLM |
+| --- | ----------------- | ------------------------------------- | --------------------------------- | --- |
+| ⑥   | bull_r1           | 4 份分析师报告                         | debate_history(Bull 立论)          | 是  |
+| ⑦   | bear_r1           | 4 份分析师报告                         | debate_history(Bear 立论)          | 是  |
+| ⑧   | bull_r2           | 4 份分析师报告 + 对方 R1 论点          | debate_history(Bull 反驳)          | 是  |
+| ⑨   | bear_r2           | 4 份分析师报告 + 对方 R1 论点          | debate_history(Bear 反驳)          | 是  |
+| ⑩   | research_manager  | debate_history(辩论全量)              | debate_history(综合结论)           | 是  |
+
+### 3.4 Layer III: Trader（LLM）
+
+| #   | 节点   | 读 State                          | 写 State                    | LLM |
+| --- | ------ | --------------------------------- | --------------------------- | --- |
+| ⑪   | trader | 分析师报告 + Research Manager 结论 | trade_decision(买卖方向+逻辑) | 是  |
+
+### 3.5 Layer IV: Risk Management 辩论（LLM）
+
+| #   | 节点              | 读 State                                    | 写 State                          | LLM |
+| --- | ----------------- | ------------------------------------------- | --------------------------------- | --- |
+| ⑫   | aggressive_r1     | trade_decision + 分析师报告 + 风控指标       | debate_history(激进立论)          | 是  |
+| ⑬   | conservative_r1   | trade_decision + 分析师报告 + 风控指标       | debate_history(保守立论)          | 是  |
+| ⑭   | neutral_r1        | trade_decision + 分析师报告 + 风控指标       | debate_history(中立立论)          | 是  |
+| ⑮   | aggressive_r2     | trade_decision + 对方 R1 论点                | debate_history(激进反驳)          | 是  |
+| ⑯   | conservative_r2   | trade_decision + 对方 R1 论点                | debate_history(保守反驳)          | 是  |
+| ⑰   | neutral_r2        | trade_decision + 对方 R1 论点                | debate_history(中立反驳)          | 是  |
+| ⑱   | risk_judge        | debate_history(Risk 辩论全量)                | trade_decision(final_trade_decision) | 是  |
+
+### 3.6 Layer V + 报告生成
+
+| #   | 节点            | 读 State                    | 写 State                              | LLM |
+| --- | --------------- | --------------------------- | ------------------------------------- | --- |
+| ⑲   | fund_manager    | final_trade_decision        | fund_manager_decision(approve/reject/return) | 是  |
+| ⑳   | generate_report | 全部 Agent 输出 + PREP 指标 | file_path + file_paths                | 是  |
+
+> 注：Layer I/II/IV 的并行派发通过 LangGraph `Send` API 实现，不是独立路由节点。每个 Agent 输出专属 Pydantic schema（结构化分析对象 + 章节 Markdown）。PREP 风控指标（回撤/波动率/Beta/VaR）作为 prompt context 注入 Layer IV，不用工具查。Claim 校验按 Agent 粒度：基本面/风控强制 data+computational 溯源，舆情强制 event 溯源，宏观标注 `llm_inference` 跳过，技术面数字部分 `field_ref`。
 
 ---
 
@@ -124,7 +205,7 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CHECK_CACHE: 输入(stock_code, analysis_type)
+    [*] --> CHECK_CACHE: 输入(stock_code)
 
     CHECK_CACHE --> COMPUTE: HIT（报表持久化命中 + 行情未过期）
     CHECK_CACHE --> FETCH: MISS（首次分析）
@@ -139,17 +220,17 @@ stateDiagram-v2
 
 两条执行路径：
 
-| 路径 | 触发条件                    | 经过节点                                                 | API 调用         | 耗时 |
-| ---- | --------------------------- | -------------------------------------------------------- | ---------------- | ---- |
-| HIT  | 报表持久化命中 + 行情未过期 | check_cache → validate → compute → Route → Agent         | 0（数据）+ LLM   | ~2s  |
-| MISS | 首次分析                    | check_cache → fetch → validate → compute → Route → Agent | 5-8（数据）+ LLM | ~8s  |
-| FAIL | 硬等式校验失败              | check_cache → [fetch →] validate → END                   | 0-5（数据）      | ~1s  |
+| 路径 | 触发条件                    | 经过节点                                                        | API 调用                  | 耗时      |
+| ---- | --------------------------- | --------------------------------------------------------------- | ------------------------- | --------- |
+| HIT  | 报表持久化命中 + 行情未过期 | check_cache → validate → compute → Layer I-V Agent 流           | 0（数据）+ 14-20 LLM      | ~75-110s  |
+| MISS | 首次分析                    | check_cache → fetch → validate → compute → Layer I-V Agent 流   | 5-8（数据）+ 14-20 LLM    | ~80-115s  |
+| FAIL | 硬等式校验失败              | check_cache → [fetch →] validate → END                          | 0-5（数据）               | ~1s       |
 
-> 注：两条路径都走 Route → Agent，因为分析报告不缓存，LLM 每次重新生成。
+> 注：两条路径都进入 5 层 Agent 流（Layer I-V），报告不缓存，LLM 每次重新生成。LLM 调用次数 14（无退回）→ 18（2 轮辩论）→ 20（含 1 次退回），延迟相应增加（ADR-0011）。
 
 ### 4.4 fetch_data 内部分步（MVP）
 
-- **Step 1 并行**：三大报表 + 行情 + 行业归属 + 预计算指标（AKShare，无依赖）
+- **Step 1 并行**：三大报表 + 行情 + 行业归属 + 预计算指标 + 日K线 + 沪深300K线 + 宏观指标 + 新闻列表（AKShare，无依赖）
 - **Step 2 依赖**：同业公司财务数据（需要 Step 1 的行业归属 + 同业列表）
 
 > v2.0 增加：Tavily 搜索（依赖行业名称）、巨潮 PDF 解析、Chroma 研报 RAG
@@ -211,6 +292,17 @@ L2: 净利率 → 毛利率 - 费用率
 L3: 费用率 → 销售费用率 + 管理费用率 + 研发费用率 + 财务费用率
 ```
 
+### 5.5 技术指标与风控指标（ADR-0011 新增）
+
+> 本节四维度 20 指标仍由基本面分析师使用（保持有效）。ADR-0011 为技术面分析师和风险管理层新增以下指标模块：
+
+| 模块                | 指标                                  | 服务对象           |
+| ------------------- | ------------------------------------- | ------------------ |
+| `metrics/technical.py` | MACD / RSI / 布林带 / KDJ          | 技术面分析师（Layer I） |
+| `metrics/risk.py`   | max_drawdown / annual_volatility / beta / VaR | 风控辩论（Layer IV，prompt context 注入） |
+
+> 注：风控指标作为 prompt context 直接注入 Layer IV 的 3 个辩论者，不用工具查；技术指标由技术面分析师读取后解读。沪深 300 K 线用于 Beta 计算的基准。
+
 ---
 
 ## 六、LangGraph State 结构
@@ -223,7 +315,6 @@ class AnalysisState(TypedDict, total=False):
     # ── 输入 ──
     query: str
     stock_code: str
-    analysis_type: Literal["financial", "investment", "comprehensive"]
     peer_codes: list[str] | None
     enable_web_search: bool  # Gradio 开关：是否启用实时事件搜索
 
@@ -266,18 +357,29 @@ class AnalysisState(TypedDict, total=False):
     quarterly_income: pd.DataFrame | None
     quarterly_trend: dict | None
 
-    # ── Layer 2.5: 关键非财务事件（仅 IA 使用）──
+    # ── PREP 新增（ADR-0011）──
+    kline_data: pd.DataFrame | None          # 个股日K线(1-2年OHLCV)
+    market_kline: pd.DataFrame | None        # 沪深300日K线(Beta基准)
+    macro_indicators: dict | None            # CPI/PMI/M2/LPR (metrics/macro.py)
+    news_list: list[dict] | None             # 新闻列表(metrics/sentiment.py 统计)
+    technical_indicators: dict | None        # MACD/RSI/布林带/KDJ (metrics/technical.py)
+    risk_metrics: dict | None                # max_drawdown/annual_volatility/beta/VaR (metrics/risk.py)
+
+    # ── Layer 3 扩展: 关键非财务事件 ──
     key_events: list[dict] | None
 
-    # ── Agent 输出 ──
-    financial_analysis: str | None
-    financial_report: str | None
-    investment_analysis: str | None
-    investment_report: str | None
-    final_report: str | None
+    # ── Agent 输出（嵌套，ADR-0011）──
+    analyst_reports: dict[str, AnalystReport]   # 4 分析师结构化报告 {macro|fundamental|technical|sentiment}
+    debate_history: list[DebateMessage]         # Bull/Bear + Risk Management 辩论消息流
+    trade_decision: TradeDecision               # Trader → Risk Judge 最终交易决策
+    fund_manager_decision: str                  # approve | reject | return
+
+    # ── 报告输出 ──
     file_path: str | None
     file_paths: dict | None
 ```
+
+> 注：PREP 字段保持扁平（兼容现有代码）；Agent 输出改为嵌套结构（`analyst_reports` / `debate_history` / `trade_decision`）。`AnalystReport`、`DebateMessage`、`TradeDecision` 为 Pydantic 模型，含结构化字段 + 章节 Markdown + Claim 列表。
 
 ---
 
@@ -298,16 +400,22 @@ def after_validate(state):
         return "__end__"  # 硬等式失败，短路终止
     return "compute_metrics"
 
-# 主图路由
-def route_to_agent(state):
-    return state["analysis_type"]
+# Fund Manager 决策条件边（Layer V）
+RETRY_COUNT = "fund_manager_retry_count"
 
-# Agent完成后
-def after_agent(state):
-    if state["analysis_type"] == "comprehensive":
-        return "merge"
-    return "generate_file"
+def after_fund_manager(state):
+    decision = state["fund_manager_decision"]
+    if decision == "approve":
+        return "generate_report"
+    if decision == "reject":
+        return "__end__"  # 标注"未通过审批" → END
+    # return → 退回 Trader，最多 1 次防死循环
+    if state.get(RETRY_COUNT, 0) >= 1:
+        return "generate_report"  # 超过上限，强制生成报告
+    return "trader"
 ```
+
+> 注：ADR-0011 移除了 `route_to_agent` 和 `after_agent`（不再有 `analysis_type` 路由，4 个分析师始终全量并行执行）。Fund Manager 的 `return → trader` 退回最多 1 次，通过 `fund_manager_retry_count` 计数器防死循环；超过上限后强制进入 `generate_report`。
 
 ---
 
@@ -334,7 +442,7 @@ def after_agent(state):
 | 问题                     | 选项                                     | 影响                                                                               |
 | ------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
 | ~~DCF 的 WACC 假设来源~~ | ~~公式估算 vs LLM 生成 vs 硬编码默认值~~ | ~~已决定：公式估算（CAPM + 利息费用/有息负债）~~                                   |
-| ~~项目目录结构~~         | ~~见架构文档~~                           | ~~已决定：src/finance_agent/ 分 nodes/metrics/mcp_servers/data/prompts/templates~~ |
+| ~~项目目录结构~~         | ~~见架构文档~~                           | ~~已决定：src/finance_agent/ 分 nodes/metrics/data/prompts/templates~~ |
 | ~~实施阶段划分~~         | ~~P0骨架→P1数据层→P2分析层→P3输出层~~    | ~~已决定：4阶段渐进~~                                                              |
 
 ### 补充决定

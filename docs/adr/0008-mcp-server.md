@@ -1,6 +1,8 @@
 # ADR 0008: MCP Server for Claude Desktop Integration
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-0011](0011-five-layer-architecture.md)
+
+> **Superseded**: MCP Server 从本项目撤销。内部 Agent 直接调 Python 函数，不走 MCP 协议（同进程通信无需序列化开销）。未来可另起独立项目将数据层或 Agent 封装为 MCP Server，与本项目解耦。mcp_server.py 退役。
 **Date**: 2026-06-07
 
 ## Context

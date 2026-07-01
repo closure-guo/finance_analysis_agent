@@ -1,6 +1,8 @@
 # ADR-0002: Agent Nodes Are Pure LLM Consumers
 
-## Status: Accepted
+## Status: Superseded by [ADR-0011](0011-five-layer-architecture.md)
+
+> **Superseded**: 本 ADR 的 fa/ia 双 Agent 模型已被 ADR-0011 的 5 层架构（4 分析师 + Bull/Bear 辩论 + Trader + Risk Management + Fund Manager）替代。FA/IA Agent 解散，职责并入新的 4 个并行分析师。"数据层与 Agent 层分离"的分层原则仍然有效，被 ADR-0011 继承。
 
 ## Context
 

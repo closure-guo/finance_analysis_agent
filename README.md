@@ -1,6 +1,6 @@
 # Finance Analysis Agent
 
-基于 LangGraph 的 A 股上市公司 AI 分析报告系统。输入股票代码，自动生成财务分析 / 投资分析 / 综合分析报告。
+基于 LangGraph 的 A 股上市公司 AI 分析报告系统。输入股票代码，自动生成多 Agent 交易决策分析报告。
 
 ## 在线演示
 
@@ -22,14 +22,16 @@
 
 > 图由路由函数自动发现生成: <code>uv run python tests/scripts/gen_graph_mermaid.py</code>
 
-四层架构：
+五层架构：
 
-| 层级     | 选型            | 职责                                               |
-| -------- | --------------- | -------------------------------------------------- |
-| L1 前端  | Gradio 5.x      | 表单输入 + 报告展示 + 文件下载                     |
-| L2 Agent | LangGraph       | 8 节点 + 条件路由 + 并行派发                       |
-| L3 数据  | pandas + SQLite | AKShare 拉取 + 20 指标计算 + 报表持久化 + 行情缓存 |
-| L4 LLM   | DeepSeek        | LiteLLM 路由                                       |
+| 层级     | 选型            | 职责                                                              |
+| -------- | --------------- | ----------------------------------------------------------------- |
+| L1 前端  | Gradio 5.x      | 表单输入 + 报告展示 + 文件下载                                    |
+| L2 Agent | LangGraph       | 5 层架构 + 多 Agent 辩论 + Send 并行派发                          |
+| L3 数据  | pandas + SQLite | AKShare 拉取 + 指标计算 + K 线/宏观/新闻 + 报表持久化 + 行情缓存  |
+| L4 LLM   | DeepSeek        | LiteLLM 路由                                                      |
+
+> L2 Agent 5 层：4 分析师并行 → Bull/Bear 辩论 → Trader → Risk Management 辩论 → Fund Manager（详见 [ADR-0011](docs/adr/0011-five-layer-architecture.md)）
 
 ## 快速开始
 
@@ -100,10 +102,13 @@ src/finance_agent/
 │   ├── fetch.py          # fetch_data
 │   ├── validate.py       # validate_financials (勾稽校验)
 │   ├── compute.py        # compute_metrics
-│   ├── fa.py             # fa_analyze (正文+摘要+8章组装)
-│   ├── ia.py             # ia_analyze (正文+摘要+7章组装)
-│   ├── merge.py          # merge (综合报告合并)
-│   └── output.py         # generate_file (Word/PPT 生成)
+│   ├── fa.py             # ⚠️ 已废弃 (ADR-0011, 职责并入 analysts/)
+│   ├── ia.py             # ⚠️ 已废弃 (ADR-0011, 职责并入 analysts/)
+│   ├── merge.py          # ⚠️ 已废弃 (ADR-0011, 职责并入 decision/)
+│   ├── output.py         # generate_file (Word/PPT 生成)
+│   ├── analysts/         # [规划] 4 分析师并行: 宏观 / 基本面 / 技术面 / 舆情
+│   ├── debate/           # [规划] Bull/Bear 辩论 + Risk Management 辩论
+│   └── decision/         # [规划] Trader + Fund Manager 决策
 ├── metrics/              # 指标计算（纯函数）
 │   ├── validate.py       # 勾稽校验 4 规则
 │   ├── solvency.py       # 偿债 5 指标
@@ -136,6 +141,7 @@ src/finance_agent/
 - [x] **P1 数据层** — AKShare + 20 指标 + 缓存 + FA 报告
 - [x] **P2 分析层** — IA Agent + prompt 工程 + 投资报告
 - [x] **P3 输出层** — 综合分析 + Word/PPT 导出 + UI 打磨
+- [ ] **P4 5 层架构重构** — 多 Agent 辩论 + 交易决策 (ADR-0011)
 
 ## 文档
 

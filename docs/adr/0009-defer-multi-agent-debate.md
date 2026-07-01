@@ -1,6 +1,8 @@
 # ADR-0009: Defer Multi-Agent Debate, Prioritize Tool-Use Refactor
 
-**Status**: Accepted
+**Status**: Reversed by [ADR-0011](0011-five-layer-architecture.md)
+
+> **Reversed**: 本 ADR 决定"延后辩论机制，优先做工具使用重构"。ADR-0011 推翻此决策：辩论机制不再延后，作为 5 层架构的核心组件立即采纳（Bull/Bear 2 轮辩论 + Risk Management 3 方辩论）。同时，ADR-0010 的工具使用重构（Step 1 tool calling）被撤销——深度分析模式下数据由 PREP 一次性注入，不需要 tool calling。tool calling 保留给未来的"快速模式"（交互式问答）。
 **Date**: 2026-06-17
 
 ## Context

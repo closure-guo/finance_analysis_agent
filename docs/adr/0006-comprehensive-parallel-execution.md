@@ -1,4 +1,10 @@
-# Comprehensive 模式并行执行架构
+# ADR-0006: Comprehensive 模式并行执行架构
+
+## Status: Superseded by [ADR-0011](0011-five-layer-architecture.md)
+
+> **Superseded**: FA/IA 双 Agent 并行已被 ADR-0011 的 4 个分析师并行替代。Send API 并行模式被继承，但应用对象从 fa_analyze/ia_analyze 变为 macro/fundamental/technical/sentiment 4 个分析师。
+
+## Context
 
 Comprehensive 分析需要同时运行财务分析（FA）和投资分析（IA）两个 Agent。初始实现使用条件边返回列表 `["fa_analyze", "ia_analyze"]`，但 LangGraph 默认顺序执行这些节点，导致 comprehensive 模式总耗时 ≈ 2.5× 单 Agent 模式（5 次串行 LLM 调用）。
 

@@ -1,7 +1,9 @@
 # ADR 0010: Tool-Use Refactor — create_agent + middleware reflection + deterministic citation check
 
-**Status**: Accepted
+**Status**: Partially Superseded by [ADR-0011](0011-five-layer-architecture.md)
 **Date**: 2026-06-18
+
+> **Partially Superseded**: Step 1（create_agent + tool calling）已撤销——深度分析模式下数据由 PREP 一次性注入，不需要 tool calling（详见 ADR-0011）。Step 2（reflection middleware）和 Step 3（确定性引用校验）保留，仍为有效设计。tool calling 保留给未来的"快速模式"（交互式问答）。
 
 ## Context
 
@@ -19,7 +21,9 @@ ADR-0009 决定「工具使用重构优先于多 Agent 辩论」。本 ADR 是 A
 
 分三步落地，三步互为独立但服务于同一目标（把 FA/IA 从「带格式化的 LLM 调用」升级为「能查数据、会反思、可校验的真 Agent」）。
 
-### Step 1: FA/IA 节点迁移到 `create_agent` + 工具集
+### Step 1: ~~FA/IA 节点迁移到 `create_agent` + 工具集~~（已撤销）
+
+> **撤销**：ADR-0011 决定深度分析模式下数据由 PREP 一次性注入，不需要 tool calling。每个分析师的数据需求是确定性的（每次分析都要全部数据），LLM 无决策空间。tool calling 保留给未来的"快速模式"（交互式问答）。
 
 用 `langchain.agents.create_agent`（LangGraph v1 废弃了 `create_react_agent`，见 `docs/langgraph v1 migration guide`）重写 `fa_analyze` / `ia_analyze`。每个 Agent 绑定一组工具，LLM 在 ReAct 循环里自主决定何时调哪个工具。
 
@@ -67,7 +71,7 @@ def fa_reflection(state, runtime) -> dict | None:
 
 ### Step 3: 确定性引用校验器（Deterministic Citation Check）
 
-报告里每一个数字必须能反查到 state 字段并（对计算型指标）重算。这是 [[finhallu-grounding-research]] 里 FinGround 论文「computational claim 用公式重算比 LLM 评审高 +18.9 F1」的直接落地。
+报告里每一个数字必须能反查到 state 字段并（对计算型指标）重算。这是 [[finhallu-grounding-research]] 里 FinGround 论文「computational claim 用公式重算比 SelfCheckGPT-adapted +10–12 F1」的直接落地。
 
 **区分两类数字**：
 

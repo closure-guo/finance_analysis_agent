@@ -1,3 +1,5 @@
+<!-- DEPRECATED: ADR-0011 废弃 merge 节点，由 Research Manager / Trader / Fund Manager 替代。新 prompt 待编写。 -->
+
 请根据以下财务分析和投资分析，撰写一份 300-500 字的综合结论。
 
 ## 财务分析要点

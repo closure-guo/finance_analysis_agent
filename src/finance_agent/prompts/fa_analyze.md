@@ -1,3 +1,5 @@
+<!-- DEPRECATED: ADR-0011 废弃 FA Agent，由基本面分析师（Fundamental Analyst Agent）替代。新 prompt 待编写。 -->
+
 你是一位资深 A 股财务分析师。请根据以下结构化财务数据，撰写专业的财务分析报告正文（第 3-7 章）。
 
 ## 行业特殊性提醒

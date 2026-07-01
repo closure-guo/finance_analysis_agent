@@ -1,16 +1,99 @@
 # Finance Analysis Agent — Domain Context
 
-## Glossary
+## Purpose
 
-### Analysis Types
+面向 A 股市场的多 Agent 投研分析系统。模仿 TradingAgents (arXiv:2412.20138) 的 5 层架构：4 个分析师并行 → Bull/Bear 辩论 → Trader 决策 → Risk Management 辩论 → Fund Manager 批准。最终产出综合分析报告，包含交易建议（买入/持有/观望/卖出）。
 
-| Term                   | Chinese  | Definition                                                                                                   |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
-| Financial Analysis     | 财务分析 | 向后看：诊断公司过去 3-5 年的财务健康状况。基于确定的事实（报表数字），不推测。输出：健康度评分 + 风险点清单 |
-| Investment Analysis    | 投资分析 | 向前看：预测公司未来 3-5 年的价值。基于假设和概率，明确风险。输出：目标价区间 + 置信度 + 关键假设            |
-| Comprehensive Analysis | 综合分析 | 财务分析 + 投资分析并行执行，合并输出一份综合报告                                                            |
+> **合规声明**：报告由 AI 系统基于公开数据自动生成，仅供参考研究，不构成投资建议。
 
-### Financial Analysis Framework: Four Dimensions + DuPont
+## Language
+
+### Analysis Architecture
+
+5 层架构，参考 TradingAgents (arXiv:2412.20138)。
+
+#### Layer I: Analyst Team（4 个并行分析师）
+
+**Macro Analyst Agent**（宏观分析师）:
+解读宏观经济环境、货币政策、行业政策对标的的影响。输入：宏观指标（CPI/PMI/M2/LPR）+ 政策动态。输出：宏观环境评估。
+_Avoid_: 宏观经济 Agent
+
+**Fundamental Analyst Agent**（基本面分析师）:
+向后看：诊断公司过去 3-5 年的财务健康状况 + 相对估值。基于确定的事实（报表数字），不推测。职责 = 原 Financial Analysis（四维度+杜邦）+ 相对估值（PE/PB 同业对比 + GARP）。输出：健康度评分 + 风险点清单 + 估值结论。
+_Avoid_: 财务分析 Agent、投资分析 Agent（已废弃，融入基本面分析师）
+
+**Technical Analyst Agent**（技术面分析师）:
+分析价格走势、成交量、技术指标、支撑压力位。输入：日 K 线序列（OHLCV）。输出：技术分析判断（趋势/超买超卖/关键价位）。
+_Avoid_: 行情分析 Agent
+
+**Sentiment Analyst Agent**（舆情分析师）:
+追踪新闻舆情、社交媒体情绪、重大事件影响。输入：个股新闻 + 财联社快讯 + 关键事件（Key Event）。输出：舆情监控 + 事件影响分析。
+_Avoid_: 新闻 Agent、情绪 Agent
+
+#### Layer II: Researcher Team（Bull/Bear 辩论）
+
+**Bull Researcher**（看多研究员）: 基于分析师报告构建看涨论点，挖掘积极信号和增长潜力。
+**Bear Researcher**（看空研究员）: 基于分析师报告构建看跌论点，专注风险点和负面信号。
+**Research Manager**（研究主管）: 综合 Bull/Bear 辩论结论，给出推荐。
+
+辩论轮数：2 轮（立论 + 反驳）。
+
+#### Layer III: Trader（交易员）
+
+基于 Research Manager 的推荐 + 历史数据，做出交易决策（买入/卖出/持有/观望），确定交易时机和仓位建议。输出 `trader_investment_plan`。
+
+#### Layer IV: Risk Management Team（风险管理辩论团队）
+
+3 个风险辩论者 + 1 个裁决者，压力测试 Trader 的交易计划：
+
+| 角色 | 风险偏好 | 职责 |
+|------|---------|------|
+| Aggressive Debator | 激进 | 优先增长，挑战保守观点 |
+| Conservative Debator | 保守 | 优先资本保全，识别高风险因素 |
+| Neutral Debator | 中性 | 平衡上下行，主张分散化 |
+| Risk Judge | 裁决 | 综合辩论 + PREP 风控指标（回撤/波动率/Beta），产出 `final_trade_decision` |
+
+辩论轮数：2 轮。输入：Trader 的 `trader_investment_plan` + 4 份分析师报告 + PREP 风控指标。
+
+#### Layer V: Fund Manager（基金经理）
+
+审阅 `final_trade_decision`，批准/拒绝/退回修改。退回修改最多 1 次（防死循环）。批准后写入决策日志，生成最终报告。
+
+### Graph Topology
+
+LangGraph 拓扑（静态展开，无循环边）：
+
+```
+START → check_cache → [fetch_data →] validate → compute_metrics
+  → Send([macro, fundamental, technical, sentiment])  ← 4 路并行
+  → Send([bull_r1, bear_r1])                          ← Round 1 并行
+  → Send([bull_r2, bear_r2])                          ← Round 2 并行（读对方 r1 反驳）
+  → research_manager
+  → trader
+  → Send([aggressive_r1, conservative_r1, neutral_r1]) ← Round 1 并行
+  → Send([aggressive_r2, conservative_r2, neutral_r2]) ← Round 2 并行
+  → risk_judge
+  → fund_manager
+  → [trader（如果退回）] 或 generate_report
+  → END
+```
+
+- Bull/Bear 辩论：2 轮，每轮 Bull 和 Bear 用 Send 并行产出，不串行等待
+- Risk Management 辩论：2 轮，每轮 3 个辩论者用 Send 并行产出
+- Fund Manager 退回：条件边，`return_count < 1` 时回到 trader，否则强制 approve/reject
+- State 结构：混合 —— PREP 字段保持扁平（兼容现有代码），agent 输出用嵌套（`analyst_reports: dict[str, AnalystReport]` / `debate_history: list[DebateMessage]` / `trade_decision: TradeDecision`）
+
+### Deprecated Terms
+
+| 旧术语 | 状态 | 替代 |
+|--------|------|------|
+| Financial Analysis (FA) | 已废弃 | 职责并入 Fundamental Analyst Agent |
+| Investment Analysis (IA) | 已废弃 | 估值部分并入 Fundamental Analyst Agent |
+| Comprehensive Analysis | 已废弃 | 5 层架构是默认模式，不再有"综合"特殊类型 |
+| fa_analyze / ia_analyze 节点 | 已废弃 | Analyst Team 4 个 Agent 替代 |
+| Risk Control Agent（并行分析师） | 已废弃 | 改为 Risk Management Team，移到 Trader 之后 |
+
+### Fundamental Analysis Framework: Four Dimensions + DuPont
 
 | Dimension              | Chinese    | Core Question    | Metrics                                                                          |
 | ---------------------- | ---------- | ---------------- | -------------------------------------------------------------------------------- |
@@ -21,26 +104,32 @@
 
 **DuPont Decomposition**（杜邦分析法）: 3 层递归拆解 ROE 变动原因。
 
-### Investment Analysis Framework: Valuation Triangle + GARP
+### Valuation Framework
 
 | Method             | Chinese  | What It Does     | Model          | MVP   |
 | ------------------ | -------- | ---------------- | -------------- | ----- |
 | Absolute Valuation | 绝对估值 | 这家公司值多少钱 | DCF（FCF折现） | ❌ v2.0 |
-
-**DCF 核心原则**（v2.0 实现）：DCF 的价值不在于输出精确数字，而在于揭示估值对假设的敏感度。输出估值区间 + 敏感性分析（WACC ±1%、g ±0.5%），不输出单一精确数字。
-| Relative Valuation | 相对估值 | 相比同行贵不贵 | PE、PB 同业对比 | ✅ |
-| SOTP | 分部估值 | 各业务线分别值多少 | Sum of The Parts（MVP 不做）|
+| Relative Valuation | 相对估值 | 相比同行贵不贵 | PE、PB 同业对比 | ✅     |
 
 **GARP**（Growth at a Reasonable Price）: PE < 行业平均 ∧ 净利润增长率 > 15% ∧ ROE > 15% ∧ 负债率 < 60%
 
-### Risk Matrix
+### Technical Analysis Framework
+
+| Dimension        | Core Question     | Metrics                              |
+| ---------------- | ----------------- | ------------------------------------ |
+| Trend            | 趋势方向          | MA（5/10/20/60）、MACD               |
+| Momentum         | 超买超卖          | RSI、KDJ                             |
+| Volatility       | 波动边界          | 布林带（BOLL）                       |
+| Support/Resistance | 关键价位        | 前高前低、筹码密集区                  |
+
+### Risk Framework
 
 | Dimension      | Chinese  | Source                                     |
 | -------------- | -------- | ------------------------------------------ |
 | Operating Risk | 经营风险 | 行业竞争格局、收入集中度                   |
 | Financial Risk | 财务风险 | 杠杆率、利息覆盖倍数（复用四维度偿债指标） |
-| Market Risk    | 市场风险 | Beta、波动率、流动性                       |
-| Policy Risk    | 政策风险 | 监管变化、行业政策                         |
+| Market Risk    | 市场风险 | Beta、波动率、最大回撤                     |
+| Policy Risk    | 政策风险 | 监管变化、行业政策（复用宏观分析结论）     |
 
 ### Scoring Model
 
@@ -49,32 +138,51 @@
 | Traffic Light | 红黄绿灯。每个指标通过双重阈值评判：绝对值水平(优良/关注/警告) + 同比变化率(稳定/<20% / 波动/20-50% / 异动/>50%)。最终 = max(绝对值灯, 变化率灯) |
 | Health Score  | 健康度评分。四维度各 25 分，🟢=满分 🟡=半分 🔴=零分。85-100=健康，60-84=关注，<60=警告                                                           |
 
-### Report Templates
+### Report
 
-| Report            | Chapters                                                                                                  |
-| ----------------- | --------------------------------------------------------------------------------------------------------- |
-| Financial Report  | 封面→执行摘要→核心指标分析(四维度表格+解读)→杜邦归因→同业对比→风险提示→结论与评级→免责声明 (8章)          |
-| Investment Report | 封面→执行摘要→行业概况(LLM知识)→估值分析(相对估值为主)→风险提示(财务指标+LLM补充)→投资建议→免责声明 (7章) |
+综合分析报告 + 交易建议。5 层架构产出：4 分析师并行 → Bull/Bear 辩论 → Trader → Risk Management → Fund Manager → 报告。
+_Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章版，已废弃）
 
-**报告 MVP 原则**：纯 Markdown 文本 + 表格，不引入图表库。雷达图/趋势图放到 v2.0。
+**报告原则**：纯 Markdown 文本 + 表格，不引入图表库。雷达图/趋势图放到 v2.0。
 
-**v2.0 扩展**：DCF 定量计算、Tavily 行业搜索、Chroma 研报 RAG、图表渲染。
+**结构化输出**：Layer I 的 4 个 Analyst Agent 各输出 Pydantic 结构化对象（而非自由 Markdown），用于 Agent 间信息传递。Layer II-V 的辩论/决策也输出结构化对象。最终合并渲染为报告。
 
-**执行摘要生成**：正文先于摘要生成。先生成第 3-7 章，再将正文作为上下文生成第 2 章执行摘要，最后拼接完整报告。
+**交易建议**：报告包含交易建议（买入/持有/观望/卖出），由 Trader 提议、Risk Management 压力测试、Fund Manager 批准。附带免责声明。
 
-### Key Events (Layer 2.5)
+**双模式设计**：
 
-| Term      | Chinese  | Definition                                                                                           |
-| --------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| Key Event | 关键事件 | 已发生且对经营有持续影响的非财务事实（提价、渠道变革、管理层变动等）。仅作为 IA 输入，不进入 FA。 |
+| 模式 | 数据获取 | Agent 机制 | 产出 | 状态 |
+|------|---------|-----------|------|------|
+| 深度模式（默认） | PREP 一次性全量注入 | 单轮 LLM + 结构化输出 | 完整 5 层架构 → 10 章报告 | ✅ v1.0 |
+| 快速模式 | tool calling 按需查询 | ReAct 循环 | 精简分析 | ❌ v2.0 |
 
-**事件定位**：介于基础数据（Layer 1-2）与衍生计算（Layer 3）之间。影响未来 3-5 年价值判断，但非财务报表数字。
+深度模式：每个分析师的数据需求是确定性的（每次都要看全部数据），PREP 算好后直接注入 prompt，无需 tool calling。"真 Agent"叙事来自 5 层架构的辩论/决策机制，不来自 tool calling。
+快速模式：留给未来交互式问答场景，ADR-0010 的 tool calling 设计保留为快速模式的机制基础。
+
+**报告章节结构**（分析师主导，线性流程）：
+
+| 章 | 标题 | 内容来源 | 字数 |
+|----|------|---------|------|
+| 1 | 封面 | 标的名称、日期、评级 | - |
+| 2 | 执行摘要 | Fund Manager 的最终决策 + 关键理由 | 300-500 |
+| 3 | 宏观环境分析 | 宏观分析师输出 | 500-800 |
+| 4 | 基本面分析 | 基本面分析师输出（四维度+杜邦+估值） | 1000-1500 |
+| 5 | 技术面分析 | 技术面分析师输出（趋势+指标+关键价位） | 500-800 |
+| 6 | 舆情与事件分析 | 舆情分析师输出（新闻+事件+情绪） | 500-800 |
+| 7 | 多空辩论摘要 | Bull/Bear 辩论核心论点 + Research Manager 结论 | 500-800 |
+| 8 | 交易建议 | Trader 计划 + Risk Management 评估 + Fund Manager 批准 | 500-800 |
+| 9 | 风险提示 | Risk Management 辩论中的风险点 + PREP 风控指标 | 300-500 |
+| 10 | 免责声明 | AI 生成 + 仅供参考 + 不构成投资建议 | 固定 |
+
+### Key Event
+
+关键事件。已发生且对经营有持续影响的非财务事实（提价、渠道变革、管理层变动等）。作为 Sentiment Analyst Agent 的输入之一。
 
 ### Data Sources
 
-| Source     | Type              | Usage                             | TTL              | MVP     |
-| ---------- | ----------------- | --------------------------------- | ---------------- | ------- |
-| AKShare    | 免费 A 股数据 API | 三大报表、行情、行业分类、PE/PB   | 按数据类型差异化 | ✅      |
+| Source     | Type              | Usage                             | TTL              |
+| ---------- | ----------------- | --------------------------------- | ---------------- |
+| AKShare    | 免费 A 股数据 API | 三大报表、行情、K线、行业分类、PE/PB、宏观、新闻 | 按数据类型差异化 |
 | 巨潮资讯网 | 年报 PDF          | MD&A、风险披露（pdfplumber 解析） | 到下个财报季     | ❌ v2.0 |
 | Tavily     | 网页搜索 API      | 行业新闻、趋势、政策              | 1天              | ❌ v2.0 |
 | Chroma     | 向量数据库        | 研报 embedding，RAG 语义检索      | 永久（知识库）   | ❌ v2.0 |
@@ -83,12 +191,11 @@
 
 | Term                | Definition                                                                                                                                                                                                                                                                   |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Data Prep Sub-graph | 数据准备子图。路由前的前置子图，包含 check_cache→[fetch_data→]validate_financials→compute_metrics。全权负责所有数据拉取和计算。                                                                                                                                                                    |
-| Pure LLM Agent      | 纯 LLM Agent。Agent 节点只读 State + 调用 LLM 生成分析文字，不拉数据、不做计算。                                                                                                                                                                                             |
-| Layer 1             | 基础公共数据。三大报表 + 行情 + 行业归属，始终拉取。                                                                                                                                                                                                                         |
-| Layer 2             | 分析导向数据。按意图选择性拉取（财务→预计算指标+PDF；投资→研报+搜索）。                                                                                                                                                                                                      |
-| Layer 3             | 衍生计算。pandas 从原始数据计算 20 指标 + 杜邦 + 红黄绿灯 + 同业对比 + GARP，无 API 调用。DCF 定量计算计划于 v2.0 实现。                                                                                                                                                                             |
-| Layer 3 扩展      | 同业数据。在 fetch_data 的 Step2 拉取，依赖 Layer 1 的行业归属结果。                                                                                                                                                                                                       |
+| Data Prep Sub-graph | 数据准备子图。路由前的前置子图，包含 check_cache→[fetch_data→]validate_financials→compute_metrics。全权负责所有数据拉取和计算，4 个 Analyst Agent 的所有数据（含 K 线、宏观、新闻）均在此拉取并计算，一次性全量注入各分析师的 prompt context。 |
+| Analyst Agent       | 分析师 Agent。Layer I 的 4 个并行 Agent 之一（宏观/基本面/技术面/舆情）。深度模式下数据由 PREP 一次性注入，无 tool calling；输出 Pydantic 结构化对象。风控不在 Layer I，已移至 Layer IV Risk Management Team。 |
+| Layer 1             | 基础公共数据。三大报表 + 行情 + 行业归属 + 日 K 线序列 + 沪深 300 K 线，始终拉取。 |
+| Layer 2             | 分析导向数据。按维度选择性拉取（宏观指标、新闻舆情、预计算指标、行业 PE）。 |
+| Layer 3             | 衍生计算。pandas 从原始数据计算：四维度 20 指标 + 杜邦 + 红黄绿灯 + 同业对比 + GARP + 技术指标（MACD/RSI/布林带/KDJ）+ 风控指标（回撤/波动率/Beta/VaR）+ 宏观指标趋势 + 舆情统计，无 API 调用。情感分析由舆情 agent 自行完成（LLM 推断），PREP 不做情感打分。DCF 定量计算计划于 v2.0。 |
 | Cross-Validation    | 勾稽校验。在指标计算前校验三张报表的内在一致性。4 条规则：①试算平衡（资产=负债+权益，硬等式）②利润表内部勾稽（净利润≈利润总额-所得税费用）③现金流量表内部勾稽（经营+投资+筹资=净变动）④留存收益勾稽（期末留存=期初+净利润-分红）。硬等式失败→终止；软等式失败→写 warning 继续。 |
 
 > 注：规则 2 原始设计为「营业收入-营业成本-期间费用≈营业利润」，因营业外收支导致大量误报，实际实现改为「净利润≈利润总额-所得税费用」，更准确可靠。

@@ -1,4 +1,10 @@
-# Comprehensive 报告分层结构
+# ADR-0007: Comprehensive 报告分层结构
+
+## Status: Superseded by [ADR-0011](0011-five-layer-architecture.md)
+
+> **Superseded**: FA/IA 双报告 + 三层合并结构已被 ADR-0011 的 10 章综合分析报告替代。FA 8 章 + IA 7 章模板作废，新报告由 4 分析师 + 辩论 + 决策层产出。
+
+## Context
 
 Comprehensive 分析需要把 FA（向后看，财务健康诊断）和 IA（向前看，投资价值判断）合并成一份综合报告。初始实现是简单拼接两份完整报告，但存在两个问题：
 

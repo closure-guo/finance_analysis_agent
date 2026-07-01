@@ -1,6 +1,8 @@
 # ADR-0001: Data Preparation Node (Strategy C)
 
-## Status: Accepted
+## Status: Amended by [ADR-0011](0011-five-layer-architecture.md)
+
+> **Amended**: FA/IA 术语已废弃，但 PREP 子图的核心概念（check_cache → fetch_data → validate → compute_metrics）仍被 ADR-0011 继承并扩展。ADR-0011 新增 K 线/宏观/新闻拉取 + 4 个新 metrics 模块。
 
 ## Context
 
