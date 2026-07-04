@@ -1,0 +1,137 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif; }
+
+body {
+    background: #0a0a0f;
+    color: #e4e4e7;
+    overflow-x: hidden;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+/* Animations */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-ring {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.7; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+@keyframes typing-dot {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-6px); }
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up { animation: fadeInUp 0.5s ease-out forwards; }
+.animate-slide-in { animation: slideIn 0.4s ease-out forwards; }
+.pulse-ring { animation: pulse-ring 2s ease-in-out infinite; }
+
+.typing-dot { animation: typing-dot 1.4s ease-in-out infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Glass morphism cards */
+.glass-card {
+    background: rgba(24, 24, 32, 0.85);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-input {
+    background: rgba(24, 24, 32, 0.9);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: all 0.3s ease;
+}
+
+.glass-input:focus-within {
+    border-color: rgba(99, 102, 241, 0.5);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+/* Pipeline node states */
+.node-pending { border-color: #3f3f46; color: #71717a; }
+.node-running {
+    border-color: #6366f1;
+    color: #818cf8;
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+}
+.node-completed { border-color: #22c55e; color: #4ade80; }
+.node-failed { border-color: #ef4444; color: #f87171; }
+
+/* Traffic lights */
+.tl-green { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
+.tl-yellow { background: #eab308; box-shadow: 0 0 8px rgba(234, 179, 8, 0.5); }
+.tl-red { background: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
+
+/* Message bubbles */
+.msg-user {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+}
+
+.msg-system {
+    background: rgba(39, 39, 46, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Expandable sections */
+.expand-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease-out, opacity 0.3s ease;
+    opacity: 0;
+}
+
+.expand-content.open {
+    max-height: 2000px;
+    opacity: 1;
+}
+
+/* Suggestion chips */
+.chip {
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+.chip:hover {
+    background: rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.5);
+    transform: translateY(-1px);
+}
+
+/* Debate layout */
+.debate-bull { border-left: 3px solid #22c55e; }
+.debate-bear { border-left: 3px solid #ef4444; }
+.debate-neutral { border-left: 3px solid #eab308; }
+
+/* Number ticker */
+.score-circle {
+    background: conic-gradient(#22c55e var(--score-deg), #27272a var(--score-deg));
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .pipeline-grid { grid-template-columns: repeat(2, 1fr) !important; }
+    .debate-layout { flex-direction: column !important; }
+}
