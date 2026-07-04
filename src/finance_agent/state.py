@@ -1,12 +1,21 @@
-from typing import Literal, TypedDict
+from operator import add
+from typing import Annotated, Literal, TypedDict
 
 import pandas as pd
+
+
+def merge_dicts(left: dict | None, right: dict | None) -> dict:
+    """Send 并行 agent 的 dict 合并 reducer。"""
+    result = dict(left or {})
+    result.update(right or {})
+    return result
 
 
 class AnalysisState(TypedDict, total=False):
     # ── 输入 ──
     query: str
     stock_code: str
+    stock_name: str
     analysis_type: Literal["financial", "investment", "comprehensive"]
     peer_codes: list[str] | None
     enable_web_search: bool  # Gradio 开关：是否启用实时事件搜索
@@ -62,3 +71,36 @@ class AnalysisState(TypedDict, total=False):
     final_report: str | None
     file_path: str | None
     file_paths: dict | None
+
+    # ── 5 层架构（ADR-0011）──
+
+    # PREP 扩展
+    kline: pd.DataFrame  # 日 K 线（OHLCV）
+    benchmark_kline: pd.DataFrame  # 沪深 300 K 线
+    technical_indicators: dict  # calc_technical() 输出
+    risk_metrics: dict  # calc_risk() 输出
+    macro_indicators: dict  # CPI/PMI/M2/LPR
+    news_list: list[dict]  # 新闻列表
+
+    # Layer I: Analyst Team（4 个并行分析师）
+    analyst_reports: Annotated[dict[str, dict], merge_dicts]
+
+    # Layer II: Researcher Team（Bull/Bear 辩论）
+    debate_history: Annotated[list[dict], add]
+    research_manager_conclusion: str
+
+    # Layer III: Trader
+    trader_plan: dict  # TradeDecision 序列化
+
+    # Layer IV: Risk Management（3 辩论者 + Risk Judge）
+    risk_debate_history: Annotated[list[dict], add]
+    final_trade_decision: dict  # TradeDecision 序列化
+
+    # Layer V: Fund Manager
+    fund_manager_decision: str  # approve | reject | return
+    return_count: int  # 退回次数（上限 1）
+
+    # 引用校验（ADR-0010 Step 3）
+    citation_report: dict  # CitationReport 序列化
+    citation_pass: bool
+    iteration_count: int  # 重试次数（上限 3）

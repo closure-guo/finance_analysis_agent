@@ -1,7 +1,7 @@
 # Slice 5 设计文档：接入非财务事件数据（Issue #8）
 
 ## 背景
-为投资分析报告注入关键非财务事件（提价、渠道变革、业绩超预期等），提升分析深度。采用三级回退架构，确保 demo 稳定性。
+为舆情分析师（ADR-0011 Layer I）注入关键非财务事件（提价、渠道变革、业绩超预期等），提升分析深度。采用三级回退架构，确保 demo 稳定性。
 
 ## 架构
 
@@ -117,8 +117,8 @@ from finance_agent.formatters import format_key_events
 sections.append(format_key_events(state.get("key_events")))
 ```
 
-### ia_analyze.md
-事件作为独立数据块注入，分布式引用：
+### 舆情分析师（sentiment analyst）
+事件作为独立数据块注入 PREP，供舆情分析师（ADR-0011 Layer I）使用：
 
 **正面事件**（impact=positive）：在第4章（估值分析）中作为价值驱动因素引用，说明事件如何支撑当前估值或未来增长预期。
 
@@ -153,9 +153,9 @@ sections.append(format_key_events(state.get("key_events")))
 修改：
 - src/finance_agent/state.py
 - src/finance_agent/nodes/fetch.py
-- src/finance_agent/nodes/ia.py
+- src/finance_agent/nodes/analysts.py  # 舆情分析师（待实现，同 technical_analyst 模式）
 - src/finance_agent/formatters.py
-- src/finance_agent/prompts/ia_analyze.md
+- src/finance_agent/prompts/sentiment_analyst.md  # 待创建
 
 ## 测试策略
 

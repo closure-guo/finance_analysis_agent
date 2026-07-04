@@ -6,42 +6,103 @@ flowchart TD
         check_cache["① check_cache<br/>查缓存"]
         fetch_data["② fetch_data<br/>AKShare 拉取"]
         validate_financials["③ validate_financials<br/>勾稽校验"]
-        compute_metrics["④ compute_metrics<br/>指标计算"]
+        compute_metrics["④ compute_metrics<br/>指标计算 + 技术指标 + 风控"]
     end
 
-    Route{"route_to_agent"}
-    fa_analyze["⑤ fa_analyze<br/>财务分析"]
-    ia_analyze["⑥ ia_analyze<br/>投资分析"]
-    merge["⑦ merge<br/>合并报告"]
-    generate_file["⑧ generate_file<br/>文件导出"]
+    subgraph LayerI[Layer I: Analyst Team]
+        analysts_entry["analysts_entry"]
+        technical_analyst["technical_analyst<br/>技术面分析"]
+    end
+
+    verify_citations["⑤ verify_citations<br/>引用校验"]
+
+    subgraph LayerII[Layer II: Bull/Bear Debate]
+        debate_r1_entry["R1 Entry"]
+        bull_r1["bull_r1"]
+        bear_r1["bear_r1"]
+        debate_r2_entry["R2 Entry"]
+        bull_r2["bull_r2"]
+        bear_r2["bear_r2"]
+        research_manager["research_manager<br/>研究结论"]
+    end
+
+    trader["⑥ trader<br/>交易决策"]
+
+    subgraph LayerIV[Layer IV: Risk Management]
+        risk_r1_entry["R1 Entry"]
+        aggressive_r1["aggressive_r1"]
+        conservative_r1["conservative_r1"]
+        neutral_r1["neutral_r1"]
+        risk_r2_entry["R2 Entry"]
+        aggressive_r2["aggressive_r2"]
+        conservative_r2["conservative_r2"]
+        neutral_r2["neutral_r2"]
+        risk_judge["risk_judge<br/>最终决策"]
+    end
+
+    fund_manager["⑦ fund_manager<br/>审批"]
+    generate_report["⑧ generate_report<br/>报告生成"]
+    generate_file["⑨ generate_file<br/>文件导出"]
     END([END])
     END_ERR([终止: 校验失败])
 
-    %% 静态边
-    fetch_data --> validate_financials
-    merge --> generate_file
-    generate_file --> END
-
-    %% 条件边 — 数据准备
+    %% PREP 边
     check_cache -->|"MISS 首次"| fetch_data
     check_cache -->|"HIT 报表已有"| validate_financials
+    fetch_data --> validate_financials
     validate_financials -->|"FAIL ✗"| END_ERR
     validate_financials -->|"PASS ✓"| compute_metrics
+    compute_metrics --> analysts_entry
 
-    %% 条件边 — Agent 路由
-    compute_metrics -->|"financial / comprehensive 并行"| fa_analyze
-    compute_metrics -->|"investment / comprehensive 并行"| ia_analyze
+    %% Layer I
+    analysts_entry -->|"Send 并行"| technical_analyst
+    technical_analyst --> verify_citations
 
-    %% 条件边 — Agent 后处理
-    fa_analyze -->|"单 Agent"| generate_file
-    fa_analyze -->|"comprehensive"| merge
-    ia_analyze -->|"单 Agent"| generate_file
-    ia_analyze -->|"comprehensive"| merge
+    %% Citation 条件路由
+    verify_citations -->|"PASS → render"| debate_r1_entry
+    verify_citations -->|"FAIL → retry"| analysts_entry
+
+    %% Layer II Debate
+    debate_r1_entry -->|"Send"| bull_r1
+    debate_r1_entry -->|"Send"| bear_r1
+    bull_r1 --> debate_r2_entry
+    bear_r1 --> debate_r2_entry
+    debate_r2_entry -->|"Send"| bull_r2
+    debate_r2_entry -->|"Send"| bear_r2
+    bull_r2 --> research_manager
+    bear_r2 --> research_manager
+
+    %% Layer III
+    research_manager --> trader
+
+    %% Layer IV Risk
+    trader --> risk_r1_entry
+    risk_r1_entry -->|"Send"| aggressive_r1
+    risk_r1_entry -->|"Send"| conservative_r1
+    risk_r1_entry -->|"Send"| neutral_r1
+    aggressive_r1 --> risk_r2_entry
+    conservative_r1 --> risk_r2_entry
+    neutral_r1 --> risk_r2_entry
+    risk_r2_entry -->|"Send"| aggressive_r2
+    risk_r2_entry -->|"Send"| conservative_r2
+    risk_r2_entry -->|"Send"| neutral_r2
+    aggressive_r2 --> risk_judge
+    conservative_r2 --> risk_judge
+    neutral_r2 --> risk_judge
+
+    %% Layer V + Report
+    risk_judge --> fund_manager
+    fund_manager -->|"approve/reject"| generate_report
+    fund_manager -->|"return 退回"| trader
+    generate_report --> generate_file
+    generate_file --> END
 
     style PREP fill:#e8f5e9
-    style Route fill:#ff9800,color:#fff
-    style fa_analyze fill:#e3f2fd
-    style ia_analyze fill:#f3e5f5
-    style merge fill:#ab47bc,color:#fff
+    style LayerI fill:#e3f2fd
+    style LayerII fill:#fff3e0
+    style LayerIV fill:#fce4ec
+    style verify_citations fill:#ff9800,color:#fff
+    style fund_manager fill:#ab47bc,color:#fff
+    style generate_report fill:#ef9a9a
     style generate_file fill:#ef9a9a
     style END_ERR fill:#ef5350,color:#fff

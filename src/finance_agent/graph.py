@@ -3,15 +3,40 @@
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from finance_agent.nodes.analysts import technical_analyst
 from finance_agent.nodes.cache import check_cache
+from finance_agent.nodes.citation_node import verify_citations
 from finance_agent.nodes.compute import compute_metrics
+from finance_agent.nodes.debate import bear_debater, bull_debater
 from finance_agent.nodes.fa import fa_analyze
 from finance_agent.nodes.fetch import fetch_data
+from finance_agent.nodes.fund_manager import fund_manager
 from finance_agent.nodes.ia import ia_analyze
 from finance_agent.nodes.merge import merge_reports
 from finance_agent.nodes.output import generate_file
+from finance_agent.nodes.report import generate_report
+from finance_agent.nodes.research_manager import research_manager
+from finance_agent.nodes.risk import (
+    aggressive_debater,
+    conservative_debater,
+    neutral_debater,
+    risk_judge,
+)
+from finance_agent.nodes.trader import trader
 from finance_agent.nodes.validate import validate_node
-from finance_agent.routing import after_agent, after_check_cache, after_validate, route_to_agent
+from finance_agent.routing import (
+    after_agent,
+    after_check_cache,
+    after_citation,
+    after_fund_manager,
+    after_validate,
+    route_to_agent,
+    route_to_analysts,
+    route_to_debate_r1,
+    route_to_debate_r2,
+    route_to_risk_r1,
+    route_to_risk_r2,
+)
 from finance_agent.state import AnalysisState
 
 
@@ -43,6 +68,107 @@ def build_graph() -> CompiledStateGraph:
     graph.add_conditional_edges("fa_analyze", after_agent)
     graph.add_conditional_edges("ia_analyze", after_agent)
     graph.add_edge("merge", "generate_file")
+    graph.add_edge("generate_file", END)
+
+    return graph.compile()
+
+
+def _passthrough(state: dict) -> dict:
+    """空状态更新，用于 Send 派发的 entry/collector 节点。"""
+    return {}
+
+
+def build_5layer_graph() -> CompiledStateGraph:
+    """ADR-0011 五层架构图：PREP → 5 层 Agent → 报告。"""
+    graph = StateGraph(AnalysisState)  # pyrefly: ignore[bad-specialization]
+
+    # ── PREP 节点（复用现有）──
+    graph.add_node("check_cache", check_cache)
+    graph.add_node("fetch_data", fetch_data)
+    graph.add_node("validate_financials", validate_node)
+    graph.add_node("compute_metrics", compute_metrics)
+
+    # ── Layer I: Analyst Team ──
+    graph.add_node("analysts_entry", _passthrough)
+    graph.add_node("technical_analyst", technical_analyst)
+
+    # ── Citation Verification ──
+    graph.add_node("verify_citations", verify_citations)
+
+    # ── Layer II: Bull/Bear Debate ──
+    graph.add_node("debate_r1_entry", _passthrough)
+    graph.add_node("bull_r1", bull_debater)
+    graph.add_node("bear_r1", bear_debater)
+    graph.add_node("debate_r2_entry", _passthrough)
+    graph.add_node("bull_r2", bull_debater)
+    graph.add_node("bear_r2", bear_debater)
+    graph.add_node("research_manager", research_manager)
+
+    # ── Layer III: Trader ──
+    graph.add_node("trader", trader)
+
+    # ── Layer IV: Risk Management ──
+    graph.add_node("risk_r1_entry", _passthrough)
+    graph.add_node("aggressive_r1", aggressive_debater)
+    graph.add_node("conservative_r1", conservative_debater)
+    graph.add_node("neutral_r1", neutral_debater)
+    graph.add_node("risk_r2_entry", _passthrough)
+    graph.add_node("aggressive_r2", aggressive_debater)
+    graph.add_node("conservative_r2", conservative_debater)
+    graph.add_node("neutral_r2", neutral_debater)
+    graph.add_node("risk_judge", risk_judge)
+
+    # ── Layer V: Fund Manager ──
+    graph.add_node("fund_manager", fund_manager)
+
+    # ── Report ──
+    graph.add_node("generate_report", generate_report)
+    graph.add_node("generate_file", generate_file)
+
+    # ── 边：PREP ──
+    graph.add_edge(START, "check_cache")
+    graph.add_conditional_edges("check_cache", after_check_cache)
+    graph.add_edge("fetch_data", "validate_financials")
+    graph.add_conditional_edges("validate_financials", after_validate)
+    graph.add_edge("compute_metrics", "analysts_entry")
+
+    # ── 边：Layer I ──
+    graph.add_conditional_edges("analysts_entry", route_to_analysts)
+    graph.add_edge("technical_analyst", "verify_citations")
+
+    # ── 边：Citation ──
+    graph.add_conditional_edges(
+        "verify_citations",
+        after_citation,
+        {"render": "debate_r1_entry", "retry": "analysts_entry"},
+    )
+
+    # ── 边：Layer II Debate ──
+    graph.add_conditional_edges("debate_r1_entry", route_to_debate_r1)
+    graph.add_edge("bull_r1", "debate_r2_entry")
+    graph.add_edge("bear_r1", "debate_r2_entry")
+    graph.add_conditional_edges("debate_r2_entry", route_to_debate_r2)
+    graph.add_edge("bull_r2", "research_manager")
+    graph.add_edge("bear_r2", "research_manager")
+
+    # ── 边：Layer III ──
+    graph.add_edge("research_manager", "trader")
+
+    # ── 边：Layer IV Risk ──
+    graph.add_edge("trader", "risk_r1_entry")
+    graph.add_conditional_edges("risk_r1_entry", route_to_risk_r1)
+    graph.add_edge("aggressive_r1", "risk_r2_entry")
+    graph.add_edge("conservative_r1", "risk_r2_entry")
+    graph.add_edge("neutral_r1", "risk_r2_entry")
+    graph.add_conditional_edges("risk_r2_entry", route_to_risk_r2)
+    graph.add_edge("aggressive_r2", "risk_judge")
+    graph.add_edge("conservative_r2", "risk_judge")
+    graph.add_edge("neutral_r2", "risk_judge")
+
+    # ── 边：Layer V + Report ──
+    graph.add_edge("risk_judge", "fund_manager")
+    graph.add_conditional_edges("fund_manager", after_fund_manager)
+    graph.add_edge("generate_report", "generate_file")
     graph.add_edge("generate_file", END)
 
     return graph.compile()

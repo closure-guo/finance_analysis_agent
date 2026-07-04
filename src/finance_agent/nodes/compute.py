@@ -12,7 +12,9 @@ from finance_agent.metrics.efficiency import calc_efficiency
 from finance_agent.metrics.garp import calc_garp
 from finance_agent.metrics.profitability import calc_profitability
 from finance_agent.metrics.relative import calc_relative_valuation
+from finance_agent.metrics.risk import calc_risk
 from finance_agent.metrics.solvency import calc_solvency
+from finance_agent.metrics.technical import calc_technical
 from finance_agent.metrics.traffic_light import assess_traffic_lights, compute_health_score
 from finance_agent.state import AnalysisState
 
@@ -106,6 +108,13 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     # TODO(Issue #4): peer_comparison 目前仅是标志位，需添加同业指标格式化器注入 LLM context
     if peer_financials is not None:
         result["peer_comparison"] = {"available": True}
+
+    # ── 技术指标 + 风控指标（需要 K 线数据）──
+    kline = state.get("kline")
+    if kline is not None and not kline.empty:
+        result["technical_indicators"] = calc_technical(kline)
+        benchmark = state.get("benchmark_kline")
+        result["risk_metrics"] = calc_risk(kline, benchmark)
 
     return result
 

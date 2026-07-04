@@ -1,6 +1,6 @@
 # FinGround Verification Node 设计文档
 
-> **注意**: 本文档为设计档案。Agent 类型已按 ADR-0011 更新为 5 层架构（宏观/基本面/技术面/舆情 + Trader + Risk Management + Fund Manager）。下方 "基本面/技术面/估值/风险" 为旧版分类，`agent_type` 枚举需按 ADR-0011 更新。
+> **注意**: 本文档为设计档案。Agent 类型已按 ADR-0011 更新为 5 层架构（宏观/基本面/技术面/舆情 + Trader + Risk Management + Fund Manager）。下方 `agent_type` 枚举已同步更新。
 
 ## 1. 节点定位
 
@@ -59,7 +59,7 @@ class VerificationInput(BaseModel):
     query: str                            # 原始用户查询
     answer: str                           # 子 Agent 生成的分析文本
     evidence: List[EvidenceChunk]         # Stage 1 检索到的证据集合 E = {e1, ..., ek}
-    agent_type: Literal["fundamental", "technical", "valuation", "risk", "synthesis"]
+    agent_type: Literal["macro", "fundamental", "technical", "sentiment", "trader", "risk", "fund_manager"]
     metadata: Optional[dict] = None       # 附加元数据（如股票代码、报告期等）
 ```
 

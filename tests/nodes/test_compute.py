@@ -1,5 +1,6 @@
 """compute.py 单元测试 — 验证编排层正确写入 State 字段。"""
 
+import pandas as pd
 import pytest
 
 
@@ -14,6 +15,22 @@ def sample_state(balance_sheet, income_statement, cash_flow, indicators):
         "industry_info": {},
         "peer_financials": None,
     }
+
+
+@pytest.fixture
+def kline_state(sample_state):
+    """带 K 线数据的 state，用于技术指标和风控指标计算。"""
+    sample_state["kline"] = pd.DataFrame(
+        {
+            "日期": pd.date_range("2024-01-02", periods=30, freq="B"),
+            "开盘": [float(i) for i in range(10, 40)],
+            "收盘": [float(i) for i in range(11, 41)],
+            "最高": [float(i) for i in range(11, 41)],
+            "最低": [float(i) for i in range(10, 40)],
+            "成交量": [1000 + i * 100 for i in range(30)],
+        }
+    )
+    return sample_state
 
 
 class TestComputeMetrics:
@@ -95,3 +112,29 @@ class TestComputeMetrics:
         result = compute_metrics(sample_state)
         assert "garp_result" in result
         assert "pass" in result["garp_result"]
+
+    def test_technical_indicators_when_kline_present(self, kline_state):
+        """有 K 线数据时计算技术指标。"""
+        from finance_agent.nodes.compute import compute_metrics
+
+        result = compute_metrics(kline_state)
+        assert "technical_indicators" in result
+        assert "MA" in result["technical_indicators"]
+        assert "MACD" in result["technical_indicators"]
+
+    def test_risk_metrics_when_kline_present(self, kline_state):
+        """有 K 线数据时计算风控指标。"""
+        from finance_agent.nodes.compute import compute_metrics
+
+        result = compute_metrics(kline_state)
+        assert "risk_metrics" in result
+        assert "max_drawdown" in result["risk_metrics"]
+        assert "volatility" in result["risk_metrics"]
+
+    def test_no_technical_when_kline_absent(self, sample_state):
+        """无 K 线数据时不产出技术指标。"""
+        from finance_agent.nodes.compute import compute_metrics
+
+        result = compute_metrics(sample_state)
+        assert "technical_indicators" not in result
+        assert "risk_metrics" not in result

@@ -20,7 +20,7 @@
   <img src="https://cdn.jsdelivr.net/gh/closure-guo/finance_analysis_agent@main/docs/assets/graph.png" alt="LangGraph 运行时拓扑" width="700" />
 </p>
 
-> 图由路由函数自动发现生成: <code>uv run python tests/scripts/gen_graph_mermaid.py</code>
+> 图由 build_5layer_graph() 生成，Mermaid 源码见 [graph.mmd](docs/assets/graph.mmd)
 
 五层架构：
 
@@ -90,25 +90,33 @@ LLM_BASE_URL=https://api.openai.com/v1
 
 ```
 src/finance_agent/
-├── graph.py              # LangGraph 主图 + 条件路由
-├── state.py              # AnalysisState TypedDict
+├── graph.py              # LangGraph 主图 (build_graph + build_5layer_graph)
+├── state.py              # AnalysisState TypedDict (含 Annotated reducers)
+├── citation.py           # 确定性引用校验器 (Claim/CitationReport/verify_claims)
+├── models.py             # 结构化输出模型 (AnalystReport/DebateMessage/TradeDecision)
 ├── app.py                # Gradio 前端入口
 ├── app_search.py         # 股票搜索
 ├── formatters.py         # LLM 上下文格式化
-├── routing.py            # 路由函数
+├── routing.py            # 路由函数 + Send 并行派发
 ├── llm.py                # LLM 调用封装
 ├── nodes/                # 图节点
 │   ├── cache.py          # check_cache
 │   ├── fetch.py          # fetch_data
 │   ├── validate.py       # validate_financials (勾稽校验)
-│   ├── compute.py        # compute_metrics
-│   ├── fa.py             # ⚠️ 已废弃 (ADR-0011, 职责并入 analysts/)
-│   ├── ia.py             # ⚠️ 已废弃 (ADR-0011, 职责并入 analysts/)
-│   ├── merge.py          # ⚠️ 已废弃 (ADR-0011, 职责并入 decision/)
+│   ├── compute.py        # compute_metrics (含技术指标 + 风控)
+│   ├── analysts.py       # Layer I: technical_analyst
+│   ├── debate.py         # Layer II: bull/bear debater
+│   ├── research_manager.py # Layer II: research_manager
+│   ├── trader.py         # Layer III: trader
+│   ├── risk.py           # Layer IV: 3 debaters + risk_judge
+│   ├── fund_manager.py   # Layer V: fund_manager
+│   ├── citation_node.py  # 引用校验节点
+│   ├── report.py         # 5 层报告生成
+│   ├── _llm_utils.py     # 共享 LLM 工具 (parse_json_response)
 │   ├── output.py         # generate_file (Word/PPT 生成)
-│   ├── analysts/         # [规划] 4 分析师并行: 宏观 / 基本面 / 技术面 / 舆情
-│   ├── debate/           # [规划] Bull/Bear 辩论 + Risk Management 辩论
-│   └── decision/         # [规划] Trader + Fund Manager 决策
+│   ├── fa.py             # 旧架构 (ADR-0011 已废弃)
+│   ├── ia.py             # 旧架构 (ADR-0011 已废弃)
+│   └── merge.py          # 旧架构 (ADR-0011 已废弃)
 ├── metrics/              # 指标计算（纯函数）
 │   ├── validate.py       # 勾稽校验 4 规则
 │   ├── solvency.py       # 偿债 5 指标
@@ -118,7 +126,9 @@ src/finance_agent/
 │   ├── dupont.py         # 杜邦 3 层分解
 │   ├── traffic_light.py  # 红黄绿灯 + 健康度评分
 │   ├── relative.py       # 相对估值
-│   └── garp.py           # GARP 筛选
+│   ├── garp.py           # GARP 筛选
+│   ├── technical.py      # 技术指标 (MA/MACD/RSI/BOLL/KDJ)
+│   └── risk.py           # 风控指标 (回撤/波动率/Beta/VaR)
 ├── data/                 # 数据层
 │   ├── akshare_client.py # AKShare API 封装
 │   └── cache.py          # SQLite 持久化 + 缓存
@@ -138,10 +148,10 @@ src/finance_agent/
 ## 实施阶段
 
 - [x] **P0 骨架** — 脚手架 + 空图 + Gradio 表单 + stub happy path
-- [x] **P1 数据层** — AKShare + 20 指标 + 缓存 + FA 报告
-- [x] **P2 分析层** — IA Agent + prompt 工程 + 投资报告
+- [x] **P1 数据层** — AKShare + 20 指标 + 缓存
+- [x] **P2 分析层** — prompt 工程 + 投资报告
 - [x] **P3 输出层** — 综合分析 + Word/PPT 导出 + UI 打磨
-- [ ] **P4 5 层架构重构** — 多 Agent 辩论 + 交易决策 (ADR-0011)
+- [x] **P4 5 层架构重构** — 多 Agent 辩论 + 交易决策 + 引用校验 + 技术指标/风控 (ADR-0011)
 
 ## 文档
 
