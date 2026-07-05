@@ -85,6 +85,25 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
         logger.warning("行情数据拉取失败: %s", e)
         result["stock_quote"] = {}
 
+    # K 线数据（技术指标 + 风控指标依赖）
+    try:
+        kline = ak.fetch_kline(code)
+        if not kline.empty:
+            c.set(f"{code}:kline", kline, ttl_seconds=3600)
+            result["kline"] = kline
+        else:
+            logger.warning("K线数据为空: %s", code)
+    except Exception as e:
+        logger.warning("K线数据拉取失败: %s", e)
+
+    try:
+        benchmark = ak.fetch_benchmark_kline()
+        if not benchmark.empty:
+            c.set("benchmark_kline", benchmark, ttl_seconds=3600)
+            result["benchmark_kline"] = benchmark
+    except Exception as e:
+        logger.warning("沪深300 K线拉取失败: %s", e)
+
     try:
         industry_pe = ak.fetch_industry_pe(code)
         if industry_pe:

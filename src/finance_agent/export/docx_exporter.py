@@ -8,7 +8,7 @@ from pathlib import Path
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
-from docx.shared import Pt
+from docx.shared import Inches, Pt
 
 from finance_agent.export.parser import parse_markdown
 
@@ -53,6 +53,8 @@ def markdown_to_docx(markdown_text: str, output_path: str, stock_name: str = "")
             _add_table(doc, sec.rows)
         elif sec.type == "paragraph":
             _add_paragraph(doc, sec.text)
+        elif sec.type == "image":
+            _add_image(doc, sec.image_path, sec.text)
         elif sec.type == "separator":
             doc.add_paragraph()
 
@@ -120,3 +122,27 @@ def _add_paragraph(doc: Document, text: str) -> None:  # pyrefly: ignore[not-a-t
         else:
             run = p.add_run(part)
             _set_run_font(run)
+
+
+def _add_image(doc: Document, image_path: str, alt_text: str) -> None:  # pyrefly: ignore[not-a-type]
+    """Add an image to the document, centered, max width 6 inches."""
+    import os
+
+    if not image_path or not os.path.exists(image_path):
+        if alt_text:
+            p = doc.add_paragraph(alt_text)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        return
+    try:
+        doc.add_picture(image_path, width=Inches(6))
+        last_paragraph = doc.paragraphs[-1]
+        last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if alt_text:
+            cap = doc.add_paragraph(alt_text)
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if cap.runs:
+                _set_run_font(cap.runs[0], italic=True, size=9)
+    except Exception:
+        if alt_text:
+            p = doc.add_paragraph(f"[{alt_text}]")
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER

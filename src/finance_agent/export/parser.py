@@ -12,10 +12,11 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Section:
-    type: str  # "heading" | "paragraph" | "table" | "separator"
+    type: str  # "heading" | "paragraph" | "table" | "separator" | "image"
     level: int = 0
     text: str = ""
     rows: list[list[str]] = field(default_factory=list)
+    image_path: str = ""
 
 
 def parse_markdown(text: str) -> list[Section]:
@@ -39,6 +40,15 @@ def parse_markdown(text: str) -> list[Section]:
         if heading_match:
             level = len(heading_match.group(1))
             sections.append(Section(type="heading", level=level, text=heading_match.group(2)))
+            i += 1
+            continue
+
+        # Image: ![alt](path)
+        image_match = re.match(r"^!\[([^\]]*)\]\(([^)]+)\)$", stripped)
+        if image_match:
+            sections.append(
+                Section(type="image", text=image_match.group(1), image_path=image_match.group(2))
+            )
             i += 1
             continue
 

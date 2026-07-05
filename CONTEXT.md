@@ -143,7 +143,7 @@ START → check_cache → [fetch_data →] validate → compute_metrics
 综合分析报告 + 交易建议。5 层架构产出：4 分析师并行 → Bull/Bear 辩论 → Trader → Risk Management → Fund Manager → 报告。
 _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章版，已废弃）
 
-**报告原则**：纯 Markdown 文本 + 表格，不引入图表库。雷达图/趋势图放到 v2.0。
+**报告原则**：Markdown 文本 + 表格 + ECharts 交互图表（前端）+ matplotlib PNG 图表（docx/pptx 导出）。图表数据来自 PREP 阶段的结构化财务数据，一次收集两处渲染。
 
 **结构化输出**：Layer I 的 4 个 Analyst Agent 各输出 Pydantic 结构化对象（而非自由 Markdown），用于 Agent 间信息传递。Layer II-V 的辩论/决策也输出结构化对象。最终合并渲染为报告。
 
@@ -177,6 +177,24 @@ _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章�
 ### Key Event
 
 关键事件。已发生且对经营有持续影响的非财务事实（提价、渠道变革、管理层变动等）。作为 Sentiment Analyst Agent 的输入之一。
+
+### Session
+
+会话。一次股票深度分析 + 后续追问的完整工作单元。每个会话独立存储于后端 SQLite，包含：最终报告 Markdown、chart_data、4 份 AnalystReport 完整 JSON、Layer II-V 中间输出（辩论/决策/风控/基金经理）、analyst summary 摘要。用户可在侧边栏新建/切换/搜索/重命名/删除会话。不支持多会话并行（一次只跑一个 pipeline）。
+
+_Avoid_: Conversation（泛指对话，不精确）、Chat Thread
+
+### Follow-up
+
+追问。报告完成后的后续提问。上下文 = 报告 Markdown + 4 个分析师 summary（从 SQLite 恢复），走快速 LLM 问答（非 5 层流水线）。追问回复也用逐 Token 流式输出。
+
+### Streaming
+
+流式输出。报告生成和追问回复均逐 Token 通过 SSE 推送给前端，前端用 Fetch Stream 逐 chunk 读取并渐进渲染 Markdown。pipeline 进度通过 SSE 事件流推送各节点状态。
+
+### Natural Language Input
+
+自然语言输入。用户可输入股票名称（"宁德时代"）或自然语言指令（"分析茅台"），后端先用 LLM 解析为股票代码，LLM 不认识时 fallback 到 AKShare `stock_info_a_code_name` 模糊匹配。
 
 ### Data Sources
 

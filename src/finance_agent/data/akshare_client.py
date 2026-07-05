@@ -295,7 +295,6 @@ class AKShareClient:
 
     def fetch_industry_pe(self, stock_code: str) -> dict | None:
         """获取个股所属行业的平均静态PE。
-
         通过 stock_individual_info_em 获取行业名称，再匹配
         stock_industry_pe_ratio_cninfo 的行业PE数据。
         如果任一环节失败返回 None，避免阻塞主流程。
@@ -335,3 +334,54 @@ class AKShareClient:
         except Exception:
             # 网络异常或 AKShare 接口变更时不阻塞主流程
             return None
+
+    def fetch_kline(self, stock_code: str, days: int = 250) -> pd.DataFrame:
+        """拉取个股日 K 线（前复权），返回最近 N 个交易日。
+
+        使用 stock_zh_a_hist（东方财富），返回列：
+        日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+        """
+        from datetime import datetime, timedelta
+
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+
+        df = ak.stock_zh_a_hist(
+            symbol=stock_code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",
+        )
+        if df is None or df.empty:
+            logger.warning("K线数据为空: %s", stock_code)
+            return pd.DataFrame()
+
+        # 按日期升序排列，取最近 N 个交易日
+        df = df.sort_values("日期").reset_index(drop=True)
+        df = df.tail(days).reset_index(drop=True)
+        return df
+
+    def fetch_benchmark_kline(self, days: int = 250) -> pd.DataFrame:
+        """拉取沪深 300 指数日 K 线，返回最近 N 个交易日。
+
+        使用 index_zh_a_hist（东方财富），返回列含 日期, 收盘 等。
+        """
+        from datetime import datetime, timedelta
+
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+
+        df = ak.index_zh_a_hist(
+            symbol="000300",
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df is None or df.empty:
+            logger.warning("沪深300 K线数据为空")
+            return pd.DataFrame()
+
+        df = df.sort_values("日期").reset_index(drop=True)
+        df = df.tail(days).reset_index(drop=True)
+        return df

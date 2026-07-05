@@ -13,6 +13,7 @@ dependencies = [
     "pyarrow>=24.0.0",
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
+    "matplotlib>=3.8.0",
     "ddgs>=7.0",
     "pandas-stubs~=3.0.3",
     "fastmcp>=3.4.2",

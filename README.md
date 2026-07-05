@@ -160,6 +160,18 @@ src/finance_agent/
 - [领域上下文](CONTEXT.md) — 术语表和分析框架定义
 - [ADR](docs/adr/) — 架构决策记录
 
+## 思路来源
+
+本项目的多 Agent 架构和引用校验机制借鉴了以下研究与开源项目：
+
+| 来源 | 用途 | 说明 |
+|------|------|------|
+| [TradingAgents (arXiv:2412.20138)](https://arxiv.org/abs/2412.20138) | 5 层架构 | 4 分析师并行 → Bull/Bear 辩论 → Trader → Risk Management 辩论 → Fund Manager 的整体流程参考 |
+| [FinGround (arXiv:2604.23588)](https://arxiv.org/abs/2604.23588) | 引用校验 | Claim 6 类分类法 + computational 公式重算机制（见 [citation.py](src/finance_agent/citation.py)） |
+| [LangChain qa_sources](https://python.langchain.com/docs/how_to/qa_sources/) | 引用结构 | 结构化 Citation 对象设计参考 |
+
+> 数据层（AKShare）、指标计算（四维度 + 杜邦 + 技术指标 + 风控指标）和报告结构为自主设计，详见 [CONTEXT.md](CONTEXT.md) 和 [ADR](docs/adr/)。
+
 ## License
 
 MIT

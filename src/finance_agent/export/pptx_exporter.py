@@ -97,6 +97,8 @@ def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -
             p.text = sec.text
             p.level = 0
             p.font.size = Pt(14)
+        elif sec.type == "image":
+            _add_image_to_slide(slide, sec.image_path, sec.text)
         elif sec.type == "table":
             # Convert table to simplified bullet list
             if sec.rows:
@@ -110,3 +112,21 @@ def _add_chapter_slide(prs: Presentation, title: str, sections: list[Section]) -
         elif sec.type == "separator":
             p = body.add_paragraph()
             p.text = ""
+
+
+def _add_image_to_slide(slide, image_path: str, alt_text: str) -> None:
+    """Add an image to a slide, positioned below the content area."""
+    import os
+
+    if not image_path or not os.path.exists(image_path):
+        if alt_text:
+            p = slide.shapes.placeholders[1].text_frame.add_paragraph()
+            p.text = f"[{alt_text}]"
+            p.font.size = Pt(12)
+        return
+    try:
+        slide.shapes.add_picture(image_path, Inches(1), Inches(2.5), width=Inches(8))
+    except Exception:
+        if alt_text:
+            p = slide.shapes.placeholders[1].text_frame.add_paragraph()
+            p.text = f"[{alt_text}]"

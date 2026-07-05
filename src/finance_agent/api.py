@@ -278,6 +278,7 @@ async def analyze(req: AnalyzeRequest):
                             "type": "report_ready",
                             "analysis_id": analysis_id,
                             "report_markdown": accumulated["final_report"],
+                            "chart_data": accumulated.get("chart_data") or {},
                             "file_paths": file_paths,
                             "stock_name": accumulated.get("stock_name", req.stock_code),
                             "duration_ms": int((time.time() - start_time) * 1000),

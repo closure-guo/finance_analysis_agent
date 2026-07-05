@@ -104,3 +104,6 @@ class AnalysisState(TypedDict, total=False):
     citation_report: dict  # CitationReport 序列化
     citation_pass: bool
     iteration_count: int  # 重试次数（上限 3）
+
+    # ── 图表数据（用于前端 ECharts + docx/pptx PNG）──
+    chart_data: dict  # 结构化财务/股价序列，JSON-serializable

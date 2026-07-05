@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { SSEEvent, PipelineStep, UIMessage } from './types'
+import { ChartsSection } from './Charts'
 
 // ── Pipeline steps (mirrors backend LAYER_STEPS) ──
 const PIPELINE_STEPS: PipelineStep[] = [
@@ -165,6 +168,7 @@ export default function App() {
           type: 'report',
           content: '',
           reportMarkdown: event.report_markdown,
+          chartData: event.chart_data,
           filePaths: event.file_paths,
           stockName: event.stock_name,
           durationMs: event.duration_ms,
@@ -681,15 +685,6 @@ function AnalystCard({ name, nameZh, summary, status, color }: {
 
 // ── Report Card ──
 function ReportCard({ msg }: { msg: UIMessage }) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({
-    fundamental: true,
-    technical: false,
-    debate: false,
-    risk: false,
-  })
-
-  const toggle = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }))
-
   return (
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
@@ -725,12 +720,42 @@ function ReportCard({ msg }: { msg: UIMessage }) {
               </div>
             </div>
 
+            {/* Charts Section */}
+            {msg.chartData && msg.chartData.annual && msg.chartData.annual.length > 0 && (
+              <div className="px-5 py-3 border-b border-zinc-800/50">
+                <div className="flex items-center gap-2 mb-3">
+                  <i className="fas fa-chart-bar text-indigo-400 text-xs"></i>
+                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">财务图表</span>
+                </div>
+                <ChartsSection data={msg.chartData} />
+              </div>
+            )}
+
             {/* Report Markdown */}
             {msg.reportMarkdown && (
               <div className="px-5 py-3 border-b border-zinc-800/50">
-                <div className="text-sm text-zinc-300 leading-relaxed max-h-[400px] overflow-y-auto whitespace-pre-wrap">
-                  {msg.reportMarkdown.slice(0, 2000)}
-                  {msg.reportMarkdown.length > 2000 && '...'}
+                <div className="text-sm text-zinc-300 leading-relaxed max-h-[600px] overflow-y-auto markdown-body">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      img: () => null,
+                      h1: ({children}) => <h1 className="text-lg font-bold text-white mt-4 mb-2">{children}</h1>,
+                      h2: ({children}) => <h2 className="text-base font-bold text-zinc-100 mt-4 mb-2 pb-1 border-b border-zinc-800">{children}</h2>,
+                      h3: ({children}) => <h3 className="text-sm font-semibold text-zinc-200 mt-3 mb-1">{children}</h3>,
+                      p: ({children}) => <p className="text-sm text-zinc-300 mb-2 leading-relaxed">{children}</p>,
+                      ul: ({children}) => <ul className="text-sm text-zinc-300 mb-2 ml-4 list-disc">{children}</ul>,
+                      ol: ({children}) => <ol className="text-sm text-zinc-300 mb-2 ml-4 list-decimal">{children}</ol>,
+                      li: ({children}) => <li className="mb-0.5">{children}</li>,
+                      strong: ({children}) => <strong className="text-zinc-100 font-semibold">{children}</strong>,
+                      table: ({children}) => <table className="w-full text-xs border-collapse mb-2">{children}</table>,
+                      th: ({children}) => <th className="border border-zinc-700 px-2 py-1 bg-zinc-800 text-zinc-200 text-left">{children}</th>,
+                      td: ({children}) => <td className="border border-zinc-700 px-2 py-1 text-zinc-400">{children}</td>,
+                      hr: () => <hr className="border-zinc-800 my-3" />,
+                      blockquote: ({children}) => <blockquote className="border-l-2 border-indigo-500 pl-3 text-zinc-400 italic my-2">{children}</blockquote>,
+                    }}
+                  >
+                    {msg.reportMarkdown}
+                  </ReactMarkdown>
                 </div>
               </div>
             )}
