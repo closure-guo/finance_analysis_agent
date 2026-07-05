@@ -31,11 +31,72 @@ export interface NodeCompleteEvent {
 export interface ReportReadyEvent {
   type: 'report_ready'
   analysis_id: string
+  session_id: string
   report_markdown: string
   chart_data: ChartData
   file_paths: Record<string, string>
   stock_name: string
   duration_ms: number
+  timestamp: string
+}
+
+// ── New streaming events ──
+
+export interface ParsingEvent {
+  type: 'parsing'
+  query: string
+  timestamp: string
+}
+
+export interface ResolvedEvent {
+  type: 'resolved'
+  stock_code: string
+  stock_name: string
+  timestamp: string
+}
+
+export interface ReportChunkEvent {
+  type: 'report_chunk'
+  chunk_index: number
+  total_chunks: number
+  text: string
+  timestamp: string
+}
+
+export interface ChatTokenEvent {
+  type: 'chat_token'
+  token: string
+  timestamp: string
+}
+
+export interface ThinkingTokenEvent {
+  type: 'thinking_token'
+  token: string
+  timestamp: string
+}
+
+export interface ChatDoneEvent {
+  type: 'chat_done'
+  timestamp: string
+}
+
+export interface SearchStartEvent {
+  type: 'search_start'
+  query: string
+  timestamp: string
+}
+
+export interface SearchResultEvent {
+  type: 'search_result'
+  query: string
+  results: Array<{ title: string; url: string; content: string }>
+  count: number
+  timestamp: string
+}
+
+export interface SearchErrorEvent {
+  type: 'search_error'
+  message: string
   timestamp: string
 }
 
@@ -100,8 +161,39 @@ export type SSEEvent =
   | NodeStartEvent
   | NodeCompleteEvent
   | ReportReadyEvent
+  | ParsingEvent
+  | ResolvedEvent
+  | ReportChunkEvent
+  | ChatTokenEvent
+  | ThinkingTokenEvent
+  | ChatDoneEvent
+  | SearchStartEvent
+  | SearchResultEvent
+  | SearchErrorEvent
   | ErrorEvent
   | DoneEvent
+
+// ── Session types ──
+
+export interface SessionMeta {
+  session_id: string
+  stock_code: string
+  stock_name: string
+  display_name: string
+  status: string
+  created_at: string
+  duration_ms: number
+  report_len?: number
+}
+
+export interface SessionDetail extends SessionMeta {
+  report_markdown: string
+  chart_data: ChartData
+  analyst_reports: Record<string, any>
+  agent_process: Record<string, any>
+  analyst_summaries: Record<string, any>
+  chat_history: Array<{ role: string; content: string; ts: string }>
+}
 
 // Pipeline step definition
 export interface PipelineStep {
@@ -129,6 +221,13 @@ export interface UIMessage {
   filePaths?: Record<string, string>
   stockName?: string
   durationMs?: number
+  sessionId?: string
+  streaming?: boolean
   // Chat-specific
   chatResponse?: string
+  thinkingContent?: string
+  // Search-specific (quick mode)
+  searchQuery?: string
+  searchResults?: Array<{ title: string; url: string; content: string }>
+  searchStatus?: 'searching' | 'done' | 'error' | 'unavailable'
 }

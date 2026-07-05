@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { SSEEvent, PipelineStep, UIMessage } from './types'
+import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail } from './types'
 import { ChartsSection } from './Charts'
 
 // ── Pipeline steps (mirrors backend LAYER_STEPS) ──
@@ -25,8 +25,13 @@ export default function App() {
   const [messages, setMessages] = useState<UIMessage[]>([])
   const [apiKey, setApiKey] = useState('')
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const pipelineMsgRef = useRef<UIMessage | null>(null)
+
+  // Session state
+  const [sessions, setSessions] = useState<SessionMeta[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const streamingReportRef = useRef<UIMessage | null>(null)
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -39,8 +44,95 @@ export default function App() {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
+  // ── Session management ──
+  const loadSessions = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/sessions')
+      const data = await resp.json()
+      setSessions(data.sessions || [])
+    } catch (e) {
+      console.error('Failed to load sessions:', e)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSessions()
+  }, [loadSessions])
+
+  const selectSession = async (sessionId: string) => {
+    try {
+      const resp = await fetch(`/api/sessions/${sessionId}`)
+      if (!resp.ok) throw new Error('Failed to load session')
+      const data: SessionDetail = await resp.json()
+      setCurrentSessionId(sessionId)
+      setAppState('report')
+      streamingReportRef.current = null
+
+      const newMessages: UIMessage[] = []
+      // Add report message
+      newMessages.push({
+        id: genId(),
+        type: 'report',
+        content: '',
+        reportMarkdown: data.report_markdown,
+        chartData: data.chart_data,
+        stockName: data.stock_name,
+        durationMs: data.duration_ms,
+        sessionId: data.session_id,
+      })
+      // Add chat history
+      if (data.chat_history) {
+        for (const h of data.chat_history) {
+          if (h.role === 'user') {
+            newMessages.push({ id: genId(), type: 'user', content: h.content })
+          } else {
+            newMessages.push({ id: genId(), type: 'chat', content: '', chatResponse: h.content })
+          }
+        }
+      }
+      setMessages(newMessages)
+    } catch (e) {
+      console.error('Failed to load session:', e)
+    }
+  }
+
+  const deleteSession = async (sessionId: string) => {
+    try {
+      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+      setSessions(prev => prev.filter(s => s.session_id !== sessionId))
+      if (currentSessionId === sessionId) {
+        setCurrentSessionId(null)
+        streamingReportRef.current = null
+        setMessages([])
+        setAppState('empty')
+      }
+    } catch (e) {
+      console.error('Failed to delete session:', e)
+    }
+  }
+
+  const renameSession = async (sessionId: string, displayName: string) => {
+    try {
+      await fetch(`/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_name: displayName }),
+      })
+      setSessions(prev => prev.map(s => s.session_id === sessionId ? { ...s, display_name: displayName } : s))
+    } catch (e) {
+      console.error('Failed to rename session:', e)
+    }
+  }
+
+  const newAnalysis = () => {
+    setCurrentSessionId(null)
+    streamingReportRef.current = null
+    setMessages([])
+    setAppState('empty')
+  }
+
   // ── SSE analysis ──
-  const startAnalysis = async (stockCode: string, mode: string) => {
+  const startAnalysis = async (query: string, mode: string) => {
     if (!apiKey.trim()) {
       setShowApiKeyInput(true)
       return
@@ -51,19 +143,22 @@ export default function App() {
       setAppState('analyzing')
     }
 
+    setCurrentSessionId(null)
+    streamingReportRef.current = null
+
     // Add user message
     const userMsg: UIMessage = {
       id: genId(),
       type: 'user',
       content: mode === 'quick'
-        ? `快速分析 ${stockCode}`
-        : `深度分析 ${stockCode}`,
+        ? `快速分析 ${query}`
+        : `深度分析 ${query}`,
     }
     setMessages(prev => [...prev, userMsg])
 
     if (mode === 'quick') {
       // Quick mode — single LLM call
-      await quickChat(stockCode, null)
+      await quickChat(query)
       return
     }
 
@@ -85,7 +180,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stock_code: stockCode,
+          query,
           api_key: apiKey,
           analysis_type: 'comprehensive',
         }),
@@ -110,7 +205,7 @@ export default function App() {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
             handleSSEEvent(event, pipelineMsg)
-          } catch (e) {
+          } catch {
             // Skip malformed lines
           }
         }
@@ -126,6 +221,18 @@ export default function App() {
 
   const handleSSEEvent = (event: SSEEvent, pipelineMsg: UIMessage) => {
     switch (event.type) {
+      case 'parsing':
+        updateMessage(pipelineMsg.id, {
+          content: `正在识别：${event.query}...`,
+        })
+        break
+
+      case 'resolved':
+        updateMessage(pipelineMsg.id, {
+          content: `已识别：${event.stock_name} (${event.stock_code})`,
+        })
+        break
+
       case 'analysis_start':
         updateMessage(pipelineMsg.id, {
           content: `开始分析 ${event.stock_name} (${event.stock_code})`,
@@ -152,8 +259,58 @@ export default function App() {
         })
         break
 
-      case 'report_ready':
+      case 'report_chunk': {
+        // Accumulate report chunks and render progressively
+        if (!streamingReportRef.current) {
+          const reportMsg: UIMessage = {
+            id: genId(),
+            type: 'report',
+            content: '',
+            reportMarkdown: event.text,
+            streaming: true,
+          }
+          streamingReportRef.current = reportMsg
+          setMessages(prev => [...prev, reportMsg])
+        } else {
+          const id = streamingReportRef.current.id
+          const newText = (streamingReportRef.current.reportMarkdown || '') + event.text
+          streamingReportRef.current = { ...streamingReportRef.current, reportMarkdown: newText }
+          setMessages(prev => prev.map(m => m.id === id ? { ...m, reportMarkdown: newText } : m))
+        }
+        break
+      }
+
+      case 'report_ready': {
+        // Finalize streaming report or create new if no chunks were received
+        if (streamingReportRef.current) {
+          updateMessage(streamingReportRef.current.id, {
+            reportMarkdown: event.report_markdown,
+            chartData: event.chart_data,
+            filePaths: event.file_paths,
+            stockName: event.stock_name,
+            durationMs: event.duration_ms,
+            sessionId: event.session_id,
+            streaming: false,
+          })
+          streamingReportRef.current = null
+        } else {
+          const reportMsg: UIMessage = {
+            id: genId(),
+            type: 'report',
+            content: '',
+            reportMarkdown: event.report_markdown,
+            chartData: event.chart_data,
+            filePaths: event.file_paths,
+            stockName: event.stock_name,
+            durationMs: event.duration_ms,
+            sessionId: event.session_id,
+          }
+          setMessages(prev => [...prev, reportMsg])
+        }
         setAppState('report')
+        setCurrentSessionId(event.session_id)
+        loadSessions()
+
         // Add completion system message
         const completionMsg: UIMessage = {
           id: genId(),
@@ -161,20 +318,8 @@ export default function App() {
           content: `分析完成 · 耗时 ${Math.round(event.duration_ms / 1000)} 秒`,
         }
         setMessages(prev => [...prev, completionMsg])
-
-        // Add report message
-        const reportMsg: UIMessage = {
-          id: genId(),
-          type: 'report',
-          content: '',
-          reportMarkdown: event.report_markdown,
-          chartData: event.chart_data,
-          filePaths: event.file_paths,
-          stockName: event.stock_name,
-          durationMs: event.duration_ms,
-        }
-        setMessages(prev => [...prev, reportMsg])
         break
+      }
 
       case 'error':
         updateMessage(pipelineMsg.id, {
@@ -199,43 +344,106 @@ export default function App() {
     }))
   }
 
-  // ── Quick chat ──
-  const quickChat = async (message: string, context: Record<string, any> | null) => {
-    // Add typing indicator
-    const typingId = genId()
-    const typingMsg: UIMessage = {
-      id: typingId,
-      type: 'system',
-      content: 'typing',
+  // ── Streaming chat ──
+  const quickChat = async (message: string) => {
+    const chatId = genId()
+    const chatMsg: UIMessage = {
+      id: chatId,
+      type: 'chat',
+      content: '',
+      chatResponse: '',
+      streaming: true,
     }
-    setMessages(prev => [...prev, typingMsg])
+    setMessages(prev => [...prev, chatMsg])
 
     try {
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, context, api_key: apiKey }),
+        body: JSON.stringify({
+          message,
+          session_id: currentSessionId,
+          api_key: apiKey,
+        }),
       })
-      const data = await resp.json()
 
-      setMessages(prev => prev.map(m =>
-        m.id === typingId
-          ? { ...m, type: 'chat', content: '', chatResponse: data.response || '无响应' }
-          : m
-      ))
+      const reader = resp.body?.getReader()
+      if (!reader) return
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const event: SSEEvent = JSON.parse(line.slice(6))
+            if (event.type === 'search_start') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, searchStatus: 'searching', searchQuery: event.query }
+                  : m
+              ))
+            } else if (event.type === 'search_result') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, searchStatus: 'done', searchResults: event.results }
+                  : m
+              ))
+            } else if (event.type === 'search_error') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, searchStatus: 'error' }
+                  : m
+              ))
+            } else if (event.type === 'thinking_token') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, thinkingContent: (m.thinkingContent || '') + event.token }
+                  : m
+              ))
+            } else if (event.type === 'chat_token') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
+                  : m
+              ))
+            } else if (event.type === 'error') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, chatResponse: `❌ ${event.message || '未知错误'}`, streaming: false }
+                  : m
+              ))
+            } else if (event.type === 'chat_done') {
+              setMessages(prev => prev.map(m =>
+                m.id === chatId ? { ...m, streaming: false } : m
+              ))
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
     } catch (e) {
       setMessages(prev => prev.map(m =>
-        m.id === typingId
-          ? { ...m, type: 'error', content: `错误: ${e instanceof Error ? e.message : 'Unknown'}` }
+        m.id === chatId
+          ? { ...m, type: 'error', content: `错误: ${e instanceof Error ? e.message : 'Unknown'}`, streaming: false }
           : m
       ))
     }
   }
 
-  const handleSendFromEmpty = (text: string) => {
-    const code = text.trim()
-    if (!code) return
-    startAnalysis(code, 'deep')
+  const handleSendFromEmpty = (text: string, mode: string = 'deep') => {
+    const query = text.trim()
+    if (!query) return
+    startAnalysis(query, mode)
   }
 
   const handleSendFromChat = (text: string) => {
@@ -246,52 +454,67 @@ export default function App() {
     const userMsg: UIMessage = { id: genId(), type: 'user', content: t }
     setMessages(prev => [...prev, userMsg])
 
-    // If report is ready, use quick chat for follow-up questions
-    if (appState === 'report') {
-      const reportMsg = messages.find(m => m.type === 'report')
-      quickChat(t, reportMsg ? { stock_name: reportMsg.stockName, report: reportMsg.reportMarkdown } : null)
-    } else {
-      quickChat(t, null)
-    }
+    // Follow-up question via streaming chat
+    quickChat(t)
   }
 
   // ── Render ──
+  const leftInset = sidebarOpen ? 256 : 48
+
   return (
-    <main className="flex flex-col items-center min-h-screen">
-      {appState === 'empty' ? (
-        <EmptyState onSend={handleSendFromEmpty} apiKey={apiKey} setApiKey={setApiKey} showApiKeyInput={showApiKeyInput} setShowApiKeyInput={setShowApiKeyInput} />
-      ) : (
-        <>
-          {/* Header */}
-          <header className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-3 glass-card">
-            <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+    <>
+      <Sidebar
+        sessions={sessions}
+        currentSessionId={currentSessionId}
+        onSelect={selectSession}
+        onDelete={deleteSession}
+        onRename={renameSession}
+        onNew={newAnalysis}
+        isOpen={sidebarOpen}
+        onToggle={() => setSidebarOpen(!sidebarOpen)}
+      />
+      <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
+        {appState === 'empty' ? (
+          <EmptyState onSend={handleSendFromEmpty} apiKey={apiKey} setApiKey={setApiKey} showApiKeyInput={showApiKeyInput} setShowApiKeyInput={setShowApiKeyInput} />
+        ) : (
+          <>
+            {/* Header */}
+            <header
+              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3 glass-card"
+              style={{ left: leftInset }}
+            >
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setSidebarOpen(!sidebarOpen)}
+                  className="text-zinc-400 hover:text-white transition-colors"
+                >
+                  <i className="fas fa-bars text-sm"></i>
+                </button>
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
                 <span className="font-semibold text-sm tracking-wide">FinAgent</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <button className="text-zinc-400 hover:text-white transition-colors text-sm">
-                <i className="fas fa-history mr-1"></i>历史
-              </button>
-              <button className="text-zinc-400 hover:text-white transition-colors text-sm" onClick={() => setShowApiKeyInput(true)}>
-                <i className="fas fa-cog mr-1"></i>设置
-              </button>
-              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700"></div>
-            </div>
-          </header>
+              </div>
+              <div className="flex items-center gap-4">
+                <button className="text-zinc-400 hover:text-white transition-colors text-sm" onClick={() => setShowApiKeyInput(true)}>
+                  <i className="fas fa-cog mr-1"></i>设置
+                </button>
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700"></div>
+              </div>
+            </header>
 
-          {/* Chat messages */}
-          <div className="w-full max-w-3xl px-4 pt-20 pb-40 space-y-6">
-            {messages.map(msg => (
-              <MessageRenderer key={msg.id} msg={msg} />
-            ))}
-          </div>
+            {/* Chat messages */}
+            <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
+              {messages.map(msg => (
+                <MessageRenderer key={msg.id} msg={msg} />
+              ))}
+            </div>
 
-          {/* Fixed input at bottom */}
-          <ChatInputBar onSend={handleSendFromChat} />
-        </>
-      )}
+            {/* Fixed input at bottom */}
+            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} />
+          </>
+        )}
+      </div>
 
       {/* API Key modal */}
       {showApiKeyInput && (
@@ -301,27 +524,177 @@ export default function App() {
           onClose={() => setShowApiKeyInput(false)}
         />
       )}
-    </main>
+    </>
+  )
+}
+
+// ── Sidebar ──
+function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle }: {
+  sessions: SessionMeta[]
+  currentSessionId: string | null
+  onSelect: (id: string) => void
+  onDelete: (id: string) => void
+  onRename: (id: string, name: string) => void
+  onNew: () => void
+  isOpen: boolean
+  onToggle: () => void
+}) {
+  const [search, setSearch] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+
+  const filtered = sessions.filter(s =>
+    s.stock_name.toLowerCase().includes(search.toLowerCase()) ||
+    s.stock_code.includes(search) ||
+    s.display_name.toLowerCase().includes(search.toLowerCase())
+  )
+
+  if (!isOpen) {
+    return (
+      <div className="fixed left-0 top-0 bottom-0 w-12 bg-zinc-900 border-r border-zinc-800 flex flex-col items-center py-4 z-50">
+        <button onClick={onToggle} className="text-zinc-400 hover:text-white transition-colors">
+          <i className="fas fa-bars"></i>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed left-0 top-0 bottom-0 w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col z-50">
+      {/* Header */}
+      <div className="p-3 border-b border-zinc-800 flex items-center justify-between">
+        <span className="text-sm font-semibold text-zinc-200">会话历史</span>
+        <button onClick={onToggle} className="text-zinc-500 hover:text-white transition-colors">
+          <i className="fas fa-times text-xs"></i>
+        </button>
+      </div>
+
+      {/* New analysis button */}
+      <div className="p-3">
+        <button
+          onClick={onNew}
+          className="w-full py-2 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-sm font-medium hover:shadow-lg hover:shadow-indigo-500/30 transition-all flex items-center justify-center gap-2"
+        >
+          <i className="fas fa-plus text-xs"></i>
+          新建分析
+        </button>
+      </div>
+
+      {/* Search */}
+      <div className="px-3 pb-3">
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="搜索股票..."
+          className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+      </div>
+
+      {/* Session list */}
+      <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {filtered.length === 0 ? (
+          <p className="text-center text-xs text-zinc-600 py-4">暂无历史会话</p>
+        ) : (
+          filtered.map(s => (
+            <div
+              key={s.session_id}
+              onClick={() => onSelect(s.session_id)}
+              className={`group relative px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1 ${
+                currentSessionId === s.session_id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+              }`}
+            >
+              {editingId === s.session_id ? (
+                <input
+                  type="text"
+                  value={editText}
+                  onChange={e => setEditText(e.target.value)}
+                  onBlur={() => {
+                    if (editText.trim()) onRename(s.session_id, editText.trim())
+                    setEditingId(null)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      if (editText.trim()) onRename(s.session_id, editText.trim())
+                      setEditingId(null)
+                    }
+                    if (e.key === 'Escape') setEditingId(null)
+                  }}
+                  onClick={e => e.stopPropagation()}
+                  autoFocus
+                  className="w-full bg-zinc-700 rounded px-2 py-1 text-xs text-white outline-none"
+                />
+              ) : (
+                <>
+                  <div
+                    className="text-sm text-zinc-200 truncate"
+                    onDoubleClick={e => {
+                      e.stopPropagation()
+                      setEditingId(s.session_id)
+                      setEditText(s.display_name)
+                    }}
+                  >
+                    {s.display_name}
+                  </div>
+                  <div className="text-[10px] text-zinc-500 flex items-center gap-2">
+                    <span>{s.stock_name}</span>
+                    <span>{new Date(s.created_at).toLocaleString()}</span>
+                  </div>
+                  <button
+                    onClick={e => {
+                      e.stopPropagation()
+                      onDelete(s.session_id)
+                    }}
+                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-opacity"
+                  >
+                    <i className="fas fa-trash text-xs"></i>
+                  </button>
+                </>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
   )
 }
 
 // ── Empty State ──
 function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyInput }: {
-  onSend: (text: string) => void
+  onSend: (text: string, mode?: string) => void
   apiKey: string
   setApiKey: (v: string) => void
   showApiKeyInput: boolean
   setShowApiKeyInput: (v: boolean) => void
 }) {
   const [text, setText] = useState('')
+  const [mode, setMode] = useState<'quick' | 'deep'>('quick')
+  const [dropdownOpen, setDropdownOpen] = useState(false)
 
   const handleKeydown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      onSend(text)
+      const query = text.trim()
+      if (!query) return
+      if (!apiKey) { setShowApiKeyInput(true); return }
+      onSend(query, mode)
       setText('')
     }
   }
+
+  const handleSend = () => {
+    const query = text.trim()
+    if (!query) return
+    if (!apiKey) { setShowApiKeyInput(true); return }
+    onSend(query, mode)
+    setText('')
+  }
+
+  const modes = [
+    { id: 'quick' as const, label: '快速模式', icon: 'fa-bolt', color: 'text-yellow-400', desc: '单次 LLM + Web Search，秒级响应' },
+    { id: 'deep' as const, label: '深度研究', icon: 'fa-layer-group', color: 'text-indigo-400', desc: '5 层 Agent 流水线，2-5 分钟完整报告' },
+  ]
+  const currentMode = modes.find(m => m.id === mode)!
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4 transition-all duration-700" style={{ minHeight: '100vh' }}>
@@ -339,10 +712,47 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
       {/* Input Box */}
       <div className="w-full max-w-2xl animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
         <div className="glass-input rounded-2xl p-2">
+          {/* Mode dropdown */}
+          <div className="relative px-4 pt-1 pb-0">
+            <button
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="flex items-center gap-1.5 text-[10px] font-medium hover:bg-zinc-800/50 rounded px-2 py-0.5 transition-colors"
+            >
+              <span className="text-zinc-600">模式：</span>
+              <i className={`fas ${currentMode.icon} ${currentMode.color}`}></i>
+              <span className={currentMode.color}>{currentMode.label}</span>
+              <i className={`fas fa-chevron-${dropdownOpen ? 'up' : 'down'} text-zinc-600 text-[8px] ml-0.5`}></i>
+            </button>
+            {dropdownOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
+                <div className="absolute left-4 top-7 z-20 w-72 glass-card rounded-lg border border-zinc-700/50 shadow-xl overflow-hidden">
+                  {modes.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => { setMode(m.id); setDropdownOpen(false) }}
+                      className={`w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors ${
+                        mode === m.id ? 'bg-zinc-800/60' : 'hover:bg-zinc-800/40'
+                      }`}
+                    >
+                      <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-xs font-medium ${mode === m.id ? m.color : 'text-zinc-300'}`}>
+                          {m.label}
+                          {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 mt-0.5">{m.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <div className="flex items-end gap-2">
             <textarea
               rows={1}
-              placeholder="输入股票代码或名称，例如：000858 五粮液..."
+              placeholder={mode === 'quick' ? '输入问题，如：茅台、宁德时代怎么样' : '输入股票名称或代码，如 茅台、300750'}
               className="flex-1 bg-transparent text-zinc-200 placeholder-zinc-600 px-4 py-3 resize-none outline-none text-sm leading-relaxed"
               style={{ minHeight: '48px', maxHeight: '120px' }}
               value={text}
@@ -350,22 +760,10 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
               onKeyDown={handleKeydown}
             />
             <button
-              onClick={() => { onSend(text); setText('') }}
+              onClick={handleSend}
               className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center hover:shadow-lg hover:shadow-indigo-500/30 transition-all mb-1 mr-1"
             >
               <i className="fas fa-arrow-up text-white text-sm"></i>
-            </button>
-          </div>
-          {/* Quick actions */}
-          <div className="flex gap-2 px-4 pb-2 pt-1">
-            <button className="chip px-3 py-1 rounded-lg text-xs border border-zinc-700/50 text-zinc-400 bg-zinc-800/50" onClick={() => { if (!apiKey) { setShowApiKeyInput(true); return }; onSend('000858') }}>
-              <i className="fas fa-bolt mr-1 text-yellow-500"></i>快速分析
-            </button>
-            <button className="chip px-3 py-1 rounded-lg text-xs border border-zinc-700/50 text-zinc-400 bg-zinc-800/50" onClick={() => { if (!apiKey) { setShowApiKeyInput(true); return }; onSend('600519') }}>
-              <i className="fas fa-layer-group mr-1 text-indigo-400"></i>深度报告
-            </button>
-            <button className="chip px-3 py-1 rounded-lg text-xs border border-zinc-700/50 text-zinc-400 bg-zinc-800/50" onClick={() => { if (!apiKey) { setShowApiKeyInput(true); return }; onSend('000858,000568') }}>
-              <i className="fas fa-balance-scale mr-1 text-green-400"></i>同业对比
             </button>
           </div>
         </div>
@@ -483,7 +881,45 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
             <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
-              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{msg.chatResponse}</p>
+              {/* Thinking banner */}
+              {msg.thinkingContent && (
+                <ThinkingBanner content={msg.thinkingContent} streaming={!!msg.streaming && !msg.chatResponse} />
+              )}
+              {/* Search banner (Kimi-style) */}
+              {msg.searchStatus === 'searching' && (
+                <div className="mb-3 flex items-center gap-2 text-xs text-blue-400 bg-blue-500/10 rounded-lg px-3 py-2">
+                  <i className="fas fa-spinner fa-spin"></i>
+                  <span>正在搜索：{msg.searchQuery}</span>
+                </div>
+              )}
+              {msg.searchStatus === 'done' && msg.searchResults && msg.searchResults.length > 0 && (
+                <SearchBanner results={msg.searchResults} query={msg.searchQuery || ''} />
+              )}
+              {msg.searchStatus === 'error' && (
+                <div className="mb-3 text-xs text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
+                  <i className="fas fa-exclamation-triangle mr-1"></i>
+                  搜索失败，基于已有知识回答
+                </div>
+              )}
+              {msg.streaming && !msg.chatResponse && !msg.thinkingContent && msg.searchStatus !== 'searching' ? (
+                <div className="flex gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
+                  <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
+                  <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
+                </div>
+              ) : (
+                <div className="text-sm text-zinc-300 leading-relaxed">
+                  <ReactMarkdown
+                    components={{
+                      p: ({ children }) => <p className="mb-2 whitespace-pre-wrap">{children}</p>,
+                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{children}</a>,
+                    }}
+                  >
+                    {msg.chatResponse || ''}
+                  </ReactMarkdown>
+                  {msg.streaming && <span className="animate-pulse ml-0.5">▋</span>}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -492,6 +928,69 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
   }
 
   return null
+}
+
+// ── Thinking Banner (collapsible reasoning content) ──
+function ThinkingBanner({ content, streaming }: { content: string; streaming: boolean }) {
+  const [expanded, setExpanded] = useState(true)
+
+  return (
+    <div className="mb-3 border border-zinc-700/50 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800/70 transition-colors text-left"
+      >
+        <i className={`fas ${streaming ? 'fa-spinner fa-spin' : 'fa-brain'} text-xs text-purple-400`}></i>
+        <span className="text-xs text-zinc-400">
+          {streaming ? '正在思考...' : '思考过程'}
+        </span>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-xs text-zinc-500 ml-auto`}></i>
+      </button>
+      {expanded && (
+        <div className="px-3 py-2 max-h-[200px] overflow-y-auto">
+          <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">{content}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Search Banner (Kimi-style collapsible) ──
+function SearchBanner({ results, query }: { results: Array<{ title: string; url: string; content: string }>; query: string }) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="mb-3 border border-zinc-700/50 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800/70 transition-colors text-left"
+      >
+        <i className={`fas fa-search text-xs text-green-400`}></i>
+        <span className="text-xs text-zinc-400">
+          搜索了 {results.length} 个网页
+        </span>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-xs text-zinc-500 ml-auto`}></i>
+      </button>
+      {expanded && (
+        <div className="px-3 py-2 space-y-2 max-h-[300px] overflow-y-auto">
+          {results.map((r, i) => (
+            <div key={i} className="text-xs">
+              <div className="flex items-start gap-1.5">
+                <span className="text-blue-400 font-mono flex-shrink-0">[{i + 1}]</span>
+                <div className="flex-1 min-w-0">
+                  <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-zinc-300 hover:text-blue-400 hover:underline truncate block">
+                    {r.title}
+                  </a>
+                  <p className="text-zinc-500 mt-0.5 line-clamp-2">{r.content}</p>
+                  <span className="text-zinc-600 text-[10px] truncate block">{r.url}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Pipeline Card ──
@@ -693,32 +1192,42 @@ function ReportCard({ msg }: { msg: UIMessage }) {
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
           <div className="msg-system rounded-2xl rounded-tl-sm overflow-hidden flex-1">
+            {/* Streaming indicator */}
+            {msg.streaming && (
+              <div className="px-5 py-2 border-b border-zinc-800/50 flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                <span className="text-xs text-indigo-400">正在生成报告...</span>
+              </div>
+            )}
+
             {/* Report Header */}
-            <div className="px-5 pt-4 pb-3 border-b border-zinc-800/50">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-lg font-bold text-white">{msg.stockName}</h3>
-                    <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-400 text-[10px] font-semibold">深度分析</span>
+            {!msg.streaming && (
+              <div className="px-5 pt-4 pb-3 border-b border-zinc-800/50">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-lg font-bold text-white">{msg.stockName}</h3>
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-400 text-[10px] font-semibold">深度分析</span>
+                    </div>
+                    <p className="text-xs text-zinc-500">深度分析报告 · 5 层 Agent 架构 · 耗时 {Math.round((msg.durationMs || 0) / 1000)}s</p>
                   </div>
-                  <p className="text-xs text-zinc-500">深度分析报告 · 5 层 Agent 架构 · 耗时 {Math.round((msg.durationMs || 0) / 1000)}s</p>
-                </div>
-                <div className="flex gap-2">
-                  {msg.filePaths?.docx && (
-                    <a href={`/api/files/${msg.filePaths.docx.split(/[\\/]/).pop()}`} download
-                      className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 transition-colors" title="导出 Word">
-                      <i className="fas fa-file-word text-xs"></i>
-                    </a>
-                  )}
-                  {msg.filePaths?.pptx && (
-                    <a href={`/api/files/${msg.filePaths.pptx.split(/[\\/]/).pop()}`} download
-                      className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 transition-colors" title="导出 PPT">
-                      <i className="fas fa-file-powerpoint text-xs"></i>
-                    </a>
-                  )}
+                  <div className="flex gap-2">
+                    {msg.filePaths?.docx && (
+                      <a href={`/api/files/${msg.filePaths.docx.split(/[\\/]/).pop()}`} download
+                        className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 transition-colors" title="导出 Word">
+                        <i className="fas fa-file-word text-xs"></i>
+                      </a>
+                    )}
+                    {msg.filePaths?.pptx && (
+                      <a href={`/api/files/${msg.filePaths.pptx.split(/[\\/]/).pop()}`} download
+                        className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 transition-colors" title="导出 PPT">
+                        <i className="fas fa-file-powerpoint text-xs"></i>
+                      </a>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* Charts Section */}
             {msg.chartData && msg.chartData.annual && msg.chartData.annual.length > 0 && (
@@ -761,12 +1270,14 @@ function ReportCard({ msg }: { msg: UIMessage }) {
             )}
 
             {/* Disclaimer */}
-            <div className="px-5 py-3">
-              <p className="text-[10px] text-zinc-600 leading-relaxed">
-                <i className="fas fa-info-circle mr-1"></i>
-                本报告由 AI 系统基于公开数据自动生成，仅供参考研究，不构成投资建议。投资有风险，入市需谨慎。
-              </p>
-            </div>
+            {!msg.streaming && (
+              <div className="px-5 py-3">
+                <p className="text-[10px] text-zinc-600 leading-relaxed">
+                  <i className="fas fa-info-circle mr-1"></i>
+                  本报告由 AI 系统基于公开数据自动生成，仅供参考研究，不构成投资建议。投资有风险，入市需谨慎。
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -775,7 +1286,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend }: { onSend: (text: string) => void }) {
+function ChatInputBar({ onSend, leftInset }: { onSend: (text: string) => void; leftInset: number }) {
   const [text, setText] = useState('')
 
   const handleKeydown = (e: React.KeyboardEvent) => {
@@ -787,7 +1298,10 @@ function ChatInputBar({ onSend }: { onSend: (text: string) => void }) {
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-4 pt-2" style={{ background: 'linear-gradient(to top, #0a0a0f 80%, transparent)' }}>
+    <div
+      className="fixed bottom-0 right-0 z-40 px-4 pb-4 pt-2"
+      style={{ left: leftInset, background: 'linear-gradient(to top, #0a0a0f 80%, transparent)' }}
+    >
       <div className="max-w-3xl mx-auto">
         <div className="glass-input rounded-2xl p-2">
           <div className="flex items-end gap-2">

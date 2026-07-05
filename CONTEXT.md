@@ -154,10 +154,10 @@ _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章�
 | 模式 | 数据获取 | Agent 机制 | 产出 | 状态 |
 |------|---------|-----------|------|------|
 | 深度模式（默认） | PREP 一次性全量注入 | 单轮 LLM + 结构化输出 | 完整 5 层架构 → 10 章报告 | ✅ v1.0 |
-| 快速模式 | tool calling 按需查询 | ReAct 循环 | 精简分析 | ❌ v2.0 |
+| 快速模式 | LLM 自身知识 + 最多 1 次工具调用 | 单次工具调用（非 ReAct） | 精简分析 | ✅ v1.1 |
 
 深度模式：每个分析师的数据需求是确定性的（每次都要看全部数据），PREP 算好后直接注入 prompt，无需 tool calling。"真 Agent"叙事来自 5 层架构的辩论/决策机制，不来自 tool calling。
-快速模式：留给未来交互式问答场景，ADR-0010 的 tool calling 设计保留为快速模式的机制基础。
+快速模式：LLM 主要依赖自身知识回答，最多发起 1 次工具调用（web search）补充实时信息。不使用 ReAct 循环，工具调用后直接生成最终回答。ADR-0010 的 tool calling 设计为快速模式的机制基础。
 
 **报告章节结构**（分析师主导，线性流程）：
 
@@ -196,13 +196,19 @@ _Avoid_: Conversation（泛指对话，不精确）、Chat Thread
 
 自然语言输入。用户可输入股票名称（"宁德时代"）或自然语言指令（"分析茅台"），后端先用 LLM 解析为股票代码，LLM 不认识时 fallback 到 AKShare `stock_info_a_code_name` 模糊匹配。
 
+### Quick Mode
+
+快速模式。单次 LLM 调用 + 最多 1 次工具调用（web search），不跑 5 层 pipeline。LLM 依赖自身知识回答，信息不足时自主发起 Tavily 搜索补充实时信息。搜索过程通过 SSE 事件流推送给前端，前端展示可折叠搜索横幅（类 Kimi）：搜索中显示"正在搜索：{query}"，搜索完成后显示"搜索了 N 个网页"，点击展开显示网页列表（标题 + URL + 摘要）。工具调用后 LLM 基于搜索结果生成最终回答，逐 Token 流式输出。
+
+_Avoid_: ReAct 循环（快速模式不使用多轮工具调用）
+
 ### Data Sources
 
 | Source     | Type              | Usage                             | TTL              |
 | ---------- | ----------------- | --------------------------------- | ---------------- |
 | AKShare    | 免费 A 股数据 API | 三大报表、行情、K线、行业分类、PE/PB、宏观、新闻 | 按数据类型差异化 |
 | 巨潮资讯网 | 年报 PDF          | MD&A、风险披露（pdfplumber 解析） | 到下个财报季     | ❌ v2.0 |
-| Tavily     | 网页搜索 API      | 行业新闻、趋势、政策              | 1天              | ❌ v2.0 |
+| Tavily     | 网页搜索 API      | 快速模式 web search、行业新闻、趋势、政策              | 1天              | ✅ v1.1 |
 | Chroma     | 向量数据库        | 研报 embedding，RAG 语义检索      | 永久（知识库）   | ❌ v2.0 |
 
 ### Architecture Terms

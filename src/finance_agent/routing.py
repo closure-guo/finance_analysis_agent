@@ -56,8 +56,13 @@ def after_citation(state: dict) -> str:
 
 
 def route_to_analysts(state: dict) -> list[Send]:
-    """Layer I: 派发到并行分析师。"""
-    return [Send("technical_analyst", state)]
+    """Layer I: 派发到 4 个并行分析师。"""
+    return [
+        Send("technical_analyst", state),
+        Send("macro_analyst", state),
+        Send("fundamental_analyst", state),
+        Send("sentiment_analyst", state),
+    ]
 
 
 def route_to_debate_r1(state: dict) -> list[Send]:

@@ -338,50 +338,194 @@ class AKShareClient:
     def fetch_kline(self, stock_code: str, days: int = 250) -> pd.DataFrame:
         """拉取个股日 K 线（前复权），返回最近 N 个交易日。
 
-        使用 stock_zh_a_hist（东方财富），返回列：
-        日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+        优先使用 stock_zh_a_hist（东方财富），失败时回退 stock_zh_a_daily（新浪）。
+        返回统一中文列名：日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 换手率
         """
+        import time
         from datetime import datetime, timedelta
 
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
 
-        df = ak.stock_zh_a_hist(
-            symbol=stock_code,
-            period="daily",
-            start_date=start_date,
-            end_date=end_date,
-            adjust="qfq",
-        )
-        if df is None or df.empty:
-            logger.warning("K线数据为空: %s", stock_code)
-            return pd.DataFrame()
+        # ── 方案1: 东方财富 stock_zh_a_hist ──
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                df = ak.stock_zh_a_hist(
+                    symbol=stock_code,
+                    period="daily",
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq",
+                )
+                if df is not None and not df.empty:
+                    df = df.sort_values("日期").reset_index(drop=True)
+                    return df.tail(days).reset_index(drop=True)
+            except Exception as e:
+                last_err = e
+                logger.warning("K线拉取(东财)第%d次失败: %s", attempt + 1, e)
+                if attempt < 1:
+                    time.sleep(2)
 
-        # 按日期升序排列，取最近 N 个交易日
-        df = df.sort_values("日期").reset_index(drop=True)
-        df = df.tail(days).reset_index(drop=True)
-        return df
+        # ── 方案2: 新浪 stock_zh_a_daily（回退） ──
+        logger.info("东财K线拉取失败，尝试新浪源: %s", stock_code)
+        sina_symbol = self._to_sina_symbol(stock_code)
+        for attempt in range(2):
+            try:
+                df = ak.stock_zh_a_daily(symbol=sina_symbol, adjust="qfq")
+                if df is not None and not df.empty:
+                    # 列名映射为中文（与东财一致）
+                    rename_map = {
+                        "date": "日期",
+                        "open": "开盘",
+                        "close": "收盘",
+                        "high": "最高",
+                        "low": "最低",
+                        "volume": "成交量",
+                        "amount": "成交额",
+                        "turnover": "换手率",
+                    }
+                    df = df.rename(columns=rename_map)
+                    df = df.sort_values("日期").reset_index(drop=True)
+                    return df.tail(days).reset_index(drop=True)
+            except Exception as e:
+                last_err = e
+                logger.warning("K线拉取(新浪)第%d次失败: %s", attempt + 1, e)
+                if attempt < 1:
+                    time.sleep(2)
+
+        logger.error("K线拉取均失败: %s, 最后错误: %s", stock_code, last_err)
+        return pd.DataFrame()
+
+    @staticmethod
+    def _to_sina_symbol(stock_code: str) -> str:
+        """A 股代码转新浪格式：600519 → sh600519, 000001 → sz000001。"""
+        if stock_code.startswith(("6", "9")):
+            return f"sh{stock_code}"
+        elif stock_code.startswith(("0", "2", "3")):
+            return f"sz{stock_code}"
+        elif stock_code.startswith(("4", "8")):
+            return f"bj{stock_code}"
+        return f"sh{stock_code}"
 
     def fetch_benchmark_kline(self, days: int = 250) -> pd.DataFrame:
         """拉取沪深 300 指数日 K 线，返回最近 N 个交易日。
 
         使用 index_zh_a_hist（东方财富），返回列含 日期, 收盘 等。
         """
+        import time
         from datetime import datetime, timedelta
 
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
 
-        df = ak.index_zh_a_hist(
-            symbol="000300",
-            period="daily",
-            start_date=start_date,
-            end_date=end_date,
-        )
-        if df is None or df.empty:
-            logger.warning("沪深300 K线数据为空")
-            return pd.DataFrame()
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                df = ak.index_zh_a_hist(
+                    symbol="000300",
+                    period="daily",
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                if df is None or df.empty:
+                    logger.warning("沪深300 K线数据为空")
+                    return pd.DataFrame()
 
-        df = df.sort_values("日期").reset_index(drop=True)
-        df = df.tail(days).reset_index(drop=True)
-        return df
+                df = df.sort_values("日期").reset_index(drop=True)
+                df = df.tail(days).reset_index(drop=True)
+                return df
+            except Exception as e:
+                last_err = e
+                logger.warning("沪深300 K线拉取第%d次失败: %s", attempt + 1, e)
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+
+        logger.error("沪深300 K线拉取3次均失败, 最后错误: %s", last_err)
+        return pd.DataFrame()
+
+    # ── 宏观指标 ──
+
+    def fetch_macro_indicators(self) -> dict:
+        """拉取宏观经济指标：CPI、PMI、M2、LPR。
+
+        返回 dict，每个指标取最近 6 个月数据。
+        失败的指标返回空列表，不阻塞流程。
+        """
+        result: dict[str, list[dict]] = {}
+
+        # CPI
+        try:
+            df = ak.macro_china_cpi()
+            if df is not None and not df.empty:
+                recent = df.tail(6)
+                result["cpi"] = recent.to_dict(orient="records")
+        except Exception as e:
+            logger.warning("CPI 拉取失败: %s", e)
+            result["cpi"] = []
+
+        # PMI
+        try:
+            df = ak.macro_china_pmi()
+            if df is not None and not df.empty:
+                recent = df.tail(6)
+                result["pmi"] = recent.to_dict(orient="records")
+        except Exception as e:
+            logger.warning("PMI 拉取失败: %s", e)
+            result["pmi"] = []
+
+        # M2 (货币供应)
+        try:
+            df = ak.macro_china_money_supply()
+            if df is not None and not df.empty:
+                recent = df.tail(6)
+                result["m2"] = recent.to_dict(orient="records")
+        except Exception as e:
+            logger.warning("M2 拉取失败: %s", e)
+            result["m2"] = []
+
+        # LPR (贷款市场报价利率)
+        try:
+            df = ak.macro_china_lpr()
+            if df is not None and not df.empty:
+                recent = df.tail(6)
+                result["lpr"] = recent.to_dict(orient="records")
+        except Exception as e:
+            logger.warning("LPR 拉取失败: %s", e)
+            result["lpr"] = []
+
+        return result
+
+    # ── 新闻资讯 ──
+
+    def fetch_news(self, stock_code: str, limit: int = 20) -> list[dict]:
+        """拉取个股新闻资讯（东方财富）。
+
+        返回 list[dict]，每条含 title、content、datetime、source。
+        失败返回空列表。
+        """
+        try:
+            df = ak.stock_news_em(symbol=stock_code)
+            if df is None or df.empty:
+                return []
+            df = df.head(limit)
+            # 标准化列名
+            col_map = {
+                "新闻标题": "title",
+                "新闻内容": "content",
+                "发布时间": "datetime",
+                "文章来源": "source",
+                "新闻链接": "url",
+            }
+            df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+            records = df.to_dict(orient="records")
+            # 确保每条都有必要的字段
+            for r in records:
+                r.setdefault("title", "")
+                r.setdefault("content", "")
+                r.setdefault("datetime", "")
+                r.setdefault("source", "")
+            return records
+        except Exception as e:
+            logger.warning("新闻拉取失败: %s", e)
+            return []

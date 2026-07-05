@@ -146,6 +146,24 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
         logger.warning("同业数据拉取失败: %s", e)
         result["peer_financials"] = None
 
+    # Step 2: 宏观指标（非必需，失败不阻塞）
+    try:
+        macro = ak.fetch_macro_indicators()
+        c.set("macro_indicators", macro, ttl_seconds=86_400)
+        result["macro_indicators"] = macro
+    except Exception as e:
+        logger.warning("宏观指标拉取失败: %s", e)
+        result["macro_indicators"] = {}
+
+    # Step 2: 新闻资讯（非必需，失败不阻塞）
+    try:
+        news = ak.fetch_news(code)
+        c.set(f"{code}:news", news, ttl_seconds=3600)
+        result["news_list"] = news
+    except Exception as e:
+        logger.warning("新闻资讯拉取失败: %s", e)
+        result["news_list"] = []
+
     return result
 
 

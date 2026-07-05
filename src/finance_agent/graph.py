@@ -3,7 +3,12 @@
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from finance_agent.nodes.analysts import technical_analyst
+from finance_agent.nodes.analysts import (
+    fundamental_analyst,
+    macro_analyst,
+    sentiment_analyst,
+    technical_analyst,
+)
 from finance_agent.nodes.cache import check_cache
 from finance_agent.nodes.citation_node import verify_citations
 from finance_agent.nodes.compute import compute_metrics
@@ -91,6 +96,9 @@ def build_5layer_graph() -> CompiledStateGraph:
     # ── Layer I: Analyst Team ──
     graph.add_node("analysts_entry", _passthrough)
     graph.add_node("technical_analyst", technical_analyst)
+    graph.add_node("macro_analyst", macro_analyst)
+    graph.add_node("fundamental_analyst", fundamental_analyst)
+    graph.add_node("sentiment_analyst", sentiment_analyst)
 
     # ── Citation Verification ──
     graph.add_node("verify_citations", verify_citations)
@@ -135,6 +143,9 @@ def build_5layer_graph() -> CompiledStateGraph:
     # ── 边：Layer I ──
     graph.add_conditional_edges("analysts_entry", route_to_analysts)
     graph.add_edge("technical_analyst", "verify_citations")
+    graph.add_edge("macro_analyst", "verify_citations")
+    graph.add_edge("fundamental_analyst", "verify_citations")
+    graph.add_edge("sentiment_analyst", "verify_citations")
 
     # ── 边：Citation ──
     graph.add_conditional_edges(
