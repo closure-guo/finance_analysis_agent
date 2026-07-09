@@ -48,24 +48,32 @@ def init_db() -> None:
         )
         """
     )
+    # 迁移：为旧表添加 session_type 列（区分深度分析 'analysis' 与快速问答 'chat'）
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'analysis'")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
     conn.commit()
     conn.close()
 
 
 def create_session(
-    stock_code: str,
-    stock_name: str,
+    stock_code: str = "",
+    stock_name: str = "",
     report_markdown: str = "",
     chart_data: dict | None = None,
     analyst_reports: dict | None = None,
     agent_process: dict | None = None,
     analyst_summaries: dict | None = None,
     duration_ms: int = 0,
+    session_type: str = "analysis",
+    display_name: str | None = None,
 ) -> str:
     """Create a new session record, return session_id."""
     session_id = str(uuid.uuid4())[:12]
     now = datetime.now().isoformat()
-    display_name = f"{stock_name} {datetime.now().strftime('%m-%d %H:%M')}"
+    if display_name is None:
+        display_name = f"{stock_name} {datetime.now().strftime('%m-%d %H:%M')}"
 
     conn = _get_db()
     conn.execute(
@@ -73,8 +81,8 @@ def create_session(
         INSERT INTO sessions
             (session_id, stock_code, stock_name, display_name, status,
              report_markdown, chart_data, analyst_reports, agent_process,
-             analyst_summaries, chat_history, created_at, duration_ms)
-        VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, '[]', ?, ?)
+             analyst_summaries, chat_history, created_at, duration_ms, session_type)
+        VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, '[]', ?, ?, ?)
         """,
         (
             session_id,
@@ -88,11 +96,26 @@ def create_session(
             json.dumps(analyst_summaries or {}, ensure_ascii=False, default=str),
             now,
             duration_ms,
+            session_type,
         ),
     )
     conn.commit()
     conn.close()
     return session_id
+
+
+def create_chat_session(display_name: str) -> str:
+    """创建快速模式对话 session，返回 session_id。
+
+    快速模式无股票代码/报告，仅记录 chat_history。
+    display_name 通常为用户问题摘要。
+    """
+    return create_session(
+        stock_code="",
+        stock_name="",
+        display_name=display_name,
+        session_type="chat",
+    )
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -101,7 +124,7 @@ def list_sessions() -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT session_id, stock_code, stock_name, display_name, status,
-               created_at, duration_ms,
+               created_at, duration_ms, session_type,
                length(report_markdown) as report_len
         FROM sessions
         ORDER BY created_at DESC

@@ -24,6 +24,128 @@ import litellm
 
 litellm.drop_params = True
 
+# ── Langfuse 兼容性修复 ─────────────────────────────────────────────
+# litellm 1.85.x 与 langfuse 4.x 深度不兼容（version 属性、sdk_integration 参数、
+# langfuse_sdk_version 属性等多处不匹配）。未配置 LANGFUSE key 时 litellm 仍会在
+# function_setup / log_event 中尝试初始化，导致异常阻塞 LLM 调用。
+# 此处补丁：添加 version 属性 + 把所有 Langfuse logger 方法变成空操作。
+try:
+    import importlib.metadata
+
+    import langfuse
+
+    if not hasattr(langfuse, "version"):
+        _lf_ver = importlib.metadata.version("langfuse")
+        langfuse.version = type("version", (), {"__version__": _lf_ver})()
+except Exception:  # noqa: S110
+    pass
+
+
+def _lf_noop(self, *a, **kw):  # noqa: ARG001
+    """空操作 — 替换 Langfuse logger 的所有方法。"""
+    pass
+
+
+def _lf_noop_init(self, *a, **kw):  # noqa: ARG001
+    """空操作 __init__ — 设置必要属性避免其他方法报 AttributeError。"""
+    self.langfuse_sdk_version = "4.13.0"
+    self.Langfuse = None
+    self.langfuse_client = None
+
+
+for _cls_path in (
+    "litellm.integrations.langfuse.langfuse.LangFuseLogger",
+    "litellm.integrations.langfuse.langfuse_prompt_management.LangfusePromptManagement",
+):
+    try:
+        _parts = _cls_path.rsplit(".", 1)
+        _mod = __import__(_parts[0], fromlist=[_parts[1]])
+        _cls = getattr(_mod, _parts[1])
+        _cls.__init__ = _lf_noop_init
+        for _method in ("log_event_on_langfuse", "_log_langfuse_v2", "_log_langfuse_v1"):
+            if hasattr(_cls, _method):
+                setattr(_cls, _method, _lf_noop)
+    except Exception:  # noqa: S110
+        pass
+
+# ── Langfuse 可观测性 ───────────────────────────────────────────────
+# 配置了 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 时，用自定义回调直接对接
+# Langfuse SDK v4，绕过 litellm 内置 langfuse 集成的兼容性问题。
+# 未配置时上方 no-op 补丁已禁用 litellm 内置集成，不影响本地运行。
+if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
+    import logging as _lf_log_mod
+
+    _lf_logger = _lf_log_mod.getLogger("finance_agent.langfuse")
+    _lf_logger.setLevel(_lf_log_mod.DEBUG)
+
+    class _LangfuseCallback:
+        """litellm 回调，将 LLM 调用上报到 Langfuse v4。"""
+
+        def __init__(self):
+            from langfuse import Langfuse
+
+            self.client = Langfuse(
+                public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+                secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+                host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
+            )
+
+        def log_success_event(self, kwargs, completion_response, start_time, end_time):
+            try:
+                self._report(kwargs, completion_response, start_time, end_time)
+            except Exception as e:
+                _lf_logger.warning("Langfuse 上报失败: %s", e)
+
+        def log_failure_event(self, kwargs, completion_response, start_time, end_time):
+            try:
+                self._report(kwargs, completion_response, start_time, end_time, error=True)
+            except Exception as e:
+                _lf_logger.warning("Langfuse 上报失败: %s", e)
+
+        async def async_log_success_event(self, kwargs, completion_response, start_time, end_time):
+            try:
+                self._report(kwargs, completion_response, start_time, end_time)
+            except Exception as e:
+                _lf_logger.warning("Langfuse 上报失败: %s", e)
+
+        async def async_log_failure_event(self, kwargs, completion_response, start_time, end_time):
+            try:
+                self._report(kwargs, completion_response, start_time, end_time, error=True)
+            except Exception as e:
+                _lf_logger.warning("Langfuse 上报失败: %s", e)
+
+        def _report(self, kwargs, resp, start_time, end_time, error=False):
+            model = kwargs.get("model", "unknown")
+            messages = kwargs.get("messages", [])
+            usage = getattr(getattr(resp, "usage", None), "model_dump", lambda: {})()
+            output = {"error": str(resp)} if error else ""
+            if not error:
+                choices = getattr(resp, "choices", [])
+                if choices:
+                    output = getattr(choices[0].message, "content", "")
+
+            self.client.start_observation(
+                name=f"litellm:{model}",
+                as_type="generation",
+                input={"messages": messages},
+                output=output,
+                model=model,
+                usage_details={
+                    "input": usage.get("prompt_tokens", 0),
+                    "output": usage.get("completion_tokens", 0),
+                    "total": usage.get("total_tokens", 0),
+                },
+                completion_start_time=start_time,
+            ).end()
+            self.client.flush()
+
+    try:
+        _cb = _LangfuseCallback()
+        litellm.success_callback.append(_cb)
+        litellm.failure_callback.append(_cb)
+    except Exception as e:
+        _lf_logger.warning("Langfuse 初始化失败: %s", e, exc_info=True)
+
 _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 _QUICK_MODEL = "deepseek/deepseek-chat"
 
@@ -79,6 +201,11 @@ def _build_kwargs(
         # Note: thinking mode + tool calling not compatible, so skip when tools present
         kwargs["reasoning_effort"] = os.environ.get("LLM_REASONING_EFFORT", "max")
         kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+    elif is_ds and tools:
+        # Tool calling: explicitly disable thinking mode (v4-pro defaults to enabled)
+        # Thinking mode does not support tool_choice parameter
+        kwargs["temperature"] = temperature
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     else:
         # Standard mode: use temperature
         kwargs["temperature"] = temperature
@@ -92,9 +219,17 @@ def call_llm(
     temperature: float = 0.3,
     max_tokens: int = 4096,
     api_key: str | None = None,
+    quick: bool = False,
 ) -> str:
-    """Non-streaming LLM call — returns full response string."""
-    model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
+    """Non-streaming LLM call — returns full response string.
+
+    If quick=True, uses LLM_QUICK_MODEL (default deepseek-chat) with thinking disabled.
+    Use quick=True for simple tasks like JSON extraction, classification, etc.
+    """
+    if quick:
+        model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
+    else:
+        model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
 
     messages = []
     if system:
@@ -107,6 +242,7 @@ def call_llm(
         max_tokens=max_tokens,
         temperature=temperature,
         api_key=api_key,
+        disable_thinking=quick,
     )
 
     resp = litellm.completion(**kwargs)
@@ -146,10 +282,7 @@ def call_llm_stream(
         messages.append({"role": "user", "content": prompt})
 
     # Tool result follow-up must disable thinking (DeepSeek requires reasoning_content passthrough)
-    # Quick mode also disables thinking for fast response
-    disable_thinking = (
-        messages is not None and any(m.get("role") == "tool" for m in messages)
-    ) or quick
+    disable_thinking = messages is not None and any(m.get("role") == "tool" for m in messages)
 
     kwargs = _build_kwargs(
         model=model,
@@ -179,18 +312,25 @@ def call_llm_with_tools(
     max_tokens: int = 4096,
     api_key: str | None = None,
     tool_choice: str = "auto",
+    messages: list[dict] | None = None,
+    model: str | None = None,
 ):
     """Non-streaming LLM call with tool support.
 
     Returns the full response object so caller can check ``tool_calls``.
-    Always uses LLM_QUICK_MODEL and disables thinking mode.
-    """
-    model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
+    Uses LLM_QUICK_MODEL by default; pass ``model`` to override (e.g. v4-pro for ReAct).
 
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    If ``messages`` is provided, it replaces the default prompt/system construction
+    (used for ReAct multi-turn dialogue with tool results).
+    """
+    if model is None:
+        model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
+
+    if messages is None:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
 
     kwargs = _build_kwargs(
         model=model,

@@ -1,26 +1,31 @@
 import ReactECharts from 'echarts-for-react'
 import type { ChartData, AnnualEntry } from './types'
 
-// ── ECharts dark theme defaults ──
-const _textColor = '#a1a1aa'
-const _axisLabelColor = '#71717a'
-const _splitLineColor = '#27272a'
+// ── ECharts light theme defaults (TRAE Work) ──
+const _textColor = '#525252'
+const _axisLabelColor = '#A3A3A3'
+const _splitLineColor = 'rgba(115, 115, 115, 0.08)'
+const _tooltipBg = '#FFFFFF'
+const _tooltipBorder = 'rgba(115, 115, 115, 0.12)'
+const _tooltipTextColor = '#171717'
+
+// TRAE Work viz palette
 const _colors = {
-  blue: '#2563eb',
-  red: '#dc2626',
-  green: '#059669',
-  purple: '#7c3aed',
-  orange: '#ea580c',
-  cyan: '#0891b2',
-  lime: '#65a30d',
-  pink: '#db2777',
+  brand: '#4B3FE3',
+  coral: '#F87454',
+  mint: '#1DC981',
+  amber: '#F5A623',
+  sky: '#3B82F6',
+  violet: '#8B5CF6',
+  rose: '#EC4899',
+  teal: '#14B8A6',
 }
 
 // ── Base chart wrapper ──
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4">
-      <h4 className="text-sm font-semibold text-zinc-300 mb-3">{title}</h4>
+    <div className="bg-white border rounded-xl p-4" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+      <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-default)' }}>{title}</h4>
       {children}
     </div>
   )
@@ -28,7 +33,7 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 
 const _baseOption = {
   textStyle: { color: _textColor, fontSize: 11 },
-  tooltip: { trigger: 'axis', backgroundColor: '#18181b', borderColor: '#3f3f46', textStyle: { color: '#e4e4e7' } },
+  tooltip: { trigger: 'axis', backgroundColor: _tooltipBg, borderColor: _tooltipBorder, textStyle: { color: _tooltipTextColor } },
   grid: { left: '8%', right: '8%', bottom: '12%', top: '15%' },
   xAxis: {
     type: 'category' as const,
@@ -58,8 +63,8 @@ export function RevenueProfitChart({ data }: { data: ChartData }) {
       { type: 'value', name: '利润(亿)', axisLabel: { color: _axisLabelColor }, splitLine: { show: false } },
     ],
     series: [
-      { name: '营业收入', type: 'bar', data: revenue, itemStyle: { color: _colors.blue } },
-      { name: '归母净利润', type: 'bar', yAxisIndex: 1, data: profit, itemStyle: { color: _colors.red } },
+      { name: '营业收入', type: 'bar', data: revenue, itemStyle: { color: _colors.brand } },
+      { name: '归母净利润', type: 'bar', yAxisIndex: 1, data: profit, itemStyle: { color: _colors.coral } },
     ],
   }
 
@@ -80,8 +85,8 @@ export function GrowthChart({ data }: { data: ChartData }) {
     legend: { data: ['营收增速', '净利润增速'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
     yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [
-      { name: '营收增速', type: 'line', data: g.revenue_growth, itemStyle: { color: _colors.blue }, symbol: 'circle', symbolSize: 6 },
-      { name: '净利润增速', type: 'line', data: g.profit_growth, itemStyle: { color: _colors.red }, symbol: 'rect', symbolSize: 6 },
+      { name: '营收增速', type: 'line', data: g.revenue_growth, itemStyle: { color: _colors.brand }, symbol: 'circle', symbolSize: 6 },
+      { name: '净利润增速', type: 'line', data: g.profit_growth, itemStyle: { color: _colors.coral }, symbol: 'rect', symbolSize: 6 },
     ],
   }
 
@@ -105,8 +110,8 @@ export function MarginChart({ data }: { data: ChartData }) {
     legend: { data: ['毛利率', '净利率'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
     yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [
-      { name: '毛利率', type: 'line', data: gm, smooth: true, itemStyle: { color: _colors.green }, symbol: 'circle', symbolSize: 6 },
-      { name: '净利率', type: 'line', data: nm, smooth: true, itemStyle: { color: _colors.purple }, symbol: 'circle', symbolSize: 6 },
+      { name: '毛利率', type: 'line', data: gm, smooth: true, itemStyle: { color: _colors.mint }, symbol: 'circle', symbolSize: 6 },
+      { name: '净利率', type: 'line', data: nm, smooth: true, itemStyle: { color: _colors.brand }, symbol: 'circle', symbolSize: 6 },
     ],
   }
 
@@ -129,10 +134,10 @@ export function RoeChart({ data }: { data: ChartData }) {
     yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [{
       type: 'line', data: roe, smooth: true,
-      itemStyle: { color: _colors.orange },
-      areaStyle: { opacity: 0.2 },
+      itemStyle: { color: _colors.amber },
+      areaStyle: { opacity: 0.15 },
       symbol: 'circle', symbolSize: 6,
-      markLine: { data: [{ yAxis: 15, label: { formatter: '优秀线 15%', color: _axisLabelColor } }, { lineStyle: { color: '#666', type: 'dashed' } }] },
+      markLine: { data: [{ yAxis: 15, label: { formatter: '优秀线 15%', color: _axisLabelColor } }, { lineStyle: { color: '#A3A3A3', type: 'dashed' } }] },
     }],
   }
 
@@ -155,7 +160,7 @@ export function CashflowChart({ data }: { data: ChartData }) {
     yAxis: { type: 'value', name: '亿元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [{
       type: 'bar', data: ocf,
-      itemStyle: { color: (p: any) => p.value >= 0 ? _colors.blue : _colors.red },
+      itemStyle: { color: (p: any) => p.value >= 0 ? _colors.sky : _colors.coral },
     }],
   }
 
@@ -177,7 +182,7 @@ export function StockPriceChart({ data }: { data: ChartData }) {
   const markLines = earningsDates.map(ed => ({
     xAxis: ed,
     label: { show: false },
-    lineStyle: { color: _colors.red, type: 'dashed', opacity: 0.5 },
+    lineStyle: { color: _colors.coral, type: 'dashed', opacity: 0.5 },
   }))
 
   const option = {
@@ -192,8 +197,8 @@ export function StockPriceChart({ data }: { data: ChartData }) {
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 15, bottom: 0 }],
     series: [{
       type: 'line', data: closes,
-      itemStyle: { color: _colors.blue },
-      areaStyle: { opacity: 0.1 },
+      itemStyle: { color: _colors.brand },
+      areaStyle: { opacity: 0.08 },
       symbol: 'none',
       markLine: { data: markLines, symbol: 'none' },
     }],
@@ -212,7 +217,6 @@ export function GrowthVsPriceChart({ data }: { data: ChartData }) {
   const daily = data.price.daily
   if (g.years.length < 2 || daily.length < 10) return null
 
-  // Calculate annual price changes
   const priceChanges: (number | null)[] = g.years.map(year => {
     const yearPrices = daily.filter(d => d.date.startsWith(year))
     const prevYear = String(parseInt(year) - 1)
@@ -228,9 +232,9 @@ export function GrowthVsPriceChart({ data }: { data: ChartData }) {
     legend: { data: ['营收增速', '净利润增速', '股价涨幅'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
     yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [
-      { name: '营收增速', type: 'bar', data: g.revenue_growth, itemStyle: { color: _colors.blue } },
-      { name: '净利润增速', type: 'bar', data: g.profit_growth, itemStyle: { color: _colors.red } },
-      { name: '股价涨幅', type: 'bar', data: priceChanges, itemStyle: { color: _colors.green } },
+      { name: '营收增速', type: 'bar', data: g.revenue_growth, itemStyle: { color: _colors.brand } },
+      { name: '净利润增速', type: 'bar', data: g.profit_growth, itemStyle: { color: _colors.coral } },
+      { name: '股价涨幅', type: 'bar', data: priceChanges, itemStyle: { color: _colors.mint } },
     ],
   }
 
@@ -254,8 +258,8 @@ export function AssetsChart({ data }: { data: ChartData }) {
     legend: { data: ['总资产', '归母权益'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
     yAxis: { type: 'value', name: '亿元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [
-      { name: '总资产', type: 'bar', data: assets, itemStyle: { color: _colors.cyan } },
-      { name: '归母权益', type: 'bar', data: equity, itemStyle: { color: _colors.lime } },
+      { name: '总资产', type: 'bar', data: assets, itemStyle: { color: _colors.teal } },
+      { name: '归母权益', type: 'bar', data: equity, itemStyle: { color: _colors.sky } },
     ],
   }
 
@@ -277,7 +281,7 @@ export function ContractLiabChart({ data }: { data: ChartData }) {
   const option = {
     ..._baseOption,
     yAxis: { type: 'value', name: '亿元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
-    series: [{ type: 'bar', data: cl, itemStyle: { color: _colors.pink } }],
+    series: [{ type: 'bar', data: cl, itemStyle: { color: _colors.rose } }],
   }
 
   return (
@@ -300,8 +304,8 @@ export function DebtRatioChart({ data }: { data: ChartData }) {
     yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
     series: [{
       type: 'line', data: dr, smooth: true,
-      itemStyle: { color: _colors.red },
-      areaStyle: { opacity: 0.15 },
+      itemStyle: { color: _colors.coral },
+      areaStyle: { opacity: 0.10 },
       symbol: 'circle', symbolSize: 6,
     }],
   }
@@ -331,7 +335,6 @@ export function HeatmapChart({ data }: { data: ChartData }) {
       const target = new Date(edDate)
       target.setDate(target.getDate() + offset)
       const targetStr = target.toISOString().slice(0, 10)
-      // Find closest trading day
       let closestIdx = -1
       for (let i = 0; i < daily.length; i++) {
         if (daily[i].date <= targetStr) closestIdx = i
@@ -369,13 +372,13 @@ export function HeatmapChart({ data }: { data: ChartData }) {
       left: 'center',
       bottom: 0,
       textStyle: { color: _textColor, fontSize: 9 },
-      inRange: { color: ['#dc2626', '#fbbf24', '#059669'] },
+      inRange: { color: ['#EF4444', '#F5A623', '#10B981'] },
     },
     series: [{
       type: 'heatmap',
       data: heatmapData,
       label: { show: true, fontSize: 9, color: '#fff' },
-      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } },
+      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.3)' } },
     }],
   }
 
@@ -392,7 +395,7 @@ export function MarketShareChart({ data }: { data: ChartData }) {
   if (!ms || !ms.shares || !Array.isArray(ms.shares)) {
     return (
       <ChartCard title="全球市场份额">
-        <div className="flex items-center justify-center h-[200px] text-zinc-600 text-sm">
+        <div className="flex items-center justify-center h-[200px] text-sm" style={{ color: 'var(--text-tertiary)' }}>
           市场份额数据暂不可得（需额外数据源）
         </div>
       </ChartCard>
@@ -407,6 +410,7 @@ export function MarketShareChart({ data }: { data: ChartData }) {
       radius: ['40%', '70%'],
       data: ms.shares.map((s: any) => ({ name: s.name, value: s.value })),
       label: { color: _textColor, fontSize: 10 },
+      color: [_colors.brand, _colors.coral, _colors.mint, _colors.amber, _colors.sky, _colors.violet, _colors.rose, _colors.teal],
     }],
   }
 
@@ -464,10 +468,10 @@ export function KpiCards({ data }: { data: ChartData }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
       {cards.map((c, i) => (
-        <div key={i} className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3">
-          <div className="text-[10px] text-zinc-500 mb-1">{c.label}</div>
-          <div className="text-base font-bold text-zinc-200">{c.value}</div>
-          {c.sub && <div className="text-[10px] text-green-400 mt-0.5">{c.sub}</div>}
+        <div key={i} className="bg-white border rounded-lg p-3" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+          <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>{c.label}</div>
+          <div className="text-base font-bold" style={{ color: 'var(--text-default)', fontFamily: 'var(--font-family-metric)' }}>{c.value}</div>
+          {c.sub && <div className="text-[10px] mt-0.5" style={{ color: 'var(--status-success-default)' }}>{c.sub}</div>}
         </div>
       ))}
     </div>

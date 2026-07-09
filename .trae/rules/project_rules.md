@@ -18,6 +18,12 @@
 
 **端到端（E2E）测试禁止使用 mock 数据。** E2E 测试必须使用真实的服务、真实的依赖（如 FastAPI 后端、Vite 前端、真实文件系统）以及真实的输入数据（可来自 `tests/fixtures/`），以验证系统在真实链路下的行为。需要隔离或打桩的场景应放到单元测试或集成测试中，而不是 E2E。
 
+**E2E 测试必须通过前端模拟用户真实输入，禁止单独测试后端 API。** E2E 测试应启动前端（Vite dev server）和后端（FastAPI），通过浏览器自动化（如 Playwright）模拟用户在页面上的真实操作（输入、点击、等待渲染），验证从前端 UI 到后端分析的完整链路。直接用 `requests`/`httpx` 调用后端接口属于集成测试，不属于 E2E。
+
+## Project startup
+
+当用户说"启动项目"时，使用 `docker compose up -d` 启动（在项目根目录执行）。
+
 ## Incident tracking
 
 问题记录和解决方案维护在 `docs/incidents/`。发现系统性问题时，新建编号文档并更新 README.md 索引。

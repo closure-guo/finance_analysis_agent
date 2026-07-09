@@ -26,7 +26,7 @@
 
 | 层级     | 选型            | 职责                                                              |
 | -------- | --------------- | ----------------------------------------------------------------- |
-| L1 前端  | Gradio 5.x      | 表单输入 + 报告展示 + 文件下载                                    |
+| L1 前端  | React 18 + Vite | 表单输入 + 报告展示 + 文件下载                                    |
 | L2 Agent | LangGraph       | 5 层架构 + 多 Agent 辩论 + Send 并行派发                          |
 | L3 数据  | pandas + SQLite | AKShare 拉取 + 指标计算 + K 线/宏观/新闻 + 报表持久化 + 行情缓存  |
 | L4 LLM   | DeepSeek        | LiteLLM 路由                                                      |
@@ -35,17 +35,49 @@
 
 ## 快速开始
 
-**环境要求**：Python >= 3.12, uv
+### 方式一：Docker 一键部署（推荐）
+
+**环境要求**：Docker Desktop
 
 ```bash
-# 安装依赖
-uv sync
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env 填入 LLM_API_KEY（必填）
 
-# 启动
-uv run python -m finance_agent.app
+# 一键启动全部服务（前端 + 后端 + Langfuse 可观测性）
+docker compose up -d --build
 ```
 
-浏览器打开 Gradio 页面，输入股票代码（如 600519）即可。
+启动后访问：
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| 前端 | http://localhost:5173 | React 应用 |
+| API 文档 | http://localhost:8000/docs | FastAPI Swagger |
+| Langfuse | http://localhost:3000 | LLM 调用追踪（首次需注册） |
+
+```bash
+# 常用命令
+docker compose down              # 停止（保留数据）
+docker compose down -v           # 停止 + 清空数据
+docker compose logs -f backend   # 查看后端日志
+docker compose ps                # 服务状态
+```
+
+### 方式二：前后端分离开发
+
+**环境要求**：Python >= 3.12, uv, Node.js >= 18
+
+```bash
+# 后端（FastAPI，端口 8000）
+uv sync
+uv run uvicorn finance_agent.api:app --host 127.0.0.1 --port 8000 --reload
+
+# 前端（Vite，端口 5173，另开终端）
+cd frontend
+npm install
+npm run dev
+```
 
 ## 环境变量配置
 
@@ -67,6 +99,9 @@ cp .env.example .env
 | `LLM_REASONING_EFFORT` | 否 | `max` | 思考强度 `low` / `high` / `max` |
 | `REPORTS_DIR` | 否 | `reports` | 报告输出目录 |
 | `EVENT_SOURCE` | 否 | `auto` | 事件数据源 `builtin` / `web` / `auto` |
+| `LANGFUSE_PUBLIC_KEY` | 否 | — | Langfuse 公钥，配置后启用 LLM 调用追踪 |
+| `LANGFUSE_SECRET_KEY` | 否 | — | Langfuse 密钥 |
+| `LANGFUSE_HOST` | 否 | `https://cloud.langfuse.com` | Langfuse 服务地址（自托管填本地地址） |
 
 ### 示例
 
@@ -94,8 +129,7 @@ src/finance_agent/
 ├── state.py              # AnalysisState TypedDict (含 Annotated reducers)
 ├── citation.py           # 确定性引用校验器 (Claim/CitationReport/verify_claims)
 ├── models.py             # 结构化输出模型 (AnalystReport/DebateMessage/TradeDecision)
-├── app.py                # Gradio 前端入口
-├── app_search.py         # 股票搜索
+├── app_search.py         # 股票搜索（模糊匹配，供 API 层调用）
 ├── formatters.py         # LLM 上下文格式化
 ├── routing.py            # 路由函数 + Send 并行派发
 ├── llm.py                # LLM 调用封装

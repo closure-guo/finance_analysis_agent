@@ -2,35 +2,39 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
+
 from finance_agent.graph import build_5layer_graph
-from finance_agent.llm import call_llm_stream, call_llm_with_tools
-from finance_agent.nlp import resolve_stock
+from finance_agent.llm import call_llm_with_tools
+from finance_agent.react_agent import (
+    REACT_SYSTEM_PROMPT,
+    REACT_TOOLS,
+    search_stock_tool,
+)
 from finance_agent.session_store import (
     append_chat,
+    create_chat_session,
     create_session,
     delete_session,
     get_session,
     init_db,
     list_sessions,
     rename_session,
-)
-from finance_agent.web_search import (
-    WEB_SEARCH_TOOL,
-    format_search_for_llm,
-    has_tavily_key,
-    tavily_search,
 )
 
 app = FastAPI(title="Finance Analysis Agent API")
@@ -81,6 +85,32 @@ LAYER_STEPS: list[dict] = [
 _NODE_MAP = {s["node"]: s for s in LAYER_STEPS}
 _ALL_NODES = [s["node"] for s in LAYER_STEPS]
 
+# Node → thinking description (streamed to frontend during execution)
+_NODE_THINKING: dict[str, str] = {
+    "check_cache": "正在检查缓存数据…",
+    "fetch_data": "正在获取财务数据（行情、财报、技术指标）…",
+    "validate_financials": "正在进行勾稽校验，验证数据一致性…",
+    "compute_metrics": "正在计算关键技术指标（MACD、RSI、KDJ 等）…",
+    "technical_analyst": "Layer I：技术面分析师正在分析价格趋势与技术指标…",
+    "verify_citations": "正在校验分析引用的数据来源…",
+    "bull_r1": "Layer II：看多分析师正在构建看多论点…",
+    "bear_r1": "Layer II：看空分析师正在构建看空论点…",
+    "bull_r2": "Layer II：看多分析师进行第二轮辩论…",
+    "bear_r2": "Layer II：看空分析师进行第二轮辩论…",
+    "research_manager": "Layer II：研究经理正在汇总辩论结论…",
+    "trader": "Layer III：交易员正在制定交易决策…",
+    "aggressive_r1": "Layer IV：激进风控分析师正在评估…",
+    "conservative_r1": "Layer IV：保守风控分析师正在评估…",
+    "neutral_r1": "Layer IV：中性风控分析师正在评估…",
+    "aggressive_r2": "Layer IV：激进风控分析师进行第二轮评估…",
+    "conservative_r2": "Layer IV：保守风控分析师进行第二轮评估…",
+    "neutral_r2": "Layer IV：中性风控分析师进行第二轮评估…",
+    "risk_judge": "Layer IV：风控裁决正在综合评估风险…",
+    "fund_manager": "Layer V：基金经理正在审批最终决策…",
+    "generate_report": "正在生成深度分析报告…",
+    "generate_file": "正在导出报告文件…",
+}
+
 
 # ── Request models ──
 
@@ -112,6 +142,35 @@ class RenameRequest(BaseModel):
 def _sse(data: dict) -> str:
     """Format a SSE data line."""
     return f"data: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
+async def _stream_from_sync(gen):
+    """把同步生成器转换为异步生成器，在线程中运行避免阻塞事件循环。
+
+    用于在 async def event_stream 中迭代同步的 _run_graph_streaming 生成器。
+    5 层分析图执行可能需要 90+ 秒，直接在事件循环中迭代会阻塞 SSE 流式输出。
+    """
+    loop = asyncio.get_event_loop()
+    q: asyncio.Queue = asyncio.Queue()
+
+    def _run():
+        try:
+            for item in gen:
+                asyncio.run_coroutine_threadsafe(q.put(item), loop)
+        except Exception as e:  # noqa: BLE001
+            asyncio.run_coroutine_threadsafe(q.put(e), loop)
+        finally:
+            asyncio.run_coroutine_threadsafe(q.put(None), loop)
+
+    loop.run_in_executor(None, _run)
+
+    while True:
+        item = await q.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
 
 
 def _extract_output(node_name: str, update: dict, accumulated: dict) -> dict:
@@ -284,185 +343,414 @@ async def delete_session_api(session_id: str):
     return {"ok": True}
 
 
-# ── Analyze ──
+# ── Graph streaming (encapsulated as a reusable tool) ──
+
+
+def _run_graph_streaming(
+    stock_code: str,
+    stock_name: str,
+    req: AnalyzeRequest,
+    analysis_id: str,
+    start_time: float,
+) -> Generator[str, None, None]:
+    """执行 5 层图分析，流式 yield SSE 事件。
+
+    封装了 PREP → Layer I-V → 报告生成的完整流程，
+    可作为 ReAct 循环中 run_deep_analysis 工具的执行体。
+    """
+    initial_state = {
+        "stock_code": stock_code,
+        "stock_name": stock_name or stock_code,
+        "analysis_type": req.analysis_type or "comprehensive",
+        "peer_codes": [c.strip() for c in (req.peer_codes or "").split(",") if c.strip()] or None,
+        "enable_web_search": req.enable_web_search,
+        "api_key": req.api_key,
+    }
+
+    yield _sse(
+        {
+            "type": "analysis_start",
+            "analysis_id": analysis_id,
+            "stock_code": stock_code,
+            "stock_name": stock_name or stock_code,
+            "timestamp": _now(),
+        }
+    )
+
+    completed: set[str] = set()
+    accumulated: dict = dict(initial_state)
+
+    try:
+        for chunk in graph.stream(
+            initial_state,
+            config={"recursion_limit": 100},
+            stream_mode="updates",
+        ):
+            for node_name, update in chunk.items():
+                if node_name not in _NODE_MAP:
+                    if isinstance(update, dict) and update:
+                        _merge_update(accumulated, node_name, update)
+                    continue
+
+                step_info = _NODE_MAP[node_name]
+                yield _sse(
+                    {
+                        "type": "node_start",
+                        "node_id": node_name,
+                        "layer": step_info["layer"],
+                        "desc": step_info["desc"],
+                        "icon": step_info["icon"],
+                        "timestamp": _now(),
+                    }
+                )
+
+                node_thinking = _NODE_THINKING.get(node_name, f"正在执行：{step_info['desc']}…")
+                yield _sse(
+                    {
+                        "type": "thinking_token",
+                        "token": f"\n▶ {node_thinking}\n",
+                        "timestamp": _now(),
+                    }
+                )
+
+                _merge_update(accumulated, node_name, update if isinstance(update, dict) else {})
+
+                idx = _ALL_NODES.index(node_name)
+                for i in range(idx + 1):
+                    completed.add(_ALL_NODES[i])
+
+                if accumulated.get("stock_name") in (None, "", stock_code):
+                    quote = accumulated.get("stock_quote") or {}
+                    info = accumulated.get("industry_info") or {}
+                    fetched_name = quote.get("name") or info.get("name")
+                    if fetched_name:
+                        accumulated["stock_name"] = fetched_name
+
+                output = _extract_output(
+                    node_name, update if isinstance(update, dict) else {}, accumulated
+                )
+
+                yield _sse(
+                    {
+                        "type": "node_complete",
+                        "node_id": node_name,
+                        "layer": step_info["layer"],
+                        "desc": step_info["desc"],
+                        "completed": sorted(completed),
+                        "progress": len(completed) / len(LAYER_STEPS),
+                        "output": output,
+                        "timestamp": _now(),
+                    }
+                )
+
+                summary_text = ""
+                if isinstance(output, dict):
+                    summary_text = output.get("summary", "")
+                if summary_text:
+                    yield _sse(
+                        {
+                            "type": "thinking_token",
+                            "token": f"  ✓ {summary_text}\n",
+                            "timestamp": _now(),
+                        }
+                    )
+
+            if accumulated.get("final_report"):
+                file_paths = accumulated.get("file_paths") or {}
+                stock_name_final = accumulated.get("stock_name", stock_code)
+                duration_ms = int((time.time() - start_time) * 1000)
+
+                report_md = accumulated["final_report"]
+                chunks = _stream_report_chunks(report_md)
+
+                for i, chunk_text in enumerate(chunks):
+                    yield _sse(
+                        {
+                            "type": "report_chunk",
+                            "chunk_index": i,
+                            "total_chunks": len(chunks),
+                            "text": chunk_text,
+                            "timestamp": _now(),
+                        }
+                    )
+
+                analyst_summaries = _extract_analyst_summaries(accumulated)
+                agent_process = _extract_agent_process(accumulated)
+                session_id = create_session(
+                    stock_code=stock_code,
+                    stock_name=stock_name_final,
+                    report_markdown=report_md,
+                    chart_data=accumulated.get("chart_data") or {},
+                    analyst_reports=_safe_dump(accumulated.get("analyst_reports") or {}),
+                    agent_process=agent_process,
+                    analyst_summaries=analyst_summaries,
+                    duration_ms=duration_ms,
+                )
+
+                yield _sse(
+                    {
+                        "type": "report_ready",
+                        "analysis_id": analysis_id,
+                        "session_id": session_id,
+                        "report_markdown": report_md,
+                        "chart_data": accumulated.get("chart_data") or {},
+                        "file_paths": file_paths,
+                        "stock_name": stock_name_final,
+                        "duration_ms": duration_ms,
+                        "timestamp": _now(),
+                    }
+                )
+
+    except Exception as e:
+        yield _sse(
+            {
+                "type": "error",
+                "node_id": "unknown",
+                "message": str(e),
+                "traceback": str(e.__traceback__),
+                "timestamp": _now(),
+            }
+        )
+
+
+# ── Analyze (ReAct loop) ──
 
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
-    """Start 5-layer analysis and stream SSE events."""
+    """Start analysis via ReAct loop — LLM decides which tools to call.
+
+    Tools available:
+    - search_stock: Search for stocks by natural language query
+    - run_deep_analysis: Execute the 5-layer analysis pipeline
+    """
 
     async def event_stream() -> AsyncGenerator[str, None]:
         analysis_id = str(uuid.uuid4())[:8]
         start_time = time.time()
 
-        # ── Natural language resolution ──
         stock_code = req.stock_code.strip()
         stock_name = req.stock_name or ""
 
-        if not stock_code and req.query:
-            yield _sse({"type": "parsing", "query": req.query, "timestamp": _now()})
-            resolved = resolve_stock(req.query, api_key=req.api_key)
-            if not resolved:
-                yield _sse(
-                    {
-                        "type": "error",
-                        "message": f"无法识别股票：{req.query}",
-                        "timestamp": _now(),
-                    }
-                )
-                yield _sse({"type": "done", "timestamp": _now()})
-                return
-            stock_code = resolved["stock_code"]
-            stock_name = resolved["stock_name"]
+        # ── Fast path: stock_code already provided, skip ReAct ──
+        if stock_code:
             yield _sse(
                 {
-                    "type": "resolved",
-                    "stock_code": stock_code,
-                    "stock_name": stock_name,
+                    "type": "thinking_token",
+                    "token": f"📋 开始执行深度分析：{stock_name or stock_code}（{stock_code}）…\n",
                     "timestamp": _now(),
                 }
             )
+            async for event in _stream_from_sync(
+                _run_graph_streaming(stock_code, stock_name, req, analysis_id, start_time)
+            ):
+                yield event
+            yield _sse(
+                {
+                    "type": "done",
+                    "analysis_id": analysis_id,
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "timestamp": _now(),
+                }
+            )
+            return
 
-        if not stock_code:
+        if not req.query:
             yield _sse({"type": "error", "message": "请输入股票代码或名称", "timestamp": _now()})
             yield _sse({"type": "done", "timestamp": _now()})
             return
 
-        initial_state = {
-            "stock_code": stock_code,
-            "stock_name": stock_name or stock_code,
-            "analysis_type": req.analysis_type or "comprehensive",
-            "peer_codes": [c.strip() for c in (req.peer_codes or "").split(",") if c.strip()]
-            or None,
-            "enable_web_search": req.enable_web_search,
-            "api_key": req.api_key,
-        }
-
+        # ── ReAct loop: LLM decides which tools to call ──
         yield _sse(
             {
-                "type": "analysis_start",
-                "analysis_id": analysis_id,
-                "stock_code": stock_code,
-                "stock_name": stock_name or stock_code,
+                "type": "thinking_token",
+                "token": "🤔 让我先分析一下你的需求…\n\n",
                 "timestamp": _now(),
             }
         )
 
-        completed: set[str] = set()
-        accumulated: dict = dict(initial_state)
+        messages: list[dict] = [
+            {"role": "system", "content": REACT_SYSTEM_PROMPT},
+            {"role": "user", "content": req.query},
+        ]
 
-        try:
-            for chunk in graph.stream(
-                initial_state,
-                config={"recursion_limit": 100},
-                stream_mode="updates",
-            ):
-                for node_name, update in chunk.items():
-                    if node_name not in _NODE_MAP:
-                        if isinstance(update, dict) and update:
-                            _merge_update(accumulated, node_name, update)
-                        continue
+        max_iterations = 6
+        analysis_executed = False
 
-                    step_info = _NODE_MAP[node_name]
+        for iteration in range(max_iterations):
+            try:
+                resp = await asyncio.to_thread(
+                    call_llm_with_tools,
+                    "",
+                    tools=REACT_TOOLS,
+                    api_key=req.api_key,
+                    messages=messages,
+                    tool_choice="required",
+                    model=os.environ.get("LLM_MODEL", "deepseek/deepseek-v4-pro"),
+                )
+            except Exception as e:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": f"LLM 调用失败：{e}",
+                        "timestamp": _now(),
+                    }
+                )
+                break
+
+            msg = resp.choices[0].message
+
+            if msg.tool_calls:
+                # Build assistant message with tool_calls for conversation history
+                assistant_msg: dict = {
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                }
+                messages.append(assistant_msg)
+
+                # Stream LLM thinking content if present
+                if msg.content:
                     yield _sse(
                         {
-                            "type": "node_start",
-                            "node_id": node_name,
-                            "layer": step_info["layer"],
-                            "desc": step_info["desc"],
-                            "icon": step_info["icon"],
+                            "type": "thinking_token",
+                            "token": msg.content + "\n",
                             "timestamp": _now(),
                         }
                     )
 
-                    _merge_update(
-                        accumulated, node_name, update if isinstance(update, dict) else {}
-                    )
-
-                    idx = _ALL_NODES.index(node_name)
-                    for i in range(idx + 1):
-                        completed.add(_ALL_NODES[i])
-
-                    if accumulated.get("stock_name") in (None, "", stock_code):
-                        quote = accumulated.get("stock_quote") or {}
-                        info = accumulated.get("industry_info") or {}
-                        fetched_name = quote.get("name") or info.get("name")
-                        if fetched_name:
-                            accumulated["stock_name"] = fetched_name
-
-                    output = _extract_output(
-                        node_name, update if isinstance(update, dict) else {}, accumulated
-                    )
+                for tool_call in msg.tool_calls:
+                    tool_name = tool_call.function.name
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
 
                     yield _sse(
                         {
-                            "type": "node_complete",
-                            "node_id": node_name,
-                            "layer": step_info["layer"],
-                            "desc": step_info["desc"],
-                            "completed": sorted(completed),
-                            "progress": len(completed) / len(LAYER_STEPS),
-                            "output": output,
+                            "type": "tool_call",
+                            "name": tool_name,
+                            "args": args,
+                            "iteration": iteration,
                             "timestamp": _now(),
                         }
                     )
 
-                # Stream report chunks when ready
-                if accumulated.get("final_report"):
-                    file_paths = accumulated.get("file_paths") or {}
-                    stock_name_final = accumulated.get("stock_name", stock_code)
-                    duration_ms = int((time.time() - start_time) * 1000)
+                    if tool_name == "search_stock":
+                        search_query = args.get("query", req.query)
+                        result = await asyncio.to_thread(
+                            search_stock_tool, search_query, api_key=req.api_key
+                        )
 
-                    # Send report chunks progressively
-                    report_md = accumulated["final_report"]
-                    chunks = _stream_report_chunks(report_md)
-
-                    for i, chunk_text in enumerate(chunks):
                         yield _sse(
                             {
-                                "type": "report_chunk",
-                                "chunk_index": i,
-                                "total_chunks": len(chunks),
-                                "text": chunk_text,
+                                "type": "tool_result",
+                                "name": "search_stock",
+                                "result": result,
                                 "timestamp": _now(),
                             }
                         )
 
-                    # Save session to SQLite
-                    analyst_summaries = _extract_analyst_summaries(accumulated)
-                    agent_process = _extract_agent_process(accumulated)
-                    session_id = create_session(
-                        stock_code=stock_code,
-                        stock_name=stock_name_final,
-                        report_markdown=report_md,
-                        chart_data=accumulated.get("chart_data") or {},
-                        analyst_reports=_safe_dump(accumulated.get("analyst_reports") or {}),
-                        agent_process=agent_process,
-                        analyst_summaries=analyst_summaries,
-                        duration_ms=duration_ms,
-                    )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(result, ensure_ascii=False),
+                            }
+                        )
 
+                    elif tool_name == "run_deep_analysis":
+                        stock_code = args.get("stock_code", "").strip()
+                        stock_name = args.get("stock_name", stock_code)
+
+                        if not stock_code:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": json.dumps(
+                                        {"error": "缺少 stock_code 参数"}, ensure_ascii=False
+                                    ),
+                                }
+                            )
+                            continue
+
+                        yield _sse(
+                            {
+                                "type": "resolved",
+                                "stock_code": stock_code,
+                                "stock_name": stock_name,
+                                "timestamp": _now(),
+                            }
+                        )
+
+                        analysis_executed = True
+                        async for event in _stream_from_sync(
+                            _run_graph_streaming(
+                                stock_code, stock_name, req, analysis_id, start_time
+                            )
+                        ):
+                            yield event
+
+                        yield _sse(
+                            {
+                                "type": "done",
+                                "analysis_id": analysis_id,
+                                "duration_ms": int((time.time() - start_time) * 1000),
+                                "timestamp": _now(),
+                            }
+                        )
+                        return
+
+                    else:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(
+                                    {"error": f"未知工具：{tool_name}"}, ensure_ascii=False
+                                ),
+                            }
+                        )
+
+            else:
+                # LLM didn't call any tool — stream its answer, then force retry
+                content = msg.content or ""
+                if content:
                     yield _sse(
                         {
-                            "type": "report_ready",
-                            "analysis_id": analysis_id,
-                            "session_id": session_id,
-                            "report_markdown": report_md,
-                            "chart_data": accumulated.get("chart_data") or {},
-                            "file_paths": file_paths,
-                            "stock_name": stock_name_final,
-                            "duration_ms": duration_ms,
+                            "type": "thinking_token",
+                            "token": content + "\n",
                             "timestamp": _now(),
                         }
                     )
 
-        except Exception as e:
+                # Don't give up — remind LLM to use tools and continue loop
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "请使用 search_stock 工具搜索用户提到的股票，不要直接回复文本。如果你已经知道股票代码，请直接调用 run_deep_analysis。",
+                    }
+                )
+                continue
+
+        # ReAct loop exhausted without executing analysis
+        if not analysis_executed:
             yield _sse(
                 {
                     "type": "error",
-                    "node_id": "unknown",
-                    "message": str(e),
-                    "traceback": str(e.__traceback__),
+                    "message": "分析流程未完成，请尝试提供更明确的股票名称或代码",
                     "timestamp": _now(),
                 }
             )
@@ -492,180 +780,61 @@ async def analyze(req: AnalyzeRequest):
 
 @app.post("/api/chat")
 async def quick_chat(req: ChatRequest):
-    """Quick mode — single LLM call with optional web search tool call."""
+    """Quick mode / Follow-up mode - ReAct Agent with web_search tool."""
 
     async def chat_stream() -> AsyncGenerator[str, None]:
-        system = (
-            "你是一个智能助手，擅长A股投研分析。用户可能输入股票名称、代码、投资问题，也可能问其他领域的问题。"
-            "对于投资相关问题，请给出专业分析，包含关键财务指标、行业地位和投资逻辑。"
-            "对于非投资问题，正常回答即可。"
-            "不展示推理过程，直接给结论。回答控制在300字以内。"
-        )
+        try:
+            from finance_agent.agent_factory import build_agent, stream_agent_to_sse
 
-        # Try NLP resolution for stock context (quick mode)
-        if not req.session_id:
-            try:
-                resolved = resolve_stock(req.message, req.api_key)
-                if resolved.get("stock_code"):
-                    stock_name = resolved.get("stock_name", "")
-                    stock_code = resolved["stock_code"]
-                    system += f"\n\n用户询问的股票：{stock_name}({stock_code})。请基于你的知识提供该股票的快速分析。"
-            except Exception:  # noqa: S110 - best-effort NLP stock resolution; ignore failures
-                pass
+            # 模式推断：有 session_id 则为追问，否则为快速问答
+            mode = "follow-up" if req.session_id else "quick"
 
-        # Load session context if provided (follow-up mode)
-        if req.session_id:
-            session = get_session(req.session_id)
-            if session:
-                report_md = session.get("report_markdown", "")
-                summaries = session.get("analyst_summaries", {})
-                if report_md:
-                    system += f"\n\n分析报告：\n{report_md[:3000]}"
-                if summaries:
-                    summaries_str = json.dumps(summaries, ensure_ascii=False)
-                    system += f"\n\n分析师摘要：\n{summaries_str}"
+            # API key: 优先用请求中的，无效则回退到环境变量
+            api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+
+            agent = build_agent(
+                mode=mode,
+                api_key=api_key,
+                session_id=req.session_id,
+            )
+
+            # 追问模式：记录用户消息到 session
+            if req.session_id:
                 append_chat(req.session_id, "user", req.message)
 
-        if req.context:
-            context_str = json.dumps(req.context, ensure_ascii=False, default=str)[:2000]
-            system += f"\n\n分析上下文：\n{context_str}"
-
-        try:
-            # ── Step 1: Try tool calling if Tavily is configured ──
-            use_search = has_tavily_key() and not req.session_id
-
-            # Heuristic: force tool call for real-time questions
-            _realtime_keywords = [
-                "天气",
-                "气温",
-                "新闻",
-                "最新",
-                "今天",
-                "现在",
-                "目前",
-                "当前",
-                "股价",
-                "行情",
-                "涨跌",
-                "比分",
-                "比赛",
-                "比分",
-                "利率",
-                "汇率",
-                "油价",
-                "金价",
-                "票房",
-                "热搜",
-                "热点",
-            ]
-            needs_search = any(kw in req.message for kw in _realtime_keywords)
-
-            if use_search:
-                resp = call_llm_with_tools(
-                    req.message,
-                    system=system
-                    + "\n\n对于需要实时信息的问题（天气、新闻、股价等），必须调用 web_search 工具搜索，不要询问澄清问题，直接搜索并回答。在回答中用 [1][2] 标注引用来源。",
-                    tools=[WEB_SEARCH_TOOL],
-                    api_key=req.api_key,
-                    tool_choice="required" if needs_search else "auto",
-                )
-
-                msg = resp.choices[0].message
-
-                # Check if LLM decided to call the tool
-                if msg.tool_calls:
-                    tool_call = msg.tool_calls[0]
-                    # Extract query from tool call arguments
-                    import json as _json
-
-                    args = _json.loads(tool_call.function.arguments)
-                    search_query = args.get("query", req.message)
-
-                    # Notify frontend: search starting
-                    yield _sse({"type": "search_start", "query": search_query, "timestamp": _now()})
-
-                    # Execute Tavily search
-                    try:
-                        search_resp = tavily_search(search_query)
-                        # Notify frontend: search results
-                        yield _sse(
-                            {
-                                "type": "search_result",
-                                "query": search_query,
-                                "results": [
-                                    {"title": r.title, "url": r.url, "content": r.content[:200]}
-                                    for r in search_resp.results
-                                ],
-                                "count": search_resp.count,
-                                "timestamp": _now(),
-                            }
-                        )
-
-                        # Build messages for second LLM call with tool result
-                        tool_result = format_search_for_llm(search_resp)
-                        messages = [
-                            {
-                                "role": "system",
-                                "content": system
-                                + "\n\n请基于搜索结果回答，用 [1][2] 标注引用来源。",
-                            },
-                            {"role": "user", "content": req.message},
-                            {
-                                "role": "assistant",
-                                "content": None,
-                                "tool_calls": [
-                                    {
-                                        "id": tool_call.id,
-                                        "type": "function",
-                                        "function": {
-                                            "name": "web_search",
-                                            "arguments": tool_call.function.arguments,
-                                        },
-                                    }
-                                ],
-                            },
-                            {"role": "tool", "tool_call_id": tool_call.id, "content": tool_result},
-                        ]
-
-                        # Stream the final answer
-                        full_response = ""
-                        for kind, token in call_llm_stream(
-                            "", messages=messages, api_key=req.api_key
-                        ):
-                            if kind == "thinking":
-                                yield _sse(
-                                    {"type": "thinking_token", "token": token, "timestamp": _now()}
-                                )
-                            else:
-                                full_response += token
-                                yield _sse(
-                                    {"type": "chat_token", "token": token, "timestamp": _now()}
-                                )
-
-                        if req.session_id:
-                            append_chat(req.session_id, "assistant", full_response)
-                        yield _sse({"type": "chat_done", "timestamp": _now()})
-                        return
-
-                    except Exception as e:
-                        # Search failed — notify and fall through to pure LLM
-                        yield _sse({"type": "search_error", "message": str(e), "timestamp": _now()})
-
-            # ── Step 2: Pure LLM answer (no tools or search failed) ──
+            # 流式输出 Agent 事件
             full_response = ""
-            for kind, token in call_llm_stream(
-                req.message, system=system, api_key=req.api_key, quick=not req.session_id
-            ):
-                if kind == "thinking":
-                    yield _sse({"type": "thinking_token", "token": token, "timestamp": _now()})
+            async for sse_str in stream_agent_to_sse(agent, req.message):
+                # 收集回复内容用于 session 记录
+                if "chat_token" in sse_str:
+                    try:
+                        data_line = sse_str.strip().split("data: ", 1)[1]
+                        data = json.loads(data_line)
+                        full_response += data.get("token", "")
+                    except (IndexError, json.JSONDecodeError):
+                        pass
+                yield sse_str
+
+            # 持久化对话到 session
+            if full_response:
+                if req.session_id:
+                    # 追问模式：追加助手回复到已有 session
+                    append_chat(req.session_id, "assistant", full_response)
                 else:
-                    full_response += token
-                    yield _sse({"type": "chat_token", "token": token, "timestamp": _now()})
+                    # 快速模式：创建新 session 并记录完整对话
+                    display_name = req.message.strip()[:30] or "快速问答"
+                    new_session_id = create_chat_session(display_name)
+                    append_chat(new_session_id, "user", req.message)
+                    append_chat(new_session_id, "assistant", full_response)
+                    yield _sse(
+                        {
+                            "type": "session_created",
+                            "session_id": new_session_id,
+                            "display_name": display_name,
+                            "timestamp": _now(),
+                        }
+                    )
 
-            if req.session_id:
-                append_chat(req.session_id, "assistant", full_response)
-
-            yield _sse({"type": "chat_done", "timestamp": _now()})
         except Exception as e:
             yield _sse({"type": "error", "message": str(e), "timestamp": _now()})
 

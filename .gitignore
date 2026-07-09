@@ -233,3 +233,12 @@ cache.db*
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime data
+**/sessions.db
+
+# Build artifacts
+frontend/tsconfig.tsbuildinfo
+
+# External reference
+Kimi_Agent_简化 Agent Harness/
