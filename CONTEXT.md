@@ -149,15 +149,15 @@ _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章�
 
 **交易建议**：报告包含交易建议（买入/持有/观望/卖出），由 Trader 提议、Risk Management 压力测试、Fund Manager 批准。附带免责声明。
 
-**双模式设计**：
+**三模式设计**：
 
-| 模式 | 数据获取 | Agent 机制 | 产出 | 状态 |
-|------|---------|-----------|------|------|
-| 深度模式（默认） | PREP 一次性全量注入 | 单轮 LLM + 结构化输出 | 完整 5 层架构 → 10 章报告 | ✅ v1.0 |
-| 快速模式 | LLM 自身知识 + 最多 1 次工具调用 | 单次工具调用（非 ReAct） | 精简分析 | ✅ v1.1 |
+| 模式 | 工具集 | max_iterations | 产出 | 状态 |
+|------|--------|---------------|------|------|
+| 深度模式（默认） | search_stock, run_deep_analysis, web_search | 10 | 完整 5 层架构 -> 10 章报告 | ✅ v1.0 |
+| 快速模式 | web_search | 3 | 精简分析 | ✅ v1.1 |
+| 追问模式 | web_search | 3 | 基于已有报告的问答 | ✅ v1.2 |
 
-深度模式：每个分析师的数据需求是确定性的（每次都要看全部数据），PREP 算好后直接注入 prompt，无需 tool calling。"真 Agent"叙事来自 5 层架构的辩论/决策机制，不来自 tool calling。
-快速模式：LLM 主要依赖自身知识回答，最多发起 1 次工具调用（web search）补充实时信息。不使用 ReAct 循环，工具调用后直接生成最终回答。ADR-0010 的 tool calling 设计为快速模式的机制基础。
+三种模式均由 ReAct Agent（Agent Harness）统一编排。模式不再决定代码路径，而是影响 Agent 的工具集、迭代上限和 system prompt。深度模式将 5 层管线封装为一个流式工具（run_deep_analysis），Agent 通过工具调用触发管线，管线进度通过流式事件实时推送。快速模式和追问模式不暴露深度分析工具，从 schema 层面杜绝意外触发。
 
 **报告章节结构**（分析师主导，线性流程）：
 
@@ -186,11 +186,11 @@ _Avoid_: Conversation（泛指对话，不精确）、Chat Thread
 
 ### Follow-up
 
-追问。报告完成后的后续提问。上下文 = 报告 Markdown + 4 个分析师 summary（从 SQLite 恢复），走快速 LLM 问答（非 5 层流水线）。追问回复也用逐 Token 流式输出。
+追问。报告完成后的后续提问。ReAct Agent 配置之一：max_iterations=3，工具集 = [web_search]。上下文 = 报告 Markdown（前 6000 字符）+ 4 个分析师 summary + 之前的 chat_history（从 SQLite session 恢复），注入 Agent 的初始 context。不暴露 run_deep_analysis，避免意外重新触发 5 层管线。追问回复逐 Token 流式输出。
 
 ### Streaming
 
-流式输出。报告生成和追问回复均逐 Token 通过 SSE 推送给前端，前端用 Fetch Stream 逐 chunk 读取并渐进渲染 Markdown。pipeline 进度通过 SSE 事件流推送各节点状态。
+流式输出。ReAct Agent 的所有事件（思考、工具调用、管线进度、工具结果、最终回答）通过单一 SSE 通道推送。流式工具（如 run_deep_analysis）在执行期间 yield PROGRESS 事件，实时推送管线节点状态。前端通过 Fetch Stream 逐 chunk 读取并渐进渲染。
 
 ### Natural Language Input
 
@@ -198,9 +198,7 @@ _Avoid_: Conversation（泛指对话，不精确）、Chat Thread
 
 ### Quick Mode
 
-快速模式。单次 LLM 调用 + 最多 1 次工具调用（web search），不跑 5 层 pipeline。LLM 依赖自身知识回答，信息不足时自主发起 Tavily 搜索补充实时信息。搜索过程通过 SSE 事件流推送给前端，前端展示可折叠搜索横幅（类 Kimi）：搜索中显示"正在搜索：{query}"，搜索完成后显示"搜索了 N 个网页"，点击展开显示网页列表（标题 + URL + 摘要）。工具调用后 LLM 基于搜索结果生成最终回答，逐 Token 流式输出。
-
-_Avoid_: ReAct 循环（快速模式不使用多轮工具调用）
+快速模式。ReAct Agent 配置之一：max_iterations=3，工具集 = [web_search]。不暴露 run_deep_analysis，从 schema 层面杜绝触发 5 层管线。LLM 依赖自身知识回答，信息不足时自主发起 Tavily 搜索补充实时信息。搜索过程通过 SSE 事件流推送给前端，前端展示可折叠搜索横幅（类 Kimi）：搜索中显示"正在搜索：{query}"，搜索完成后显示"搜索了 N 个网页"，点击展开显示网页列表（标题 + URL + 摘要）。
 
 ### Data Sources
 
