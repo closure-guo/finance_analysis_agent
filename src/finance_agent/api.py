@@ -139,6 +139,7 @@ class AnalyzeRequest(BaseModel):
     api_key: str | None = None
     session_id: str | None = None  # 追问时传入会话 ID
     focus: str = ""  # 深度研究意图澄清环节用户填写的关注点（Kimi 风格反问回答）
+    user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
 
 
 class ChatRequest(BaseModel):
@@ -146,11 +147,13 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     context: dict | None = None
     api_key: str | None = None
+    user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
 
 
 class ClarifyRequest(BaseModel):
     query: str
     api_key: str | None = None
+    user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
 
 
 class RenameRequest(BaseModel):
@@ -586,9 +589,11 @@ def _run_graph_streaming(
         _config: dict = {"recursion_limit": 100}
         if _handler is not None:
             _config["callbacks"] = [_handler]
-            # ADR-0015：通过 metadata 传 langfuse_session_id，CallbackHandler 在根 chain
-            # 自动调用 propagate_attributes 聚合到 Langfuse session
+            # ADR-0015：通过 metadata 传 langfuse_session_id / langfuse_user_id，
+            # CallbackHandler 在根 chain 自动调用 propagate_attributes 聚合
             _config["metadata"] = {"langfuse_session_id": session_id}
+            if req.user_id:
+                _config["metadata"]["langfuse_user_id"] = req.user_id
 
         for mode, chunk in graph.stream(
             initial_state,
@@ -803,6 +808,7 @@ def _generate_clarify_understanding_stream(
     stock_name: str,
     stock_code: str,
     api_key: str | None,
+    user_id: str | None = None,
 ):
     """流式生成意图理解，yield (kind, text) 元组。
 
@@ -831,6 +837,25 @@ def _generate_clarify_understanding_stream(
     }
 
     answer_parts: list[str] = []
+    # ADR-0015：clarify LLM 调用用 span 包裹 + propagate_attributes(user_id)
+    from contextlib import nullcontext as _nullcontext
+
+    from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse
+
+    _lf_clarify = _get_langfuse()
+    _span_cm = _nullcontext()
+    _prop_cm = _nullcontext()
+    if _lf_clarify is not None:
+        _span_cm = _lf_clarify.start_as_current_observation(
+            as_type="span", name="clarify_understanding", input={"query": query}
+        )
+        if user_id:
+            with contextlib.suppress(Exception):
+                from langfuse import propagate_attributes
+
+                _prop_cm = propagate_attributes(user_id=user_id)
+    _span_cm.__enter__()
+    _prop_cm.__enter__()
     try:
         for kind, text in call_llm_stream(
             prompt, system=system, api_key=api_key, max_tokens=480, quick=True
@@ -863,6 +888,11 @@ def _generate_clarify_understanding_stream(
         )
     except Exception:  # noqa: BLE001
         yield ("done", fallback)
+    finally:
+        with contextlib.suppress(Exception):
+            _prop_cm.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            _span_cm.__exit__(None, None, None)
 
 
 @app.post("/api/clarify")
@@ -982,7 +1012,7 @@ async def clarify(req: ClarifyRequest):
         if stock_code:
             understanding = ""
             for kind, text in _generate_clarify_understanding_stream(
-                query, stock_name, stock_code, api_key
+                query, stock_name, stock_code, api_key, user_id=req.user_id
             ):
                 if kind == "thinking":
                     yield _sse({"type": "clarify_thinking", "token": text, "timestamp": _now()})
@@ -1172,6 +1202,7 @@ async def analyze(req: AnalyzeRequest):
                 "duration_ms": 0,  # 占位，实际在 stream 结束后计算
             },
             session_id=session_id,
+            user_id=req.user_id,
         ):
             # 拦截 resolved 事件，在前面插入 session_created
             if session_created_sent and '"type": "resolved"' in sse_str:
@@ -1297,7 +1328,9 @@ async def quick_chat(req: ChatRequest):
 
             # 流式输出 Agent 事件
             full_response = ""
-            async for sse_str in stream_agent_to_sse(agent, req.message, session_id=req_session_id):
+            async for sse_str in stream_agent_to_sse(
+                agent, req.message, session_id=req_session_id, user_id=req.user_id
+            ):
                 # 收集回复内容用于 session 记录
                 if "chat_token" in sse_str:
                     try:

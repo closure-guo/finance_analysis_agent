@@ -495,6 +495,7 @@ async def stream_agent_to_sse(
     extra_events: dict | None = None,
     force_tool: bool = False,
     session_id: str | None = None,
+    user_id: str | None = None,
 ):
     """运行 Agent 并将 StreamEvent 映射为前端 SSE 格式。
 
@@ -506,6 +507,7 @@ async def stream_agent_to_sse(
         extra_events: 额外的事件上下文（如 session_id 用于 session_created）
         session_id: Langfuse session 聚合 ID（ADR-0015）。设置后用 react_loop span
             包裹 ReAct 执行并 propagate_attributes(session_id)。
+        user_id: Langfuse user 聚合 ID（ADR-0015）。设置后 propagate_attributes(user_id)。
 
     Yields:
         SSE 格式的字符串: "data: {...}\\n\\n"
@@ -529,11 +531,11 @@ async def stream_agent_to_sse(
         _react_cm = _lf.start_as_current_observation(
             as_type="span", name="react_loop", input={"query": user_input}
         )
-        if session_id:
+        if session_id or user_id:
             try:
                 from langfuse import propagate_attributes
 
-                _propagate_cm = propagate_attributes(session_id=session_id)
+                _propagate_cm = propagate_attributes(session_id=session_id, user_id=user_id)
             except Exception:  # noqa: S110
                 pass
     _react_cm.__enter__()

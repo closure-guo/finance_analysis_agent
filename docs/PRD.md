@@ -6,7 +6,7 @@
 
 ## Solution
 
-构建一个基于 LangGraph 的多 Agent 交易决策分析系统。用户通过 Gradio 表单输入股票代码，系统自动执行 5 层架构分析（4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager），完成数据拉取（AKShare）、指标计算、LLM 多 Agent 辩论与决策、报告生成全流程，输出 Markdown 报告并可导出 Word/PPT。
+构建一个基于 LangGraph 的多 Agent 交易决策分析系统。用户通过前端表单输入股票代码，系统自动执行 5 层架构分析（4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager），完成数据拉取（AKShare）、指标计算、LLM 多 Agent 辩论与决策、报告生成全流程，输出 Markdown 报告并可导出 Word/PPT。
 
 ## User Stories
 
@@ -70,7 +70,7 @@
 31. 作为一个投资者，我能将分析报告导出为 Word 文档
 32. 作为一个投资者，我能将分析报告导出为 PPT 演示文稿
 33. 作为一个投资者，报告末尾有明确的免责声明（AI 生成、数据来源、不构成投资建议）
-34. 作为一个投资者，报告中所有数据表格使用 Markdown 表格格式，在 Gradio 中可直接渲染
+34. 作为一个投资者，报告中所有数据表格使用 Markdown 表格格式，在前端可直接渲染
 
 ## Implementation Decisions
 
@@ -78,7 +78,7 @@
 
 系统采用 4 层基础设施 + L2 内 5 层多 Agent 架构：
 
-- **L1 前端**：Gradio 5.x Blocks API，表单输入 + 报告展示 + 文件下载
+- **L1 前端**：React 18 + Vite，表单输入 + 报告展示 + 文件下载
 - **L2 Agent**：LangGraph，5 层架构: 4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager
 - **L3 数据**：pandas + SQLite，AKShare 数据拉取 + 全部计算 + 缓存
 - **L4 LLM**：DeepSeek-V4-Pro，LiteLLM 路由
@@ -237,21 +237,19 @@ src/finance_agent/
 ├── data/
 │   ├── akshare_client.py # AKShare API 封装
 │   └── cache.py          # SQLite 缓存读写 + TTL
-├── prompts/
-│   ├── analysts/         # 4 个分析师 prompt
-│   │   ├── macro.md
-│   │   ├── fundamental.md
-│   │   ├── technical.md
-│   │   └── sentiment.md
-│   ├── debate/           # 辩论 prompt
-│   │   ├── bull.md
-│   │   ├── bear.md
-│   │   └── risk_debaters.md
-│   └── decision/         # 决策 prompt
-│       ├── trader.md
-│       └── fund_manager.md
-└── templates/
-    └── report.md         # 10 章报告模板
+├── prompts/              # LLM prompt（扁平结构，Langfuse 托管）
+│   ├── macro_analyst.md
+│   ├── fundamental_analyst.md
+│   ├── technical_analyst.md
+│   ├── sentiment_analyst.md
+│   ├── bull_debater.md
+│   ├── bear_debater.md
+│   ├── risk_debater.md
+│   ├── research_manager.md
+│   ├── risk_judge.md
+│   ├── trader.md
+│   ├── fund_manager.md
+│   └── quick_mode.md / deep_mode.md / follow_up_mode.md
 ```
 
 ### Key Module Interfaces
@@ -321,10 +319,10 @@ src/finance_agent/
 
 ### Implementation Phases
 
-- **P0 骨架**：项目脚手架 + State 定义 + 空图 + 1 个端到端 happy path（stub 返回"你好"）+ Gradio 表单
+- **P0 骨架**：项目脚手架 + State 定义 + 空图 + 1 个端到端 happy path（stub 返回"你好"）+ 前端表单
 - **P1 数据层**：AKShare 封装 + fetch_data + compute_metrics（全部 20 指标 + 杜邦 + 红黄绿灯 + 同业对比 + 相对估值 + GARP）+ SQLite 缓存 + metrics/ 单元测试
-- **P2 分析层**：FA Agent + IA Agent + prompt 工程 + 报告模板 + 两步法执行摘要 + merge 节点
-- **P3 输出层**：python-docx Word 生成 + python-pptx PPT 生成 + Gradio UI 打磨
+- **P2 分析层**：5 层多 Agent 架构（4 分析师 + Bull/Bear 辩论 + Trader + Risk 辩论 + Fund Manager）+ prompt 工程 + 两步法执行摘要
+- **P3 输出层**：python-docx Word 生成 + python-pptx PPT 生成 + 前端 UI 打磨
 
 每个阶段结束时跑通端到端验证。
 

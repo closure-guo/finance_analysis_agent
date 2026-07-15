@@ -20,6 +20,16 @@ const STAGE_NODES = ['check_cache', 'technical_analyst', 'bull_r1', 'trader', 'a
 let msgIdCounter = 0
 const genId = () => `msg-${++msgIdCounter}`
 
+const getUserId = (): string => {
+  const KEY = 'fa_user_id'
+  let uid = localStorage.getItem(KEY)
+  if (!uid) {
+    uid = `user-${crypto.randomUUID()}`
+    localStorage.setItem(KEY, uid)
+  }
+  return uid
+}
+
 export default function App() {
   const [appState, setAppState] = useState<'empty' | 'analyzing' | 'report'>('empty')
   const [messages, setMessages] = useState<UIMessage[]>([])
@@ -184,6 +194,7 @@ export default function App() {
         body: JSON.stringify({
           query,
           api_key: apiKey,
+          user_id: getUserId(),
           analysis_type: 'comprehensive',
           ...(stockCode ? { stock_code: stockCode } : {}),
           ...(stockName ? { stock_name: stockName } : {}),
@@ -373,6 +384,7 @@ export default function App() {
         body: JSON.stringify({
           message,
           session_id: currentSessionId,
+          user_id: getUserId(),
           api_key: apiKey,
         }),
       })
@@ -484,7 +496,7 @@ export default function App() {
       const resp = await fetch('/api/clarify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, api_key: apiKey }),
+        body: JSON.stringify({ query, api_key: apiKey, user_id: getUserId() }),
       })
       if (!resp.ok) {
         throw new Error(`服务器错误 (${resp.status})`)
@@ -1220,16 +1232,19 @@ function SearchBanner({ results, query }: { results: Array<{ title: string; url:
     <div className="mb-3">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/40 hover:bg-zinc-800/60 rounded-lg transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
+        style={{ background: 'var(--bg-overlay-l1)' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l2)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
       >
-        <i className="fas fa-search text-xs text-green-400 flex-shrink-0"></i>
-        <span className="text-xs text-zinc-400">
+        <i className="fas fa-search text-xs flex-shrink-0" style={{ color: 'var(--status-success-default)' }}></i>
+        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
           已搜索
-          <span className="text-zinc-300 font-medium mx-1">{results.length}</span>
+          <span className="mx-1 font-medium" style={{ color: 'var(--text-default)' }}>{results.length}</span>
           个网页
-          {query && <span className="text-zinc-600 ml-1.5">· {query}</span>}
+          {query && <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {query}</span>}
         </span>
-        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] text-zinc-600 ml-auto transition-transform`}></i>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] ml-auto transition-transform`} style={{ color: 'var(--text-tertiary)' }}></i>
       </button>
       <div
         className="overflow-hidden transition-all duration-300 ease-out"
@@ -1242,7 +1257,16 @@ function SearchBanner({ results, query }: { results: Array<{ title: string; url:
               href={r.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="block px-3 py-2 bg-zinc-900/40 rounded-lg border border-zinc-800/50 hover:border-zinc-700 hover:bg-zinc-800/40 transition-all group"
+              className="block px-3 py-2 rounded-lg border transition-all"
+              style={{ background: 'var(--bg-base-secondary)', borderColor: 'var(--border-neutral-l1)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-neutral-l2)'
+                e.currentTarget.style.background = 'var(--bg-overlay-l1)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-neutral-l1)'
+                e.currentTarget.style.background = 'var(--bg-base-secondary)'
+              }}
             >
               <div className="flex items-start gap-2">
                 <img
@@ -1253,13 +1277,13 @@ function SearchBanner({ results, query }: { results: Array<{ title: string; url:
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-zinc-600 font-mono flex-shrink-0">{i + 1}</span>
-                    <span className="text-xs text-zinc-300 group-hover:text-blue-400 transition-colors truncate font-medium">
+                    <span className="text-[10px] font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>{i + 1}</span>
+                    <span className="text-xs truncate font-medium" style={{ color: 'var(--text-default)' }} onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-brand)' }} onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-default)' }}>
                       {r.title}
                     </span>
                   </div>
-                  <p className="text-[11px] text-zinc-500 mt-1 line-clamp-2 leading-relaxed">{r.content}</p>
-                  <span className="text-[10px] text-zinc-600 truncate block mt-1">{getDomain(r.url)}</span>
+                  <p className="text-[11px] mt-1 line-clamp-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{r.content}</p>
+                  <span className="text-[10px] truncate block mt-1" style={{ color: 'var(--text-tertiary)' }}>{getDomain(r.url)}</span>
                 </div>
               </div>
             </a>
@@ -1284,26 +1308,26 @@ function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: s
       <div className="flex justify-start animate-slide-in">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
-            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
+            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
               {/* 工具调用展示 */}
               {tools.map((t, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs text-zinc-400 mb-2">
+                <div key={i} className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
                   {t.status === 'running' ? (
                     <>
-                      <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                      <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
                       <span>正在搜索股票...</span>
                     </>
                   ) : t.status === 'done' ? (
                     <>
-                      <i className="fas fa-check-circle text-green-500 text-xs"></i>
+                      <i className="fas fa-check-circle text-xs" style={{ color: 'var(--status-success-default)' }}></i>
                       <span>{t.result_summary}</span>
                     </>
                   ) : (
                     <>
-                      <i className="fas fa-exclamation-circle text-red-500 text-xs"></i>
+                      <i className="fas fa-exclamation-circle text-xs" style={{ color: 'var(--status-error-default)' }}></i>
                       <span>{t.error || '失败'}</span>
                     </>
                   )}
@@ -1315,8 +1339,8 @@ function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: s
               )}
               {/* 加载中 */}
               {!thinking && tools.length === 0 && (
-                <div className="flex items-center gap-2 text-xs text-zinc-500">
-                  <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                  <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
                   <span>正在理解您的需求...</span>
                 </div>
               )}
@@ -1333,14 +1357,17 @@ function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: s
       <div className="flex justify-start animate-slide-in">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-red-500/20 flex items-center justify-center flex-shrink-0 mt-1">
-              <i className="fas fa-exclamation text-red-400 text-xs"></i>
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'rgba(239, 68, 68, 0.2)' }}>
+              <i className="fas fa-exclamation text-xs" style={{ color: 'var(--status-error-default)' }}></i>
             </div>
-            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
-              <p className="text-sm text-zinc-300">{data.message}</p>
+            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{data.message}</p>
               <button
                 onClick={() => onStart?.('', '', msg.id)}
-                className="mt-3 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs text-white transition-colors"
+                className="mt-3 px-4 py-2 rounded-lg text-xs text-white transition-colors"
+                style={{ background: 'var(--bg-brand)' }}
+                onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-brand-hover)'}}
+                onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-brand)'}}
               >
                 重新输入
               </button>
@@ -1356,46 +1383,49 @@ function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: s
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
         <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
-          <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
+          <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
             {/* 思考过程（可折叠） */}
             {thinking && <ThinkingBanner content={thinking} streaming={false} />}
 
             {/* 意图摘要 - 重点展示 */}
             {data?.understanding && (
-              <div className="mb-4 p-3 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+              <div className="mb-4 p-3 rounded-lg border" style={{ background: 'var(--bg-brand-popup)', borderColor: 'rgba(75, 63, 227, 0.2)' }}>
                 <div className="flex items-center gap-2 mb-1">
-                  <i className="fas fa-lightbulb text-xs text-indigo-400"></i>
-                  <span className="text-xs font-medium text-indigo-400">意图理解</span>
+                  <i className="fas fa-lightbulb text-xs" style={{ color: 'var(--text-brand)' }}></i>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-brand)' }}>意图理解</span>
                 </div>
-                <p className="text-sm text-zinc-300 leading-relaxed">{data.understanding}</p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{data.understanding}</p>
               </div>
             )}
 
             {/* 股票信息 */}
             {data?.stock_code && (
               <div className="mb-3 flex items-center gap-2">
-                <i className="fas fa-chart-line text-xs text-green-400"></i>
-                <span className="text-sm text-zinc-200 font-medium">{data.stock_name}</span>
-                <span className="text-xs text-zinc-500 font-mono">{data.stock_code}</span>
+                <i className="fas fa-chart-line text-xs" style={{ color: 'var(--status-success-default)' }}></i>
+                <span className="text-sm font-medium" style={{ color: 'var(--text-default)' }}>{data.stock_name}</span>
+                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{data.stock_code}</span>
               </div>
             )}
 
             {/* 候选选择 */}
             {data?.needs_selection && data.candidates.length > 0 && (
               <div className="mb-3">
-                <p className="text-xs text-zinc-400 mb-2">找到多个候选股票，请选择：</p>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>找到多个候选股票，请选择：</p>
                 <div className="space-y-1">
                   {data.candidates.map(c => (
                     <button
                       key={c.stock_code}
                       onClick={() => onStart?.(c.stock_code, c.stock_name, msg.id)}
-                      className="w-full flex items-center justify-between px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg transition-colors text-left"
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors text-left"
+                      style={{ background: 'var(--bg-overlay-l1)' }}
+                      onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
+                      onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
                     >
-                      <span className="text-sm text-zinc-300">{c.stock_name}</span>
-                      <span className="text-xs text-zinc-500 font-mono">{c.stock_code}</span>
+                      <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{c.stock_name}</span>
+                      <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{c.stock_code}</span>
                     </button>
                   ))}
                 </div>
@@ -1405,16 +1435,16 @@ function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: s
             {/* 研究计划 */}
             {data?.plan && data.plan.length > 0 && (
               <div className="mb-3">
-                <p className="text-xs text-zinc-400 mb-2 flex items-center gap-1">
+                <p className="text-xs mb-2 flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
                   <i className="fas fa-list-ol text-[10px]"></i> 研究计划
                 </p>
                 <div className="space-y-1">
                   {data.plan.map((step, i) => (
                     <div key={i} className="flex items-start gap-2 text-xs">
-                      <span className="text-zinc-600 font-mono flex-shrink-0">{i + 1}.</span>
+                      <span className="font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>{i + 1}.</span>
                       <div>
-                        <span className="text-zinc-300">{step.title}</span>
-                        <span className="text-zinc-500 ml-1">- {step.desc}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{step.title}</span>
+                        <span className="ml-1" style={{ color: 'var(--text-tertiary)' }}>- {step.desc}</span>
                       </div>
                     </div>
                   ))}
@@ -1426,7 +1456,10 @@ function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: s
             {data?.stock_code && !data.needs_selection && (
               <button
                 onClick={() => onStart?.(data.stock_code, data.stock_name, msg.id)}
-                className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 rounded-xl text-sm text-white font-medium transition-all flex items-center justify-center gap-2"
+                className="w-full py-2.5 rounded-xl text-sm text-white font-medium transition-all flex items-center justify-center gap-2"
+                style={{ background: 'var(--bg-brand)' }}
+                onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-brand-hover)'}}
+                onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-brand)'}}
               >
                 <i className="fas fa-play text-xs"></i>
                 开始深度分析
@@ -1495,24 +1528,24 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
         <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
-          <div className="msg-system rounded-2xl rounded-tl-sm overflow-hidden flex-1">
+          <div className="msg-system rounded-xl rounded-tl-sm overflow-hidden flex-1">
             {/* Progress Pipeline */}
             <div className="px-5 pt-4 pb-2">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-zinc-400">分析进度</span>
-                  <span className="text-xs text-zinc-600">{msg.content || '准备中...'}</span>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>分析进度</span>
+                  <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{msg.content || '准备中...'}</span>
                 </div>
-                <span className="text-xs text-zinc-600 font-mono">~90s</span>
+                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>~90s</span>
               </div>
               <div className="flex items-center gap-1 mb-4">
-                <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-overlay-l1)' }}>
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-1000"
-                    style={{ width: `${Math.max(5, progress * 100)}%` }}
+                    className="h-full rounded-full transition-all duration-1000"
+                    style={{ width: `${Math.max(5, progress * 100)}%`, background: 'var(--bg-brand)' }}
                   />
                 </div>
               </div>
@@ -1524,14 +1557,14 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                     <div key={step.node} className="flex items-center" style={{ flex: i < PIPELINE_STEPS.length - 1 ? '1' : 'none' }}>
                       <div className="flex flex-col items-center gap-1">
                         <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center node-${status} ${status === 'running' ? 'pulse-ring' : ''}`}
-                          style={status === 'running' ? { borderColor: '#6366f1', background: 'rgba(99,102,241,0.2)' } : status === 'completed' ? { borderColor: '#22c55e', background: 'rgba(34,197,94,0.2)' } : { borderColor: '#3f3f46' }}>
+                          style={status === 'running' ? { borderColor: 'var(--status-primary-default)', background: 'var(--bg-brand-popup)' } : status === 'completed' ? { borderColor: 'var(--status-success-default)', background: 'rgba(16, 185, 129, 0.15)' } : { borderColor: 'var(--border-neutral-l2)' }}>
                           <i className={`fas fa-${step.icon} text-xs`}></i>
                         </div>
-                        <span className="text-[10px] text-zinc-500">{step.desc}</span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{step.desc}</span>
                       </div>
                       {i < PIPELINE_STEPS.length - 1 && (
                         <div className="flex-1 flex items-center justify-center pt-2 px-1">
-                          <div className={`w-full h-px ${status === 'completed' ? 'bg-green-500/50' : 'bg-zinc-800'}`}></div>
+                          <div className={`w-full h-px ${status === 'completed' ? '' : ''}`} style={{ background: status === 'completed' ? 'rgba(16,185,129,0.5)' : 'var(--bg-overlay-l2)' }}></div>
                         </div>
                       )}
                     </div>
@@ -1542,17 +1575,17 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
 
             {/* 流式思考过程（真实 LLM reasoning） */}
             {msg.thinkingContent && (
-              <div className="px-5 py-3 border-t border-zinc-800/50">
+              <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
                 <ThinkingBanner content={msg.thinkingContent} streaming={!!current} />
               </div>
             )}
 
             {/* Layer I: Analyst Cards */}
             {(completed.includes('check_cache') || current === 'technical_analyst' || completed.includes('technical_analyst')) && (
-              <div className="px-5 py-3 border-t border-zinc-800/50">
+              <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Layer I - 并行分析师</span>
-                  <span className="text-[10px] text-zinc-600">
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Layer I - 并行分析师</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     {completed.includes('technical_analyst') ? '4/4 完成' : '0/4 完成'}
                   </span>
                 </div>
@@ -1565,39 +1598,42 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
             )}
 
             {/* Expandable log */}
-            <div className="px-5 py-3 border-t border-zinc-800/50">
+            <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
               <button
                 onClick={() => setShowLog(!showLog)}
-                className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors w-full"
+                className="flex items-center gap-2 text-xs transition-colors w-full"
+                style={{ color: 'var(--text-tertiary)' }}
+                onMouseEnter={(e) => {e.currentTarget.style.color = 'var(--text-secondary)'}}
+                onMouseLeave={(e) => {e.currentTarget.style.color = 'var(--text-tertiary)'}}
               >
                 <i className={`fas fa-chevron-down transition-transform duration-300 ${showLog ? '' : 'rotate-[-90deg]'}`}></i>
                 <span>查看实时输出日志</span>
                 {completed.length > 0 && (
-                  <span className="text-[10px] text-zinc-600 ml-1">· {completed.length} 条</span>
+                  <span className="text-[10px] ml-1" style={{ color: 'var(--text-tertiary)' }}>· {completed.length} 条</span>
                 )}
               </button>
               <div
                 className="overflow-hidden transition-all duration-300 ease-out"
                 style={{ maxHeight: showLog ? '300px' : '0px', opacity: showLog ? 1 : 0 }}
               >
-                <div className="mt-2 bg-zinc-950 rounded-lg p-3 font-mono text-[11px] text-zinc-500 leading-relaxed overflow-y-auto max-h-[300px]">
+                <div className="mt-2 rounded-lg p-3 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-[300px]" style={{ background: 'var(--bg-base-secondary)' }}>
                   {completed.map(node => (
                     <div key={node} className="flex items-start gap-2 py-0.5">
-                      <i className="fas fa-check-circle text-[10px] text-green-500 flex-shrink-0 mt-0.5"></i>
-                      <span className="text-zinc-700 text-[10px] flex-shrink-0">{new Date().toLocaleTimeString()}</span>
-                      <span className="text-indigo-400 flex-shrink-0">{node.toUpperCase()}</span>
-                      <span className="text-zinc-500 truncate">{outputs[node]?.summary || 'completed'}</span>
+                      <i className="fas fa-check-circle text-[10px] flex-shrink-0 mt-0.5" style={{ color: 'var(--status-success-default)' }}></i>
+                      <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>{new Date().toLocaleTimeString()}</span>
+                      <span className="flex-shrink-0" style={{ color: 'var(--text-brand)' }}>{node.toUpperCase()}</span>
+                      <span className="truncate" style={{ color: 'var(--text-tertiary)' }}>{outputs[node]?.summary || 'completed'}</span>
                     </div>
                   ))}
                   {current && (
                     <div className="flex items-start gap-2 py-0.5">
                       <span className="relative flex h-2 w-2 flex-shrink-0 mt-0.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--status-warning-default)' }}></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--status-warning-default)' }}></span>
                       </span>
-                      <span className="text-zinc-700 text-[10px] flex-shrink-0">{new Date().toLocaleTimeString()}</span>
-                      <span className="text-yellow-400 flex-shrink-0">{current.toUpperCase()}</span>
-                      <span className="text-zinc-500">running...</span>
+                      <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>{new Date().toLocaleTimeString()}</span>
+                      <span className="flex-shrink-0" style={{ color: 'var(--status-warning-default)' }}>{current.toUpperCase()}</span>
+                      <span style={{ color: 'var(--text-tertiary)' }}>running...</span>
                     </div>
                   )}
                 </div>
@@ -1619,29 +1655,29 @@ function AnalystCard({ name, nameZh, summary, status, color }: {
   color: 'green' | 'yellow' | 'red' | 'neutral'
 }) {
   const colors = {
-    green: { border: 'border-green-500/30', bg: 'bg-green-500/10', text: 'text-green-400' },
-    yellow: { border: 'border-yellow-500/30', bg: 'bg-yellow-500/10', text: 'text-yellow-400' },
-    red: { border: 'border-red-500/30', bg: 'bg-red-500/10', text: 'text-red-400' },
-    neutral: { border: 'border-indigo-500/30', bg: 'bg-indigo-500/10', text: 'text-indigo-400' },
+    green: { border: 'rgba(16,185,129,0.3)', bg: 'rgba(16,185,129,0.08)', text: 'var(--status-success-default)' },
+    yellow: { border: 'rgba(245,158,11,0.3)', bg: 'rgba(245,158,11,0.08)', text: 'var(--status-warning-default)' },
+    red: { border: 'rgba(239,68,68,0.3)', bg: 'rgba(239,68,68,0.08)', text: 'var(--status-error-default)' },
+    neutral: { border: 'rgba(75,63,227,0.3)', bg: 'var(--bg-brand-popup)', text: 'var(--text-brand)' },
   }
   const c = colors[color]
 
   const statusIcon = status === 'completed'
-    ? <i className="fas fa-check-circle text-green-500"></i>
+    ? <i className="fas fa-check-circle" style={{ color: 'var(--status-success-default)' }}></i>
     : status === 'running'
-    ? <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
-    : <div className="w-2 h-2 rounded-full bg-zinc-600"></div>
+    ? <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
+    : <div className="w-2 h-2 rounded-full" style={{ background: 'var(--text-tertiary)' }}></div>
 
   return (
-    <div className={`${c.border} ${c.bg} border rounded-xl p-3 cursor-pointer hover:border-opacity-60 transition-all`}>
+    <div className="border rounded-xl p-3 cursor-pointer hover:border-opacity-60 transition-all" style={{ borderColor: c.border, background: c.bg }}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className={`text-xs font-medium ${c.text}`}>{name}</span>
-          <span className="text-[10px] text-zinc-600">{nameZh}</span>
+          <span className="text-xs font-medium" style={{ color: c.text }}>{name}</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{nameZh}</span>
         </div>
         {statusIcon}
       </div>
-      <div className="text-[11px] text-zinc-400 leading-snug">{summary}</div>
+      <div className="text-[11px] leading-snug" style={{ color: 'var(--text-secondary)' }}>{summary}</div>
     </div>
   )
 }
