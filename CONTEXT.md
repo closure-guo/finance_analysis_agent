@@ -184,6 +184,46 @@ _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章�
 
 _Avoid_: Conversation（泛指对话，不精确）、Chat Thread
 
+> **与 Langfuse Session 的区别**：同名不同义。Langfuse Session 不是存储单元，是 Langfuse 里附加在 Trace 上的分组属性（`session_id`），用于把多个 Trace 聚合成一次会话回放。本项目里 Langfuse `session_id` = 本 Session 的 ID（1:1 映射），一个 Session 对应 N 个 Langfuse Trace（深度分析 1 个 + 每次追问 1 个）。不要把"一次 Session = 一条 Langfuse Trace"。
+
+### Trace
+
+Langfuse Trace。一次用户交互的完整追踪单元 = 一次 `react_agent.py` 调用。深度分析交互产生 1 个 Trace（ReAct 思考 + search_stock/web_search 工具调用 + run_deep_analysis 5 层管线全部在同一 Trace 内）；每次追问产生独立的 1 个 Trace。同一 Session 的所有 Trace 通过 `session_id` 聚合为 Langfuse Session。
+
+_Avoid_: 把整个 Session（深度分析 + 多轮追问）塞进单条 Trace（会无限增长、丧失按交互计费/评分能力、退化 Langfuse Session 的多 Trace 分组语义）。
+
+### Span
+
+Langfuse Span。Trace 内的嵌套观测节点。本项目 span 层级：Trace(user-turn) → span(run_deep_analysis) → span(prep) / span(macro_analyst) / span(fundamental_analyst) / ... / span(bull_r1) / span(bear_r1) / ... / span(trader) / span(risk_judge) / span(fund_manager)。LangGraph `Send` 并行的 4 个分析师 / Bull-Bear / 3 个风险辩论者互为兄弟 span。
+
+### Generation
+
+Langfuse Generation。LLM 调用观测，挂在所属 Agent 的 span 下，记录 input/output/model/usage。一个 span 可含多个 generation（如辩论者多轮）。Generation 上附带 `prompt_name` + `prompt_version`，使"这份报告由哪版 prompt 产出"可追溯。
+
+_Avoid_: 用 `start_observation` 创建孤立 generation（不建立父子上下文，5 层结构会塌成扁平列表）-- 必须用 `start_as_current_observation` 或 `@observe`。
+
+### Langfuse Prompt
+
+Langfuse 托管的 prompt 资源。本项目采用 **P-2 混合+兜底**：[prompts/](file:///d:\WorkSpace\finance_analysis_agent\src\finance_agent\prompts) 下 15 个 `.md` 全部迁入 Langfuse（含 2 个内联于 `agent_factory.py` 的 system prompt），同时本地文件作为兜底基线保留并 commit。
+
+- 权威源：配置 Langfuse 时以 Langfuse 的 `production` label 版本为准；未配置或拉取失败时回退本地 `.md`，回退时打 `WARN` 日志（漂移可见但不阻断）。
+- 版本控制：改 prompt 不重新部署，在 Langfuse UI 把新版打 `production` label 即上线；旧版保留可回滚。
+- 类型：全部 `text` 类型（type 不可逆，chat 类型留待未来多轮 prompt）。
+- 模板语法：`{{var}}`，`prompt.compile(**vars)` 渲染（与本地 loader 语法一致）。
+- 版本挂载：Generation 观测附带 `prompt_name` + `prompt_version`。
+
+_Avoid_: 把线上真实 prompt 的真相仍归于 git（启用 Langfuse 后 git 里 `.md` 是兜底基线，可能滞后；真相在 Langfuse + trace 上的 prompt 版本记录）。把 Langfuse 设为硬依赖（违背本地开发与离线场景）。
+
+### Langfuse Score
+
+Langfuse 评估打分。本项目分三层部署：
+
+- **L0（立即）**：`verify_citations` 节点的 `citation_pass: bool` 通过 `langfuse.score(trace_id=, name="citation_pass", value=, data_type="boolean")` 上报，挂 **trace 级**。`citation_report` 明细（每条 claim 的 PASS/FAIL/UNVERIFIABLE）作为 metadata 附在 `verify_citations` span 上，供下钻定位。兑现 ADR-0010 第 124 行"幻觉率成为可监控指标"的承诺。
+- **L1（中期）**：确定性维度（citation/杜邦分层/勾稽）用 **Code Evaluator**（复用 `metrics/` 纯函数）；主观维度（分析深度/逻辑连贯/表达）用 **LLM-as-a-Judge**。两者分工--不让 LLM 判数字对错（citation 的活），只判主观质量（呼应 ADR-0010 第 126 行）。
+- **L2（长期）**：标的输入快照进 **Dataset**，prompt 改版跑 **Experiment** 对比新旧版，CI 卡回归。
+
+_Avoid_: 让 LLM-as-Judge 判数字对错（评审 LLM 自身会幻觉，ADR-0010 已明令禁止）。把 citation score 挂 generation 级（校验对象是分析师 span 输出，非单次 LLM 调用）。
+
 ### Follow-up
 
 追问。报告完成后的后续提问。ReAct Agent 配置之一：max_iterations=3，工具集 = [web_search]。上下文 = 报告 Markdown（前 6000 字符）+ 4 个分析师 summary + 之前的 chat_history（从 SQLite session 恢复），注入 Agent 的初始 context。不暴露 run_deep_analysis，避免意外重新触发 5 层管线。追问回复逐 Token 流式输出。

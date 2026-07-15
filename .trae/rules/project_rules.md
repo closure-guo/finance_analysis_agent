@@ -28,6 +28,10 @@
 
 问题记录和解决方案维护在 `docs/incidents/`。发现系统性问题时，新建编号文档并更新 README.md 索引。
 
+## Bug 排查
+
+排查 bug 时不光要看后端日志，还要查看 Langfuse 的 trace（含 LLM 调用链路、输入输出、耗时与异常）。Langfuse 访问地址：http://localhost:3000
+
 ## Agent skills
 
 ### Issue tracker

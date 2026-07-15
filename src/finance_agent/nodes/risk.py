@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 
-from finance_agent.llm import call_llm
 from finance_agent.models import DebateMessage, TradeDecision
-from finance_agent.nodes._llm_utils import parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_streaming, parse_json_response
 from finance_agent.prompts.loader import load_prompt
 
 
-def _risk_debater(state: dict, role: str, prompt_name: str) -> dict:
+def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "") -> dict:
     """风险辩论者通用逻辑。"""
     context = _build_risk_context(state)
     system = load_prompt(prompt_name).replace("{role}", role)
@@ -26,7 +25,7 @@ def _risk_debater(state: dict, role: str, prompt_name: str) -> dict:
         system = system.replace("{perspective}", "中性平衡")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(context, system=system, api_key=api_key, node_name=node_name)
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 
@@ -35,17 +34,17 @@ def _risk_debater(state: dict, role: str, prompt_name: str) -> dict:
 
 def aggressive_debater(state: dict) -> dict:
     """Layer IV 激进型风险辩论者。"""
-    return _risk_debater(state, "aggressive", "risk_debater")
+    return _risk_debater(state, "aggressive", "risk_debater", node_name="aggressive_debater")
 
 
 def conservative_debater(state: dict) -> dict:
     """Layer IV 保守型风险辩论者。"""
-    return _risk_debater(state, "conservative", "risk_debater")
+    return _risk_debater(state, "conservative", "risk_debater", node_name="conservative_debater")
 
 
 def neutral_debater(state: dict) -> dict:
     """Layer IV 中性型风险辩论者。"""
-    return _risk_debater(state, "neutral", "risk_debater")
+    return _risk_debater(state, "neutral", "risk_debater", node_name="neutral_debater")
 
 
 def risk_judge(state: dict) -> dict:
@@ -54,7 +53,7 @@ def risk_judge(state: dict) -> dict:
     system = load_prompt("risk_judge")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="risk_judge")
     data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)
 

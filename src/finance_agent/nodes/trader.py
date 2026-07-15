@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from finance_agent.llm import call_llm
 from finance_agent.models import TradeDecision
-from finance_agent.nodes._llm_utils import parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt
 
 
@@ -14,7 +13,7 @@ def trader(state: dict) -> dict:
     system = load_prompt("trader")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="trader")
     data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)
 
@@ -24,6 +23,10 @@ def trader(state: dict) -> dict:
 def _build_trader_context(state: dict) -> str:
     """构建 Trader 的 LLM context。"""
     sections = []
+
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     # 分析师报告
     reports = state.get("analyst_reports") or {}

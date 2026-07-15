@@ -32,6 +32,7 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const streamingReportRef = useRef<UIMessage | null>(null)
+  const [mode, setMode] = useState<'quick' | 'deep'>('deep')
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -132,7 +133,7 @@ export default function App() {
   }
 
   // ── SSE analysis ──
-  const startAnalysis = async (query: string, mode: string) => {
+  const startAnalysis = async (query: string, mode: string, stockCode?: string, stockName?: string) => {
     if (!apiKey.trim()) {
       setShowApiKeyInput(true)
       return
@@ -171,6 +172,7 @@ export default function App() {
       currentNode: '',
       nodeOutputs: {},
       progress: 0,
+      thinkingContent: '',
     }
     pipelineMsgRef.current = pipelineMsg
     setMessages(prev => [...prev, pipelineMsg])
@@ -183,6 +185,8 @@ export default function App() {
           query,
           api_key: apiKey,
           analysis_type: 'comprehensive',
+          ...(stockCode ? { stock_code: stockCode } : {}),
+          ...(stockName ? { stock_name: stockName } : {}),
         }),
       })
 
@@ -256,6 +260,12 @@ export default function App() {
             [event.node_id]: event.output,
           },
           content: `${event.layer}: ${event.desc} ✓`,
+        })
+        break
+
+      case 'thinking_token':
+        updateMessage(pipelineMsg.id, {
+          thinkingContent: (pipelineMsg.thinkingContent || '') + event.token,
         })
         break
 
@@ -440,10 +450,175 @@ export default function App() {
     }
   }
 
+  // ── Deep research intent clarification (Kimi-style) ──
+  const startDeepClarify = async (query: string) => {
+    if (!apiKey.trim()) {
+      setShowApiKeyInput(true)
+      return
+    }
+
+    if (appState === 'empty') {
+      setAppState('analyzing')
+    }
+    setCurrentSessionId(null)
+    streamingReportRef.current = null
+
+    // 用户消息
+    const userMsg: UIMessage = { id: genId(), type: 'user', content: query }
+    setMessages(prev => [...prev, userMsg])
+
+    // 澄清卡片占位（loading 态）
+    const clarifyMsg: UIMessage = {
+      id: genId(),
+      type: 'clarify',
+      content: '',
+      clarifyData: null,
+      clarifyStarted: false,
+      streaming: true,
+      clarifyThinking: '',
+      clarifyTools: [],
+    }
+    setMessages(prev => [...prev, clarifyMsg])
+
+    try {
+      const resp = await fetch('/api/clarify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, api_key: apiKey }),
+      })
+      if (!resp.ok) {
+        throw new Error(`服务器错误 (${resp.status})`)
+      }
+      const reader = resp.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const event: SSEEvent = JSON.parse(line.slice(6))
+
+            if (event.type === 'clarify_tool') {
+              setMessages(prev => prev.map(m => {
+                if (m.id !== clarifyMsg.id) return m
+                const tools = [...(m.clarifyTools || [])]
+                if (event.status === 'running') {
+                  tools.push({ tool: event.tool, status: 'running' })
+                } else {
+                  const idx = tools.findIndex(t => t.tool === event.tool && t.status === 'running')
+                  if (idx >= 0) {
+                    tools[idx] = {
+                      tool: event.tool,
+                      status: event.status,
+                      result_summary: event.result_summary,
+                      source: event.source,
+                      error: event.error,
+                    }
+                  } else {
+                    tools.push({
+                      tool: event.tool,
+                      status: event.status,
+                      result_summary: event.result_summary,
+                      source: event.source,
+                      error: event.error,
+                    })
+                  }
+                }
+                return { ...m, clarifyTools: tools }
+              }))
+            } else if (event.type === 'clarify_thinking') {
+              setMessages(prev => prev.map(m =>
+                m.id === clarifyMsg.id
+                  ? { ...m, clarifyThinking: (m.clarifyThinking || '') + event.token }
+                  : m
+              ))
+            } else if (event.type === 'clarify_answer') {
+              setMessages(prev => prev.map(m =>
+                m.id === clarifyMsg.id
+                  ? { ...m, clarifyThinking: (m.clarifyThinking || '') + event.token }
+                  : m
+              ))
+            } else if (event.type === 'clarify_done') {
+              setMessages(prev => prev.map(m =>
+                m.id === clarifyMsg.id
+                  ? { ...m, clarifyData: event.data, streaming: false }
+                  : m
+              ))
+            }
+          } catch {
+            // Skip malformed line
+          }
+        }
+      }
+
+      // 如果流结束但没有收到 clarify_done，标记为错误
+      setMessages(prev => prev.map(m =>
+        m.id === clarifyMsg.id && m.streaming
+          ? {
+              ...m,
+              streaming: false,
+              clarifyData: m.clarifyData || {
+                status: 'error',
+                query,
+                stock_code: '',
+                stock_name: '',
+                understanding: '',
+                questions: [],
+                plan: [],
+                needs_selection: false,
+                candidates: [],
+                message: '意图识别未返回结果',
+              },
+            }
+          : m
+      ))
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : '连接错误'
+      setMessages(prev => prev.map(m =>
+        m.id === clarifyMsg.id
+          ? {
+              ...m,
+              streaming: false,
+              clarifyData: {
+                status: 'error',
+                query,
+                stock_code: '',
+                stock_name: '',
+                understanding: '',
+                questions: [],
+                plan: [],
+                needs_selection: false,
+                candidates: [],
+                message: `意图识别失败：${errMsg}`,
+              },
+            }
+          : m
+      ))
+    }
+  }
+
+  // 用户在澄清卡片上确认后，带 stock_code 启动深度分析
+  const handleClarifyStart = (stockCode: string, stockName: string, clarifyMsgId: string) => {
+    setMessages(prev => prev.map(m => m.id === clarifyMsgId ? { ...m, clarifyStarted: true } : m))
+    startAnalysis(stockName || stockCode, 'deep', stockCode, stockName)
+  }
+
   const handleSendFromEmpty = (text: string, mode: string = 'deep') => {
     const query = text.trim()
     if (!query) return
-    startAnalysis(query, mode)
+    if (mode === 'deep') {
+      startDeepClarify(query)
+    } else {
+      startAnalysis(query, mode)
+    }
   }
 
   const handleSendFromChat = (text: string) => {
@@ -454,8 +629,12 @@ export default function App() {
     const userMsg: UIMessage = { id: genId(), type: 'user', content: t }
     setMessages(prev => [...prev, userMsg])
 
-    // Follow-up question via streaming chat
-    quickChat(t)
+    // Deep mode: 先做意图澄清；Quick mode: 直接快速对话
+    if (mode === 'deep') {
+      startDeepClarify(t)
+    } else {
+      quickChat(t)
+    }
   }
 
   // ── Render ──
@@ -475,7 +654,7 @@ export default function App() {
       />
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
         {appState === 'empty' ? (
-          <EmptyState onSend={handleSendFromEmpty} apiKey={apiKey} setApiKey={setApiKey} showApiKeyInput={showApiKeyInput} setShowApiKeyInput={setShowApiKeyInput} />
+          <EmptyState onSend={handleSendFromEmpty} apiKey={apiKey} setApiKey={setApiKey} showApiKeyInput={showApiKeyInput} setShowApiKeyInput={setShowApiKeyInput} mode={mode} setMode={setMode} />
         ) : (
           <>
             {/* Header */}
@@ -506,12 +685,12 @@ export default function App() {
             {/* Chat messages */}
             <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
               {messages.map(msg => (
-                <MessageRenderer key={msg.id} msg={msg} />
+                <MessageRenderer key={msg.id} msg={msg} onClarifyStart={handleClarifyStart} />
               ))}
             </div>
 
             {/* Fixed input at bottom */}
-            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} />
+            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} />
           </>
         )}
       </div>
@@ -660,15 +839,16 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
 }
 
 // ── Empty State ──
-function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyInput }: {
+function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyInput, mode, setMode }: {
   onSend: (text: string, mode?: string) => void
   apiKey: string
   setApiKey: (v: string) => void
   showApiKeyInput: boolean
   setShowApiKeyInput: (v: boolean) => void
+  mode: 'quick' | 'deep'
+  setMode: (m: 'quick' | 'deep') => void
 }) {
   const [text, setText] = useState('')
-  const [mode, setMode] = useState<'quick' | 'deep'>('quick')
   const [dropdownOpen, setDropdownOpen] = useState(false)
 
   const handleKeydown = (e: React.KeyboardEvent) => {
@@ -795,7 +975,7 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
 }
 
 // ── Message Renderer ──
-function MessageRenderer({ msg }: { msg: UIMessage }) {
+function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifyStart?: (stockCode: string, stockName: string, clarifyMsgId: string) => void }) {
   if (msg.type === 'user') {
     return (
       <div className="flex justify-end animate-slide-in">
@@ -864,6 +1044,10 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
     )
   }
 
+  if (msg.type === 'clarify') {
+    return <ClarifyCard msg={msg} onStart={onClarifyStart} />
+  }
+
   if (msg.type === 'pipeline') {
     return <PipelineCard msg={msg} />
   }
@@ -885,24 +1069,34 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
               {msg.thinkingContent && (
                 <ThinkingBanner content={msg.thinkingContent} streaming={!!msg.streaming && !msg.chatResponse} />
               )}
-              {/* Search banner (Kimi-style) */}
+              {/* Search status (Kimi-style) */}
               {msg.searchStatus === 'searching' && (
-                <div className="mb-3 flex items-center gap-2 text-xs text-blue-400 bg-blue-500/10 rounded-lg px-3 py-2">
-                  <i className="fas fa-spinner fa-spin"></i>
-                  <span>正在搜索：{msg.searchQuery}</span>
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 rounded-lg">
+                    <span className="relative flex h-2 w-2 flex-shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                    </span>
+                    <span className="text-xs text-blue-400">正在搜索</span>
+                    <span className="text-xs text-zinc-500 truncate">{msg.searchQuery}</span>
+                  </div>
                 </div>
               )}
               {msg.searchStatus === 'done' && msg.searchResults && msg.searchResults.length > 0 && (
                 <SearchBanner results={msg.searchResults} query={msg.searchQuery || ''} />
               )}
               {msg.searchStatus === 'error' && (
-                <div className="mb-3 text-xs text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
-                  <i className="fas fa-exclamation-triangle mr-1"></i>
-                  搜索失败，基于已有知识回答
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 rounded-lg">
+                    <i className="fas fa-exclamation-triangle text-xs text-amber-400 flex-shrink-0"></i>
+                    <span className="text-xs text-amber-400">搜索失败</span>
+                    <span className="text-xs text-zinc-500">基于已有知识回答</span>
+                  </div>
                 </div>
               )}
+              {/* Response content or typing indicator */}
               {msg.streaming && !msg.chatResponse && !msg.thinkingContent && msg.searchStatus !== 'searching' ? (
-                <div className="flex gap-1.5">
+                <div className="flex items-center gap-1.5 py-1">
                   <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
                   <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
                   <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
@@ -917,7 +1111,7 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
                   >
                     {msg.chatResponse || ''}
                   </ReactMarkdown>
-                  {msg.streaming && <span className="animate-pulse ml-0.5">▋</span>}
+                  {msg.streaming && msg.chatResponse && <span className="animate-pulse ml-0.5">▋</span>}
                 </div>
               )}
             </div>
@@ -930,65 +1124,303 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
   return null
 }
 
-// ── Thinking Banner (collapsible reasoning content) ──
+// ── Thinking Banner (Kimi-style collapsible reasoning) ──
 function ThinkingBanner({ content, streaming }: { content: string; streaming: boolean }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(streaming)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const prevStreamingRef = useRef(streaming)
+
+  useEffect(() => {
+    if (streaming) setExpanded(true)
+    prevStreamingRef.current = streaming
+  }, [streaming])
+
+  useEffect(() => {
+    if (expanded && streaming && contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight
+    }
+  }, [content, expanded, streaming])
+
+  const charCount = content.length
+  const isJustFinished = !streaming && prevStreamingRef.current
 
   return (
-    <div className="mb-3 border border-zinc-700/50 rounded-lg overflow-hidden">
+    <div className="mb-3">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800/70 transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/40 hover:bg-zinc-800/60 rounded-lg transition-colors text-left"
       >
-        <i className={`fas ${streaming ? 'fa-spinner fa-spin' : 'fa-brain'} text-xs text-purple-400`}></i>
+        {streaming ? (
+          <span className="relative flex h-2 w-2 flex-shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span>
+          </span>
+        ) : (
+          <i className="fas fa-check-circle text-xs text-purple-400 flex-shrink-0"></i>
+        )}
         <span className="text-xs text-zinc-400">
-          {streaming ? '正在思考...' : '思考过程'}
+          {streaming ? '正在思考' : isJustFinished ? `已深度思考` : '思考过程'}
+          {!streaming && charCount > 0 && (
+            <span className="text-zinc-600 ml-1.5">· {charCount} 字</span>
+          )}
         </span>
-        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-xs text-zinc-500 ml-auto`}></i>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] text-zinc-600 ml-auto transition-transform`}></i>
       </button>
-      {expanded && (
-        <div className="px-3 py-2 max-h-[200px] overflow-y-auto">
-          <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">{content}</p>
+      <div
+        className="overflow-hidden transition-all duration-300 ease-out"
+        style={{ maxHeight: expanded ? '240px' : '0px', opacity: expanded ? 1 : 0 }}
+      >
+        <div
+          ref={contentRef}
+          className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 bg-zinc-900/40 rounded-lg border border-zinc-800/50"
+        >
+          <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap break-words">{content}</p>
         </div>
-      )}
+      </div>
     </div>
   )
 }
 
-// ── Search Banner (Kimi-style collapsible) ──
+// ── Search Banner (Kimi-style collapsible search results) ──
 function SearchBanner({ results, query }: { results: Array<{ title: string; url: string; content: string }>; query: string }) {
   const [expanded, setExpanded] = useState(false)
 
+  const getDomain = (url: string) => {
+    try {
+      return new URL(url).hostname.replace('www.', '')
+    } catch {
+      return url
+    }
+  }
+
+  const getFavicon = (url: string) => {
+    try {
+      const domain = new URL(url).hostname
+      return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
+    } catch {
+      return ''
+    }
+  }
+
   return (
-    <div className="mb-3 border border-zinc-700/50 rounded-lg overflow-hidden">
+    <div className="mb-3">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800/70 transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/40 hover:bg-zinc-800/60 rounded-lg transition-colors text-left"
       >
-        <i className={`fas fa-search text-xs text-green-400`}></i>
+        <i className="fas fa-search text-xs text-green-400 flex-shrink-0"></i>
         <span className="text-xs text-zinc-400">
-          搜索了 {results.length} 个网页
+          已搜索
+          <span className="text-zinc-300 font-medium mx-1">{results.length}</span>
+          个网页
+          {query && <span className="text-zinc-600 ml-1.5">· {query}</span>}
         </span>
-        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-xs text-zinc-500 ml-auto`}></i>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] text-zinc-600 ml-auto transition-transform`}></i>
       </button>
-      {expanded && (
-        <div className="px-3 py-2 space-y-2 max-h-[300px] overflow-y-auto">
+      <div
+        className="overflow-hidden transition-all duration-300 ease-out"
+        style={{ maxHeight: expanded ? '400px' : '0px', opacity: expanded ? 1 : 0 }}
+      >
+        <div className="space-y-2 mt-1 max-h-[400px] overflow-y-auto pr-1">
           {results.map((r, i) => (
-            <div key={i} className="text-xs">
-              <div className="flex items-start gap-1.5">
-                <span className="text-blue-400 font-mono flex-shrink-0">[{i + 1}]</span>
+            <a
+              key={i}
+              href={r.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block px-3 py-2 bg-zinc-900/40 rounded-lg border border-zinc-800/50 hover:border-zinc-700 hover:bg-zinc-800/40 transition-all group"
+            >
+              <div className="flex items-start gap-2">
+                <img
+                  src={getFavicon(r.url)}
+                  alt=""
+                  className="w-4 h-4 rounded-sm flex-shrink-0 mt-0.5"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                />
                 <div className="flex-1 min-w-0">
-                  <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-zinc-300 hover:text-blue-400 hover:underline truncate block">
-                    {r.title}
-                  </a>
-                  <p className="text-zinc-500 mt-0.5 line-clamp-2">{r.content}</p>
-                  <span className="text-zinc-600 text-[10px] truncate block">{r.url}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-zinc-600 font-mono flex-shrink-0">{i + 1}</span>
+                    <span className="text-xs text-zinc-300 group-hover:text-blue-400 transition-colors truncate font-medium">
+                      {r.title}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 mt-1 line-clamp-2 leading-relaxed">{r.content}</p>
+                  <span className="text-[10px] text-zinc-600 truncate block mt-1">{getDomain(r.url)}</span>
                 </div>
               </div>
-            </div>
+            </a>
           ))}
         </div>
-      )}
+      </div>
+    </div>
+  )
+}
+
+// ── Clarify Card (Kimi-style intent confirmation) ──
+function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: string, stockName: string, clarifyMsgId: string) => void }) {
+  if (msg.clarifyStarted) return null
+
+  const data = msg.clarifyData
+  const thinking = msg.clarifyThinking || ''
+  const tools = msg.clarifyTools || []
+
+  // Loading 状态
+  if (msg.streaming && !data) {
+    return (
+      <div className="flex justify-start animate-slide-in">
+        <div className="max-w-[95%] md:max-w-[90%] w-full">
+          <div className="flex items-start gap-3">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+              <i className="fas fa-robot text-white text-xs"></i>
+            </div>
+            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
+              {/* 工具调用展示 */}
+              {tools.map((t, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs text-zinc-400 mb-2">
+                  {t.status === 'running' ? (
+                    <>
+                      <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                      <span>正在搜索股票...</span>
+                    </>
+                  ) : t.status === 'done' ? (
+                    <>
+                      <i className="fas fa-check-circle text-green-500 text-xs"></i>
+                      <span>{t.result_summary}</span>
+                    </>
+                  ) : (
+                    <>
+                      <i className="fas fa-exclamation-circle text-red-500 text-xs"></i>
+                      <span>{t.error || '失败'}</span>
+                    </>
+                  )}
+                </div>
+              ))}
+              {/* 思考过程 */}
+              {thinking && (
+                <ThinkingBanner content={thinking} streaming={msg.streaming} />
+              )}
+              {/* 加载中 */}
+              {!thinking && tools.length === 0 && (
+                <div className="flex items-center gap-2 text-xs text-zinc-500">
+                  <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                  <span>正在理解您的需求...</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 错误状态
+  if (data?.status === 'error') {
+    return (
+      <div className="flex justify-start animate-slide-in">
+        <div className="max-w-[95%] md:max-w-[90%] w-full">
+          <div className="flex items-start gap-3">
+            <div className="w-7 h-7 rounded-lg bg-red-500/20 flex items-center justify-center flex-shrink-0 mt-1">
+              <i className="fas fa-exclamation text-red-400 text-xs"></i>
+            </div>
+            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
+              <p className="text-sm text-zinc-300">{data.message}</p>
+              <button
+                onClick={() => onStart?.('', '', msg.id)}
+                className="mt-3 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs text-white transition-colors"
+              >
+                重新输入
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 正常结果
+  return (
+    <div className="flex justify-start animate-slide-in">
+      <div className="max-w-[95%] md:max-w-[90%] w-full">
+        <div className="flex items-start gap-3">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+            <i className="fas fa-robot text-white text-xs"></i>
+          </div>
+          <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
+            {/* 思考过程（可折叠） */}
+            {thinking && <ThinkingBanner content={thinking} streaming={false} />}
+
+            {/* 意图摘要 - 重点展示 */}
+            {data?.understanding && (
+              <div className="mb-4 p-3 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+                <div className="flex items-center gap-2 mb-1">
+                  <i className="fas fa-lightbulb text-xs text-indigo-400"></i>
+                  <span className="text-xs font-medium text-indigo-400">意图理解</span>
+                </div>
+                <p className="text-sm text-zinc-300 leading-relaxed">{data.understanding}</p>
+              </div>
+            )}
+
+            {/* 股票信息 */}
+            {data?.stock_code && (
+              <div className="mb-3 flex items-center gap-2">
+                <i className="fas fa-chart-line text-xs text-green-400"></i>
+                <span className="text-sm text-zinc-200 font-medium">{data.stock_name}</span>
+                <span className="text-xs text-zinc-500 font-mono">{data.stock_code}</span>
+              </div>
+            )}
+
+            {/* 候选选择 */}
+            {data?.needs_selection && data.candidates.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs text-zinc-400 mb-2">找到多个候选股票，请选择：</p>
+                <div className="space-y-1">
+                  {data.candidates.map(c => (
+                    <button
+                      key={c.stock_code}
+                      onClick={() => onStart?.(c.stock_code, c.stock_name, msg.id)}
+                      className="w-full flex items-center justify-between px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg transition-colors text-left"
+                    >
+                      <span className="text-sm text-zinc-300">{c.stock_name}</span>
+                      <span className="text-xs text-zinc-500 font-mono">{c.stock_code}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 研究计划 */}
+            {data?.plan && data.plan.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs text-zinc-400 mb-2 flex items-center gap-1">
+                  <i className="fas fa-list-ol text-[10px]"></i> 研究计划
+                </p>
+                <div className="space-y-1">
+                  {data.plan.map((step, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs">
+                      <span className="text-zinc-600 font-mono flex-shrink-0">{i + 1}.</span>
+                      <div>
+                        <span className="text-zinc-300">{step.title}</span>
+                        <span className="text-zinc-500 ml-1">- {step.desc}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 开始分析按钮 */}
+            {data?.stock_code && !data.needs_selection && (
+              <button
+                onClick={() => onStart?.(data.stock_code, data.stock_name, msg.id)}
+                className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 rounded-xl text-sm text-white font-medium transition-all flex items-center justify-center gap-2"
+              >
+                <i className="fas fa-play text-xs"></i>
+                开始深度分析
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1094,6 +1526,13 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
               </div>
             </div>
 
+            {/* 流式思考过程（真实 LLM reasoning） */}
+            {msg.thinkingContent && (
+              <div className="px-5 py-3 border-t border-zinc-800/50">
+                <ThinkingBanner content={msg.thinkingContent} streaming={!!current} />
+              </div>
+            )}
+
             {/* Layer I: Analyst Cards */}
             {(completed.includes('check_cache') || current === 'technical_analyst' || completed.includes('technical_analyst')) && (
               <div className="px-5 py-3 border-t border-zinc-800/50">
@@ -1117,27 +1556,38 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                 onClick={() => setShowLog(!showLog)}
                 className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors w-full"
               >
-                <i className={`fas fa-chevron-down transition-transform ${showLog ? '' : 'rotate-[-90deg]'}`}></i>
+                <i className={`fas fa-chevron-down transition-transform duration-300 ${showLog ? '' : 'rotate-[-90deg]'}`}></i>
                 <span>查看实时输出日志</span>
+                {completed.length > 0 && (
+                  <span className="text-[10px] text-zinc-600 ml-1">· {completed.length} 条</span>
+                )}
               </button>
-              {showLog && (
-                <div className="mt-2 bg-zinc-950 rounded-lg p-3 font-mono text-[11px] text-zinc-500 leading-relaxed overflow-x-auto">
+              <div
+                className="overflow-hidden transition-all duration-300 ease-out"
+                style={{ maxHeight: showLog ? '300px' : '0px', opacity: showLog ? 1 : 0 }}
+              >
+                <div className="mt-2 bg-zinc-950 rounded-lg p-3 font-mono text-[11px] text-zinc-500 leading-relaxed overflow-y-auto max-h-[300px]">
                   {completed.map(node => (
-                    <div key={node}>
-                      <span className="text-zinc-700">[{new Date().toLocaleTimeString()}]</span>{' '}
-                      <span className="text-indigo-500">{node.toUpperCase()}</span>{' '}
-                      {outputs[node]?.summary || 'completed'}
+                    <div key={node} className="flex items-start gap-2 py-0.5">
+                      <i className="fas fa-check-circle text-[10px] text-green-500 flex-shrink-0 mt-0.5"></i>
+                      <span className="text-zinc-700 text-[10px] flex-shrink-0">{new Date().toLocaleTimeString()}</span>
+                      <span className="text-indigo-400 flex-shrink-0">{node.toUpperCase()}</span>
+                      <span className="text-zinc-500 truncate">{outputs[node]?.summary || 'completed'}</span>
                     </div>
                   ))}
                   {current && (
-                    <div>
-                      <span className="text-zinc-700">[{new Date().toLocaleTimeString()}]</span>{' '}
-                      <span className="text-yellow-500">{current.toUpperCase()}</span>{' '}
-                      running...
+                    <div className="flex items-start gap-2 py-0.5">
+                      <span className="relative flex h-2 w-2 flex-shrink-0 mt-0.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
+                      </span>
+                      <span className="text-zinc-700 text-[10px] flex-shrink-0">{new Date().toLocaleTimeString()}</span>
+                      <span className="text-yellow-400 flex-shrink-0">{current.toUpperCase()}</span>
+                      <span className="text-zinc-500">running...</span>
                     </div>
                   )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>
@@ -1195,8 +1645,12 @@ function ReportCard({ msg }: { msg: UIMessage }) {
             {/* Streaming indicator */}
             {msg.streaming && (
               <div className="px-5 py-2 border-b border-zinc-800/50 flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
-                <span className="text-xs text-indigo-400">正在生成报告...</span>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+                <span className="text-xs text-indigo-400">正在生成报告</span>
+                <span className="text-xs text-zinc-600">· 流式输出中</span>
               </div>
             )}
 
@@ -1286,7 +1740,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend, leftInset }: { onSend: (text: string) => void; leftInset: number }) {
+function ChatInputBar({ onSend, leftInset, mode, setMode }: { onSend: (text: string) => void; leftInset: number; mode: 'quick' | 'deep'; setMode: (m: 'quick' | 'deep') => void }) {
   const [text, setText] = useState('')
 
   const handleKeydown = (e: React.KeyboardEvent) => {
@@ -1304,13 +1758,28 @@ function ChatInputBar({ onSend, leftInset }: { onSend: (text: string) => void; l
     >
       <div className="max-w-3xl mx-auto">
         <div className="glass-input rounded-2xl p-2">
+          {/* Mode switcher */}
+          <div className="flex items-center gap-1 px-1 pb-1">
+            <button
+              onClick={() => setMode('deep')}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${mode === 'deep' ? 'bg-indigo-600/30 text-indigo-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              <i className="fas fa-layer-group text-[10px] mr-1"></i>深度研究
+            </button>
+            <button
+              onClick={() => setMode('quick')}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${mode === 'quick' ? 'bg-amber-600/30 text-amber-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              <i className="fas fa-bolt text-[10px] mr-1"></i>快速对话
+            </button>
+          </div>
           <div className="flex items-end gap-2">
             <button className="w-8 h-8 rounded-lg hover:bg-zinc-700/50 flex items-center justify-center text-zinc-500 transition-colors mb-1">
               <i className="fas fa-plus text-xs"></i>
             </button>
             <textarea
               rows={1}
-              placeholder="追问报告中的任何内容..."
+              placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
               className="flex-1 bg-transparent text-zinc-200 placeholder-zinc-600 px-2 py-3 resize-none outline-none text-sm leading-relaxed"
               style={{ minHeight: '40px', maxHeight: '100px' }}
               value={text}

@@ -28,6 +28,7 @@ ReAct 主循环：Agent 的心脏
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -44,6 +45,7 @@ from finance_agent.harness.types import (
     HookPoint,
     PermissionMode,
     PermissionRequest,
+    Role,
     StreamEvent,
     ToolCallRequest,
     ToolResult,
@@ -158,7 +160,7 @@ class Agent:
 
     # ── 核心运行入口 ──
 
-    async def run(self, user_input: str) -> AsyncIterator[StreamEvent]:
+    async def run(self, user_input: str, force_tool: bool = False) -> AsyncIterator[StreamEvent]:
         """
         运行 Agent -- 核心入口
 
@@ -184,6 +186,11 @@ class Agent:
         self._running = True
         start_time = time.time()
         iterations = 0
+        analysis_completed = False  # run_deep_analysis 完成后标记
+        empty_retries = 0  # LLM 空输出重试计数
+        max_empty_retries = 3  # 最大空输出重试次数
+        text_only_retries = 0  # LLM 纯文本无工具调用重试计数
+        max_text_only_retries = 2  # 最大纯文本重试次数
 
         # 1. 触发会话开始钩子
         await self.hooks.emit(
@@ -219,6 +226,10 @@ class Agent:
                 # ── 获取工具 schemas ──
                 tool_schemas = self.tools.get_schemas_for_llm()
 
+                # 分析完成后，不给 LLM 工具，强制生成文本摘要
+                if analysis_completed:
+                    tool_schemas = []
+
                 # ── 构建 API 消息 ──
                 api_messages = self.context.build_messages_for_api()
 
@@ -226,32 +237,60 @@ class Agent:
                 assistant_text = ""
                 pending_tool_calls: list[ToolCallRequest] = []
 
+                # 第一次迭代且 force_tool=True 时，强制调用工具
+                _tool_choice = "required" if (force_tool and iterations == 1) else "auto"
+
                 async for chunk in self.llm.chat_stream(
                     messages=api_messages,
                     tools=tool_schemas if tool_schemas else None,
+                    tool_choice=_tool_choice,
                 ):
                     if chunk.text_delta:
-                        # 流式文本增量
+                        # 流式文本增量 -- 先缓冲，等流结束再决定是 THINK 还是 ANSWER
                         assistant_text += chunk.text_delta
-
-                        # 提取 <thinking> 标签内容作为 think 事件
-                        think_content = self._extract_thinking(assistant_text)
-                        if think_content:
-                            yield StreamEvent.think(think_content)
-
-                        # 普通文本作为增量输出
-                        yield StreamEvent(
-                            event_type=ActionType.ANSWER,
-                            content=chunk.text_delta,
-                        )
 
                     if chunk.tool_calls:
                         pending_tool_calls = chunk.tool_calls
-                        for tc in pending_tool_calls:
-                            yield StreamEvent.for_tool_call(tc)
 
                     if chunk.is_finished:
                         break
+
+                # ── 根据是否有工具调用，决定文本是推理还是回复 ──
+                if assistant_text and pending_tool_calls:
+                    # 有工具调用 -> 文本是推理过程
+                    yield StreamEvent.think(assistant_text)
+                elif assistant_text and not pending_tool_calls:
+                    # 无工具调用但有文本 -> 检查是否应该继续调用工具
+                    has_prior_tools = any(m.role == Role.TOOL for m in self.context.messages)
+                    if (
+                        has_prior_tools
+                        and not analysis_completed
+                        and text_only_retries < max_text_only_retries
+                    ):
+                        text_only_retries += 1
+                        logger.warning(
+                            f"LLM 返回纯文本但未调用工具（第 {text_only_retries}/{max_text_only_retries} 次重试）"
+                        )
+                        # 先把 LLM 的文本回复追加到上下文，让 LLM 知道自己说了什么
+                        self.context.append_assistant(assistant_text, None)
+                        # 追加 system 提示，引导 LLM 继续调用工具
+                        self.context.append_system(
+                            "你刚才返回了文字但没有调用工具。请根据对话上下文，"
+                            "直接调用下一步所需的工具（如 run_deep_analysis），"
+                            "不要重复已说过的话。"
+                        )
+                        iterations -= 1
+                        continue
+                    # 确实是最终回复
+                    yield StreamEvent(
+                        event_type=ActionType.ANSWER,
+                        content=assistant_text,
+                    )
+
+                # ── 发送工具调用事件 ──
+                if pending_tool_calls:
+                    for tc in pending_tool_calls:
+                        yield StreamEvent.for_tool_call(tc)
 
                 # ── 追加助手消息到上下文 ──
                 tool_calls_raw = []
@@ -269,7 +308,31 @@ class Agent:
 
                 # ── 检查是否有工具调用 ──
                 if not pending_tool_calls:
-                    # 无工具调用 -> 任务完成
+                    if not assistant_text:
+                        # LLM 返回空输出（API 异常/限流），重试而非结束
+                        empty_retries = empty_retries + 1
+                        if empty_retries <= max_empty_retries:
+                            logger.warning(
+                                f"LLM 返回空输出（第 {empty_retries}/{max_empty_retries} 次重试）"
+                            )
+                            await asyncio.sleep(1 * empty_retries)
+                            # 移除刚才追加的空 assistant 消息，避免上下文污染
+                            if (
+                                self.context.messages
+                                and self.context.messages[-1].role == Role.ASSISTANT
+                            ):
+                                self.context.messages.pop()
+                            # 空输出重试不消耗迭代配额
+                            iterations -= 1
+                            continue
+                        else:
+                            logger.error("LLM 连续返回空输出，已达最大重试次数")
+                            yield StreamEvent(
+                                event_type=ActionType.ERROR,
+                                content="AI 服务暂时不可用，请稍后重试。",
+                            )
+                            break
+                    # 确实是最终回复 -> 任务完成
                     logger.debug("无工具调用，循环结束")
                     break
 
@@ -310,11 +373,40 @@ class Agent:
                         },
                     )
 
-                    # 执行工具
-                    result = await self.tools.execute(tc.id, tc.name, tc.arguments)
+                    # 执行工具：流式工具走 execute_stream，普通工具走 execute
+                    if self.tools.is_streaming(tc.name):
+                        # 流式工具：透传 PROGRESS 事件，提取最终 ToolResult
+                        result = None
+                        async for event in self.tools.execute_stream(tc.id, tc.name, tc.arguments):
+                            if isinstance(event, StreamEvent):
+                                if event.event_type == ActionType.PROGRESS:
+                                    yield event
+                                elif (
+                                    event.event_type == ActionType.TOOL_RESULT and event.tool_result
+                                ):
+                                    result = event.tool_result
+                                    # 同时 yield 这个事件（含 metadata）
+                                    yield event
+                            elif isinstance(event, ToolResult):
+                                result = event
+
+                        if result is None:
+                            result = ToolResult(
+                                tool_call_id=tc.id,
+                                name=tc.name,
+                                output="[错误] 流式工具未返回结果",
+                                is_error=True,
+                            )
+                    else:
+                        # 普通工具
+                        result = await self.tools.execute(tc.id, tc.name, tc.arguments)
 
                     # 追加工具结果到上下文
                     self.context.append_tool_result(tc.id, result.output, result.is_error)
+
+                    # run_deep_analysis 完成后标记，允许 LLM 再生成一次摘要
+                    if tc.name == "run_deep_analysis" and not result.is_error:
+                        analysis_completed = True
 
                     # 触发 post_tool_use 钩子
                     await self.hooks.emit(
@@ -331,7 +423,25 @@ class Agent:
 
             # 循环结束
             if iterations >= self.max_iterations:
-                yield StreamEvent.error(f"达到最大迭代次数 ({self.max_iterations})，任务被截断")
+                # 不直接报错，让 LLM 基于已有上下文生成回复
+                try:
+                    api_messages = self.context.build_messages_for_api()
+                    async for chunk in self.llm.chat_stream(
+                        messages=api_messages,
+                        tools=None,  # 不提供工具，强制生成文本
+                    ):
+                        if chunk.text_delta:
+                            yield StreamEvent(
+                                event_type=ActionType.ANSWER,
+                                content=chunk.text_delta,
+                            )
+                        if chunk.is_finished:
+                            break
+                except Exception as e:
+                    logger.warning("max_iterations 后生成回复失败: %s", e)
+                    yield StreamEvent.error(
+                        f"达到最大迭代次数 ({self.max_iterations})，请提供更明确的信息"
+                    )
 
         except Exception as e:
             logger.exception("Agent 运行时错误")

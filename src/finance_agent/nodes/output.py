@@ -19,9 +19,6 @@ _DISCLAIMER = (
 def generate_file(state: dict) -> dict:
     final_report = state.get("final_report", "")
     if not final_report:
-        # Single-agent mode fallback (investment/financial without merge)
-        final_report = state.get("investment_report", "") or state.get("financial_report", "")
-    if not final_report:
         return {"file_path": None, "file_paths": None}
 
     # 统一追加免责声明（避免重复）

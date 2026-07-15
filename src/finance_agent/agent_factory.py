@@ -10,115 +10,31 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 from collections.abc import Callable
 from typing import Any
 
 from finance_agent.harness import Agent, PermissionMode
+from finance_agent.prompts.loader import load_prompt
 
 # ───────────────────────────────────────────────
-# System Prompts
+# System Prompts（ADR-0016：从 prompts/*.md 加载，Langfuse 优先 + 本地兜底）
 # ───────────────────────────────────────────────
 
-QUICK_MODE_PROMPT = """# Identity
-你是一个智能问答助手，擅长 A 股投资领域，同时也能回答用户的通用问题（如天气、新闻、常识等）。
 
-# Safety
-IMPORTANT: 投资相关回答仅供参考研究，不构成投资建议。
-
-# Tone & Style
-- 使用中文回答
-- 简洁直接，不要冗长
-- 不使用 emoji
-
-# Workflow
-优先用自身知识回答。用户询问实时信息（天气、股价、新闻、政策、赛事等）时，调用 web_search 补充。
-对于非投资类的通用问题，正常友好地回答，不要以"与投资无关"为由拒答。
-
-# Tool Policy
-- web_search: 获取实时信息（天气、行情、新闻、政策等）。简单知识性问题不需要搜索。
-
-# Environment
-当前时间：{now}
-
-# Reminders
-- 保持简洁
-- 实时性问题才搜索
-- 友好回答用户的通用问题，不要拒答
-""".strip()
+def _quick_mode_prompt() -> str:
+    return load_prompt("quick_mode").strip()
 
 
-DEEP_MODE_PROMPT = """# Identity
-你是一个 A 股投研分析助手。用户输入股票名称或代码，你调用深度分析管线生成完整研报。
-
-# Safety
-IMPORTANT: 报告由 AI 系统基于公开数据自动生成，仅供参考研究，不构成投资建议。
-IMPORTANT: 不要直接给出买卖建议，所有交易建议必须来自 run_deep_analysis 工具的输出。
-
-# Tone & Style
-- 使用中文回答
-- 专业、客观、简洁
-- 不使用 emoji
-
-# Workflow
-用户想分析股票时，先用 search_stock 解析股票代码，再调用 run_deep_analysis 运行 5 层分析管线。
-管线运行期间，进度会自动推送给用户，你不需要描述进度。
-管线完成后，基于报告内容给用户一个简短的摘要（3-5 句），不要复述完整报告。
-
-# Tool Policy
-- search_stock: 用户输入股票名称时使用，解析为股票代码
-- run_deep_analysis: 股票代码确认后调用，运行 5 层分析管线
-- web_search: 补充实时信息（如最新新闻、政策变化），不替代深度分析
-
-# Domain Knowledge
-A 股市场 5 层分析架构：4 个分析师并行（宏观/基本面/技术面/舆情）-> Bull/Bear 辩论 -> 交易员决策 -> 风险管理辩论 -> 基金经理批准。分析基于 AKShare 公开数据。
-
-# Environment
-当前时间：{now}
-
-# Reminders
-- 先 search_stock 再 run_deep_analysis，不要跳过股票解析
-- 报告完成后给摘要，不要复述全文
-""".strip()
+def _deep_mode_prompt() -> str:
+    return load_prompt("deep_mode").strip()
 
 
-FOLLOW_UP_MODE_PROMPT = """# Identity
-你正在与用户讨论之前生成的股票分析报告。基于报告内容回答用户的追问。
-
-# Safety
-IMPORTANT: 回答仅供参考研究，不构成投资建议。
-
-# Tone & Style
-- 使用中文回答
-- 引用报告中的具体数据支持你的回答
-- 不使用 emoji
-
-# Workflow
-用户的问题通常围绕已有报告展开。优先从报告上下文中找答案。
-如果用户询问报告之外的新信息（如最新行情、新闻），调用 web_search 补充。
-
-# Tool Policy
-- web_search: 获取报告之外的实时信息
-
-# Domain Knowledge
-之前的分析报告：
-{report_excerpt}
-
-分析师摘要：
-{analyst_summaries}
-
-之前的对话：
-{chat_history}
-
-# Environment
-当前时间：{now}
-报告生成时间：{created_at}
-
-# Reminders
-- 优先引用报告内容
-- 报告中没有的信息才搜索
-""".strip()
+def _follow_up_mode_prompt() -> str:
+    return load_prompt("follow_up_mode").strip()
 
 
 # ───────────────────────────────────────────────
@@ -143,12 +59,15 @@ async def _web_search(query: str) -> str:
 def _make_search_stock(api_key: str | None = None):
     """创建 search_stock 工具，注入 api_key 闭包。"""
 
-    async def search_stock(query: str) -> str:
+    async def search_stock(query: str = "") -> str:
         """根据自然语言解析 A 股股票代码
 
         Args:
             query: 股票名称、代码或描述，如 "茅台"、"600519"、"贵州茅台"
         """
+        if not query or not query.strip():
+            return "[错误] 查询为空，请提供股票名称或代码"
+
         from finance_agent.react_agent import search_stock_tool
 
         result = search_stock_tool(query, api_key)
@@ -166,18 +85,42 @@ def _format_stock_result(result: dict) -> str:
     if not candidates:
         return result.get("message", "未找到匹配的股票")
 
+    def _get(c: dict, *keys: str) -> str:
+        """兼容 stock_code/code 和 stock_name/name 两种键名。"""
+        for k in keys:
+            v = c.get(k)
+            if v:
+                return str(v)
+        return ""
+
     if len(candidates) == 1:
         c = candidates[0]
-        code = c.get("code", "")
-        name = c.get("name", "")
+        code = _get(c, "stock_code", "code")
+        name = _get(c, "stock_name", "name")
         return f"找到股票：{name}({code})"
 
     lines = ["找到多个候选股票，请确认："]
     for i, c in enumerate(candidates, 1):
-        code = c.get("code", "")
-        name = c.get("name", "")
+        code = _get(c, "stock_code", "code")
+        name = _get(c, "stock_name", "name")
         lines.append(f"{i}. {name}({code})")
     return "\n".join(lines)
+
+
+def _parse_stock_result_text(text: str) -> dict | None:
+    """从 _format_stock_result 的输出文本中解析股票代码和名称。
+
+    输入示例：
+      "找到股票：中际旭创(300308)"
+    返回：
+      {"code": "300308", "name": "中际旭创"}
+    """
+    import re
+
+    m = re.search(r"找到股票：(.+?)\((\d{6})\)", text)
+    if m:
+        return {"name": m.group(1), "code": m.group(2)}
+    return None
 
 
 def _make_run_deep_analysis(
@@ -185,11 +128,13 @@ def _make_run_deep_analysis(
     analysis_type: str = "comprehensive",
     peer_codes: list | None = None,
     enable_web_search: bool = False,
+    session_id: str | None = None,
 ):
     """创建 run_deep_analysis 流式工具，注入配置闭包。
 
     LLM 只看到 stock_code 和 stock_name，其余参数通过闭包注入。
     返回一个异步生成器，yield StreamEvent（PROGRESS + TOOL_RESULT）。
+    session_id 用于 Langfuse session 聚合与 trace 属性（ADR-0015）。
     """
 
     async def run_deep_analysis(stock_code: str, stock_name: str = ""):
@@ -199,6 +144,12 @@ def _make_run_deep_analysis(
             stock_code: A 股股票代码，如 "600519"
             stock_name: 股票名称，如 "贵州茅台"
         """
+        from finance_agent.api import (
+            _ALL_NODES,
+            LAYER_STEPS,
+            _extract_output,
+            _merge_update,
+        )
         from finance_agent.harness import ActionType, StreamEvent, ToolResult
 
         initial_state = {
@@ -211,15 +162,70 @@ def _make_run_deep_analysis(
         }
 
         accumulated: dict = dict(initial_state)
+        completed: set[str] = set()
 
-        for chunk in _stream_graph(initial_state):
+        # 在线程中运行同步 graph.stream，避免阻塞事件循环
+        # ADR-0015：CallbackHandler 通过 langchain callback 机制工作（不依赖 OTel
+        # context 跨线程传播），直接在子线程跑即可。
+        loop = asyncio.get_event_loop()
+        chunk_queue: asyncio.Queue = asyncio.Queue()
+
+        def _run_graph():
+            try:
+                for mode, chunk in _stream_graph(initial_state, session_id=session_id):
+                    asyncio.run_coroutine_threadsafe(chunk_queue.put((mode, chunk)), loop)
+            except Exception as e:
+                asyncio.run_coroutine_threadsafe(chunk_queue.put(e), loop)
+            finally:
+                asyncio.run_coroutine_threadsafe(chunk_queue.put(None), loop)
+
+        loop.run_in_executor(None, _run_graph)
+
+        while True:
+            item = await chunk_queue.get()
+            if item is None:
+                break
+            if isinstance(item, Exception):
+                raise item
+
+            mode, chunk = item
+
+            # Custom mode: forward thinking tokens
+            if mode == "custom":
+                if isinstance(chunk, dict) and chunk.get("type") == "thinking":
+                    yield StreamEvent.think(chunk.get("token", ""))
+                continue
+
+            # Updates mode: existing node progress logic
             for node_name, update in chunk.items():
-                if isinstance(update, dict) and update:
-                    accumulated.update(update)
+                if node_name not in _ALL_NODES:
+                    continue
 
+                if isinstance(update, dict) and update:
+                    _merge_update(accumulated, node_name, update)
+
+                idx = _ALL_NODES.index(node_name)
+                for i in range(idx + 1):
+                    completed.add(_ALL_NODES[i])
+
+                step_info = {s["node"]: s for s in LAYER_STEPS}.get(node_name, {})
+                output = _extract_output(
+                    node_name, update if isinstance(update, dict) else {}, accumulated
+                )
+
+                # yield PROGRESS with detailed metadata -> stream_agent_to_sse 映射为 node_complete
                 yield StreamEvent.progress(
-                    content=f"{node_name} 完成",
-                    metadata={"node": node_name},
+                    content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
+                    metadata={
+                        "node": node_name,
+                        "sse_type": "node_complete",
+                        "node_id": node_name,
+                        "layer": step_info.get("layer", ""),
+                        "desc": step_info.get("desc", node_name),
+                        "completed": sorted(completed),
+                        "progress": len(completed) / len(LAYER_STEPS),
+                        "output": output,
+                    },
                 )
 
         report_md = accumulated.get("final_report", "")
@@ -228,15 +234,25 @@ def _make_run_deep_analysis(
             "analyst_reports": accumulated.get("analyst_reports") or {},
             "stock_code": stock_code,
             "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
+            "report_markdown": report_md,
+            "sse_type": "report_ready",
         }
+
+        # LLM 上下文只放摘要
+        llm_output = f"深度分析完成。股票：{metadata['stock_name']}({stock_code})。\n"
+        llm_output += f"报告已生成，共 {len(report_md)} 字符。\n"
+        if len(report_md) > 2000:
+            llm_output += f"报告摘要：\n{report_md[:2000]}...\n"
+        else:
+            llm_output += f"报告内容：\n{report_md}"
 
         yield StreamEvent(
             event_type=ActionType.TOOL_RESULT,
-            content=report_md,
+            content=llm_output,
             tool_result=ToolResult(
                 tool_call_id="",
                 name="run_deep_analysis",
-                output=report_md,
+                output=llm_output,
                 metadata=metadata,
             ),
         )
@@ -244,19 +260,40 @@ def _make_run_deep_analysis(
     return run_deep_analysis
 
 
-def _stream_graph(initial_state: dict, config: dict | None = None):
-    """执行 5 层管线同步流式迭代。"""
+def _stream_graph(initial_state: dict, config: dict | None = None, session_id: str | None = None):
+    """执行 5 层管线同步流式迭代。
+
+    ADR-0015：注入 Langfuse CallbackHandler 使图节点自动挂成 span 树（Send 扇出
+    会自动传播 callback）。CallbackHandler 通过 OTel context.attach 设置 current
+    span，使 call_llm 的 generation（start_as_current_observation）能挂到节点 span 下。
+    """
     from finance_agent.graph import build_5layer_graph
 
     if config is None:
         config = {"recursion_limit": 100}
 
+    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+
+    _handler = get_callback_handler()
+    _lf = get_langfuse()
+    if _handler is not None:
+        config = {**config, "callbacks": [*config.get("callbacks", []), _handler]}
+        # ADR-0015：通过 metadata 传 langfuse_session_id，CallbackHandler 自动聚合到 session
+        if session_id:
+            config["metadata"] = {**config.get("metadata", {}), "langfuse_session_id": session_id}
+
     graph = build_5layer_graph()
-    yield from graph.stream(
-        initial_state,
-        config=config,
-        stream_mode="updates",
-    )
+
+    try:
+        yield from graph.stream(  # type: ignore[call-overload]
+            initial_state,
+            config=config,
+            stream_mode=["updates", "custom"],
+        )
+    finally:
+        if _lf is not None:
+            with contextlib.suppress(Exception):
+                _lf.flush()
 
 
 # ───────────────────────────────────────────────
@@ -289,24 +326,29 @@ def build_agent(
     llm_client = _make_llm_client(model, api_key)
 
     if mode == "quick":
+        prompt = _quick_mode_prompt().format(now=_now())
         agent = Agent(
             model=model,
             api_key=api_key,
-            system_prompt=QUICK_MODE_PROMPT.format(now=_now()),
+            system_prompt=prompt,
             permission_mode=PermissionMode.YOLO,
             max_iterations=3,
             llm=llm_client,
         )
         agent.tools.register(_web_search, name="web_search")
+        session_id = kwargs.get("session_id")
+        if session_id:
+            _inject_chat_history(agent, session_id)
         return agent
 
     if mode == "deep":
+        prompt = _deep_mode_prompt().format(now=_now())
         agent = Agent(
             model=model,
             api_key=api_key,
-            system_prompt=DEEP_MODE_PROMPT.format(now=_now()),
+            system_prompt=prompt,
             permission_mode=PermissionMode.YOLO,
-            max_iterations=10,
+            max_iterations=6,  # web_search -> search_stock -> run_deep_analysis -> 摘要
             llm=llm_client,
         )
         agent.tools.register(_make_search_stock(api_key), name="search_stock")
@@ -316,10 +358,14 @@ def build_agent(
                 analysis_type=analysis_type,
                 peer_codes=peer_codes,
                 enable_web_search=enable_web_search,
+                session_id=kwargs.get("session_id"),
             ),
             name="run_deep_analysis",
         )
         agent.tools.register(_web_search, name="web_search")
+        session_id = kwargs.get("session_id")
+        if session_id:
+            _inject_chat_history(agent, session_id)
         return agent
 
     if mode == "follow-up":
@@ -346,8 +392,9 @@ def build_agent(
 
 def _now() -> str:
     from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
 
 
 def _make_llm_client(model: str, api_key: str | None = None):
@@ -355,6 +402,31 @@ def _make_llm_client(model: str, api_key: str | None = None):
     from finance_agent.harness.litellm_client import LiteLLMClient
 
     return LiteLLMClient(model=model, api_key=api_key)
+
+
+def _inject_chat_history(agent: Agent, session_id: str) -> None:
+    """将 session 中的历史对话以标准 user/assistant 消息轮次注入 agent 上下文。
+
+    用标准消息角色（而非 system prompt 纯文本）注入历史，
+    使 LLM 能正确理解多轮对话的指代关系。
+    """
+    session = _load_session(session_id)
+    chat_history_raw = session.get("chat_history", [])
+    if isinstance(chat_history_raw, str):
+        try:
+            chat_history = json.loads(chat_history_raw)
+        except json.JSONDecodeError:
+            chat_history = []
+    else:
+        chat_history = chat_history_raw
+
+    for h in chat_history:
+        role = h.get("role", "user")
+        content = h.get("content", "")
+        if role == "user":
+            agent.context.append_user(content)
+        else:
+            agent.context.append_assistant(content)
 
 
 def _load_session(session_id: str) -> dict:
@@ -401,7 +473,7 @@ def _build_follow_up_prompt(session: dict) -> str:
         history_lines.append(f"{label}: {content}")
     history_text = "\n".join(history_lines) if history_lines else "（无历史对话）"
 
-    return FOLLOW_UP_MODE_PROMPT.format(
+    return _follow_up_mode_prompt().format(
         now=_now(),
         report_excerpt=report_excerpt,
         analyst_summaries=json.dumps(analyst_summaries, ensure_ascii=False),
@@ -419,6 +491,10 @@ async def stream_agent_to_sse(
     agent: Agent,
     user_input: str,
     on_metadata: Callable[[dict], None] | None = None,
+    on_resolved: Callable[[str, str], None] | None = None,
+    extra_events: dict | None = None,
+    force_tool: bool = False,
+    session_id: str | None = None,
 ):
     """运行 Agent 并将 StreamEvent 映射为前端 SSE 格式。
 
@@ -426,65 +502,215 @@ async def stream_agent_to_sse(
         agent: ReAct Agent 实例
         user_input: 用户输入
         on_metadata: TOOL_METADATA 事件的回调（用于 session 创建等）
+        on_resolved: 股票代码解析完成回调 (stock_code, stock_name)
+        extra_events: 额外的事件上下文（如 session_id 用于 session_created）
+        session_id: Langfuse session 聚合 ID（ADR-0015）。设置后用 react_loop span
+            包裹 ReAct 执行并 propagate_attributes(session_id)。
 
     Yields:
         SSE 格式的字符串: "data: {...}\\n\\n"
     """
     from finance_agent.harness import ActionType
 
-    async for event in agent.run(user_input):
+    last_web_search_query = ""  # 追踪 web_search 的查询参数
+
+    # ADR-0015: react_loop span 包裹 ReAct 执行，使顶层 trace 结构为
+    # [react_loop] -> [search_stock] / [run_deep_analysis span -> 5 层]。
+    # 手动管理上下文以避免重构大段事件映射循环；异常路径下 span 由 OTel
+    # span processor 周期性导出兜底。
+    from contextlib import nullcontext as _nullcontext
+
+    from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse
+
+    _lf = _get_langfuse()
+    _react_cm: contextlib.AbstractContextManager[Any] = _nullcontext()
+    _propagate_cm: contextlib.AbstractContextManager[Any] = _nullcontext()
+    if _lf is not None:
+        _react_cm = _lf.start_as_current_observation(
+            as_type="span", name="react_loop", input={"query": user_input}
+        )
+        if session_id:
+            try:
+                from langfuse import propagate_attributes
+
+                _propagate_cm = propagate_attributes(session_id=session_id)
+            except Exception:  # noqa: S110
+                pass
+    _react_cm.__enter__()
+    _propagate_cm.__enter__()
+    async for event in agent.run(user_input, force_tool=force_tool):
+        ts = _now()
+
         if event.event_type == ActionType.ANSWER:
-            yield _sse({"type": "chat_token", "token": event.content})
+            yield _sse({"type": "chat_token", "token": event.content, "timestamp": ts})
 
         elif event.event_type == ActionType.THINK:
-            yield _sse({"type": "thinking_token", "token": event.content})
+            yield _sse({"type": "thinking_token", "token": event.content, "timestamp": ts})
 
         elif event.event_type == ActionType.TOOL_CALL:
             tc = event.tool_call
+            # 跳过 permission_required 事件（tool_call 为 None，只有 permission_request）
+            if not tc:
+                continue
+            name = tc.name or ""
+            args = tc.arguments if tc else {}
+            if name == "web_search":
+                last_web_search_query = str(args.get("query", ""))
+                yield _sse(
+                    {"type": "search_start", "query": last_web_search_query, "timestamp": ts}
+                )
             yield _sse(
                 {
                     "type": "tool_call",
-                    "name": tc.name if tc else "",
-                    "arguments": tc.arguments if tc else {},
+                    "name": name,
+                    "args": args,
+                    "timestamp": ts,
                 }
             )
 
         elif event.event_type == ActionType.PROGRESS:
-            yield _sse(
-                {
-                    "type": "pipeline_progress",
-                    "content": event.content,
-                    "metadata": event.metadata or {},
-                }
-            )
+            # 映射为前端期望的 node_complete 事件
+            meta = event.metadata or {}
+            sse_type = meta.get("sse_type", "node_complete")
+            if sse_type == "node_complete":
+                yield _sse(
+                    {
+                        "type": "node_complete",
+                        "node_id": meta.get("node_id", ""),
+                        "layer": meta.get("layer", ""),
+                        "desc": meta.get("desc", ""),
+                        "completed": meta.get("completed", []),
+                        "progress": meta.get("progress", 0),
+                        "output": meta.get("output", {}),
+                        "timestamp": ts,
+                    }
+                )
+            else:
+                yield _sse(
+                    {
+                        "type": "pipeline_progress",
+                        "content": event.content,
+                        "metadata": meta,
+                        "timestamp": ts,
+                    }
+                )
 
         elif event.event_type == ActionType.TOOL_METADATA:
             if on_metadata and event.metadata:
                 on_metadata(event.metadata)
             yield _sse(
                 {
-                    "type": "tool_metadata",
+                    "type": "pipeline_update",
                     "metadata": event.metadata or {},
+                    "timestamp": ts,
                 }
             )
 
         elif event.event_type == ActionType.TOOL_RESULT:
-            # TOOL_RESULT 不直接发给前端，进入 LLM 上下文
-            # 但如果有 metadata，触发回调
-            if event.tool_result and event.tool_result.metadata:
-                if on_metadata:
-                    on_metadata(event.tool_result.metadata)
-                yield _sse(
-                    {
-                        "type": "tool_metadata",
-                        "metadata": event.tool_result.metadata,
-                    }
-                )
+            tr = event.tool_result
+            if tr:
+                # 处理 metadata（chart_data、analyst_reports 等）
+                if tr.metadata:
+                    if on_metadata:
+                        on_metadata(tr.metadata)
+
+                    sse_type = tr.metadata.get("sse_type", "")
+
+                    # run_deep_analysis 的最终结果：发送 report_ready
+                    if sse_type == "report_ready" or tr.name == "run_deep_analysis":
+                        stock_code = tr.metadata.get("stock_code", "")
+                        stock_name = tr.metadata.get("stock_name", "")
+                        if on_resolved:
+                            on_resolved(stock_code, stock_name)
+                        yield _sse(
+                            {
+                                "type": "resolved",
+                                "stock_code": stock_code,
+                                "stock_name": stock_name,
+                                "timestamp": ts,
+                            }
+                        )
+                        yield _sse(
+                            {
+                                "type": "report_ready",
+                                "report_markdown": tr.metadata.get("report_markdown", ""),
+                                "chart_data": tr.metadata.get("chart_data", {}),
+                                "stock_name": stock_name,
+                                "timestamp": ts,
+                            }
+                        )
+                    else:
+                        yield _sse(
+                            {
+                                "type": "pipeline_update",
+                                "metadata": tr.metadata,
+                                "timestamp": ts,
+                            }
+                        )
+                else:
+                    # 普通工具结果
+                    result_data = tr.output
+                    with contextlib.suppress(json.JSONDecodeError, TypeError):
+                        result_data = json.loads(tr.output)
+
+                    # web_search: 解析纯文本结果，发送结构化搜索来源
+                    if tr.name == "web_search" and isinstance(result_data, str):
+                        from finance_agent.web_search import parse_search_output
+
+                        search_results = parse_search_output(result_data)
+                        if search_results:
+                            yield _sse(
+                                {
+                                    "type": "search_result",
+                                    "query": last_web_search_query,
+                                    "results": [
+                                        {"title": r.title, "url": r.url, "content": r.content}
+                                        for r in search_results
+                                    ],
+                                    "count": len(search_results),
+                                    "timestamp": ts,
+                                }
+                            )
+
+                    # search_stock: 解析纯文本结果，发送结构化股票信息
+                    if tr.name == "search_stock" and isinstance(result_data, str):
+                        stock_info = _parse_stock_result_text(result_data)
+                        if stock_info:
+                            # 通过 on_metadata 回调通知调用方（用于 fallback）
+                            if on_metadata:
+                                on_metadata(
+                                    {
+                                        "search_stock_code": stock_info["code"],
+                                        "search_stock_name": stock_info["name"],
+                                    }
+                                )
+                            yield _sse(
+                                {
+                                    "type": "stock_resolved",
+                                    "stock_code": stock_info["code"],
+                                    "stock_name": stock_info["name"],
+                                    "timestamp": ts,
+                                }
+                            )
+
+                    yield _sse(
+                        {
+                            "type": "tool_result",
+                            "name": tr.name,
+                            "result": result_data,
+                            "timestamp": ts,
+                        }
+                    )
 
         elif event.event_type == ActionType.ERROR:
-            yield _sse({"type": "error", "message": event.content})
+            yield _sse({"type": "error", "message": event.content, "timestamp": ts})
 
-    yield _sse({"type": "chat_done"})
+    # ADR-0015: 退出 react_loop span 与 session 聚合上下文
+    _propagate_cm.__exit__(None, None, None)
+    _react_cm.__exit__(None, None, None)
+
+    yield _sse({"type": "chat_done", "timestamp": _now()})
+    # NOTE: done 事件由调用方发送（确保 session_created 等事件先发完）
 
 
 def _sse(data: dict) -> str:

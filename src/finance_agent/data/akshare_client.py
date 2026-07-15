@@ -16,26 +16,40 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from datetime import date, datetime
 
 import akshare as ak
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_SINA_MAX_RETRIES = 3
-_SINA_RETRY_DELAY = 5
+_SINA_MAX_RETRIES = 2
+_SINA_RETRY_DELAY = 2
+_AK_TIMEOUT = 15  # 单次 AKShare 调用超时秒数
+
+
+def _call_ak(func, *args, **kwargs):
+    """带超时的 AKShare 调用包装。超时返回 None，由调用方处理。"""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(func, *args, **kwargs)
+        try:
+            return future.result(timeout=_AK_TIMEOUT)
+        except FuturesTimeoutError:
+            logger.warning(
+                "AKShare 调用超时 (%ds): %s", _AK_TIMEOUT, getattr(func, "__name__", str(func))
+            )
+            return None
 
 
 def _sina_report(stock: str, symbol: str) -> pd.DataFrame:
-    """Call stock_financial_report_sina with retry — the Sina API is flaky."""
+    """Call stock_financial_report_sina with retry - the Sina API is flaky."""
     for attempt in range(1, _SINA_MAX_RETRIES + 1):
-        try:
-            df = ak.stock_financial_report_sina(stock=stock, symbol=symbol)
-            if df is not None and not df.empty:
-                return df
-            logger.warning("Sina API returned empty for %s/%s (attempt %d)", stock, symbol, attempt)
-        except (TypeError, KeyError) as e:
-            logger.warning("Sina API error for %s/%s (attempt %d): %s", stock, symbol, attempt, e)
+        df = _call_ak(ak.stock_financial_report_sina, stock=stock, symbol=symbol)
+        if df is not None and not df.empty:
+            return df
+        logger.warning("Sina API returned empty for %s/%s (attempt %d)", stock, symbol, attempt)
         if attempt < _SINA_MAX_RETRIES:
             time.sleep(_SINA_RETRY_DELAY)
     raise RuntimeError(f"新浪财经接口连续 {_SINA_MAX_RETRIES} 次无响应，请稍后再试")
@@ -153,9 +167,13 @@ class AKShareClient:
         return self._trim_years(df, years)
 
     def fetch_indicators(self, stock_code: str, start_year: str = "2020") -> pd.DataFrame:
-        df = ak.stock_financial_analysis_indicator(symbol=stock_code, start_year=start_year)
+        df = _call_ak(
+            ak.stock_financial_analysis_indicator, symbol=stock_code, start_year=start_year
+        )
+        if df is None or df.empty:
+            return pd.DataFrame()
         # 只保留年报（日期以 12-31 结尾）
-        if not df.empty and "日期" in df.columns:
+        if "日期" in df.columns:
             mask = df["日期"].astype(str).str.endswith("12-31")
             df = df[mask].reset_index(drop=True)
         return df
@@ -183,16 +201,14 @@ class AKShareClient:
 
     def fetch_industry(self, stock_code: str) -> dict:
         # 主源：东方财富（含行业+名称）
-        try:
-            df = ak.stock_individual_info_em(symbol=stock_code)
+        df = _call_ak(ak.stock_individual_info_em, symbol=stock_code)
+        if df is not None and not df.empty:
             result = {}
             for _, row in df.iterrows():
                 key = _INDUSTRY_KEY_MAP.get(row["item"], row["item"])
                 result[key] = row["value"]
             if result.get("name") or result.get("industry"):
                 return result
-        except Exception as e:
-            logger.warning("stock_individual_info_em failed for %s: %s", stock_code, e)
         # 降级：cninfo 行业 + 名称 fallback
         result = self._fetch_name_fallback(stock_code)
         industry = self._fetch_industry_cninfo(stock_code)
@@ -202,8 +218,8 @@ class AKShareClient:
 
     def fetch_stock_quote(self, stock_code: str) -> dict:
         # 主源：东方财富实时行情（含 PE/PB/市值/价格）
-        try:
-            df = ak.stock_zh_a_spot_em()
+        df = _call_ak(ak.stock_zh_a_spot_em)
+        if df is not None and not df.empty:
             # 尝试多种格式匹配（纯数字 / 带前缀）
             for code_key in (stock_code, stock_code.lstrip("sh").lstrip("sz")):
                 row = df[df["代码"] == code_key]
@@ -212,8 +228,6 @@ class AKShareClient:
             if not row.empty:
                 raw = row.iloc[0].to_dict()
                 return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
-        except Exception as e:
-            logger.warning("stock_zh_a_spot_em failed for %s: %s", stock_code, e)
         # 降级：仅获取名称+代码
         fallback = self._fetch_name_fallback(stock_code)
         if fallback:
@@ -232,8 +246,8 @@ class AKShareClient:
         prefix = "SH" if stock_code.startswith(("6", "9")) else "SZ"
         symbol = f"{prefix}{stock_code.lstrip('sh').lstrip('sz')}"
 
-        df = ak.stock_profit_sheet_by_quarterly_em(symbol=symbol)
-        if df.empty or "PARENT_NETPROFIT" not in df.columns:
+        df = _call_ak(ak.stock_profit_sheet_by_quarterly_em, symbol=symbol)
+        if df is None or df.empty or "PARENT_NETPROFIT" not in df.columns:
             raise ValueError(f"股票 {stock_code} 季度利润表数据不可用")
 
         # 按报告日排序（最新的在前），copy 避免 fragmentation warning
@@ -301,7 +315,9 @@ class AKShareClient:
         """
         try:
             # 1. 获取行业名称
-            info_df = ak.stock_individual_info_em(symbol=stock_code)
+            info_df = _call_ak(ak.stock_individual_info_em, symbol=stock_code)
+            if info_df is None or info_df.empty:
+                return None
             industry_name = None
             for _, row in info_df.iterrows():
                 if row["item"] == "行业":
@@ -314,7 +330,11 @@ class AKShareClient:
             from datetime import datetime
 
             date_str = datetime.now().strftime("%Y%m%d")
-            pe_df = ak.stock_industry_pe_ratio_cninfo(symbol="证监会行业分类", date=date_str)
+            pe_df = _call_ak(
+                ak.stock_industry_pe_ratio_cninfo, symbol="证监会行业分类", date=date_str
+            )
+            if pe_df is None or pe_df.empty:
+                return None
             # 列名映射
             pe_df = pe_df.rename(columns=_INDUSTRY_PE_KEY_MAP)
 
@@ -341,60 +361,44 @@ class AKShareClient:
         优先使用 stock_zh_a_hist（东方财富），失败时回退 stock_zh_a_daily（新浪）。
         返回统一中文列名：日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 换手率
         """
-        import time
         from datetime import datetime, timedelta
 
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
 
-        # ── 方案1: 东方财富 stock_zh_a_hist ──
-        last_err: Exception | None = None
-        for attempt in range(2):
-            try:
-                df = ak.stock_zh_a_hist(
-                    symbol=stock_code,
-                    period="daily",
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust="qfq",
-                )
-                if df is not None and not df.empty:
-                    df = df.sort_values("日期").reset_index(drop=True)
-                    return df.tail(days).reset_index(drop=True)
-            except Exception as e:
-                last_err = e
-                logger.warning("K线拉取(东财)第%d次失败: %s", attempt + 1, e)
-                if attempt < 1:
-                    time.sleep(2)
+        # ── 方案1: 东方财富 stock_zh_a_hist（仅 1 次重试） ──
+        df = _call_ak(
+            ak.stock_zh_a_hist,
+            symbol=stock_code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",
+        )
+        if df is not None and not df.empty:
+            df = df.sort_values("日期").reset_index(drop=True)
+            return df.tail(days).reset_index(drop=True)
 
-        # ── 方案2: 新浪 stock_zh_a_daily（回退） ──
+        # ── 方案2: 新浪 stock_zh_a_daily（回退，仅 1 次重试） ──
         logger.info("东财K线拉取失败，尝试新浪源: %s", stock_code)
         sina_symbol = self._to_sina_symbol(stock_code)
-        for attempt in range(2):
-            try:
-                df = ak.stock_zh_a_daily(symbol=sina_symbol, adjust="qfq")
-                if df is not None and not df.empty:
-                    # 列名映射为中文（与东财一致）
-                    rename_map = {
-                        "date": "日期",
-                        "open": "开盘",
-                        "close": "收盘",
-                        "high": "最高",
-                        "low": "最低",
-                        "volume": "成交量",
-                        "amount": "成交额",
-                        "turnover": "换手率",
-                    }
-                    df = df.rename(columns=rename_map)
-                    df = df.sort_values("日期").reset_index(drop=True)
-                    return df.tail(days).reset_index(drop=True)
-            except Exception as e:
-                last_err = e
-                logger.warning("K线拉取(新浪)第%d次失败: %s", attempt + 1, e)
-                if attempt < 1:
-                    time.sleep(2)
+        df = _call_ak(ak.stock_zh_a_daily, symbol=sina_symbol, adjust="qfq")
+        if df is not None and not df.empty:
+            rename_map = {
+                "date": "日期",
+                "open": "开盘",
+                "close": "收盘",
+                "high": "最高",
+                "low": "最低",
+                "volume": "成交量",
+                "amount": "成交额",
+                "turnover": "换手率",
+            }
+            df = df.rename(columns=rename_map)
+            df = df.sort_values("日期").reset_index(drop=True)
+            return df.tail(days).reset_index(drop=True)
 
-        logger.error("K线拉取均失败: %s, 最后错误: %s", stock_code, last_err)
+        logger.error("K线拉取均失败: %s", stock_code)
         return pd.DataFrame()
 
     @staticmethod
@@ -413,36 +417,24 @@ class AKShareClient:
 
         使用 index_zh_a_hist（东方财富），返回列含 日期, 收盘 等。
         """
-        import time
         from datetime import datetime, timedelta
 
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
 
-        last_err: Exception | None = None
-        for attempt in range(3):
-            try:
-                df = ak.index_zh_a_hist(
-                    symbol="000300",
-                    period="daily",
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                if df is None or df.empty:
-                    logger.warning("沪深300 K线数据为空")
-                    return pd.DataFrame()
+        df = _call_ak(
+            ak.index_zh_a_hist,
+            symbol="000300",
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df is None or df.empty:
+            logger.warning("沪深300 K线拉取失败或为空")
+            return pd.DataFrame()
 
-                df = df.sort_values("日期").reset_index(drop=True)
-                df = df.tail(days).reset_index(drop=True)
-                return df
-            except Exception as e:
-                last_err = e
-                logger.warning("沪深300 K线拉取第%d次失败: %s", attempt + 1, e)
-                if attempt < 2:
-                    time.sleep(2 * (attempt + 1))
-
-        logger.error("沪深300 K线拉取3次均失败, 最后错误: %s", last_err)
-        return pd.DataFrame()
+        df = df.sort_values("日期").reset_index(drop=True)
+        return df.tail(days).reset_index(drop=True)
 
     # ── 宏观指标 ──
 
@@ -454,45 +446,23 @@ class AKShareClient:
         """
         result: dict[str, list[dict]] = {}
 
-        # CPI
-        try:
-            df = ak.macro_china_cpi()
+        def _safe_macro(key: str, func):
+            df = _call_ak(func)
             if df is not None and not df.empty:
-                recent = df.tail(6)
-                result["cpi"] = recent.to_dict(orient="records")
-        except Exception as e:
-            logger.warning("CPI 拉取失败: %s", e)
-            result["cpi"] = []
+                records = df.tail(6).to_dict(orient="records")
+                # 序列化 date/datetime 对象，避免 JSON 编码失败
+                for r in records:
+                    for k, v in r.items():
+                        if isinstance(v, (date, datetime)):
+                            r[k] = v.isoformat()
+                result[key] = records
+            else:
+                result[key] = []
 
-        # PMI
-        try:
-            df = ak.macro_china_pmi()
-            if df is not None and not df.empty:
-                recent = df.tail(6)
-                result["pmi"] = recent.to_dict(orient="records")
-        except Exception as e:
-            logger.warning("PMI 拉取失败: %s", e)
-            result["pmi"] = []
-
-        # M2 (货币供应)
-        try:
-            df = ak.macro_china_money_supply()
-            if df is not None and not df.empty:
-                recent = df.tail(6)
-                result["m2"] = recent.to_dict(orient="records")
-        except Exception as e:
-            logger.warning("M2 拉取失败: %s", e)
-            result["m2"] = []
-
-        # LPR (贷款市场报价利率)
-        try:
-            df = ak.macro_china_lpr()
-            if df is not None and not df.empty:
-                recent = df.tail(6)
-                result["lpr"] = recent.to_dict(orient="records")
-        except Exception as e:
-            logger.warning("LPR 拉取失败: %s", e)
-            result["lpr"] = []
+        _safe_macro("cpi", ak.macro_china_cpi)
+        _safe_macro("pmi", ak.macro_china_pmi)
+        _safe_macro("m2", ak.macro_china_money_supply)
+        _safe_macro("lpr", ak.macro_china_lpr)
 
         return result
 
@@ -504,28 +474,27 @@ class AKShareClient:
         返回 list[dict]，每条含 title、content、datetime、source。
         失败返回空列表。
         """
-        try:
-            df = ak.stock_news_em(symbol=stock_code)
-            if df is None or df.empty:
-                return []
-            df = df.head(limit)
-            # 标准化列名
-            col_map = {
-                "新闻标题": "title",
-                "新闻内容": "content",
-                "发布时间": "datetime",
-                "文章来源": "source",
-                "新闻链接": "url",
-            }
-            df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
-            records = df.to_dict(orient="records")
-            # 确保每条都有必要的字段
-            for r in records:
-                r.setdefault("title", "")
-                r.setdefault("content", "")
-                r.setdefault("datetime", "")
-                r.setdefault("source", "")
-            return records
-        except Exception as e:
-            logger.warning("新闻拉取失败: %s", e)
+        df = _call_ak(ak.stock_news_em, symbol=stock_code)
+        if df is None or df.empty:
             return []
+        df = df.head(limit)
+        # 标准化列名
+        col_map = {
+            "新闻标题": "title",
+            "新闻内容": "content",
+            "发布时间": "datetime",
+            "文章来源": "source",
+            "新闻链接": "url",
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+        records = df.to_dict(orient="records")
+        # 序列化 date/datetime 对象
+        for r in records:
+            for k, v in r.items():
+                if isinstance(v, (date, datetime)):
+                    r[k] = v.isoformat()
+            r.setdefault("title", "")
+            r.setdefault("content", "")
+            r.setdefault("datetime", "")
+            r.setdefault("source", "")
+        return records

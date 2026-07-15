@@ -20,6 +20,7 @@ class AnalysisState(TypedDict, total=False):
     peer_codes: list[str] | None
     enable_web_search: bool  # 是否启用实时事件搜索
     api_key: str | None  # 用户自带的 DeepSeek API Key（HF Spaces 用）
+    focus: str  # 深度研究意图澄清环节用户填写的关注点（Kimi 风格反问回答）
 
     # ── Cache ──
     cache_result: str  # HIT | MISS
@@ -60,14 +61,10 @@ class AnalysisState(TypedDict, total=False):
     quarterly_income: pd.DataFrame | None
     quarterly_trend: dict | None
 
-    # ── Layer 2.5: 关键非财务事件（仅 IA 使用）──
+    # ── Layer 2.5: 关键非财务事件（舆情分析师输入之一）──
     key_events: list[dict] | None
 
     # ── Agent 输出 ──
-    financial_analysis: str | None
-    financial_report: str | None
-    investment_analysis: str | None
-    investment_report: str | None
     final_report: str | None
     file_path: str | None
     file_paths: dict | None

@@ -8,9 +8,8 @@
 
 from __future__ import annotations
 
-from finance_agent.llm import call_llm
 from finance_agent.models import DebateMessage
-from finance_agent.nodes._llm_utils import parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_streaming, parse_json_response
 from finance_agent.prompts.loader import load_prompt
 
 
@@ -20,7 +19,7 @@ def bull_debater(state: dict) -> dict:
     system = load_prompt("bull_debater")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="bull_debater")
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 
@@ -33,7 +32,7 @@ def bear_debater(state: dict) -> dict:
     system = load_prompt("bear_debater")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="bear_debater")
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 

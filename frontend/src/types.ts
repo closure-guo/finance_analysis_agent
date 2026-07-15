@@ -72,6 +72,22 @@ export interface ChatTokenEvent {
 export interface ThinkingTokenEvent {
   type: 'thinking_token'
   token: string
+  node?: string
+  timestamp: string
+}
+
+export interface ToolCallEvent {
+  type: 'tool_call'
+  name: string
+  args: Record<string, any>
+  iteration: number
+  timestamp: string
+}
+
+export interface ToolResultEvent {
+  type: 'tool_result'
+  name: string
+  result: any
   timestamp: string
 }
 
@@ -156,6 +172,71 @@ export interface DoneEvent {
   timestamp: string
 }
 
+export interface SessionCreatedEvent {
+  type: 'session_created'
+  session_id: string
+  display_name: string
+  timestamp: string
+}
+
+export interface ClarifyPlanStep {
+  title: string
+  desc: string
+}
+
+export interface ClarifyQuestion {
+  id: string
+  text: string
+}
+
+export interface ClarifyCandidate {
+  stock_code: string
+  stock_name: string
+}
+
+export interface ClarifyData {
+  status: 'ok' | 'error'
+  query: string
+  stock_code: string
+  stock_name: string
+  understanding: string
+  questions: ClarifyQuestion[]
+  plan: ClarifyPlanStep[]
+  needs_selection: boolean
+  candidates: ClarifyCandidate[]
+  message: string
+}
+
+export interface ClarifyToolEvent {
+  type: 'clarify_tool'
+  tool: string
+  args?: Record<string, any>
+  status: 'running' | 'done' | 'error'
+  result_summary?: string
+  source?: string
+  found?: boolean
+  error?: string
+  timestamp: string
+}
+
+export interface ClarifyThinkingEvent {
+  type: 'clarify_thinking'
+  token: string
+  timestamp: string
+}
+
+export interface ClarifyAnswerEvent {
+  type: 'clarify_answer'
+  token: string
+  timestamp: string
+}
+
+export interface ClarifyDoneEvent {
+  type: 'clarify_done'
+  data: ClarifyData
+  timestamp: string
+}
+
 export type SSEEvent =
   | AnalysisStartEvent
   | NodeStartEvent
@@ -166,12 +247,19 @@ export type SSEEvent =
   | ReportChunkEvent
   | ChatTokenEvent
   | ThinkingTokenEvent
+  | ToolCallEvent
+  | ToolResultEvent
   | ChatDoneEvent
   | SearchStartEvent
   | SearchResultEvent
   | SearchErrorEvent
   | ErrorEvent
   | DoneEvent
+  | SessionCreatedEvent
+  | ClarifyToolEvent
+  | ClarifyThinkingEvent
+  | ClarifyAnswerEvent
+  | ClarifyDoneEvent
 
 // ── Session types ──
 
@@ -184,6 +272,7 @@ export interface SessionMeta {
   created_at: string
   duration_ms: number
   report_len?: number
+  session_type?: string
 }
 
 export interface SessionDetail extends SessionMeta {
@@ -204,7 +293,7 @@ export interface PipelineStep {
 }
 
 // UI message types
-export type MessageType = 'user' | 'pipeline' | 'report' | 'chat' | 'system' | 'error'
+export type MessageType = 'user' | 'pipeline' | 'report' | 'chat' | 'system' | 'error' | 'clarify'
 
 export interface UIMessage {
   id: string
@@ -230,4 +319,15 @@ export interface UIMessage {
   searchQuery?: string
   searchResults?: Array<{ title: string; url: string; content: string }>
   searchStatus?: 'searching' | 'done' | 'error' | 'unavailable'
+  // Clarify-specific (deep research intent confirmation)
+  clarifyData?: ClarifyData | null
+  clarifyStarted?: boolean
+  clarifyThinking?: string
+  clarifyTools?: Array<{
+    tool: string
+    status: 'running' | 'done' | 'error'
+    result_summary?: string
+    source?: string
+    error?: string
+  }>
 }

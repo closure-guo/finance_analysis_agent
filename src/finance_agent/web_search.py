@@ -22,6 +22,7 @@ class SearchResponse(BaseModel):
     query: str
     results: list[SearchResult]
     count: int
+    answer: str | None = None  # Tavily AI 生成的实时摘要
 
 
 # ── Tool definition for LLM function calling ──
@@ -83,13 +84,17 @@ def tavily_search(query: str, max_results: int = 5) -> SearchResponse:
             )
         )
 
-    return SearchResponse(query=query, results=results, count=len(results))
+    answer = response.get("answer") or None
+
+    return SearchResponse(query=query, results=results, count=len(results), answer=answer)
 
 
 def format_search_for_llm(response: SearchResponse) -> str:
     """Format search results as tool result string for LLM context.
 
     Format:
+    [AI 摘要] {answer}    （如果 Tavily 返回了实时摘要）
+
     [1] {title}
     {url}
     {content}
@@ -98,6 +103,10 @@ def format_search_for_llm(response: SearchResponse) -> str:
     ...
     """
     lines: list[str] = []
+    if response.answer:
+        lines.append("[AI 摘要]")
+        lines.append(response.answer)
+        lines.append("")
     for i, r in enumerate(response.results, 1):
         lines.append(f"[{i}] {r.title}")
         lines.append(r.url)
@@ -109,3 +118,29 @@ def format_search_for_llm(response: SearchResponse) -> str:
 def has_tavily_key() -> bool:
     """Check if Tavily API key is configured."""
     return bool(os.environ.get("TAVILY_API_KEY", ""))
+
+
+def parse_search_output(text: str) -> list[SearchResult]:
+    """从 format_search_for_llm 的输出文本中解析结构化搜索结果。
+
+    用于在前端展示搜索来源链接，无需重复调用 Tavily API。
+    """
+    results: list[SearchResult] = []
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("[") and "]" in line:
+            title = line.split("]", 1)[1].strip()
+            url = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            content_lines: list[str] = []
+            j = i + 2
+            while j < len(lines) and lines[j].strip():
+                content_lines.append(lines[j].strip())
+                j += 1
+            if url and url.startswith("http"):
+                results.append(SearchResult(title=title, url=url, content=" ".join(content_lines)))
+            i = j
+        else:
+            i += 1
+    return results

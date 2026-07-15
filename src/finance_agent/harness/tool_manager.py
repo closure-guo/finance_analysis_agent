@@ -140,6 +140,15 @@ class ToolManager:
     def get_tool_names(self) -> list[str]:
         return list(self.tools.keys())
 
+    def is_streaming(self, name: str) -> bool:
+        """检查工具是否为流式工具（async generator）。"""
+        import inspect
+
+        func = self.tools.get(name)
+        if func is None:
+            return False
+        return inspect.isasyncgenfunction(func)
+
     # ── 执行 ──
 
     async def execute(
@@ -215,6 +224,92 @@ class ToolManager:
                 is_error=True,
                 duration_ms=duration,
             )
+
+    async def execute_stream(
+        self,
+        tool_call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ):
+        """
+        执行流式工具（async generator） -- yield StreamEvent，返回最终 ToolResult。
+
+        流式工具 yield StreamEvent（PROGRESS / TOOL_RESULT），
+        本方法透传 PROGRESS 事件，提取最终 TOOL_RESULT 返回。
+        """
+        from finance_agent.harness.types import ActionType
+
+        start = time.time()
+
+        # 1. 检查工具是否存在
+        if name not in self.tools:
+            yield self._error_result(tool_call_id, name, f"工具 '{name}' 不存在")
+            return
+
+        # 2. 权限检查
+        permitted = await self.checker.check(name, arguments)
+        if not permitted:
+            yield self._error_result(
+                tool_call_id, name, f"工具 '{name}' 的权限请求被拒绝", permission_granted=False
+            )
+            return
+
+        # 3. 执行流式工具
+        try:
+            func = self.tools[name]
+            gen = func(**arguments)
+
+            final_result: ToolResult | None = None
+
+            async for event in gen:
+                if event.event_type == ActionType.PROGRESS:
+                    yield event
+                elif event.event_type == ActionType.TOOL_RESULT:
+                    # 流式工具的最终结果
+                    if event.tool_result:
+                        final_result = event.tool_result
+                    yield event
+
+            # 统计
+            duration = int((time.time() - start) * 1000)
+            if name not in self.stats:
+                self.stats[name] = {"calls": 0, "errors": 0, "total_ms": 0}
+            self.stats[name]["calls"] += 1
+            self.stats[name]["total_ms"] += duration
+
+            if final_result is None:
+                # 流式工具未返回 TOOL_RESULT，构建一个
+                final_result = ToolResult(
+                    tool_call_id=tool_call_id,
+                    name=name,
+                    output="",
+                    duration_ms=duration,
+                )
+
+            yield final_result
+
+        except Exception as e:
+            duration = int((time.time() - start) * 1000)
+            if name in self.stats:
+                self.stats[name]["errors"] += 1
+            yield self._error_result(tool_call_id, name, f"{type(e).__name__}: {e}", duration)
+
+    def _error_result(
+        self,
+        tool_call_id: str,
+        name: str,
+        message: str,
+        duration_ms: int = 0,
+        permission_granted: bool = True,
+    ) -> ToolResult:
+        return ToolResult(
+            tool_call_id=tool_call_id,
+            name=name,
+            output=f"[错误] {message}",
+            is_error=True,
+            duration_ms=duration_ms,
+            permission_granted=permission_granted,
+        )
 
     def __repr__(self) -> str:
         return f"ToolManager(tools={len(self.tools)}, schemas={len(self.schemas)})"

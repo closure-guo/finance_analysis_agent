@@ -49,10 +49,8 @@ def init_db() -> None:
         """
     )
     # 迁移：为旧表添加 session_type 列（区分深度分析 'analysis' 与快速问答 'chat'）
-    try:
+    with contextlib.suppress(sqlite3.OperationalError):
         conn.execute("ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'analysis'")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
     conn.commit()
     conn.close()
 
@@ -68,6 +66,7 @@ def create_session(
     duration_ms: int = 0,
     session_type: str = "analysis",
     display_name: str | None = None,
+    status: str = "completed",
 ) -> str:
     """Create a new session record, return session_id."""
     session_id = str(uuid.uuid4())[:12]
@@ -82,13 +81,14 @@ def create_session(
             (session_id, stock_code, stock_name, display_name, status,
              report_markdown, chart_data, analyst_reports, agent_process,
              analyst_summaries, chat_history, created_at, duration_ms, session_type)
-        VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, '[]', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)
         """,
         (
             session_id,
             stock_code,
             stock_name,
             display_name,
+            status,
             report_markdown,
             json.dumps(chart_data or {}, ensure_ascii=False),
             json.dumps(analyst_reports or {}, ensure_ascii=False, default=str),
@@ -102,6 +102,61 @@ def create_session(
     conn.commit()
     conn.close()
     return session_id
+
+
+def update_session_report(
+    session_id: str,
+    report_markdown: str = "",
+    chart_data: dict | None = None,
+    analyst_reports: dict | None = None,
+    agent_process: dict | None = None,
+    analyst_summaries: dict | None = None,
+    duration_ms: int = 0,
+    status: str = "completed",
+) -> bool:
+    """更新 session 的报告数据和状态。
+
+    用于管线启动时先创建 running session，完成后再回填报告。
+    """
+    conn = _get_db()
+    cur = conn.execute(
+        """
+        UPDATE sessions SET
+            report_markdown = ?,
+            chart_data = ?,
+            analyst_reports = ?,
+            agent_process = ?,
+            analyst_summaries = ?,
+            duration_ms = ?,
+            status = ?
+        WHERE session_id = ?
+        """,
+        (
+            report_markdown,
+            json.dumps(chart_data or {}, ensure_ascii=False),
+            json.dumps(analyst_reports or {}, ensure_ascii=False, default=str),
+            json.dumps(agent_process or {}, ensure_ascii=False, default=str),
+            json.dumps(analyst_summaries or {}, ensure_ascii=False, default=str),
+            duration_ms,
+            status,
+            session_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def update_session_status(session_id: str, status: str) -> bool:
+    """更新 session 状态（如 running -> failed）。"""
+    conn = _get_db()
+    cur = conn.execute(
+        "UPDATE sessions SET status = ? WHERE session_id = ?",
+        (status, session_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
 
 
 def create_chat_session(display_name: str) -> str:

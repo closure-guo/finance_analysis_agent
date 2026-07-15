@@ -15,14 +15,10 @@ dependencies = [
     "matplotlib>=3.8.0",
     "ddgs>=7.0",
     "pandas-stubs~=3.0.3",
-    "fastmcp>=3.4.2",
     "langfuse>=2.0.0",
     "tavily-python>=0.7.26",
     "python-dotenv>=1.2.2",
 ]
-
-[project.scripts]
-finance-agent-mcp = "finance_agent.mcp_server:main"
 
 [tool.uv]
 package = true
@@ -56,7 +52,7 @@ select = [
 ignore = ["E501"]  # line-too-long (handled by formatter)
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101"]  # pytest uses assert
+"tests/**/*.py" = ["S101", "S310"]  # pytest uses assert; test scripts use urllib
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

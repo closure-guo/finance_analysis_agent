@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
-from finance_agent.llm import call_llm
+from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint
 from finance_agent.prompts.loader import load_prompt
 
 
 def research_manager(state: dict) -> dict:
-    """Layer II Research Manager — 输出纯文本结论。"""
+    """Layer II Research Manager - 输出纯文本结论。"""
     context = _build_research_context(state)
     system = load_prompt("research_manager")
     api_key = state.get("api_key")
 
-    conclusion = call_llm(context, system=system, api_key=api_key)
+    conclusion = call_llm_streaming(
+        context, system=system, api_key=api_key, node_name="research_manager"
+    )
 
     return {"research_manager_conclusion": conclusion}
 
 
 def _build_research_context(state: dict) -> str:
     sections = []
+
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     # 分析师报告摘要
     reports = state.get("analyst_reports") or {}

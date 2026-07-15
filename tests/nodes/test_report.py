@@ -77,3 +77,45 @@ class TestGenerateReport:
         report = result["final_report"]
         assert "贵州茅台" in report
         assert "600519" in report
+
+    def test_focus_reorders_and_folds_sections(self, monkeypatch):
+        """focus 命中维度时：重点分析师前置并标星，非重点折叠，出现研究聚焦摘要。"""
+        from finance_agent.nodes import report as report_mod
+
+        # 打桩 LLM 摘要调用，避免真实请求
+        monkeypatch.setattr(report_mod, "call_llm", lambda *a, **k: "围绕估值的摘要文本")
+
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "focus": "估值是否合理，中长期持有",
+            "analyst_reports": {
+                "fundamental": AnalystReport(
+                    agent_name="fundamental",
+                    summary="基本面强劲",
+                    key_findings=["ROE 28.33%"],
+                    claims=[],
+                    markdown="",
+                ),
+                "technical": AnalystReport(
+                    agent_name="technical",
+                    summary="技术面偏多",
+                    key_findings=["MA5 上穿 MA20"],
+                    claims=[],
+                    markdown="",
+                ),
+            },
+        }
+        result = generate_report(state)
+        report = result["final_report"]
+
+        # 研究聚焦摘要出现
+        assert "研究聚焦" in report
+        assert "围绕估值的摘要文本" in report
+        # 报告头部标注研究聚焦
+        assert "研究聚焦: 估值是否合理" in report
+        # fundamental（命中 valuation/growth）为重点，标星且出现在 technical 之前
+        assert report.index("fundamental") < report.index("technical")
+        assert "★ 重点" in report
+        # technical（未命中）被折叠
+        assert "<details>" in report

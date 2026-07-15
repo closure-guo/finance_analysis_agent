@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import litellm
@@ -68,83 +69,11 @@ for _cls_path in (
     except Exception:  # noqa: S110
         pass
 
-# ── Langfuse 可观测性 ───────────────────────────────────────────────
-# 配置了 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 时，用自定义回调直接对接
-# Langfuse SDK v4，绕过 litellm 内置 langfuse 集成的兼容性问题。
-# 未配置时上方 no-op 补丁已禁用 litellm 内置集成，不影响本地运行。
-if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
-    import logging as _lf_log_mod
-
-    _lf_logger = _lf_log_mod.getLogger("finance_agent.langfuse")
-    _lf_logger.setLevel(_lf_log_mod.DEBUG)
-
-    class _LangfuseCallback:
-        """litellm 回调，将 LLM 调用上报到 Langfuse v4。"""
-
-        def __init__(self):
-            from langfuse import Langfuse
-
-            self.client = Langfuse(
-                public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-                secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-                host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
-            )
-
-        def log_success_event(self, kwargs, completion_response, start_time, end_time):
-            try:
-                self._report(kwargs, completion_response, start_time, end_time)
-            except Exception as e:
-                _lf_logger.warning("Langfuse 上报失败: %s", e)
-
-        def log_failure_event(self, kwargs, completion_response, start_time, end_time):
-            try:
-                self._report(kwargs, completion_response, start_time, end_time, error=True)
-            except Exception as e:
-                _lf_logger.warning("Langfuse 上报失败: %s", e)
-
-        async def async_log_success_event(self, kwargs, completion_response, start_time, end_time):
-            try:
-                self._report(kwargs, completion_response, start_time, end_time)
-            except Exception as e:
-                _lf_logger.warning("Langfuse 上报失败: %s", e)
-
-        async def async_log_failure_event(self, kwargs, completion_response, start_time, end_time):
-            try:
-                self._report(kwargs, completion_response, start_time, end_time, error=True)
-            except Exception as e:
-                _lf_logger.warning("Langfuse 上报失败: %s", e)
-
-        def _report(self, kwargs, resp, start_time, end_time, error=False):
-            model = kwargs.get("model", "unknown")
-            messages = kwargs.get("messages", [])
-            usage = getattr(getattr(resp, "usage", None), "model_dump", lambda: {})()
-            output = {"error": str(resp)} if error else ""
-            if not error:
-                choices = getattr(resp, "choices", [])
-                if choices:
-                    output = getattr(choices[0].message, "content", "")
-
-            self.client.start_observation(
-                name=f"litellm:{model}",
-                as_type="generation",
-                input={"messages": messages},
-                output=output,
-                model=model,
-                usage_details={
-                    "input": usage.get("prompt_tokens", 0),
-                    "output": usage.get("completion_tokens", 0),
-                    "total": usage.get("total_tokens", 0),
-                },
-                completion_start_time=start_time,
-            ).end()
-            self.client.flush()
-
-    try:
-        _cb = _LangfuseCallback()
-        litellm.success_callback.append(_cb)
-        litellm.failure_callback.append(_cb)
-    except Exception as e:
-        _lf_logger.warning("Langfuse 初始化失败: %s", e, exc_info=True)
+# ── Langfuse 可观测性（ADR-0015）───────────────────────────────────
+# LLM 调用细节改由 start_as_current_observation 在 call_llm 三入口包裹，
+# 自动挂到 CallbackHandler 已建好的图节点 span 下。
+# 不再使用 _LangfuseCallback + start_observation（产生孤立 generation，无父子关系）。
+from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse  # noqa: E402
 
 _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 _QUICK_MODEL = "deepseek/deepseek-chat"
@@ -245,13 +174,38 @@ def call_llm(
         disable_thinking=quick,
     )
 
-    resp = litellm.completion(**kwargs)
-    content = resp.choices[0].message.content
-    # Fallback: if content is empty (thinking mode), use reasoning_content
-    if not content:
-        msg = resp.choices[0].message
-        content = getattr(msg, "reasoning_content", "") or ""
-    return str(content)
+    _lf = _get_langfuse()
+    if _lf is not None:
+        try:
+            with _lf.start_as_current_observation(
+                as_type="generation",
+                name=f"litellm:{model}",
+                model=model,
+                input={"messages": messages},
+            ) as _gen:
+                resp = litellm.completion(**kwargs)
+                content = resp.choices[0].message.content
+                if not content:
+                    msg = resp.choices[0].message
+                    content = getattr(msg, "reasoning_content", "") or ""
+                _usage = getattr(resp, "usage", None)
+                _ud = {}
+                if _usage:
+                    _ud = {
+                        "input": getattr(_usage, "prompt_tokens", 0) or 0,
+                        "output": getattr(_usage, "completion_tokens", 0) or 0,
+                    }
+                _gen.update(output=str(content), usage_details=_ud)
+                return str(content)
+        except Exception:
+            _lf = None
+    if _lf is None:
+        resp = litellm.completion(**kwargs)
+        content = resp.choices[0].message.content
+        if not content:
+            msg = resp.choices[0].message
+            content = getattr(msg, "reasoning_content", "") or ""
+        return str(content)
 
 
 def call_llm_stream(
@@ -294,14 +248,54 @@ def call_llm_stream(
         disable_thinking=disable_thinking,
     )
 
-    stream = litellm.completion(**kwargs)
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        # Yield reasoning content (thinking) and answer content separately
-        if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
-            yield ("thinking", str(delta.reasoning_content))
-        if delta and delta.content:
-            yield ("answer", str(delta.content))
+    _lf = _get_langfuse()
+    _gen_cm = None
+    _gen = None
+    if _lf is not None:
+        try:
+            _gen_cm = _lf.start_as_current_observation(
+                as_type="generation",
+                name=f"litellm:{model}",
+                model=model,
+                input={"messages": messages},
+            )
+            _gen = _gen_cm.__enter__()
+        except Exception:
+            _gen = None
+            _gen_cm = None
+
+    try:
+        _accumulated = ""
+        _last_usage = None
+        stream = litellm.completion(**kwargs)
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            # Yield reasoning content (thinking) and answer content separately
+            if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                yield ("thinking", str(delta.reasoning_content))
+            if delta and delta.content:
+                _accumulated += str(delta.content)
+                yield ("answer", str(delta.content))
+            _u = getattr(chunk, "usage", None)
+            if _u:
+                _last_usage = _u
+
+        if _gen is not None:
+            try:
+                _ud = {}
+                if _last_usage:
+                    _ud = {
+                        "input": getattr(_last_usage, "prompt_tokens", 0) or 0,
+                        "output": getattr(_last_usage, "completion_tokens", 0) or 0,
+                    }
+                _gen.update(output=_accumulated, usage_details=_ud)
+                _gen.end()
+            except Exception:  # noqa: S110
+                pass
+    finally:
+        if _gen_cm is not None:
+            with contextlib.suppress(Exception):
+                _gen_cm.__exit__(None, None, None)
 
 
 def call_llm_with_tools(
@@ -344,4 +338,29 @@ def call_llm_with_tools(
     if tool_choice:
         kwargs["tool_choice"] = tool_choice
 
+    _lf = _get_langfuse()
+    if _lf is not None:
+        try:
+            with _lf.start_as_current_observation(
+                as_type="generation",
+                name=f"litellm:{model}",
+                model=model,
+                input={"messages": messages},
+            ) as _gen:
+                resp = litellm.completion(**kwargs)
+                _output = ""
+                _choices = getattr(resp, "choices", [])
+                if _choices:
+                    _output = getattr(_choices[0].message, "content", "") or ""
+                _usage = getattr(resp, "usage", None)
+                _ud = {}
+                if _usage:
+                    _ud = {
+                        "input": getattr(_usage, "prompt_tokens", 0) or 0,
+                        "output": getattr(_usage, "completion_tokens", 0) or 0,
+                    }
+                _gen.update(output=str(_output), usage_details=_ud)
+                return resp
+        except Exception:
+            _lf = None
     return litellm.completion(**kwargs)

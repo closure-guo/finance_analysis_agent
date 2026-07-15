@@ -126,6 +126,10 @@ class ContextManager:
         """追加助手消息"""
         self.append(Message(role=Role.ASSISTANT, content=content, tool_calls=tool_calls))
 
+    def append_system(self, content: str) -> None:
+        """追加系统提示消息"""
+        self.append(Message(role=Role.SYSTEM, content=content))
+
     def append_tool_result(self, tool_call_id: str, output: str, is_error: bool = False) -> None:
         """追加工具结果消息"""
         # L1: 工具结果预算检查

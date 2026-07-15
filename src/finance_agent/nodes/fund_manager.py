@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 
-from finance_agent.llm import call_llm
-from finance_agent.nodes._llm_utils import parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt
 
 
@@ -15,7 +14,7 @@ def fund_manager(state: dict) -> dict:
     system = load_prompt("fund_manager")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="fund_manager")
     data = parse_json_response(response)
     decision = data["decision"]
 
@@ -29,6 +28,11 @@ def fund_manager(state: dict) -> dict:
 def _build_fund_manager_context(state: dict) -> str:
     """构建 Fund Manager 的 LLM context。"""
     sections = []
+
+    # 用户关注点（来自深度研究意图澄清环节）
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     # 最终交易决策
     decision = state.get("final_trade_decision") or {}

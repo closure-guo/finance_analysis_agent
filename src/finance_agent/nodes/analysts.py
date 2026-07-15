@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import json
 
-from finance_agent.llm import call_llm
 from finance_agent.models import AnalystReport
-from finance_agent.nodes._llm_utils import parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt
 
 _VALID_CLAIM_TYPES = {
@@ -64,7 +63,9 @@ def technical_analyst(state: dict) -> dict:
     system = load_prompt("technical_analyst")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(
+        context, system=system, api_key=api_key, node_name="technical_analyst"
+    )
     report = _parse_analyst_report(response, "technical")
 
     return {"analyst_reports": {"technical": report}}
@@ -77,6 +78,10 @@ def _build_technical_context(state: dict) -> str:
     stock_name = state.get("stock_name", "N/A")
     stock_code = state.get("stock_code", "N/A")
     sections.append(f"股票: {stock_name}({stock_code})")
+
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     indicators = state.get("technical_indicators") or {}
     if indicators:
@@ -91,7 +96,9 @@ def macro_analyst(state: dict) -> dict:
     system = load_prompt("macro_analyst")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(
+        context, system=system, api_key=api_key, node_name="macro_analyst"
+    )
     report = _parse_analyst_report(response, "macro")
 
     return {"analyst_reports": {"macro": report}}
@@ -106,6 +113,10 @@ def _build_macro_context(state: dict) -> str:
     industry = state.get("industry_info") or {}
     industry_name = industry.get("name", "N/A")
     sections.append(f"股票: {stock_name}({stock_code}), 所属行业: {industry_name}")
+
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     macro = state.get("macro_indicators") or {}
     if macro:
@@ -131,7 +142,9 @@ def fundamental_analyst(state: dict) -> dict:
     system = load_prompt("fundamental_analyst")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(
+        context, system=system, api_key=api_key, node_name="fundamental_analyst"
+    )
     report = _parse_analyst_report(response, "fundamental")
 
     return {"analyst_reports": {"fundamental": report}}
@@ -144,6 +157,10 @@ def _build_fundamental_context(state: dict) -> str:
     stock_name = state.get("stock_name", "N/A")
     stock_code = state.get("stock_code", "N/A")
     sections.append(f"股票: {stock_name}({stock_code})")
+
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     # 三大报表（近 3 年，减少 token）
     for name, key in [
@@ -225,7 +242,9 @@ def sentiment_analyst(state: dict) -> dict:
     system = load_prompt("sentiment_analyst")
     api_key = state.get("api_key")
 
-    response = call_llm(context, system=system, api_key=api_key)
+    response = call_llm_streaming(
+        context, system=system, api_key=api_key, node_name="sentiment_analyst"
+    )
     report = _parse_analyst_report(response, "sentiment")
 
     return {"analyst_reports": {"sentiment": report}}
@@ -238,6 +257,10 @@ def _build_sentiment_context(state: dict) -> str:
     stock_name = state.get("stock_name", "N/A")
     stock_code = state.get("stock_code", "N/A")
     sections.append(f"股票: {stock_name}({stock_code})")
+
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     # 新闻列表（取最近 15 条，减少 token）
     news = state.get("news_list") or []

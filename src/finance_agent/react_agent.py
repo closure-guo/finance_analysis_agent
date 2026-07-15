@@ -48,8 +48,8 @@ DEEP_ANALYSIS_TOOL: dict[str, Any] = {
     "function": {
         "name": "run_deep_analysis",
         "description": (
-            "对指定A股股票执行深度分析（5层架构：4分析师并行→多空辩论→交易决策→"
-            "风控压力测试→基金经理审批→报告生成）。需要提供股票代码。"
+            "对指定A股股票执行深度分析（5层架构：4分析师并行->多空辩论->交易决策->"
+            "风控压力测试->基金经理审批->报告生成）。需要提供股票代码。"
             "如果用户输入了模糊查询，请先调用 search_stock 获取股票代码。"
         ),
         "parameters": {
@@ -69,7 +69,29 @@ DEEP_ANALYSIS_TOOL: dict[str, Any] = {
     },
 }
 
-REACT_TOOLS = [SEARCH_STOCK_TOOL, DEEP_ANALYSIS_TOOL]
+WEB_SEARCH_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "搜索网页获取实时信息。当用户询问股票推荐、今日热点、市场动态等"
+            "需要最新信息的问题时调用。例如：'今天推荐买入的股票'、'A股热点'。"
+            "搜索后从结果中提取具体股票名称，再调用 search_stock 获取代码，最后调用 run_deep_analysis。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+REACT_TOOLS = [SEARCH_STOCK_TOOL, DEEP_ANALYSIS_TOOL, WEB_SEARCH_TOOL]
 
 # ── ReAct system prompt ──
 
@@ -78,30 +100,38 @@ REACT_SYSTEM_PROMPT = """你是一个专业的A股投研分析助手，负责理
 ## 可用工具
 
 1. **search_stock**: 根据自然语言查询搜索A股股票。当用户输入股票名称、行业描述、公司特征等模糊查询时调用。
-2. **run_deep_analysis**: 对指定股票执行完整的5层深度分析（4分析师→多空辩论→风控→报告）。需要股票代码。
+2. **run_deep_analysis**: 对指定股票执行完整的5层深度分析（4分析师->多空辩论->风控->报告）。需要股票代码。
+3. **web_search**: 搜索网页获取实时信息。当用户询问股票推荐、今日热点、市场动态等需要最新信息的问题时调用。
 
 ## 工作流程
 
 1. 分析用户输入：
    - 如果用户直接输入了6位股票代码，可以直接调用 run_deep_analysis
    - 如果用户输入了股票名称（如"宁德时代"），可以先调用 search_stock 确认代码，再调用 run_deep_analysis
-   - 如果用户输入了模糊查询（如"光模块龙头企业"、"白酒龙头"），必须先调用 search_stock 搜索
+   - 如果用户输入了模糊查询（如"光模块龙头企业"、"白酒龙头"），先调用 search_stock 搜索
+   - 如果问题包含时效性或不确定性（如"推荐"、"今天"、"最近"、"热点"、"利好"），先调用 web_search 获取最新信息，再从结果中提取具体股票
 
-2. 调用 search_stock 后：
+2. 调用 web_search 后：
+   - 从搜索结果中提取具体的股票名称
+   - 调用 search_stock 获取股票代码
+   - 调用 run_deep_analysis 执行深度分析
+
+3. 调用 search_stock 后：
    - 如果返回单个候选股票，直接调用 run_deep_analysis
    - 如果返回多个候选股票，且用户意图明确（如"龙头"通常指第一），选择最匹配的调用 run_deep_analysis
    - 如果返回多个候选股票，且无法确定用户要分析哪个，向用户列出候选并询问"找到以下股票，你想深度分析哪一个？"
-   - 如果没有匹配结果，可以尝试换关键词重新搜索
+   - 如果没有匹配结果，可以尝试换关键词重新搜索（最多2次）
 
-3. 调用 run_deep_analysis 后：
+4. 调用 run_deep_analysis 后：
    - 工具会执行完整的深度分析流程并自动返回结果
    - 不需要再调用其他工具
 
 ## 重要规则
 
+- 遇到不确定或时效性的问题，优先调用 web_search 获取最新信息，不要凭记忆猜测
 - 不要直接说"无法识别股票"，必须调用 search_stock 工具尝试搜索
 - 每次只调用一个工具
-- 如果搜索结果不理想，可以更换关键词重试（最多3次）
+- 如果搜索结果不理想，可以更换关键词重试（最多2次）
 - 深度分析只需要调用一次"""
 
 

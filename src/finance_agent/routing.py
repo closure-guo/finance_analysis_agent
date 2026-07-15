@@ -10,26 +10,11 @@ def after_check_cache(state: dict) -> str:
     return "fetch_data"
 
 
-def route_to_agent(state: dict) -> list[Send]:
-    analysis_type = state.get("analysis_type", "financial")
-    if analysis_type == "comprehensive":
-        return [Send("fa_analyze", state), Send("ia_analyze", state)]
-    if analysis_type == "investment":
-        return [Send("ia_analyze", state)]
-    return [Send("fa_analyze", state)]
-
-
 def after_validate(state: dict) -> str:
-    """勾稽校验后路由：FAIL → END，PASS → compute_metrics。"""
+    """勾稽校验后路由：FAIL -> END，PASS -> compute_metrics。"""
     if state.get("validation_result") == "FAIL":
         return "__end__"
     return "compute_metrics"
-
-
-def after_agent(state: dict) -> str:
-    if state.get("analysis_type") == "comprehensive":
-        return "merge"
-    return "generate_file"
 
 
 # ── 5 层架构路由函数（ADR-0011）──
