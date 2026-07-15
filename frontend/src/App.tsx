@@ -33,7 +33,13 @@ const getUserId = (): string => {
 export default function App() {
   const [appState, setAppState] = useState<'empty' | 'analyzing' | 'report'>('empty')
   const [messages, setMessages] = useState<UIMessage[]>([])
-  const [apiKey, setApiKey] = useState('')
+  const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('fa_api_key') || '')
+  const saveApiKey = useCallback((v: string) => {
+    setApiKeyState(v)
+    if (v) localStorage.setItem('fa_api_key', v)
+    else localStorage.removeItem('fa_api_key')
+  }, [])
+  const setApiKey = saveApiKey
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
   const pipelineMsgRef = useRef<UIMessage | null>(null)
 
@@ -1688,43 +1694,51 @@ function ReportCard({ msg }: { msg: UIMessage }) {
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
         <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
-          <div className="msg-system rounded-2xl rounded-tl-sm overflow-hidden flex-1">
+          <div className="msg-system rounded-xl rounded-tl-sm overflow-hidden flex-1">
             {/* Streaming indicator */}
             {msg.streaming && (
-              <div className="px-5 py-2 border-b border-zinc-800/50 flex items-center gap-2">
+              <div className="px-5 py-2 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
                 </span>
-                <span className="text-xs text-indigo-400">正在生成报告</span>
-                <span className="text-xs text-zinc-600">· 流式输出中</span>
+                <span className="text-xs" style={{ color: 'var(--text-brand)' }}>正在生成报告</span>
+                <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>· 流式输出中</span>
               </div>
             )}
 
             {/* Report Header */}
             {!msg.streaming && (
-              <div className="px-5 pt-4 pb-3 border-b border-zinc-800/50">
+              <div className="px-5 pt-4 pb-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-lg font-bold text-white">{msg.stockName}</h3>
-                      <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-400 text-[10px] font-semibold">深度分析</span>
+                      <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{msg.stockName}</h3>
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold" style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>深度分析</span>
                     </div>
-                    <p className="text-xs text-zinc-500">深度分析报告 · 5 层 Agent 架构 · 耗时 {Math.round((msg.durationMs || 0) / 1000)}s</p>
+                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · 耗时 {Math.round((msg.durationMs || 0) / 1000)}s</p>
                   </div>
                   <div className="flex gap-2">
                     {msg.filePaths?.docx && (
                       <a href={`/api/files/${msg.filePaths.docx.split(/[\\/]/).pop()}`} download
-                        className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 transition-colors" title="导出 Word">
+                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors" title="导出 Word"
+                        style={{ background: 'var(--bg-base-secondary)', color: 'var(--icon-secondary)' }}
+                        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
+                        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-base-secondary)'}}
+                      >
                         <i className="fas fa-file-word text-xs"></i>
                       </a>
                     )}
                     {msg.filePaths?.pptx && (
                       <a href={`/api/files/${msg.filePaths.pptx.split(/[\\/]/).pop()}`} download
-                        className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 transition-colors" title="导出 PPT">
+                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors" title="导出 PPT"
+                        style={{ background: 'var(--bg-base-secondary)', color: 'var(--icon-secondary)' }}
+                        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
+                        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-base-secondary)'}}
+                      >
                         <i className="fas fa-file-powerpoint text-xs"></i>
                       </a>
                     )}
@@ -1864,7 +1878,7 @@ function ApiKeyModal({ apiKey, setApiKey, onClose }: {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div className="glass-card rounded-2xl p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-white mb-4">配置 API Key</h3>
-        <p className="text-xs text-zinc-500 mb-4">输入 DeepSeek API Key 用于 LLM 调用。Key 仅保存在浏览器内存中，不会持久化。</p>
+        <p className="text-xs text-zinc-500 mb-4">输入 DeepSeek API Key 用于 LLM 调用。Key 保存在浏览器本地，刷新页面不会丢失。</p>
         <input
           type="password"
           placeholder="sk-..."
