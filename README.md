@@ -125,12 +125,11 @@ LLM_BASE_URL=https://api.openai.com/v1
 
 ```
 src/finance_agent/
-├── graph.py              # LangGraph 主图 (build_graph + build_5layer_graph)
+├── graph.py              # LangGraph 主图 (build_5layer_graph)
 ├── state.py              # AnalysisState TypedDict (含 Annotated reducers)
 ├── citation.py           # 确定性引用校验器 (Claim/CitationReport/verify_claims)
 ├── models.py             # 结构化输出模型 (AnalystReport/DebateMessage/TradeDecision)
 ├── app_search.py         # 股票搜索（模糊匹配，供 API 层调用）
-├── formatters.py         # LLM 上下文格式化
 ├── routing.py            # 路由函数 + Send 并行派发
 ├── llm.py                # LLM 调用封装
 ├── nodes/                # 图节点
@@ -147,10 +146,7 @@ src/finance_agent/
 │   ├── citation_node.py  # 引用校验节点
 │   ├── report.py         # 5 层报告生成
 │   ├── _llm_utils.py     # 共享 LLM 工具 (parse_json_response)
-│   ├── output.py         # generate_file (Word/PPT 生成)
-│   ├── fa.py             # 旧架构 (ADR-0011 已废弃)
-│   ├── ia.py             # 旧架构 (ADR-0011 已废弃)
-│   └── merge.py          # 旧架构 (ADR-0011 已废弃)
+│   └── output.py         # generate_file (Word/PPT 生成)
 ├── metrics/              # 指标计算（纯函数）
 │   ├── validate.py       # 勾稽校验 4 规则
 │   ├── solvency.py       # 偿债 5 指标
@@ -175,13 +171,12 @@ src/finance_agent/
 │   ├── parser.py         # Markdown 解析器
 │   ├── docx_exporter.py  # Word 导出
 │   └── pptx_exporter.py  # PPT 导出
-├── prompts/              # LLM prompt
-└── templates/            # 报告模板
+└── prompts/              # LLM prompt
 ```
 
 ## 实施阶段
 
-- [x] **P0 骨架** — 脚手架 + 空图 + Gradio 表单 + stub happy path
+- [x] **P0 骨架** - 脚手架 + 空图 + 前端表单 + stub happy path
 - [x] **P1 数据层** — AKShare + 20 指标 + 缓存
 - [x] **P2 分析层** — prompt 工程 + 投资报告
 - [x] **P3 输出层** — 综合分析 + Word/PPT 导出 + UI 打磨

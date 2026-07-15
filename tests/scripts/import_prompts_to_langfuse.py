@@ -3,7 +3,7 @@
 用法：
     .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py
     .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py --dry-run
-    .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py --exclude fa_analyze ia_analyze
+    .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py --exclude quick_mode
 
 前提：已设置环境变量 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST。
 若同名 prompt 已存在，Langfuse 会自动作为新版本添加（不会报错）。
@@ -24,7 +24,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "src" / "finance_agent" / "prompts"
 
-DEFAULT_EXCLUDE = {"fa_analyze", "ia_analyze", "fa_summary", "ia_summary"}
+DEFAULT_EXCLUDE: set[str] = set()
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,14 +32,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="只打印不导入")
     p.add_argument("--labels", default="production", help="标签，逗号分隔（默认 production）")
     p.add_argument("--exclude", nargs="*", default=list(DEFAULT_EXCLUDE), help="不导入的 prompt 名")
-    p.add_argument("--include-all", action="store_true", help="导入全部，包括废弃的")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     labels = [s.strip() for s in args.labels.split(",") if s.strip()]
-    exclude = set() if args.include_all else set(args.exclude)
+    exclude = set(args.exclude)
 
     files = sorted(PROMPTS_DIR.glob("*.md"))
     if not files:
@@ -57,7 +56,7 @@ def main() -> int:
 
         for f in files:
             name = f.stem
-            tag = "  [SKIP 废弃]" if name in exclude else "  [IMPORT]"
+            tag = "  [SKIP 排除]" if name in exclude else "  [IMPORT]"
             print(f"  {name}{tag}")
         print("\n[dry-run] 未实际导入")
         return 0
@@ -83,7 +82,7 @@ def main() -> int:
     for f in files:
         name = f.stem
         if name in exclude:
-            print(f"  SKIP  {name}  (废弃/排除)")
+            print(f"  SKIP  {name}  (排除)")
             skip += 1
             continue
         try:

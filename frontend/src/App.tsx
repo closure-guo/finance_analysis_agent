@@ -665,20 +665,20 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setSidebarOpen(!sidebarOpen)}
-                  className="text-zinc-400 hover:text-white transition-colors"
+                  className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors"
                 >
                   <i className="fas fa-bars text-sm"></i>
                 </button>
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
-                <span className="font-semibold text-sm tracking-wide">FinAgent</span>
+                <span className="font-semibold text-sm tracking-wide" style={{ color: 'var(--text-default)' }}>FinAgent</span>
               </div>
               <div className="flex items-center gap-4">
-                <button className="text-zinc-400 hover:text-white transition-colors text-sm" onClick={() => setShowApiKeyInput(true)}>
+                <button className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm" onClick={() => setShowApiKeyInput(true)}>
                   <i className="fas fa-cog mr-1"></i>设置
                 </button>
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700"></div>
+                <div className="w-7 h-7 rounded-full" style={{ background: 'var(--bg-overlay-l3)' }}></div>
               </div>
             </header>
 
@@ -730,8 +730,8 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
 
   if (!isOpen) {
     return (
-      <div className="fixed left-0 top-0 bottom-0 w-12 bg-zinc-900 border-r border-zinc-800 flex flex-col items-center py-4 z-50">
-        <button onClick={onToggle} className="text-zinc-400 hover:text-white transition-colors">
+      <div className="fixed left-0 top-0 bottom-0 w-12 flex flex-col items-center py-4 z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
+        <button onClick={onToggle} className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors">
           <i className="fas fa-bars"></i>
         </button>
       </div>
@@ -739,11 +739,11 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   }
 
   return (
-    <div className="fixed left-0 top-0 bottom-0 w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col z-50">
+    <div className="fixed left-0 top-0 bottom-0 w-64 flex flex-col z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
       {/* Header */}
-      <div className="p-3 border-b border-zinc-800 flex items-center justify-between">
-        <span className="text-sm font-semibold text-zinc-200">会话历史</span>
-        <button onClick={onToggle} className="text-zinc-500 hover:text-white transition-colors">
+      <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+        <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
+        <button onClick={onToggle} className="text-[var(--text-tertiary)] hover:text-[var(--text-default)] transition-colors">
           <i className="fas fa-times text-xs"></i>
         </button>
       </div>
@@ -752,7 +752,8 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
       <div className="p-3">
         <button
           onClick={onNew}
-          className="w-full py-2 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-sm font-medium hover:shadow-lg hover:shadow-indigo-500/30 transition-all flex items-center justify-center gap-2"
+          className="w-full py-2 rounded-xl text-white text-sm font-medium transition-all flex items-center justify-center gap-2"
+          style={{ background: 'var(--bg-brand)' }}
         >
           <i className="fas fa-plus text-xs"></i>
           新建分析
@@ -766,22 +767,24 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="搜索股票..."
-          className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:ring-1 focus:ring-indigo-500"
+          className="w-full rounded-lg px-3 py-2 text-xs outline-none focus:ring-1"
+          style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'transparent' }}
         />
       </div>
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {filtered.length === 0 ? (
-          <p className="text-center text-xs text-zinc-600 py-4">暂无历史会话</p>
+          <p className="text-center text-xs py-4" style={{ color: 'var(--text-tertiary)' }}>暂无历史会话</p>
         ) : (
           filtered.map(s => (
             <div
               key={s.session_id}
               onClick={() => onSelect(s.session_id)}
-              className={`group relative px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1 ${
-                currentSessionId === s.session_id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-              }`}
+              className="group relative px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1"
+              style={currentSessionId === s.session_id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+              onMouseEnter={(e) => { if (currentSessionId !== s.session_id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+              onMouseLeave={(e) => { if (currentSessionId !== s.session_id) e.currentTarget.style.background = 'transparent' }}
             >
               {editingId === s.session_id ? (
                 <input
@@ -801,12 +804,14 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                   }}
                   onClick={e => e.stopPropagation()}
                   autoFocus
-                  className="w-full bg-zinc-700 rounded px-2 py-1 text-xs text-white outline-none"
+                  className="w-full rounded px-2 py-1 text-xs outline-none"
+                  style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-default)' }}
                 />
               ) : (
                 <>
                   <div
-                    className="text-sm text-zinc-200 truncate"
+                    className="text-sm truncate"
+                    style={{ color: 'var(--text-default)' }}
                     onDoubleClick={e => {
                       e.stopPropagation()
                       setEditingId(s.session_id)
@@ -815,7 +820,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                   >
                     {s.display_name}
                   </div>
-                  <div className="text-[10px] text-zinc-500 flex items-center gap-2">
+                  <div className="text-[10px] flex items-center gap-2" style={{ color: 'var(--text-tertiary)' }}>
                     <span>{s.stock_name}</span>
                     <span>{new Date(s.created_at).toLocaleString()}</span>
                   </div>
@@ -824,7 +829,10 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                       e.stopPropagation()
                       onDelete(s.session_id)
                     }}
-                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-opacity"
+                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{ color: 'var(--text-tertiary)' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--status-error-default)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)' }}
                   >
                     <i className="fas fa-trash text-xs"></i>
                   </button>
@@ -880,13 +888,13 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
     <div className="flex flex-col items-center justify-center flex-1 px-4 transition-all duration-700" style={{ minHeight: '100vh' }}>
       {/* Logo & Title */}
       <div className="text-center mb-10 animate-fade-in-up">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center mx-auto mb-5 shadow-2xl shadow-indigo-500/20">
+        <div className="w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-5" style={{ background: 'var(--bg-brand)' }}>
           <i className="fas fa-chart-line text-white text-2xl"></i>
         </div>
-        <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-white via-zinc-200 to-zinc-400 bg-clip-text text-transparent">
+        <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-default)' }}>
           Finance Analysis Agent
         </h1>
-        <p className="text-zinc-500 text-sm">AI 驱动的 A 股投研分析系统</p>
+        <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>AI 驱动的 A 股投研分析系统</p>
       </div>
 
       {/* Input Box */}
@@ -896,32 +904,33 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
           <div className="relative px-4 pt-1 pb-0">
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-1.5 text-[10px] font-medium hover:bg-zinc-800/50 rounded px-2 py-0.5 transition-colors"
+              className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
             >
-              <span className="text-zinc-600">模式：</span>
+              <span style={{ color: 'var(--text-tertiary)' }}>模式：</span>
               <i className={`fas ${currentMode.icon} ${currentMode.color}`}></i>
               <span className={currentMode.color}>{currentMode.label}</span>
-              <i className={`fas fa-chevron-${dropdownOpen ? 'up' : 'down'} text-zinc-600 text-[8px] ml-0.5`}></i>
+              <i className={`fas fa-chevron-${dropdownOpen ? 'up' : 'down'} text-[8px] ml-0.5`} style={{ color: 'var(--text-tertiary)' }}></i>
             </button>
             {dropdownOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
-                <div className="absolute left-4 top-7 z-20 w-72 glass-card rounded-lg border border-zinc-700/50 shadow-xl overflow-hidden">
+                <div className="absolute left-4 top-7 z-20 w-72 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
                   {modes.map(m => (
                     <button
                       key={m.id}
                       onClick={() => { setMode(m.id); setDropdownOpen(false) }}
-                      className={`w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors ${
-                        mode === m.id ? 'bg-zinc-800/60' : 'hover:bg-zinc-800/40'
-                      }`}
+                      className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors"
+                      style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                      onMouseEnter={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+                      onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                     >
                       <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
                       <div className="flex-1 min-w-0">
-                        <div className={`text-xs font-medium ${mode === m.id ? m.color : 'text-zinc-300'}`}>
+                        <div className={`text-xs font-medium ${mode === m.id ? m.color : ''}`} style={mode !== m.id ? { color: 'var(--text-secondary)' } : {}}>
                           {m.label}
                           {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
                         </div>
-                        <div className="text-[10px] text-zinc-500 mt-0.5">{m.desc}</div>
+                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{m.desc}</div>
                       </div>
                     </button>
                   ))}
@@ -933,25 +942,26 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
             <textarea
               rows={1}
               placeholder={mode === 'quick' ? '输入问题，如：茅台、宁德时代怎么样' : '输入股票名称或代码，如 茅台、300750'}
-              className="flex-1 bg-transparent text-zinc-200 placeholder-zinc-600 px-4 py-3 resize-none outline-none text-sm leading-relaxed"
-              style={{ minHeight: '48px', maxHeight: '120px' }}
+              className="flex-1 bg-transparent px-4 py-3 resize-none outline-none text-sm leading-relaxed"
+              style={{ minHeight: '48px', maxHeight: '120px', color: 'var(--text-default)' }}
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={handleKeydown}
             />
             <button
               onClick={handleSend}
-              className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center hover:shadow-lg hover:shadow-indigo-500/30 transition-all mb-1 mr-1"
+              className="w-10 h-10 rounded-xl flex items-center justify-center mb-1 mr-1"
+              style={{ background: 'var(--bg-brand)' }}
             >
               <i className="fas fa-arrow-up text-white text-sm"></i>
             </button>
           </div>
         </div>
         {!apiKey && (
-          <p className="text-center text-xs text-zinc-600 mt-2">
+          <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-info-circle mr-1"></i>
             需要配置 API Key 才能开始分析
-            <button className="text-indigo-400 hover:underline ml-1" onClick={() => setShowApiKeyInput(true)}>去配置</button>
+            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowApiKeyInput(true)}>去配置</button>
           </p>
         )}
       </div>
@@ -959,14 +969,14 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
       {/* Feature cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8 max-w-2xl w-full px-4 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
         {[
-          { icon: 'users', color: 'text-indigo-400', label: '4 维并行分析' },
-          { icon: 'comments', color: 'text-amber-400', label: 'Bull/Bear 辩论' },
-          { icon: 'shield-alt', color: 'text-red-400', label: 'Risk 压力测试' },
-          { icon: 'file-alt', color: 'text-cyan-400', label: '结构化报告' },
+          { icon: 'users', color: 'text-[var(--text-brand)]', label: '4 维并行分析' },
+          { icon: 'comments', color: 'text-[var(--status-warning-default)]', label: 'Bull/Bear 辩论' },
+          { icon: 'shield-alt', color: 'text-[var(--status-error-default)]', label: 'Risk 压力测试' },
+          { icon: 'file-alt', color: 'text-[#14b8a6]', label: '结构化报告' },
         ].map(f => (
           <div key={f.label} className="glass-card rounded-xl p-3 text-center">
             <div className={`${f.color} text-lg mb-1`}><i className={`fas fa-${f.icon}`}></i></div>
-            <div className="text-xs text-zinc-400">{f.label}</div>
+            <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{f.label}</div>
           </div>
         ))}
       </div>
@@ -993,11 +1003,11 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
       <div className="flex justify-start animate-slide-in">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center flex-shrink-0 mt-1">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--status-error-default)' }}>
               <i className="fas fa-exclamation text-white text-xs"></i>
             </div>
-            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-3 flex-1">
-              <p className="text-sm text-red-400">{msg.content}</p>
+            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-3 flex-1">
+              <p className="text-sm" style={{ color: 'var(--status-error-default)' }}>{msg.content}</p>
             </div>
           </div>
         </div>
@@ -1009,14 +1019,14 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
     return (
       <div className="flex justify-start">
         <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/20">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'var(--bg-brand)' }}>
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
-          <div className="msg-system rounded-2xl rounded-tl-sm px-4 py-3">
+          <div className="msg-system rounded-xl rounded-tl-sm px-4 py-3">
             <div className="flex gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
-              <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
-              <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
+              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
+              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
+              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
             </div>
           </div>
         </div>
@@ -1029,11 +1039,11 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
       <div className="flex justify-start animate-slide-in">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
-            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-3 flex-1">
-              <div className="flex items-center gap-2 text-green-400 text-xs">
+            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-3 flex-1">
+              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--status-success-default)' }}>
                 <i className="fas fa-check-circle"></i>
                 <span>{msg.content}</span>
               </div>
@@ -1061,10 +1071,10 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
       <div className="flex justify-start animate-slide-in">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1 shadow-lg shadow-indigo-500/20">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
-            <div className="msg-system rounded-2xl rounded-tl-sm px-5 py-4 flex-1">
+            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
               {/* Thinking banner */}
               {msg.thinkingContent && (
                 <ThinkingBanner content={msg.thinkingContent} streaming={!!msg.streaming && !msg.chatResponse} />
@@ -1072,13 +1082,13 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
               {/* Search status (Kimi-style) */}
               {msg.searchStatus === 'searching' && (
                 <div className="mb-3">
-                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 rounded-lg">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-brand-popup)' }}>
                     <span className="relative flex h-2 w-2 flex-shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
                     </span>
-                    <span className="text-xs text-blue-400">正在搜索</span>
-                    <span className="text-xs text-zinc-500 truncate">{msg.searchQuery}</span>
+                    <span className="text-xs" style={{ color: 'var(--text-brand)' }}>正在搜索</span>
+                    <span className="text-xs truncate" style={{ color: 'var(--text-tertiary)' }}>{msg.searchQuery}</span>
                   </div>
                 </div>
               )}
@@ -1087,26 +1097,26 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
               )}
               {msg.searchStatus === 'error' && (
                 <div className="mb-3">
-                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 rounded-lg">
-                    <i className="fas fa-exclamation-triangle text-xs text-amber-400 flex-shrink-0"></i>
-                    <span className="text-xs text-amber-400">搜索失败</span>
-                    <span className="text-xs text-zinc-500">基于已有知识回答</span>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.1)' }}>
+                    <i className="fas fa-exclamation-triangle text-xs flex-shrink-0" style={{ color: 'var(--status-warning-default)' }}></i>
+                    <span className="text-xs" style={{ color: 'var(--status-warning-default)' }}>搜索失败</span>
+                    <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>基于已有知识回答</span>
                   </div>
                 </div>
               )}
               {/* Response content or typing indicator */}
               {msg.streaming && !msg.chatResponse && !msg.thinkingContent && msg.searchStatus !== 'searching' ? (
                 <div className="flex items-center gap-1.5 py-1">
-                  <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
-                  <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
-                  <div className="w-2 h-2 rounded-full bg-zinc-500 typing-dot"></div>
+                  <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
+                  <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
+                  <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
                 </div>
               ) : (
-                <div className="text-sm text-zinc-300 leading-relaxed">
+                <div className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
                   <ReactMarkdown
                     components={{
                       p: ({ children }) => <p className="mb-2 whitespace-pre-wrap">{children}</p>,
-                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{children}</a>,
+                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-brand)' }}>{children}</a>,
                     }}
                   >
                     {msg.chatResponse || ''}
@@ -1148,23 +1158,26 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
     <div className="mb-3">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-zinc-800/40 hover:bg-zinc-800/60 rounded-lg transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
+        style={{ background: 'var(--bg-overlay-l1)' }}
+        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
+        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
       >
         {streaming ? (
           <span className="relative flex h-2 w-2 flex-shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span>
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
           </span>
         ) : (
-          <i className="fas fa-check-circle text-xs text-purple-400 flex-shrink-0"></i>
+          <i className="fas fa-check-circle text-xs flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
         )}
-        <span className="text-xs text-zinc-400">
+        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
           {streaming ? '正在思考' : isJustFinished ? `已深度思考` : '思考过程'}
           {!streaming && charCount > 0 && (
-            <span className="text-zinc-600 ml-1.5">· {charCount} 字</span>
+            <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {charCount} 字</span>
           )}
         </span>
-        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] text-zinc-600 ml-auto transition-transform`}></i>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] ml-auto transition-transform`} style={{ color: 'var(--text-tertiary)' }}></i>
       </button>
       <div
         className="overflow-hidden transition-all duration-300 ease-out"
@@ -1172,9 +1185,10 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
       >
         <div
           ref={contentRef}
-          className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 bg-zinc-900/40 rounded-lg border border-zinc-800/50"
+          className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg"
+          style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
         >
-          <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap break-words">{content}</p>
+          <p className="text-xs leading-relaxed whitespace-pre-wrap break-words" style={{ color: 'var(--text-tertiary)' }}>{content}</p>
         </div>
       </div>
     </div>

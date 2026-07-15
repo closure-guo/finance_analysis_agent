@@ -12,6 +12,9 @@ flowchart TD
     subgraph LayerI[Layer I: Analyst Team]
         analysts_entry["analysts_entry"]
         technical_analyst["technical_analyst<br/>技术面分析"]
+        macro_analyst["macro_analyst<br/>宏观分析"]
+        fundamental_analyst["fundamental_analyst<br/>基本面分析"]
+        sentiment_analyst["sentiment_analyst<br/>舆情分析"]
     end
 
     verify_citations["⑤ verify_citations<br/>引用校验"]
@@ -55,8 +58,14 @@ flowchart TD
     compute_metrics --> analysts_entry
 
     %% Layer I
-    analysts_entry -->|"Send 并行"| technical_analyst
+    analysts_entry -->|"Send 4 并行"| technical_analyst
+    analysts_entry -->|"Send"| macro_analyst
+    analysts_entry -->|"Send"| fundamental_analyst
+    analysts_entry -->|"Send"| sentiment_analyst
     technical_analyst --> verify_citations
+    macro_analyst --> verify_citations
+    fundamental_analyst --> verify_citations
+    sentiment_analyst --> verify_citations
 
     %% Citation 条件路由
     verify_citations -->|"PASS → render"| debate_r1_entry

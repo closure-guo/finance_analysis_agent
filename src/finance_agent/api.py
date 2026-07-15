@@ -1279,19 +1279,25 @@ async def quick_chat(req: ChatRequest):
             # API key: 优先用请求中的，无效则回退到环境变量
             api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
 
+            # ADR-0015：新对话时先创建 session，使 Langfuse session 聚合可用
+            # （session_id 须在 agent 运行前确定，否则 propagate_attributes 拿不到）
+            if not req.session_id:
+                _display_name = req.message.strip()[:30] or "快速问答"
+                req_session_id = create_chat_session(_display_name)
+                append_chat(req_session_id, "user", req.message)
+            else:
+                req_session_id = req.session_id
+                append_chat(req_session_id, "user", req.message)
+
             agent = build_agent(
                 mode=mode,
                 api_key=api_key,
-                session_id=req.session_id,
+                session_id=req_session_id,
             )
-
-            # 追问模式：记录用户消息到 session
-            if req.session_id:
-                append_chat(req.session_id, "user", req.message)
 
             # 流式输出 Agent 事件
             full_response = ""
-            async for sse_str in stream_agent_to_sse(agent, req.message, session_id=req.session_id):
+            async for sse_str in stream_agent_to_sse(agent, req.message, session_id=req_session_id):
                 # 收集回复内容用于 session 记录
                 if "chat_token" in sse_str:
                     try:
@@ -1304,20 +1310,14 @@ async def quick_chat(req: ChatRequest):
 
             # 持久化对话到 session
             if full_response:
-                if req.session_id:
-                    # 追问模式：追加助手回复到已有 session
-                    append_chat(req.session_id, "assistant", full_response)
-                else:
-                    # 快速模式：创建新 session 并记录完整对话
-                    display_name = req.message.strip()[:30] or "快速问答"
-                    new_session_id = create_chat_session(display_name)
-                    append_chat(new_session_id, "user", req.message)
-                    append_chat(new_session_id, "assistant", full_response)
+                append_chat(req_session_id, "assistant", full_response)
+                if not req.session_id:
+                    # 新对话：通知前端 session_id
                     yield _sse(
                         {
                             "type": "session_created",
-                            "session_id": new_session_id,
-                            "display_name": display_name,
+                            "session_id": req_session_id,
+                            "display_name": _display_name,
                             "timestamp": _now(),
                         }
                     )

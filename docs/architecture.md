@@ -12,10 +12,10 @@
 
 | 层级     | 选型                          | 职责                                                                |
 | -------- | ----------------------------- | ------------------------------------------------------------------- |
-| L1 前端  | Gradio 5.x Blocks API         | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
+| L1 前端  | React 18 + Vite               | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
 | L2 Agent | LangGraph                     | 5 层架构: 4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager |
-| L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（MVP 不含 Chroma/Tavily） |
-| L4 LLM   | DeepSeek (deepseek-v4-pro) | LiteLLM 路由                                               |
+| L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（v2.0 计划 Chroma）       |
+| L4 LLM   | DeepSeek (deepseek-v4-pro)    | LiteLLM 路由                                                        |
 
 ### 1.2 核心原则
 
@@ -233,7 +233,7 @@ stateDiagram-v2
 - **Step 1 并行**：三大报表 + 行情 + 行业归属 + 预计算指标 + 日K线 + 沪深300K线 + 宏观指标 + 新闻列表（AKShare，无依赖）
 - **Step 2 依赖**：同业公司财务数据（需要 Step 1 的行业归属 + 同业列表）
 
-> v2.0 增加：Tavily 搜索（依赖行业名称）、巨潮 PDF 解析、Chroma 研报 RAG
+> v2.0 增加：巨潮 PDF 解析、Chroma 研报 RAG（Tavily 搜索已于 v1.1 纳入快速模式）
 
 ---
 
@@ -316,7 +316,7 @@ class AnalysisState(TypedDict, total=False):
     query: str
     stock_code: str
     peer_codes: list[str] | None
-    enable_web_search: bool  # Gradio 开关：是否启用实时事件搜索
+    enable_web_search: bool  # 前端开关：是否启用实时事件搜索
 
     # ── Cache ──
     cache_result: str  # HIT | MISS
@@ -401,21 +401,15 @@ def after_validate(state):
     return "compute_metrics"
 
 # Fund Manager 决策条件边（Layer V）
-RETRY_COUNT = "fund_manager_retry_count"
-
 def after_fund_manager(state):
-    decision = state["fund_manager_decision"]
-    if decision == "approve":
-        return "generate_report"
-    if decision == "reject":
-        return "__end__"  # 标注"未通过审批" → END
-    # return → 退回 Trader，最多 1 次防死循环
-    if state.get(RETRY_COUNT, 0) >= 1:
-        return "generate_report"  # 超过上限，强制生成报告
-    return "trader"
+    decision = state.get("fund_manager_decision", "approve")
+    # return -> 退回 Trader，最多 1 次防死循环
+    if decision == "return" and state.get("return_count", 0) < 1:
+        return "trader"
+    return "generate_report"  # approve / reject / 退回超限 均进入报告生成
 ```
 
-> 注：ADR-0011 移除了 `route_to_agent` 和 `after_agent`（不再有 `analysis_type` 路由，4 个分析师始终全量并行执行）。Fund Manager 的 `return → trader` 退回最多 1 次，通过 `fund_manager_retry_count` 计数器防死循环；超过上限后强制进入 `generate_report`。
+> 注：ADR-0011 移除了 `route_to_agent` 和 `after_agent`（不再有 `analysis_type` 路由，4 个分析师始终全量并行执行）。Fund Manager 的 `return -> trader` 退回最多 1 次，通过 `return_count` 计数器防死循环；超过上限后强制进入 `generate_report`。
 
 ---
 
@@ -423,7 +417,7 @@ def after_fund_manager(state):
 
 | 层级      | 选型              | 备选            | 决策依据                        |
 | --------- | ----------------- | --------------- | ------------------------------- |
-| 前端      | Gradio 5.x Blocks | Streamlit       | 表单布局灵活 + share 链接       |
+| 前端      | React 18 + Vite   | Gradio          | 组件生态 + 状态管理(zustand) + ECharts 图表   |
 | Agent     | LangGraph         | CrewAI          | Supervisor + Sub-graph 原生支持 |
 | LLM(开发) | DeepSeek-V4-Pro  | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
 | LLM 路由  | LiteLLM           | 自定义          | 100+ 模型统一接口               |
@@ -448,8 +442,8 @@ def after_fund_manager(state):
 ### 补充决定
 
 - **State 使用 TypedDict**：LangGraph 原生一等公民，Reducer/Checkpoint/节点返回值零摩擦
-- **实施 4 阶段**：P0 骨架(脚手架+空图+happy path) → P1 数据层(AKShare+20指标+缓存) → P2 分析层(Agent+prompt+报告模板) → P3 输出层(Word/PPT+Gradio打磨)
-- **MVP 范围**：仅 AKShare 数据源，无 Tavily/Chroma/巨潮PDF/DCF 定量计算。v2.0 扩展 DCF、外部搜索、RAG、图表
+- **实施 4 阶段**：P0 骨架(脚手架+空图+happy path) -> P1 数据层(AKShare+20指标+缓存) -> P2 分析层(Agent+prompt+报告模板) -> P3 输出层(Word/PPT+前端打磨)
+- **MVP 范围**：AKShare 数据源 + Tavily 搜索（v1.1 纳入快速模式），无 Chroma/巨潮PDF/DCF 定量计算。v2.0 扩展 DCF、RAG、图表
 - **分析年份跨度**：动态，尽量拉 5 年，不足则有多少用多少，最低 2 年（保证同比变化率可计算），低于 2 年报错
 - **同业选择**：默认申万同三级行业市值 Top 5；用户可手动输入对标股票代码覆盖自动选取
 - **数据降级策略**：必需数据（三大报表）缺失→报错终止；非必需（同业、研报、搜索）缺失→标记 N/A 继续

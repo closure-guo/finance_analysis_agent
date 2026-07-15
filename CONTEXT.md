@@ -204,7 +204,7 @@ _Avoid_: 用 `start_observation` 创建孤立 generation（不建立父子上下
 
 ### Langfuse Prompt
 
-Langfuse 托管的 prompt 资源。本项目采用 **P-2 混合+兜底**：[prompts/](file:///d:\WorkSpace\finance_analysis_agent\src\finance_agent\prompts) 下 15 个 `.md` 全部迁入 Langfuse（含 2 个内联于 `agent_factory.py` 的 system prompt），同时本地文件作为兜底基线保留并 commit。
+Langfuse 托管的 prompt 资源。本项目采用 **P-2 混合+兜底**：[prompts/](file:///d:\WorkSpace\finance_analysis_agent\src\finance_agent\prompts) 下 14 个 `.md` 全部迁入 Langfuse，同时本地文件作为兜底基线保留并 commit。
 
 - 权威源：配置 Langfuse 时以 Langfuse 的 `production` label 版本为准；未配置或拉取失败时回退本地 `.md`，回退时打 `WARN` 日志（漂移可见但不阻断）。
 - 版本控制：改 prompt 不重新部署，在 Langfuse UI 把新版打 `production` label 即上线；旧版保留可回滚。
