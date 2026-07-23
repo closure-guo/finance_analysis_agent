@@ -29,7 +29,9 @@ ReAct 主循环：Agent 的心脏
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -52,6 +54,121 @@ from finance_agent.harness.types import (
 )
 
 logger = logging.getLogger("finance_agent.harness.loop")
+
+
+# ───────────────────────────────────────────────
+# DSML 防御性解析
+# ───────────────────────────────────────────────
+# DeepSeek（V3.2+/V4）偶发以 DSML 文本标记输出工具调用，而非结构化 tool_calls
+# 字段。标记形如：<｜｜DSML｜｜tool_calls> <｜｜DSML｜｜invoke name="search_stock"> ...
+# litellm 不解析该文本格式，会作为 content 泄漏给用户（深度模式出现乱码）。
+# 此处防御性解析：将 DSML 文本还原为 ToolCallRequest，并清除标记文本。
+#
+# 竖线字符变体：｜(U+FF5C 全角)、‖(U+2016 数学双竖线)、|(U+007C 普通)、│(U+2502)
+_DSML_BAR = r"[｜‖|│]"
+# DSML 标签起始：< 后跟任意竖线组合 + DSML（大小写不敏感）
+_DSML_TAG = r"<\s*" + _DSML_BAR + r"*\s*[Dd][Ss][Mm][Ll]" + _DSML_BAR + r"*"
+_DSML_DETECT = re.compile(_DSML_TAG)
+# invoke name="...">body</...invoke>
+_DSML_INVOKE = re.compile(
+    _DSML_TAG + r'\s*invoke\s+name="([^"]+)"[^>]*>(.*?)'
+    r"<\s*/\s*" + _DSML_BAR + r"*\s*[Dd][Ss][Mm][Ll]" + _DSML_BAR + r"*\s*invoke\s*>",
+    re.DOTALL,
+)
+# parameter name="...">value</...parameter>
+_DSML_PARAM = re.compile(
+    _DSML_TAG + r'\s*parameter\s+name="([^"]+)"[^>]*>(.*?)'
+    r"<\s*/\s*" + _DSML_BAR + r"*\s*[Dd][Ss][Mm][Ll]" + _DSML_BAR + r"*\s*parameter\s*>",
+    re.DOTALL,
+)
+# 任意 DSML 标签（用于清理残留，如 <｜｜DSML｜｜tool_calls>）
+_DSML_ANY_TAG = re.compile(r"<\s*/?\s*" + _DSML_BAR + r"*\s*[Dd][Ss][Mm][Ll][^>]*>")
+
+# DSML 标记中出现的竖线字符集合（全角 ｜ / 数学双竖线 ‖ / 普通 | / 制表 │）
+_DSML_BARS_SET = frozenset("｜‖|│")
+
+
+def _safe_think_len(text: str, start: int) -> tuple[int, bool]:
+    """计算 ``text[start:]`` 中可安全作为 THINK 逐 token 流式输出的结束位置。
+
+    防止 DSML 标记在流末清理前泄漏给用户：逐 token 流式时，若累积文本中出现
+    DSML 标记起始（``<`` + 空白/竖线 + ``DSML``），则标记部分不流式，留待流末
+    :func:`_parse_dsml_from_text` 清理后用 THINK_REPLACE 覆盖。
+
+    Args:
+        text: 累积的完整文本（含已流式与未流式部分）。
+        start: 已流式到的偏移量，从此处开始扫描。
+
+    Returns:
+        ``(safe_end, dsml_found)``：
+        - ``safe_end``：可安全流式到 ``text[start:safe_end]``。
+        - ``dsml_found``：True 表示 ``text[safe_end:]`` 起始处检测到完整 DSML 标记，
+          调用方应停止后续流式（标记留待流末清理）。
+    """
+    i = start
+    while i < len(text):
+        lt = text.find("<", i)
+        if lt == -1:
+            return len(text), False
+        # lt 处是否已是完整 DSML 标记起始
+        if _DSML_DETECT.match(text, lt):
+            return lt, True
+        # lt 处是否可能是「尚未补全的 DSML 标记前缀」：
+        # 标记形如 < [空白] [竖线] [空白] DSML...；若 '<' 后仅有空白/竖线，
+        # 或紧接 'DSML' 的前缀（尚未凑齐 4 字母），则按可能为标记处理，回退到 lt 之前等待更多 token。
+        j = lt + 1
+        while j < len(text) and (text[j].isspace() or text[j] in _DSML_BARS_SET):
+            j += 1
+        if "dsml".startswith(text[j:].lower()):
+            return lt, False
+        # lt 处确定不是 DSML 标记 -> 越过继续扫描下一个 '<'
+        i = lt + 1
+    return len(text), False
+
+
+def _parse_dsml_params(body: str) -> dict:
+    """从 invoke body 中解析参数（parameter 标签优先，回退 JSON）。"""
+    args: dict = {}
+    for m in _DSML_PARAM.finditer(body):
+        args[m.group(1).strip()] = m.group(2).strip()
+
+    if not args:
+        body_stripped = body.strip()
+        if body_stripped.startswith("{"):
+            try:
+                parsed = json.loads(body_stripped)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except json.JSONDecodeError:
+                pass
+    return args
+
+
+def _parse_dsml_from_text(text: str) -> tuple[list[ToolCallRequest], str]:
+    """从文本中防御性解析 DSML 工具调用标记。
+
+    Returns:
+        (tool_calls, cleaned_text)。若无 DSML 标记，返回 ([], 原文本)。
+    """
+    if not _DSML_DETECT.search(text):
+        return [], text
+
+    tool_calls: list[ToolCallRequest] = []
+    for m in _DSML_INVOKE.finditer(text):
+        name = m.group(1).strip()
+        args = _parse_dsml_params(m.group(2))
+        tool_calls.append(
+            ToolCallRequest(
+                id=f"dsml_{len(tool_calls)}",
+                name=name,
+                arguments=args,
+            )
+        )
+
+    # 清理：移除 invoke 块（含 body），再移除残留标签（tool_calls 等）
+    cleaned = _DSML_INVOKE.sub("", text)
+    cleaned = _DSML_ANY_TAG.sub("", cleaned)
+    return tool_calls, cleaned.strip()
 
 
 # ───────────────────────────────────────────────
@@ -236,6 +353,8 @@ class Agent:
                 # ── 调用 LLM（流式）──
                 assistant_text = ""
                 pending_tool_calls: list[ToolCallRequest] = []
+                _streamed_len = 0  # assistant_text 中已作为 THINK 流式输出的偏移量
+                _dsml_active = False  # 检测到 DSML 标记后停止流式，留待流末清理
 
                 # 第一次迭代且 force_tool=True 时，强制调用工具
                 _tool_choice = "required" if (force_tool and iterations == 1) else "auto"
@@ -246,8 +365,19 @@ class Agent:
                     tool_choice=_tool_choice,
                 ):
                     if chunk.text_delta:
-                        # 流式文本增量 -- 先缓冲，等流结束再决定是 THINK 还是 ANSWER
+                        # 逐 token 实时下发为思考过程。流末再依据是否伴随工具调用
+                        # 决定是 THINK 还是最终回答：
+                        #   - 伴随工具调用 -> 确为思考，保留。
+                        #   - 无工具调用 -> 实为回答，发 THINK_TO_ANSWER 让前端转换。
+                        # 安全流式：DSML 标记部分不下发，避免在流末清理前泄漏给用户。
                         assistant_text += chunk.text_delta
+                        if not _dsml_active:
+                            _safe_end, _dsml_found = _safe_think_len(assistant_text, _streamed_len)
+                            if _safe_end > _streamed_len:
+                                yield StreamEvent.think(assistant_text[_streamed_len:_safe_end])
+                            _streamed_len = _safe_end
+                            if _dsml_found:
+                                _dsml_active = True
 
                     if chunk.tool_calls:
                         pending_tool_calls = chunk.tool_calls
@@ -255,15 +385,33 @@ class Agent:
                     if chunk.is_finished:
                         break
 
+                # ── DSML 防御性解析 ──
+                # DeepSeek 偶发以 DSML 文本标记输出工具调用，litellm 未解析为
+                # 结构化 tool_calls。此处从文本中还原工具调用，避免标记泄漏给用户。
+                _raw_text = assistant_text
+                if not pending_tool_calls and assistant_text:
+                    dsml_calls, dsml_cleaned = _parse_dsml_from_text(assistant_text)
+                    if dsml_calls:
+                        pending_tool_calls = dsml_calls
+                        assistant_text = dsml_cleaned
+
+                # DSML 清理可能改变了已逐 token 流式输出的文本 -> 用清理后内容覆盖
+                if assistant_text != _raw_text:
+                    yield StreamEvent.think_replace(assistant_text)
+
                 # ── 根据是否有工具调用，决定文本是推理还是回复 ──
                 if assistant_text and pending_tool_calls:
-                    # 有工具调用 -> 文本是推理过程
-                    yield StreamEvent.think(assistant_text)
+                    # 有工具调用 -> 文本是推理过程，已逐 token 流式输出，无需再整段发送
+                    pass
                 elif assistant_text and not pending_tool_calls:
                     # 无工具调用但有文本 -> 检查是否应该继续调用工具
                     has_prior_tools = any(m.role == Role.TOOL for m in self.context.messages)
+                    # 仅在强制工具模式（force_tool）下重试；深度模式允许 Agent 自主
+                    # 返回纯文本澄清反问（ADR-0017 D2：反问触发条件由 Agent 自主判断），
+                    # 避免强制要求调用 run_deep_analysis 而绕过澄清流程。
                     if (
-                        has_prior_tools
+                        force_tool
+                        and has_prior_tools
                         and not analysis_completed
                         and text_only_retries < max_text_only_retries
                     ):
@@ -276,16 +424,14 @@ class Agent:
                         # 追加 system 提示，引导 LLM 继续调用工具
                         self.context.append_system(
                             "你刚才返回了文字但没有调用工具。请根据对话上下文，"
-                            "直接调用下一步所需的工具（如 run_deep_analysis），"
-                            "不要重复已说过的话。"
+                            "若用户意图已明确则调用下一步工具（如 run_deep_analysis），"
+                            "若信息不足可以文字反问澄清。不要重复已说过的话。"
                         )
                         iterations -= 1
                         continue
-                    # 确实是最终回复
-                    yield StreamEvent(
-                        event_type=ActionType.ANSWER,
-                        content=assistant_text,
-                    )
+                    # 确实是最终回复（澄清反问或分析摘要）
+                    # 文本已作为思考逐 token 流式输出，流末判定为回答 -> 通知前端转换
+                    yield StreamEvent.think_to_answer(assistant_text)
 
                 # ── 发送工具调用事件 ──
                 if pending_tool_calls:

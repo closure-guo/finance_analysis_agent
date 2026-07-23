@@ -72,13 +72,14 @@ def main() -> bool:
 
         # ── 3. 切换到"深度研究"模式 ──
         print("[3/6] 切换到深度研究模式...")
+        # EmptyState 下拉框：先点"模式："展开，再选"深度研究"（默认即 deep）
         try:
-            # 点击"模式："下拉按钮
             page.locator("button").filter(has_text="模式").first.click(timeout=5000)
             time.sleep(0.5)
-            # 选择"深度研究"
             page.locator("button").filter(has_text="深度研究").first.click(timeout=5000)
             time.sleep(0.5)
+            page.keyboard.press("Escape")
+            time.sleep(0.3)
         except PlaywrightError:
             print("  可能已是深度模式，继续")
         _screenshot(page, "03_mode_deep.png")
@@ -104,7 +105,6 @@ def main() -> bool:
         saw_tool_call = False
         saw_tool_result = False
         saw_resolved = False
-        saw_error = False
         last_body = ""
 
         while time.time() < deadline:
@@ -146,7 +146,6 @@ def main() -> bool:
                 break
 
             if "错误" in body or "连接错误" in body:
-                saw_error = True
                 print(f"  [{time.time():.0f}] ✗ error 出现")
                 break
 

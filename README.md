@@ -6,14 +6,6 @@
 
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://closure-guo-finance-analysis-agent.hf.space)
 
-**股票搜索与配置**
-
-<img src="https://cdn.jsdelivr.net/gh/closure-guo/finance_analysis_agent@main/docs/assets/demo-search.gif" width="700" />
-
-**报告生成与下载**
-
-<img src="https://cdn.jsdelivr.net/gh/closure-guo/finance_analysis_agent@main/docs/assets/demo-report.gif" width="700" />
-
 ## 架构
 
 <p align="center">

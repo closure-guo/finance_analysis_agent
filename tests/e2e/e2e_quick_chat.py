@@ -134,8 +134,10 @@ def _run_playwright(api_key: str) -> bool:
         time.sleep(0.5)
         _screenshot(page, "e2e_quick_02_apikey.png")
 
-        # 选择快速模式
+        # 选择快速模式（EmptyState 下拉框：先点"模式："展开，再选"快速模式"）
         print("  选择快速模式...")
+        page.locator("button").filter(has_text="模式").first.click()
+        time.sleep(0.5)
         page.locator("button").filter(has_text="快速模式").first.click()
         time.sleep(0.5)
 
@@ -151,6 +153,27 @@ def _run_playwright(api_key: str) -> bool:
         input_selector.press("Enter")
         time.sleep(1)
         _screenshot(page, "e2e_quick_03_sent.png")
+
+        # 回归断言：发送后必须从首页跳转到对话视图
+        # （appState 应从 'empty' 切换到 'clarifying'，此切换同步发生在 fetch 之前）
+        print("  校验：已从首页跳转到对话视图...")
+        body_after_send = page.locator("body").inner_text(timeout=5000)
+        nav_checks = {
+            "首页标题已消失": "Finance Analysis Agent" not in body_after_send,
+            "首页副标题已消失": "AI 驱动的 A 股投研分析系统" not in body_after_send,
+            "对话视图已出现（底部提示）": "AI 生成仅供参考" in body_after_send,
+            "用户问题已渲染为气泡": test_question in body_after_send,
+        }
+        nav_ok = True
+        for name, ok in nav_checks.items():
+            status = "[PASS]" if ok else "[FAIL]"
+            print(f"    {status} {name}")
+            if not ok:
+                nav_ok = False
+        if not nav_ok:
+            print("[FAIL] 快速模式发送后未跳转到对话页（停留在首页）")
+            browser.close()
+            return False
 
         # 等待回复
         print(f"  等待 Agent 回复 (最长 {CHAT_TIMEOUT}s)...")
@@ -237,6 +260,53 @@ def _run_playwright(api_key: str) -> bool:
             print(f"  {status} {name}")
             if not ok:
                 all_pass = False
+
+        # ── 回归：会话模式锁定 ──
+        # 1) 快速对话进行中（currentSessionId 已设）-> 模式切换应被禁用
+        # 2) 点"新建分析"回到首页 -> EmptyState 复现（模式可选）
+        # 3) 点侧边栏历史会话 -> 重新锁定，且高亮"快速对话"（mode 从 session_type='chat' 同步）
+        print("\n回归校验：会话模式锁定...")
+        try:
+            deep_btn = page.locator("button:has-text('深度研究')")
+            quick_btn = page.locator("button:has-text('快速对话')")
+
+            def _both_disabled() -> bool:
+                return deep_btn.is_disabled() and quick_btn.is_disabled()
+
+            def _quick_active() -> bool:
+                # 高亮按钮的 inline style 含 brand-popup
+                return "brand-popup" in (quick_btn.get_attribute("style") or "")
+
+            # 1) 当前应锁定（ChatInputBar 渲染中，按钮存在）
+            locked_now = _both_disabled()
+            print(f"    [{'PASS' if locked_now else 'FAIL'}] 会话进行中模式切换已禁用")
+            if not locked_now:
+                all_pass = False
+
+            # 2) 新建分析 -> 回到首页（EmptyState 渲染，ChatInputBar 卸载）
+            page.locator("button:has-text('新建分析')").first.click()
+            page.wait_for_timeout(800)
+            _screenshot(page, "e2e_quick_05a_new_analysis.png")
+            empty_shown = "Finance Analysis Agent" in page.locator("body").inner_text(timeout=2000)
+            print(f"    [{'PASS' if empty_shown else 'FAIL'}] 新建分析后回到首页（模式可选）")
+            if not empty_shown:
+                all_pass = False
+
+            # 3) 点回历史会话 -> ChatInputBar 重新渲染，锁定 + 快速对话高亮
+            page.get_by_text(test_question, exact=False).first.click()
+            page.wait_for_timeout(1500)
+            _screenshot(page, "e2e_quick_05b_history_loaded.png")
+            relocked = _both_disabled()
+            synced = _quick_active()
+            print(f"    [{'PASS' if relocked else 'FAIL'}] 载入历史会话后模式切换已禁用")
+            print(f"    [{'PASS' if synced else 'FAIL'}] 历史会话模式已同步为快速对话")
+            if not relocked:
+                all_pass = False
+            if not synced:
+                all_pass = False
+        except PlaywrightError as e:
+            print(f"  [FAIL] 模式锁定校验异常: {e}")
+            all_pass = False
 
         # 保存页面文本
         report_path = SCREENSHOT_DIR / "report_e2e_quick_chat.md"

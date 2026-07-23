@@ -32,6 +32,22 @@
 
 排查 bug 时不光要看后端日志，还要查看 Langfuse 的 trace（含 LLM 调用链路、输入输出、耗时与异常）。Langfuse 访问地址：http://localhost:3000
 
+## Workflow routing
+
+所有任务进站前先分类（详见 docs/openspec-superpowers-实施文档.md §4）：
+
+- **新功能** -> OpenSpec delta 提案 -> Superpowers 管线 -> 验证 -> sync + archive
+- **修 bug · 意图不变** -> 复现测试 + systematic-debugging，不触碰 openspec
+- **修 bug · 意图变更 / 行为未定义** -> 同新功能流程，delta 先行
+- **重大架构决策** -> 手动落 docs/adr/（编号递增，只增不改）
+- **小改动** -> 直接改
+
+## Verification red lines
+
+- 没有先写失败测试的代码，删除重写
+- archive 前置条件：tasks.md 全勾 + verification 通过 + 人工验证报告落 tests/validation/
+- 「测试全过」不等于「行为正确」；交互行为变更必须有人工验证环节
+
 ## Agent skills
 
 ### Issue tracker
@@ -44,4 +60,4 @@ Default triage label vocabulary (needs-triage, needs-info, ready-for-agent, read
 
 ### Domain docs
 
-Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context layout - one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`. ADR 由人手动维护，agent 不得自动新建 ADR。

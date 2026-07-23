@@ -1,8 +1,9 @@
-"""Web search tool — Tavily API wrapper for quick mode single tool call."""
+"""Web search tool - Tavily API wrapper for quick mode single tool call."""
 
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from pydantic import BaseModel
@@ -118,6 +119,81 @@ def format_search_for_llm(response: SearchResponse) -> str:
 def has_tavily_key() -> bool:
     """Check if Tavily API key is configured."""
     return bool(os.environ.get("TAVILY_API_KEY", ""))
+
+
+def batch_tavily_search(
+    queries: list[str], max_results_per_query: int = 5, max_workers: int = 4
+) -> list[SearchResponse]:
+    """并行执行多个 Tavily 搜索查询，合并去重后返回。
+
+    使用 ThreadPoolExecutor 并行调用 Tavily API，按 URL 去重。
+    单个查询失败不影响其他查询。
+
+    Args:
+        queries: 搜索关键词列表
+        max_results_per_query: 每个查询的最大结果数
+        max_workers: 最大并行线程数
+
+    Returns:
+        去重后的 SearchResponse 列表（每个 query 一个，失败的 query 返回空结果）
+    """
+    if not has_tavily_key():
+        raise ValueError("TAVILY_API_KEY not configured")
+
+    if not queries:
+        return []
+
+    results_map: dict[int, SearchResponse] = {}
+
+    def _single_search(idx: int, q: str) -> tuple[int, SearchResponse]:
+        try:
+            resp = tavily_search(q, max_results=max_results_per_query)
+            return idx, resp
+        except Exception:
+            return idx, SearchResponse(query=q, results=[], count=0)
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(queries))) as executor:
+        futures = [executor.submit(_single_search, i, q) for i, q in enumerate(queries)]
+        for future in as_completed(futures):
+            idx, resp = future.result()
+            results_map[idx] = resp
+
+    responses = [results_map[i] for i in range(len(queries))]
+
+    seen_urls: set[str] = set()
+    for resp in responses:
+        deduped: list[SearchResult] = []
+        for r in resp.results:
+            if r.url not in seen_urls:
+                seen_urls.add(r.url)
+                deduped.append(r)
+        resp.results = deduped
+        resp.count = len(deduped)
+
+    return responses
+
+
+def format_batch_for_llm(responses: list[SearchResponse]) -> str:
+    """将批量搜索结果格式化为 LLM 友好的文本。
+
+    每个查询的结果连续编号，便于引用。
+    """
+    lines: list[str] = []
+    ref_num = 0
+    for resp in responses:
+        if not resp.results:
+            continue
+        lines.append(f"## 搜索: {resp.query}")
+        if resp.answer:
+            lines.append(f"[AI 摘要] {resp.answer}")
+            lines.append("")
+        for r in resp.results:
+            ref_num += 1
+            lines.append(f"[{ref_num}] {r.title}")
+            lines.append(r.url)
+            lines.append(r.content)
+            lines.append("")
+    return "\n".join(lines)
 
 
 def parse_search_output(text: str) -> list[SearchResult]:

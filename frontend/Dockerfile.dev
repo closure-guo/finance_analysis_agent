@@ -1,0 +1,17 @@
+# ── 前端开发镜像：vite dev server（热重载）──────────────────────────
+# 仅在 docker-compose.override.yml 中被引用，生产构建仍用 Dockerfile（nginx）。
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# 国内 npm 镜像加速
+RUN npm config set registry https://registry.npmmirror.com --strict-ssl=false
+
+# 先装依赖（利用层缓存；源码通过 volume 挂载，不进镜像）
+COPY package.json package-lock.json ./
+RUN npm ci
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev"]

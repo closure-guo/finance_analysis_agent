@@ -28,19 +28,38 @@ logger = logging.getLogger(__name__)
 _SINA_MAX_RETRIES = 2
 _SINA_RETRY_DELAY = 2
 _AK_TIMEOUT = 15  # 单次 AKShare 调用超时秒数
+_AK_MAX_RETRIES = 3  # 通用 AKShare 调用重试次数（应对 RemoteDisconnected 限频）
+_AK_RETRY_DELAY = 1.5  # 重试退避秒数
 
 
 def _call_ak(func, *args, **kwargs):
-    """带超时的 AKShare 调用包装。超时返回 None，由调用方处理。"""
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(func, *args, **kwargs)
-        try:
-            return future.result(timeout=_AK_TIMEOUT)
-        except FuturesTimeoutError:
-            logger.warning(
-                "AKShare 调用超时 (%ds): %s", _AK_TIMEOUT, getattr(func, "__name__", str(func))
-            )
-            return None
+    """带超时 + 重试的 AKShare 调用包装。
+
+    超时或连接异常（含 RemoteDisconnected 限频）时重试，全部失败返回 None。
+    """
+    for attempt in range(1, _AK_MAX_RETRIES + 1):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(func, *args, **kwargs)
+            try:
+                return future.result(timeout=_AK_TIMEOUT)
+            except FuturesTimeoutError:
+                logger.warning(
+                    "AKShare 调用超时 (%ds): %s (attempt %d/%d)",
+                    _AK_TIMEOUT, getattr(func, "__name__", str(func)), attempt, _AK_MAX_RETRIES,
+                )
+            except Exception as e:
+                # 捕获 RemoteDisconnected / ConnectionError 等网络异常，重试而非直接抛出
+                logger.warning(
+                    "AKShare 调用异常: %s: %s (attempt %d/%d)",
+                    getattr(func, "__name__", str(func)), type(e).__name__, attempt, _AK_MAX_RETRIES,
+                )
+        if attempt < _AK_MAX_RETRIES:
+            time.sleep(_AK_RETRY_DELAY * attempt)  # 线性退避
+    logger.error(
+        "AKShare 调用全部失败 (%d 次): %s", _AK_MAX_RETRIES,
+        getattr(func, "__name__", str(func)),
+    )
+    return None
 
 
 def _sina_report(stock: str, symbol: str) -> pd.DataFrame:

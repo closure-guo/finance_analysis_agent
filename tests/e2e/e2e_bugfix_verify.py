@@ -101,15 +101,16 @@ def _setup_api_key(page, api_key: str) -> bool:
 
 
 def _select_mode(page, mode: str) -> bool:
-    """选择模式（快速模式 / 深度研究）-- 需先打开下拉菜单。"""
+    """选择模式（EmptyState 下拉框：先点"模式："展开，再选选项）。"""
+    # 目标选项文案：快速模式 / 深度研究
+    label = "快速模式" if "快速" in mode else "深度研究"
     try:
-        # 点击"模式："按钮打开下拉菜单
+        # 点击"模式："下拉触发按钮
         mode_btn = page.locator("button").filter(has_text="模式")
         if mode_btn.count() > 0:
             mode_btn.first.click()
             time.sleep(0.5)
-            # 点击下拉菜单中的选项
-            option = page.locator("button").filter(has_text=mode)
+            option = page.locator("button").filter(has_text=label)
             if option.count() > 0:
                 option.first.click()
                 time.sleep(0.5)

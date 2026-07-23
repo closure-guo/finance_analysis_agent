@@ -102,6 +102,7 @@ REACT_SYSTEM_PROMPT = """你是一个专业的A股投研分析助手，负责理
 1. **search_stock**: 根据自然语言查询搜索A股股票。当用户输入股票名称、行业描述、公司特征等模糊查询时调用。
 2. **run_deep_analysis**: 对指定股票执行完整的5层深度分析（4分析师->多空辩论->风控->报告）。需要股票代码。
 3. **web_search**: 搜索网页获取实时信息。当用户询问股票推荐、今日热点、市场动态等需要最新信息的问题时调用。
+4. **batch_web_search**: 可以一次性传入多个查询关键词，并行搜索，效率更高。
 
 ## 工作流程
 
@@ -118,7 +119,7 @@ REACT_SYSTEM_PROMPT = """你是一个专业的A股投研分析助手，负责理
 
 3. 调用 search_stock 后：
    - 如果返回单个候选股票，直接调用 run_deep_analysis
-   - 如果返回多个候选股票，且用户意图明确（如"龙头"通常指第一），选择最匹配的调用 run_deep_analysis
+   - 如果返回多个候选股票：**不要直接调用 run_deep_analysis**，应该使用 web_search 或 batch_web_search 搜集这些股票的最新信息，然后基于搜索结果给用户一个摘要和建议，让用户选择具体股票
    - 如果返回多个候选股票，且无法确定用户要分析哪个，向用户列出候选并询问"找到以下股票，你想深度分析哪一个？"
    - 如果没有匹配结果，可以尝试换关键词重新搜索（最多2次）
 
@@ -132,13 +133,22 @@ REACT_SYSTEM_PROMPT = """你是一个专业的A股投研分析助手，负责理
 - 不要直接说"无法识别股票"，必须调用 search_stock 工具尝试搜索
 - 每次只调用一个工具
 - 如果搜索结果不理想，可以更换关键词重试（最多2次）
-- 深度分析只需要调用一次"""
+- 深度分析只需要调用一次
+- **有多个候选股票时，不能直接进入管线，必须先搜索再给用户建议**"""
 
 
 # ── Stock search tool implementation ──
 #
 # 四级短路降级：AKShare 验证是唯一信任锚点，LLM 和 Web Search 都是信息源，
 # 必须经过验证才能输出。越靠前的层越可信越便宜，一旦命中直接返回。
+
+# 时效性/非具体关键词：随时间变化，LLM 常识推理易"幻觉"出单只热门股
+# （如把"热门股票"→贵州茅台并以 high confidence 返回），导致 Agent 跳过确认
+# 直接进管线。命中此类词时跳过 STEP 2c，改走 Web Search / 模糊搜索返回多候选。
+_TIME_SENSITIVE_KEYWORDS = [
+    "热门", "热点", "热股", "推荐", "今天", "今日", "最近", "最新",
+    "当下", "现在", "当前", "涨幅", "跌幅", "涨停", "跌停", "利好", "利空",
+]
 
 
 def search_stock_tool(query: str, api_key: str | None = None) -> dict:
@@ -186,8 +196,18 @@ def search_stock_tool(query: str, api_key: str | None = None) -> dict:
                 "confidence": 1.0,
             }
 
+    # ── STEP 2c 前置守卫：时效性查询跳过 LLM 常识推理 ──
+    # "热门股票"/"今天推荐"等查询随时间变化，LLM 易幻觉出单只股票并以 high
+    # confidence 返回（AKShare 验证通过后即单候选 → Agent 直接进管线）。
+    # 此处强制跳过 LLM 推理，落到 STEP 3 Web Search / STEP 4 模糊搜索返回多候选。
+    is_time_sensitive = any(kw in query for kw in _TIME_SENSITIVE_KEYWORDS)
+
     # ── STEP 2c: LLM 常识推理 ──
-    llm_result = _search_with_llm_reasoning(query, api_key)
+    llm_result = (
+        None
+        if is_time_sensitive
+        else _search_with_llm_reasoning(query, api_key)
+    )
     if llm_result and llm_result.get("confidence") == "high":
         verified = _verify_stock_code(llm_result["stock_code"])
         if verified:
@@ -240,6 +260,10 @@ def _classify_input(query: str) -> str:
     # 包含6位数字 → 代码
     if re.search(r"\d{6}", query):
         return "code"
+
+    # 时效性/非具体关键词 → 描述（随时间变化，不应按具体股票名处理）
+    if any(kw in query for kw in _TIME_SENSITIVE_KEYWORDS):
+        return "description"
 
     # 时效性/概念性关键词 → 描述
     _concept_keywords = [

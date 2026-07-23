@@ -56,6 +56,96 @@ async def _web_search(query: str) -> str:
     return format_search_for_llm(response)
 
 
+MAX_WEB_SOURCES = 20
+MAX_SOURCE_CONTENT_LEN = 500
+
+_web_search_cache: dict[str, str] = {}
+
+
+def _make_web_search_with_collector(collector: list[dict]):
+    """创建 web_search 工具，同时将搜索结果收集到 collector 用于引用溯源。"""
+
+    async def web_search(query: str) -> str:
+        """搜索网页获取实时信息
+
+        Args:
+            query: 搜索关键词
+        """
+        from finance_agent.web_search import format_search_for_llm, has_tavily_key, tavily_search
+
+        if not has_tavily_key():
+            return "[错误] 未配置 TAVILY_API_KEY，无法执行搜索。"
+        if query in _web_search_cache:
+            return _web_search_cache[query]
+        response = tavily_search(query)
+        result_text = format_search_for_llm(response)
+        _web_search_cache[query] = result_text
+        if len(collector) < MAX_WEB_SOURCES:
+            for r in response.results:
+                entry = {
+                    "query": query,
+                    "title": r.title,
+                    "url": r.url,
+                    "content": r.content[:MAX_SOURCE_CONTENT_LEN],
+                }
+                if entry not in collector:
+                    collector.append(entry)
+                    if len(collector) >= MAX_WEB_SOURCES:
+                        break
+        return result_text
+
+    return web_search
+
+
+def _make_batch_web_search(collector: list[dict]):
+    """创建 batch_web_search 工具，并行搜索多个关键词并收集信源。"""
+
+    async def batch_web_search(queries: list[str]) -> str:
+        """并行批量搜索多个关键词，获取更全面的信息
+
+        适用于需要从多个维度搜集信息的场景，如分析一只股票时同时搜索
+        最新新闻、财务数据、行业对比、分析师观点等。
+
+        Args:
+            queries: 搜索关键词列表，建议 2-5 个不同维度的查询
+        """
+        from finance_agent.web_search import (
+            batch_tavily_search,
+            format_batch_for_llm,
+            has_tavily_key,
+        )
+
+        if not has_tavily_key():
+            return "[错误] 未配置 TAVILY_API_KEY，无法执行搜索。"
+        if not queries:
+            return "[错误] 查询列表为空"
+        uncached = [q for q in queries if q not in _web_search_cache]
+        cached_responses_text = [_web_search_cache[q] for q in queries if q in _web_search_cache]
+        if uncached:
+            responses = batch_tavily_search(uncached)
+            new_text = format_batch_for_llm(responses)
+            for resp in responses:
+                _web_search_cache[resp.query] = format_batch_for_llm([resp])
+                if len(collector) < MAX_WEB_SOURCES:
+                    for r in resp.results:
+                        entry = {
+                            "query": resp.query,
+                            "title": r.title,
+                            "url": r.url,
+                            "content": r.content[:MAX_SOURCE_CONTENT_LEN],
+                        }
+                        if entry not in collector:
+                            collector.append(entry)
+                            if len(collector) >= MAX_WEB_SOURCES:
+                                break
+        else:
+            new_text = ""
+        combined = "\n".join(t for t in [*cached_responses_text, new_text] if t)
+        return combined or "[未找到相关信息]"
+
+    return batch_web_search
+
+
 def _make_search_stock(api_key: str | None = None):
     """创建 search_stock 工具，注入 api_key 闭包。"""
 
@@ -129,6 +219,7 @@ def _make_run_deep_analysis(
     peer_codes: list | None = None,
     enable_web_search: bool = False,
     session_id: str | None = None,
+    web_sources: list[dict] | None = None,
 ):
     """创建 run_deep_analysis 流式工具，注入配置闭包。
 
@@ -159,6 +250,7 @@ def _make_run_deep_analysis(
             "peer_codes": peer_codes,
             "enable_web_search": enable_web_search,
             "api_key": api_key,
+            "web_sources": web_sources or [],
         }
 
         accumulated: dict = dict(initial_state)
@@ -235,6 +327,7 @@ def _make_run_deep_analysis(
             "stock_code": stock_code,
             "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
             "report_markdown": report_md,
+            "web_sources": web_sources or [],
             "sse_type": "report_ready",
         }
 
@@ -348,9 +441,10 @@ def build_agent(
             api_key=api_key,
             system_prompt=prompt,
             permission_mode=PermissionMode.YOLO,
-            max_iterations=6,  # web_search -> search_stock -> run_deep_analysis -> 摘要
+            max_iterations=6,
             llm=llm_client,
         )
+        web_sources_collector: list[dict] = []
         agent.tools.register(_make_search_stock(api_key), name="search_stock")
         agent.tools.register(
             _make_run_deep_analysis(
@@ -359,10 +453,14 @@ def build_agent(
                 peer_codes=peer_codes,
                 enable_web_search=enable_web_search,
                 session_id=kwargs.get("session_id"),
+                web_sources=web_sources_collector,
             ),
             name="run_deep_analysis",
         )
-        agent.tools.register(_web_search, name="web_search")
+        agent.tools.register(
+            _make_web_search_with_collector(web_sources_collector), name="web_search"
+        )
+        agent.tools.register(_make_batch_web_search(web_sources_collector), name="batch_web_search")
         session_id = kwargs.get("session_id")
         if session_id:
             _inject_chat_history(agent, session_id)
@@ -549,6 +647,15 @@ async def stream_agent_to_sse(
         elif event.event_type == ActionType.THINK:
             yield _sse({"type": "thinking_token", "token": event.content, "timestamp": ts})
 
+        elif event.event_type == ActionType.THINK_TO_ANSWER:
+            # 文本已作为 thinking_token 逐 token 流式输出；流末判定为最终回答。
+            # answer 字段供后端持久化（api.py 收集），前端据此把思考区转为回答区。
+            yield _sse({"type": "thinking_to_answer", "answer": event.content, "timestamp": ts})
+
+        elif event.event_type == ActionType.THINK_REPLACE:
+            # 替换已流式输出的思考内容（DSML 清理等后处理）
+            yield _sse({"type": "thinking_replace", "token": event.content, "timestamp": ts})
+
         elif event.event_type == ActionType.TOOL_CALL:
             tc = event.tool_call
             # 跳过 permission_required 事件（tool_call 为 None，只有 permission_request）
@@ -638,6 +745,7 @@ async def stream_agent_to_sse(
                                 "report_markdown": tr.metadata.get("report_markdown", ""),
                                 "chart_data": tr.metadata.get("chart_data", {}),
                                 "stock_name": stock_name,
+                                "web_sources": tr.metadata.get("web_sources", []),
                                 "timestamp": ts,
                             }
                         )
