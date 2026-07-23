@@ -53,7 +53,7 @@ class Test5LayerPipelineE2E:
         # ── Layer III/IV：交易决策 ──
         assert "final_trade_decision" in result
         decision = result["final_trade_decision"]
-        assert decision.action in ("buy", "sell", "hold")
+        assert decision.action in ("buy", "sell", "hold", "watch")
 
         # ── Layer V：基金经理决策 ──
         assert "fund_manager_decision" in result

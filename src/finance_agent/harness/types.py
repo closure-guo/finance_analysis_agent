@@ -35,6 +35,8 @@ class ActionType(str, Enum):
     """ReAct 循环中 Agent 的单步动作类型"""
 
     THINK = "think"  # 内部思考（Claude Code 的 <thinking>）
+    THINK_TO_ANSWER = "think_to_answer"  # 流式输出为思考，流末判定实为最终回答（通知前端转换）
+    THINK_REPLACE = "think_replace"  # 替换已流式输出的思考内容（DSML 清理等后处理）
     TOOL_CALL = "tool_call"  # 请求调用工具
     TOOL_RESULT = "tool_result"  # 工具执行结果
     ANSWER = "answer"  # 最终回答
@@ -210,6 +212,19 @@ class StreamEvent:
     @classmethod
     def think(cls, content: str) -> StreamEvent:
         return cls(event_type=ActionType.THINK, content=content)
+
+    @classmethod
+    def think_to_answer(cls, content: str) -> StreamEvent:
+        """流式输出期间文本已作为 THINK 逐 token 下发；流末判定为最终回答时，
+        用此事件通知消费者将已展示的思考内容转为回答。content 为完整回答文本，
+        供需要持久化的消费者（如 session 记录）使用。"""
+        return cls(event_type=ActionType.THINK_TO_ANSWER, content=content)
+
+    @classmethod
+    def think_replace(cls, content: str) -> StreamEvent:
+        """替换已流式输出的思考内容。用于流末后处理（如 DSML 标记清理）：
+        逐 token 流式时原始文本可能含标记，清理后用此事件覆盖。"""
+        return cls(event_type=ActionType.THINK_REPLACE, content=content)
 
     @classmethod
     def for_tool_call(cls, call: ToolCallRequest) -> StreamEvent:

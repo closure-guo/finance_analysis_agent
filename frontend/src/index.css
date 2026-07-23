@@ -48,6 +48,15 @@
 
 body { background: var(--bg-base-default); color: var(--text-default); overflow-x: hidden; }
 
+/* Placeholder - light */
+::placeholder { color: var(--text-tertiary); opacity: 1; }
+:-ms-input-placeholder { color: var(--text-tertiary); }
+::-ms-input-placeholder { color: var(--text-tertiary); }
+
+/* Inputs */
+input, textarea { color: var(--text-default); }
+input:focus, textarea:focus { outline: none; }
+
 /* Scrollbar - light */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -92,8 +101,8 @@ body { background: var(--bg-base-default); color: var(--text-default); overflow-
 
 /* Message bubbles - light */
 .msg-user {
-  background: var(--bg-invert);
-  color: #FFFFFF;
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
   border-radius: 18px 18px 6px 18px;
 }
 .msg-system {

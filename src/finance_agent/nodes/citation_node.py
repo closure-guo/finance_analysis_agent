@@ -30,9 +30,14 @@ def verify_citations(state: dict) -> dict:
     # 明细附在 verify_citations span 的 metadata 上供下钻。
     _report_to_langfuse(report)
 
+    # 递增 iteration_count，使 after_citation 的重试上限（< 3）真正生效。
+    # 否则 citation_pass=False 时会无限重试，图永远无法推进到辩论/报告阶段。
+    iteration_count = state.get("iteration_count", 0)
+
     return {
         "citation_report": report.model_dump(),
         "citation_pass": report.all_passed,
+        "iteration_count": iteration_count + 1,
     }
 
 

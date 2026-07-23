@@ -21,9 +21,8 @@ from pydantic import BaseModel
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
 from finance_agent.graph import build_5layer_graph  # noqa: E402
-from finance_agent.llm import call_llm_stream  # noqa: E402
 from finance_agent.react_agent import (  # noqa: E402
-    search_stock_tool,
+    _TIME_SENSITIVE_KEYWORDS as _TIME_SENSITIVE_KEYWORDS_REACT,
 )
 from finance_agent.session_store import (  # noqa: E402
     append_chat,
@@ -34,6 +33,7 @@ from finance_agent.session_store import (  # noqa: E402
     init_db,
     list_sessions,
     rename_session,
+    update_session_for_clarify,
     update_session_report,
     update_session_status,
 )
@@ -113,19 +113,6 @@ _NODE_THINKING: dict[str, str] = {
 }
 
 
-# ── Deep research clarification plan (Kimi-style intent confirmation) ──
-# 固定的 5 层管线研究计划，用于深度研究前的意图澄清环节展示给用户确认。
-
-DEFAULT_CLARIFY_PLAN: list[dict] = [
-    {"title": "数据准备", "desc": "获取行情、财报、技术指标，勾稽校验与指标计算"},
-    {"title": "Layer I 多维分析", "desc": "基本面、技术面、宏观、舆情 4 个分析师并行"},
-    {"title": "Layer II 多空辩论", "desc": "看多 / 看空两轮辩论，研究经理汇总结论"},
-    {"title": "Layer III 交易决策", "desc": "交易员制定买卖方向与仓位建议"},
-    {"title": "Layer IV 风控压力测试", "desc": "激进 / 保守 / 中性三方辩论 + 风控裁决"},
-    {"title": "Layer V 基金经理审批", "desc": "审批最终决策，生成结构化研报"},
-]
-
-
 # ── Request models ──
 
 
@@ -146,12 +133,6 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     context: dict | None = None
-    api_key: str | None = None
-    user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
-
-
-class ClarifyRequest(BaseModel):
-    query: str
     api_key: str | None = None
     user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
 
@@ -532,11 +513,15 @@ def _run_graph_streaming(
     req: AnalyzeRequest,
     analysis_id: str,
     start_time: float,
+    session_id: str | None = None,
 ) -> Generator[str, None, None]:
     """执行 5 层图分析，流式 yield SSE 事件。
 
     封装了 PREP → Layer I-V → 报告生成的完整流程，
     可作为 ReAct 循环中 run_deep_analysis 工具的执行体。
+
+    Args:
+        session_id: 可选外部传入的 session_id。若未提供，内部创建新 session。
     """
     initial_state = {
         "stock_code": stock_code,
@@ -550,11 +535,15 @@ def _run_graph_streaming(
 
     stock_name_display = stock_name or stock_code
 
-    session_id = create_session(
-        stock_code=stock_code,
-        stock_name=stock_name_display,
-        status="running",
-    )
+    # 若 session_id 为外部传入，说明 session_created 已由调用方发送，避免重复
+    session_created_externally = bool(session_id)
+
+    if not session_id:
+        session_id = create_session(
+            stock_code=stock_code,
+            stock_name=stock_name_display,
+            status="running",
+        )
 
     yield _sse(
         {
@@ -567,14 +556,15 @@ def _run_graph_streaming(
         }
     )
 
-    yield _sse(
-        {
-            "type": "session_created",
-            "session_id": session_id,
-            "display_name": f"{stock_name_display} {_now()[-5:]}",
-            "timestamp": _now(),
-        }
-    )
+    if not session_created_externally:
+        yield _sse(
+            {
+                "type": "session_created",
+                "session_id": session_id,
+                "display_name": f"{stock_name_display} {_now()[-5:]}",
+                "timestamp": _now(),
+            }
+        )
 
     completed: set[str] = set()
     accumulated: dict = dict(initial_state)
@@ -748,309 +738,84 @@ def _run_graph_streaming(
         )
 
 
-# ── Deep research intent clarification (Kimi-style) ──
-
-
-def _generate_clarify_understanding(
-    query: str,
-    stock_name: str,
-    stock_code: str,
-    api_key: str | None,
-) -> dict:
-    """用 LLM 生成意图理解 + 1-2 个澄清问题（Kimi 风格"反问"）。
-
-    返回 {"understanding": str, "questions": [{"id", "text"}, ...]}。
-    LLM 失败时回退到默认文案、questions 为空。
-    """
-    from finance_agent.llm import call_llm
-    from finance_agent.nodes._llm_utils import parse_json_response
-
-    system = (
-        "你是A股投研助手的意图理解模块（Kimi 风格澄清环节）。根据用户输入和已识别的股票，"
-        "输出 JSON：\n"
-        '{"understanding": "基于用户原始输入，用2-3句话概括其深度分析意图，包括：用户关注的核心问题、'
-        "期望的分析角度（如基本面/技术面/估值/行业对比/舆情等）、隐含的投资视角。不要简单重复股票名和代码，"
-        '要体现出对用户真实需求的理解。不使用emoji，不超过120字",'
-        ' "questions": [{"id": "q1", "text": "一个针对性的澄清问题，帮用户明确研究方向"}]}\n'
-        "questions 生成 1-2 个，聚焦于：分析侧重点（基本面/技术面/估值/成长性/舆情）、"
-        "时间维度（短期/中长期）、风险偏好、是否需要同业对比等。"
-        "如果用户输入已足够明确，questions 为空数组 []。只输出 JSON，不要多余解释。"
-    )
-    prompt = f"用户输入：{query}\n已识别股票：{stock_name}({stock_code})"
-    fallback = {
-        "understanding": f"您希望对 {stock_name}({stock_code}) 进行深度投研分析",
-        "questions": [],
-    }
-    try:
-        resp = call_llm(prompt, system=system, api_key=api_key, max_tokens=480, quick=True)
-        data = parse_json_response(resp)
-        understanding = (data.get("understanding") or "").strip() if isinstance(data, dict) else ""
-        raw_qs = data.get("questions") if isinstance(data, dict) else None
-        questions = []
-        if isinstance(raw_qs, list):
-            for i, q in enumerate(raw_qs[:2]):
-                if isinstance(q, dict) and q.get("text"):
-                    questions.append(
-                        {"id": q.get("id") or f"q{i + 1}", "text": str(q["text"]).strip()}
-                    )
-                elif isinstance(q, str) and q.strip():
-                    questions.append({"id": f"q{i + 1}", "text": q.strip()})
-        return {
-            "understanding": understanding or fallback["understanding"],
-            "questions": questions,
-        }
-    except Exception:  # noqa: BLE001 - best-effort LLM understanding
-        return fallback
-
-
-def _generate_clarify_understanding_stream(
-    query: str,
-    stock_name: str,
-    stock_code: str,
-    api_key: str | None,
-    user_id: str | None = None,
-):
-    """流式生成意图理解，yield (kind, text) 元组。
-
-    kind:
-      - "thinking": LLM reasoning_content（思考过程）
-      - "answer": LLM answer content（JSON 片段）
-    最终返回解析后的 {"understanding": ..., "questions": [...]} 通过 ("done", dict) 传递。
-    """
-    from finance_agent.nodes._llm_utils import parse_json_response
-
-    system = (
-        "你是A股投研助手的意图理解模块（Kimi 风格澄清环节）。根据用户输入和已识别的股票，"
-        "输出 JSON：\n"
-        '{"understanding": "基于用户原始输入，用2-3句话概括其深度分析意图，包括：用户关注的核心问题、'
-        "期望的分析角度（如基本面/技术面/估值/行业对比/舆情等）、隐含的投资视角。不要简单重复股票名和代码，"
-        '要体现出对用户真实需求的理解。不使用emoji，不超过120字",'
-        ' "questions": [{"id": "q1", "text": "一个针对性的澄清问题，帮用户明确研究方向"}]}\n'
-        "questions 生成 1-2 个，聚焦于：分析侧重点（基本面/技术面/估值/成长性/舆情）、"
-        "时间维度（短期/中长期）、风险偏好、是否需要同业对比等。"
-        "如果用户输入已足够明确，questions 为空数组 []。只输出 JSON，不要多余解释。"
-    )
-    prompt = f"用户输入：{query}\n已识别股票：{stock_name}({stock_code})"
-    fallback = {
-        "understanding": f"您希望对 {stock_name}({stock_code}) 进行深度投研分析",
-        "questions": [],
-    }
-
-    answer_parts: list[str] = []
-    # ADR-0015：clarify LLM 调用用 span 包裹 + propagate_attributes(user_id)
-    from contextlib import nullcontext as _nullcontext
-
-    from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse
-
-    _lf_clarify = _get_langfuse()
-    _span_cm = _nullcontext()
-    _prop_cm = _nullcontext()
-    if _lf_clarify is not None:
-        _span_cm = _lf_clarify.start_as_current_observation(
-            as_type="span", name="clarify_understanding", input={"query": query}
-        )
-        if user_id:
-            with contextlib.suppress(Exception):
-                from langfuse import propagate_attributes
-
-                _prop_cm = propagate_attributes(user_id=user_id)
-    _span_cm.__enter__()
-    _prop_cm.__enter__()
-    try:
-        for kind, text in call_llm_stream(
-            prompt, system=system, api_key=api_key, max_tokens=480, quick=True
-        ):
-            if kind == "thinking":
-                yield ("thinking", text)
-            elif kind == "answer":
-                answer_parts.append(text)
-                yield ("answer", text)
-
-        full_answer = "".join(answer_parts)
-        data = parse_json_response(full_answer)
-        understanding = (data.get("understanding") or "").strip() if isinstance(data, dict) else ""
-        raw_qs = data.get("questions") if isinstance(data, dict) else None
-        questions = []
-        if isinstance(raw_qs, list):
-            for i, q in enumerate(raw_qs[:2]):
-                if isinstance(q, dict) and q.get("text"):
-                    questions.append(
-                        {"id": q.get("id") or f"q{i + 1}", "text": str(q["text"]).strip()}
-                    )
-                elif isinstance(q, str) and q.strip():
-                    questions.append({"id": f"q{i + 1}", "text": q.strip()})
-        yield (
-            "done",
-            {
-                "understanding": understanding or fallback["understanding"],
-                "questions": questions,
-            },
-        )
-    except Exception:  # noqa: BLE001
-        yield ("done", fallback)
-    finally:
-        with contextlib.suppress(Exception):
-            _prop_cm.__exit__(None, None, None)
-        with contextlib.suppress(Exception):
-            _span_cm.__exit__(None, None, None)
-
-
-@app.post("/api/clarify")
-async def clarify(req: ClarifyRequest):
-    """深度研究前的意图澄清环节（SSE 流式）。
-
-    推送事件类型：
-      - clarify_tool: 工具调用信息（搜索股票）
-      - clarify_thinking: LLM 思考过程（reasoning_content）
-      - clarify_answer: LLM 答案片段（意图理解 JSON 片段）
-      - clarify_done: 完整的澄清数据（股票代码、候选、问题等）
-    """
-    query = (req.query or "").strip()
-    api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
-
-    def _error_data(msg: str) -> dict:
-        return {
-            "status": "error",
-            "query": query,
-            "stock_code": "",
-            "stock_name": "",
-            "understanding": "",
-            "questions": [],
-            "plan": [],
-            "needs_selection": False,
-            "candidates": [],
-            "message": msg,
-        }
-
-    def _clarify_stream():
-        if not query:
-            yield _sse(
-                {
-                    "type": "clarify_done",
-                    "data": _error_data("请输入股票名称或代码"),
-                    "timestamp": _now(),
-                }
-            )
-            return
-
-        yield _sse(
-            {
-                "type": "clarify_tool",
-                "tool": "search_stock",
-                "args": {"query": query},
-                "status": "running",
-                "timestamp": _now(),
-            }
-        )
-
-        try:
-            result = search_stock_tool(query, api_key)
-        except Exception as e:  # noqa: BLE001
-            yield _sse(
-                {
-                    "type": "clarify_tool",
-                    "tool": "search_stock",
-                    "status": "error",
-                    "error": str(e),
-                    "timestamp": _now(),
-                }
-            )
-            yield _sse(
-                {
-                    "type": "clarify_done",
-                    "data": _error_data(f"股票识别失败：{e}"),
-                    "timestamp": _now(),
-                }
-            )
-            return
-
-        found = bool(result.get("found"))
-        raw_candidates = result.get("candidates", []) if found else []
-        needs_confirmation = bool(result.get("needs_confirmation"))
-        source = result.get("source", "")
-
-        def _norm(c: dict) -> dict:
-            return {
-                "stock_code": c.get("stock_code") or c.get("code", ""),
-                "stock_name": c.get("stock_name") or c.get("name", ""),
-            }
-
-        candidates = [_norm(c) for c in raw_candidates if _norm(c)["stock_code"]]
-
-        stock_code = ""
-        stock_name = ""
-        needs_selection = False
-
-        if (
-            candidates
-            and not needs_confirmation
-            or candidates
-            and needs_confirmation
-            and len(candidates) == 1
-        ):
-            stock_code = candidates[0]["stock_code"]
-            stock_name = candidates[0]["stock_name"]
-        elif candidates and needs_confirmation:
-            needs_selection = True
-
-        cand_desc = "、".join(f"{c['stock_name']}({c['stock_code']})" for c in candidates[:3])
-        if len(candidates) > 3:
-            cand_desc += f" 等{len(candidates)}只"
-        yield _sse(
-            {
-                "type": "clarify_tool",
-                "tool": "search_stock",
-                "status": "done",
-                "result_summary": cand_desc or "未找到匹配股票",
-                "source": source,
-                "found": found,
-                "timestamp": _now(),
-            }
-        )
-
-        questions: list[dict] = []
-        if stock_code:
-            understanding = ""
-            for kind, text in _generate_clarify_understanding_stream(
-                query, stock_name, stock_code, api_key, user_id=req.user_id
-            ):
-                if kind == "thinking":
-                    yield _sse({"type": "clarify_thinking", "token": text, "timestamp": _now()})
-                elif kind == "answer":
-                    yield _sse({"type": "clarify_answer", "token": text, "timestamp": _now()})
-                elif kind == "done":
-                    understanding = text["understanding"]
-                    questions = text["questions"]
-        elif needs_selection:
-            understanding = "找到多个匹配的股票，请选择要深度分析的目标。"
-        else:
-            understanding = "未能识别到具体的股票，请提供更准确的股票名称或6位代码。"
-
-        show_plan = bool(stock_code or needs_selection)
-
-        yield _sse(
-            {
-                "type": "clarify_done",
-                "data": {
-                    "status": "ok",
-                    "query": query,
-                    "stock_code": stock_code,
-                    "stock_name": stock_name,
-                    "understanding": understanding,
-                    "questions": questions,
-                    "plan": DEFAULT_CLARIFY_PLAN if show_plan else [],
-                    "needs_selection": needs_selection,
-                    "candidates": candidates,
-                    "message": "" if show_plan else "未找到匹配的股票，请尝试更准确的名称或6位代码",
-                },
-                "timestamp": _now(),
-            }
-        )
-
-    return StreamingResponse(_stream_from_sync(_clarify_stream()), media_type="text/event-stream")
-
-
 # ── Analyze (harness-based ReAct) ──
+
+
+def _parse_sse_data(sse_str: str) -> dict | None:
+    """从 SSE 字符串中解析 data JSON，失败返回 None。"""
+    try:
+        body = sse_str.strip().split("data: ", 1)[1]
+        return json.loads(body)
+    except (IndexError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _summarize_tool_result(result) -> str:
+    """将工具结果浓缩为前端可展示的简短文本（与前端逻辑保持一致）。"""
+    if isinstance(result, str):
+        return result[:150]
+    if isinstance(result, list):
+        items: list[str] = []
+        for r in result[:3]:
+            if isinstance(r, dict):
+                items.append(
+                    r.get("title")
+                    or r.get("name")
+                    or r.get("code")
+                    or json.dumps(r, ensure_ascii=False)[:50]
+                )
+            else:
+                items.append(str(r)[:50])
+        return "、".join(items)
+    if isinstance(result, dict):
+        return json.dumps(result, ensure_ascii=False)[:150]
+    return ""
+
+
+class _ChatCollector:
+    """收集 Agent 流式事件中的最终回复、思考过程与工具调用，用于持久化到 chat_history。"""
+
+    def __init__(self) -> None:
+        self.response: str = ""
+        self.thinking: str = ""
+        self.tool_calls: list[dict] = []
+
+    def feed(self, data: dict) -> None:
+        t = data.get("type")
+        if t == "chat_token":
+            self.response += data.get("token", "")
+        elif t == "thinking_to_answer":
+            # 文本已作为 thinking_token 流式输出，流末判定为最终回答：
+            # 将末尾回答文本从 thinking 中剥离，避免重复持久化。
+            ans = data.get("answer", "")
+            self.response += ans
+            if ans and self.thinking.endswith(ans):
+                self.thinking = self.thinking[: -len(ans)]
+        elif t == "thinking_token":
+            self.thinking += data.get("token", "")
+        elif t == "thinking_replace":
+            self.thinking = data.get("token", "")
+        elif t == "tool_call":
+            name = data.get("name", "")
+            # run_deep_analysis 触发的是管线 UI（非对话流工具调用框），跳过以与前端保持一致
+            if name == "run_deep_analysis":
+                return
+            self.tool_calls.append(
+                {
+                    "name": name,
+                    "args": data.get("args", {}),
+                    "result_text": "",
+                    "done": False,
+                }
+            )
+        elif t == "tool_result":
+            name = data.get("name", "")
+            result_text = _summarize_tool_result(data.get("result"))
+            for tc in reversed(self.tool_calls):
+                if tc["name"] == name and not tc["done"]:
+                    tc["result_text"] = result_text
+                    tc["done"] = True
+                    break
 
 
 @app.post("/api/analyze")
@@ -1067,73 +832,108 @@ async def analyze(req: AnalyzeRequest):
         analysis_id = str(uuid.uuid4())[:8]
         start_time = time.time()
 
+        if not req.query:
+            yield _sse({"type": "error", "message": "请输入股票代码或名称", "timestamp": _now()})
+            yield _sse({"type": "done", "timestamp": _now()})
+            return
+
+        # API key: 优先用请求中的，无效则回退到环境变量
+        api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+
+        # ── Session 生命周期：从首次输入开始 ──
+        session_id = req.session_id
+        if session_id:
+            session = get_session(session_id)
+            if not session:
+                yield _sse({"type": "error", "message": "Session not found", "timestamp": _now()})
+                yield _sse({"type": "done", "timestamp": _now()})
+                return
+        else:
+            display_name = req.query.strip()[:30] or "深度分析"
+            session_id = create_session(
+                stock_code="",
+                stock_name="",
+                display_name=display_name,
+                status="clarifying",
+                session_type="analysis",
+            )
+            yield _sse(
+                {
+                    "type": "session_created",
+                    "session_id": session_id,
+                    "display_name": display_name,
+                    "timestamp": _now(),
+                }
+            )
+
+        # 追加用户输入到 chat_history
+        append_chat(session_id, "user", req.query)
+
         stock_code = req.stock_code.strip()
         stock_name = req.stock_name or ""
 
         # ── Fast path: stock_code 已知，直接走管线 ──
-        if stock_code:
+        # 只有当没有 session_id 时才走 fast path，或者用户显式要求重新分析
+        if stock_code and not session_id:
+            update_session_for_clarify(
+                session_id, stock_code=stock_code, stock_name=stock_name, status="running"
+            )
             async for event in _stream_from_sync(
-                _run_graph_streaming(stock_code, stock_name, req, analysis_id, start_time)
+                _run_graph_streaming(
+                    stock_code, stock_name, req, analysis_id, start_time, session_id=session_id
+                )
             ):
                 yield event
             yield _sse(
                 {
                     "type": "done",
                     "analysis_id": analysis_id,
+                    "session_id": session_id,
                     "duration_ms": int((time.time() - start_time) * 1000),
                     "timestamp": _now(),
                 }
             )
             return
 
-        if not req.query:
-            yield _sse({"type": "error", "message": "请输入股票代码或名称", "timestamp": _now()})
-            yield _sse({"type": "done", "timestamp": _now()})
-            return
-
         # ── 走 harness ReAct Agent ──
         from finance_agent.agent_factory import build_agent, stream_agent_to_sse
 
-        # API key: 优先用请求中的，无效则回退到环境变量
-        api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+        # 从 session 恢复 focus，与用户输入合并
+        session = get_session(session_id) or {}
+        accumulated_focus = (session.get("focus") or "").strip()
+        current_focus = (req.focus or "").strip()
+        if current_focus:
+            accumulated_focus = f"{accumulated_focus}\n{current_focus}".strip()
 
-        # 构建 deep 模式 Agent（含 session_id 上下文注入）
+        # 构建 deep 模式 Agent，注入 session_id 以恢复历史对话
         agent = build_agent(
             mode="deep",
             api_key=api_key,
             analysis_type=req.analysis_type,
             peer_codes=req.peer_codes.split(",") if req.peer_codes else None,
             enable_web_search=req.enable_web_search,
-            session_id=req.session_id,
+            session_id=session_id,
         )
 
-        # session 管理状态
-        session_id = req.session_id
-        session_created_sent = False
         collected_metadata: dict = {}
+        analysis_executed = False
+        collector = _ChatCollector()
 
         def on_metadata(metadata: dict):
             """收集 TOOL_METADATA（chart_data、analyst_reports 等）用于 session 持久化。"""
             collected_metadata.update(metadata)
 
         def on_resolved(sc: str, sn: str):
-            """股票代码解析完成回调 -- 创建 analysis session 并保存报告。"""
-            nonlocal session_id, session_created_sent
-            if not session_id:
-                # 创建 analysis session（保存报告、图表数据等）
-                session_id = create_session(
-                    stock_code=sc,
-                    stock_name=sn,
-                    report_markdown=collected_metadata.get("report_markdown", ""),
-                    chart_data=collected_metadata.get("chart_data") or {},
-                    analyst_reports=collected_metadata.get("analyst_reports") or {},
-                )
-                session_created_sent = True
-            # 保存用户查询到 chat_history
-            append_chat(session_id, "user", req.query)
+            """股票代码解析完成回调 -- 更新 session。"""
+            update_session_for_clarify(
+                session_id,
+                stock_code=sc,
+                stock_name=sn,
+                display_name=f"{sn}({sc})",
+            )
 
         # 对时效性查询，预调 web_search 并将结果注入用户消息
-        _time_sensitive_keywords = ["推荐", "热点", "今天", "今日", "最近", "最新", "利好", "买入"]
+        _time_sensitive_keywords = _TIME_SENSITIVE_KEYWORDS_REACT
         _has_stock_code = bool(re.search(r"\d{6}", req.query))
         user_query = req.query
 
@@ -1143,46 +943,37 @@ async def analyze(req: AnalyzeRequest):
 
             search_query = f"{req.query} A股 热点 推荐 最新"
 
-            # 先发送 thinking_token，确保前端 ThinkingBanner 渲染
-            yield _sse(
-                {
-                    "type": "thinking_token",
-                    "token": "用户询问包含时效性关键词，我先搜索最新市场信息。\n",
-                    "timestamp": _now(),
-                }
-            )
+            _pre_thinking = {
+                "type": "thinking_token",
+                "token": "用户询问包含时效性关键词，我先搜索最新市场信息。\n",
+                "timestamp": _now(),
+            }
+            collector.feed(_pre_thinking)
+            yield _sse(_pre_thinking)
+            _pre_tool_call = {
+                "type": "tool_call",
+                "name": "web_search",
+                "args": {"query": search_query},
+                "timestamp": _now(),
+            }
+            collector.feed(_pre_tool_call)
+            yield _sse(_pre_tool_call)
 
-            # 发送 tool_call SSE 事件
-            yield _sse(
-                {
-                    "type": "tool_call",
-                    "name": "web_search",
-                    "args": {"query": search_query},
-                    "timestamp": _now(),
-                }
-            )
-
-            # 执行搜索
             search_result = ""
             try:
                 search_result = await _web_search(search_query)
             except Exception as e:
                 search_result = f"搜索失败: {e}"
 
-            # 截取前 2000 字符
             search_summary = search_result[:2000] if len(search_result) > 2000 else search_result
-
-            # 发送 tool_result SSE 事件
-            yield _sse(
-                {
-                    "type": "tool_result",
-                    "name": "web_search",
-                    "result": search_summary,
-                    "timestamp": _now(),
-                }
-            )
-
-            # 注入搜索结果到用户消息
+            _pre_tool_result = {
+                "type": "tool_result",
+                "name": "web_search",
+                "result": search_summary,
+                "timestamp": _now(),
+            }
+            collector.feed(_pre_tool_result)
+            yield _sse(_pre_tool_result)
             user_query = (
                 f"{req.query}\n\n"
                 f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
@@ -1190,82 +981,96 @@ async def analyze(req: AnalyzeRequest):
                 f"{search_summary}"
             )
 
-        # 流式输出 Agent 事件
-        async for sse_str in stream_agent_to_sse(
-            agent,
-            user_query,
-            on_metadata=on_metadata,
-            on_resolved=on_resolved,
-            extra_events={
-                "analysis_id": analysis_id,
-                "session_id": session_id or "",
-                "duration_ms": 0,  # 占位，实际在 stream 结束后计算
-            },
-            session_id=session_id,
-            user_id=req.user_id,
-        ):
-            # 拦截 resolved 事件，在前面插入 session_created
-            if session_created_sent and '"type": "resolved"' in sse_str:
-                yield _sse(
-                    {
-                        "type": "session_created",
-                        "session_id": session_id,
-                        "display_name": req.query.strip()[:30] or "深度分析",
-                        "timestamp": _now(),
-                    }
-                )
-                session_created_sent = False
-            # 在 report_ready 事件中注入 session_id 和 duration_ms
-            if '"type": "report_ready"' in sse_str and session_id:
-                import json as _json
+        # 如果 session 已有 focus，注入用户消息上下文
+        if accumulated_focus:
+            user_query = f"{user_query}\n\n[已收集的用户关注点/澄清回答：\n{accumulated_focus}]"
 
-                with contextlib.suppress(Exception):
-                    data = _json.loads(sse_str.replace("data: ", "").strip())
+        # 流式输出 Agent 事件
+        stream_error = False
+        try:
+            async for sse_str in stream_agent_to_sse(
+                agent,
+                user_query,
+                on_metadata=on_metadata,
+                on_resolved=on_resolved,
+                extra_events={
+                    "analysis_id": analysis_id,
+                    "session_id": session_id,
+                    "duration_ms": 0,
+                },
+                session_id=session_id,
+                user_id=req.user_id,
+            ):
+                # 记录 Assistant 文本回复 / 思考 / 工具调用，用于后续保存到 chat_history
+                data = _parse_sse_data(sse_str)
+                if data is not None:
+                    collector.feed(data)
+                    if data.get("type") == "report_ready":
+                        analysis_executed = True
+
+                # 在 report_ready 事件中注入 session_id 和 duration_ms
+                if data is not None and data.get("type") == "report_ready" and session_id:
                     data["session_id"] = session_id
                     data["duration_ms"] = int((time.time() - start_time) * 1000)
                     yield _sse(data)
                     continue
-            yield sse_str
+                yield sse_str
+        except Exception as exc:
+            # 流式输出本身异常（如 Langfuse 上下文/回调抛错）时，向前端发送 error + done，
+            # 避免连接被静默关闭、前端无限等待（"深度模式无响应"）。
+            import logging as _api_lg
 
-        # 如果分析未执行（LLM 生成了文字回复），检查是否有 search_stock 结果可以 fallback
-        if not collected_metadata.get("stock_code"):
-            # Fallback: Agent 找到了股票但没有调用 run_deep_analysis，直接启动管线
-            fb_stock_code = collected_metadata.get("search_stock_code", "")
-            fb_stock_name = collected_metadata.get("search_stock_name", "")
-            if fb_stock_code:
-                yield _sse(
-                    {
-                        "type": "thinking_token",
-                        "token": "\n▶ 自动启动深度分析管线…\n",
-                        "timestamp": _now(),
-                    }
-                )
-                async for event in _stream_from_sync(
-                    _run_graph_streaming(fb_stock_code, fb_stock_name, req, analysis_id, start_time)
-                ):
-                    yield event
+            _api_lg.getLogger("finance_agent.api").exception("深度分析流式输出异常")
+            stream_error = True
+            yield _sse(
+                {
+                    "type": "error",
+                    "message": f"分析过程出错: {exc}",
+                    "timestamp": _now(),
+                }
+            )
+
+        # 保存 Assistant 回复到 chat_history（含思考过程与工具调用，便于历史会话回显）
+        if collector.response.strip():
+            append_chat(
+                session_id,
+                "assistant",
+                collector.response.strip(),
+                thinking=collector.thinking.strip() or None,
+                tool_calls=collector.tool_calls or None,
+            )
+
+        # 如果 Agent 调用了 run_deep_analysis，说明已进入分析阶段
+        if collected_metadata.get("report_markdown") or collected_metadata.get("stock_code"):
+            analysis_executed = True
+
+        # 如果分析未执行（且未发生异常），说明 Agent 仍在澄清阶段，保存状态
+        if not analysis_executed and not stream_error:
+            # 更新 focus：如果 Assistant 的回复包含澄清问题，则 focus 保持当前累积；
+            # 否则追加到 focus（用户可能直接在回答中补充了关注点）
+            # 这里简化处理：将当前 req.focus 合并到 session focus
+            if current_focus:
+                update_session_for_clarify(session_id, focus=accumulated_focus, status="clarifying")
             else:
-                # 没有找到股票，保存对话到 session
-                if session_id:
-                    append_chat(session_id, "user", req.query)
-                else:
-                    display_name = req.query.strip()[:30] or "深度分析"
-                    session_id = create_chat_session(display_name)
-                    append_chat(session_id, "user", req.query)
-                    yield _sse(
-                        {
-                            "type": "session_created",
-                            "session_id": session_id,
-                            "display_name": display_name,
-                            "timestamp": _now(),
-                        }
-                    )
+                update_session_for_clarify(session_id, status="clarifying")
+            yield _sse(
+                {
+                    "type": "awaiting_input",
+                    "session_id": session_id,
+                    "pending_intent": "awaiting_focus",
+                    "timestamp": _now(),
+                }
+            )
+        else:
+            # 分析已完成，session 状态已被 _run_graph_streaming 更新为 completed
+            pass
 
         # done 事件最后发送
         yield _sse(
             {
                 "type": "done",
                 "analysis_id": analysis_id,
+                "session_id": session_id,
                 "duration_ms": int((time.time() - start_time) * 1000),
                 "timestamp": _now(),
             }
@@ -1326,24 +1131,25 @@ async def quick_chat(req: ChatRequest):
                 session_id=req_session_id,
             )
 
-            # 流式输出 Agent 事件
-            full_response = ""
+            # 流式输出 Agent 事件，同时收集回复 / 思考 / 工具调用用于持久化
+            collector = _ChatCollector()
             async for sse_str in stream_agent_to_sse(
                 agent, req.message, session_id=req_session_id, user_id=req.user_id
             ):
-                # 收集回复内容用于 session 记录
-                if "chat_token" in sse_str:
-                    try:
-                        data_line = sse_str.strip().split("data: ", 1)[1]
-                        data = json.loads(data_line)
-                        full_response += data.get("token", "")
-                    except (IndexError, json.JSONDecodeError):
-                        pass
+                data = _parse_sse_data(sse_str)
+                if data is not None:
+                    collector.feed(data)
                 yield sse_str
 
-            # 持久化对话到 session
-            if full_response:
-                append_chat(req_session_id, "assistant", full_response)
+            # 持久化对话到 session（含思考过程与工具调用，便于历史会话回显）
+            if collector.response:
+                append_chat(
+                    req_session_id,
+                    "assistant",
+                    collector.response,
+                    thinking=collector.thinking.strip() or None,
+                    tool_calls=collector.tool_calls or None,
+                )
                 if not req.session_id:
                     # 新对话：通知前端 session_id
                     yield _sse(

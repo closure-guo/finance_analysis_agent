@@ -112,9 +112,10 @@ def main() -> int:
         page.screenshot(path=f"{SCREENSHOT_DIR}/e2e_lf_02_apikey.png")
 
         print("[3/5] 选快速模式并提问...")
-        page.locator("button").filter(has_text="模式").first.click()
-        time.sleep(0.5)
+        # EmptyState 下拉框：先点"模式："展开，再选"快速模式"
         try:
+            page.locator("button").filter(has_text="模式").first.click(timeout=5000)
+            time.sleep(0.5)
             page.locator("button").filter(has_text="快速模式").first.click(timeout=3000)
             time.sleep(0.3)
             print("  已切换快速模式")

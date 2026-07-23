@@ -39,8 +39,8 @@ def test_full_e2e():
         try:
             page.locator('button:has-text("去配置")').click(timeout=5000)
             page.wait_for_timeout(500)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"  [DEBUG] 去配置按钮未点击: {exc}")
 
         api_input = page.locator('input[placeholder="sk-..."]')
         if api_input.is_visible(timeout=3000):
@@ -51,9 +51,12 @@ def test_full_e2e():
         else:
             print("  [WARN] API Key 输入框未找到")
 
-        # Click "快速分析" button (sends '茅台' directly)
-        page.locator('button:has-text("快速分析")').click()
-        print("[2/6] 点击'快速分析' → 发送'茅台' ✓")
+        # 在输入框中输入“茅台”并发送（当前 UI 无“快速分析”按钮）
+        textarea = page.locator("textarea").first
+        textarea.fill("茅台")
+        page.wait_for_timeout(500)
+        textarea.press("Enter")
+        print("[2/6] 输入'茅台'并发送 ✓")
         page.wait_for_timeout(2000)
         page.screenshot(path=str(SCREENSHOT_DIR / "02_after_click.png"))
 

@@ -37,6 +37,7 @@ export interface ReportReadyEvent {
   file_paths: Record<string, string>
   stock_name: string
   duration_ms: number
+  web_sources?: Array<{ query: string; title: string; url: string; content: string }>
   timestamp: string
 }
 
@@ -76,6 +77,18 @@ export interface ThinkingTokenEvent {
   timestamp: string
 }
 
+export interface ThinkingToAnswerEvent {
+  type: 'thinking_to_answer'
+  answer: string
+  timestamp: string
+}
+
+export interface ThinkingReplaceEvent {
+  type: 'thinking_replace'
+  token: string
+  timestamp: string
+}
+
 export interface ToolCallEvent {
   type: 'tool_call'
   name: string
@@ -107,6 +120,13 @@ export interface SearchResultEvent {
   query: string
   results: Array<{ title: string; url: string; content: string }>
   count: number
+  timestamp: string
+}
+
+export interface StockResolvedEvent {
+  type: 'stock_resolved'
+  stock_code: string
+  stock_name: string
   timestamp: string
 }
 
@@ -179,64 +199,14 @@ export interface SessionCreatedEvent {
   timestamp: string
 }
 
-export interface ClarifyPlanStep {
-  title: string
-  desc: string
-}
-
-export interface ClarifyQuestion {
-  id: string
-  text: string
-}
-
-export interface ClarifyCandidate {
-  stock_code: string
-  stock_name: string
-}
-
-export interface ClarifyData {
-  status: 'ok' | 'error'
-  query: string
-  stock_code: string
-  stock_name: string
-  understanding: string
-  questions: ClarifyQuestion[]
-  plan: ClarifyPlanStep[]
-  needs_selection: boolean
-  candidates: ClarifyCandidate[]
-  message: string
-}
-
-export interface ClarifyToolEvent {
-  type: 'clarify_tool'
-  tool: string
-  args?: Record<string, any>
-  status: 'running' | 'done' | 'error'
-  result_summary?: string
-  source?: string
-  found?: boolean
-  error?: string
+export interface AwaitingInputEvent {
+  type: 'awaiting_input'
+  session_id: string
+  pending_intent: string
   timestamp: string
 }
 
-export interface ClarifyThinkingEvent {
-  type: 'clarify_thinking'
-  token: string
-  timestamp: string
-}
-
-export interface ClarifyAnswerEvent {
-  type: 'clarify_answer'
-  token: string
-  timestamp: string
-}
-
-export interface ClarifyDoneEvent {
-  type: 'clarify_done'
-  data: ClarifyData
-  timestamp: string
-}
-
+// ── Session types ──
 export type SSEEvent =
   | AnalysisStartEvent
   | NodeStartEvent
@@ -247,19 +217,19 @@ export type SSEEvent =
   | ReportChunkEvent
   | ChatTokenEvent
   | ThinkingTokenEvent
+  | ThinkingToAnswerEvent
+  | ThinkingReplaceEvent
   | ToolCallEvent
   | ToolResultEvent
   | ChatDoneEvent
   | SearchStartEvent
   | SearchResultEvent
+  | StockResolvedEvent
   | SearchErrorEvent
   | ErrorEvent
   | DoneEvent
   | SessionCreatedEvent
-  | ClarifyToolEvent
-  | ClarifyThinkingEvent
-  | ClarifyAnswerEvent
-  | ClarifyDoneEvent
+  | AwaitingInputEvent
 
 // ── Session types ──
 
@@ -275,13 +245,21 @@ export interface SessionMeta {
   session_type?: string
 }
 
+export interface ChatHistoryEntry {
+  role: string
+  content: string
+  ts: string
+  thinking?: string
+  tool_calls?: Array<{ name: string; args?: Record<string, any>; result_text?: string; done?: boolean }>
+}
+
 export interface SessionDetail extends SessionMeta {
   report_markdown: string
   chart_data: ChartData
   analyst_reports: Record<string, any>
   agent_process: Record<string, any>
   analyst_summaries: Record<string, any>
-  chat_history: Array<{ role: string; content: string; ts: string }>
+  chat_history: ChatHistoryEntry[]
 }
 
 // Pipeline step definition
@@ -293,7 +271,17 @@ export interface PipelineStep {
 }
 
 // UI message types
-export type MessageType = 'user' | 'pipeline' | 'report' | 'chat' | 'system' | 'error' | 'clarify'
+export type MessageType = 'user' | 'pipeline' | 'report' | 'chat' | 'system' | 'error'
+
+// 单次工具调用记录（与思考过程分离展示）
+export interface ToolCallEntry {
+  name: string
+  label: string
+  icon: string
+  argText: string
+  resultText?: string
+  done?: boolean
+}
 
 export interface UIMessage {
   id: string
@@ -312,22 +300,13 @@ export interface UIMessage {
   durationMs?: number
   sessionId?: string
   streaming?: boolean
+  webSources?: Array<{ query: string; title: string; url: string; content: string }>
   // Chat-specific
   chatResponse?: string
   thinkingContent?: string
+  toolCalls?: ToolCallEntry[]
   // Search-specific (quick mode)
   searchQuery?: string
   searchResults?: Array<{ title: string; url: string; content: string }>
   searchStatus?: 'searching' | 'done' | 'error' | 'unavailable'
-  // Clarify-specific (deep research intent confirmation)
-  clarifyData?: ClarifyData | null
-  clarifyStarted?: boolean
-  clarifyThinking?: string
-  clarifyTools?: Array<{
-    tool: string
-    status: 'running' | 'done' | 'error'
-    result_summary?: string
-    source?: string
-    error?: string
-  }>
 }

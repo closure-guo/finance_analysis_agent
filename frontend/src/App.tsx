@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail } from './types'
+import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry } from './types'
 import { ChartsSection } from './Charts'
 
 // ── Pipeline steps (mirrors backend LAYER_STEPS) ──
@@ -30,8 +30,57 @@ const getUserId = (): string => {
   return uid
 }
 
+// 格式化会话时间，对非法/缺失的 created_at 兜底，绝不返回 "Invalid Date"
+function formatSessionTime(ts: string | undefined | null): string {
+  if (!ts) return '未知时间'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return '未知时间'
+  // 后端用 epoch 占位的脏数据（无法还原真实时间）。浏览器解析 ISO 字符串时
+  // 可能按本地时区得到 epoch 之前的负值时间戳，所以用 <= 0 或年份 <= 1970 兜底。
+  if (d.getTime() <= 0 || d.getFullYear() <= 1970) return '未知时间'
+  return d.toLocaleString()
+}
+
+// 根据工具名/参数构建展示用的 ToolCallEntry（图标、标签、参数摘要）
+function buildToolCallEntry(
+  name: string,
+  args?: Record<string, any>,
+  resultText?: string,
+  done?: boolean,
+): ToolCallEntry {
+  const icon =
+    name === 'search_stock' ? '🔍' :
+    name === 'batch_web_search' ? '🌐' : '🛠️'
+  const label =
+    name === 'search_stock' ? '识别股票' :
+    name === 'batch_web_search' ? '批量搜索' :
+    name === 'web_search' ? '网络搜索' : name
+  const argText = args?.query
+    ? args.query
+    : Array.isArray(args?.queries)
+      ? args.queries.join('、')
+      : Object.keys(args || {}).length
+        ? JSON.stringify(args)
+        : ''
+  return { name, label, icon, argText, resultText, done }
+}
+
+// 将工具结果浓缩为简短文本（与后端 _summarize_tool_result 保持一致）
+function summarizeToolResult(result: any): string {
+  if (typeof result === 'string') return result.substring(0, 150)
+  if (Array.isArray(result)) {
+    return result.slice(0, 3)
+      .map((r: any) => r?.title || r?.name || r?.code || JSON.stringify(r).substring(0, 50))
+      .join('、')
+  }
+  if (result && typeof result === 'object') {
+    return JSON.stringify(result).substring(0, 150)
+  }
+  return ''
+}
+
 export default function App() {
-  const [appState, setAppState] = useState<'empty' | 'analyzing' | 'report'>('empty')
+  const [appState, setAppState] = useState<'empty' | 'analyzing' | 'report' | 'clarifying'>('empty')
   const [messages, setMessages] = useState<UIMessage[]>([])
   const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('fa_api_key') || '')
   const saveApiKey = useCallback((v: string) => {
@@ -49,6 +98,15 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const streamingReportRef = useRef<UIMessage | null>(null)
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
+  // 中断进行中的 SSE 流：切换会话/新建分析/删除当前会话时调用，
+  // 防止残留的 node_start/report_chunk 等事件继续 setMessages 把 pipeline UI 推回来。
+  const abortRef = useRef<AbortController | null>(null)
+  const abortStreaming = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+  }, [])
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -77,35 +135,60 @@ export default function App() {
   }, [loadSessions])
 
   const selectSession = async (sessionId: string) => {
+    // 中断进行中的 SSE 流，避免残留事件把 pipeline UI 推回到新载入的会话视图
+    abortStreaming()
     try {
       const resp = await fetch(`/api/sessions/${sessionId}`)
       if (!resp.ok) throw new Error('Failed to load session')
       const data: SessionDetail = await resp.json()
+      
+      // 先完全重置所有状态
+      setMessages([])
       setCurrentSessionId(sessionId)
       setAppState('report')
+      // 按会话类型锁定模式：chat -> quick，analysis -> deep
+      setMode(data.session_type === 'chat' ? 'quick' : 'deep')
       streamingReportRef.current = null
+      pipelineMsgRef.current = null
+
+      const reportMsg: UIMessage | null = data.session_type !== 'chat'
+        ? {
+            id: genId(),
+            type: 'report',
+            content: '',
+            reportMarkdown: data.report_markdown,
+            chartData: data.chart_data,
+            stockName: data.stock_name,
+            durationMs: data.duration_ms,
+            sessionId: data.session_id,
+          }
+        : null
 
       const newMessages: UIMessage[] = []
-      // Add report message
-      newMessages.push({
-        id: genId(),
-        type: 'report',
-        content: '',
-        reportMarkdown: data.report_markdown,
-        chartData: data.chart_data,
-        stockName: data.stock_name,
-        durationMs: data.duration_ms,
-        sessionId: data.session_id,
-      })
-      // Add chat history
-      if (data.chat_history) {
-        for (const h of data.chat_history) {
-          if (h.role === 'user') {
-            newMessages.push({ id: genId(), type: 'user', content: h.content })
-          } else {
-            newMessages.push({ id: genId(), type: 'chat', content: '', chatResponse: h.content })
+      let reportInserted = false
+      const history = Array.isArray(data.chat_history) ? data.chat_history : []
+      for (const h of history) {
+        if (h.role === 'user') {
+          newMessages.push({ id: genId(), type: 'user', content: h.content })
+          if (reportMsg && !reportInserted) {
+            newMessages.push(reportMsg)
+            reportInserted = true
           }
+        } else {
+          newMessages.push({
+            id: genId(),
+            type: 'chat',
+            content: '',
+            chatResponse: h.content,
+            thinkingContent: h.thinking || undefined,
+            toolCalls: (h.tool_calls || []).map((tc: any) =>
+              buildToolCallEntry(tc.name, tc.args, tc.result_text, tc.done),
+            ),
+          })
         }
+      }
+      if (reportMsg && !reportInserted) {
+        newMessages.push(reportMsg)
       }
       setMessages(newMessages)
     } catch (e) {
@@ -118,6 +201,7 @@ export default function App() {
       await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
       setSessions(prev => prev.filter(s => s.session_id !== sessionId))
       if (currentSessionId === sessionId) {
+        abortStreaming()
         setCurrentSessionId(null)
         streamingReportRef.current = null
         setMessages([])
@@ -142,58 +226,118 @@ export default function App() {
   }
 
   const newAnalysis = () => {
+    abortStreaming()
     setCurrentSessionId(null)
     streamingReportRef.current = null
+    pipelineMsgRef.current = null
     setMessages([])
     setAppState('empty')
   }
 
-  // ── SSE analysis ──
-  const startAnalysis = async (query: string, mode: string, stockCode?: string, stockName?: string) => {
+  // ── SSE analysis (deep mode) ──
+  const startAnalysis = async (
+    query: string,
+    sessionId: string | null = null,
+    stockCode?: string,
+    stockName?: string,
+    focus?: string,
+  ) => {
     if (!apiKey.trim()) {
       setShowApiKeyInput(true)
       return
     }
 
-    // Transition to chat mode
+    // 首次进入聊天模式
     if (appState === 'empty') {
-      setAppState('analyzing')
+      setAppState('clarifying')
     }
 
-    setCurrentSessionId(null)
-    streamingReportRef.current = null
+    // 只有新会话才重置 session；澄清轮次保留 currentSessionId
+    if (!sessionId) {
+      setCurrentSessionId(null)
+      streamingReportRef.current = null
+    }
 
-    // Add user message
+    // 添加用户消息
     const userMsg: UIMessage = {
       id: genId(),
       type: 'user',
-      content: mode === 'quick'
-        ? `快速分析 ${query}`
-        : `深度分析 ${query}`,
+      content: query,
     }
     setMessages(prev => [...prev, userMsg])
 
-    if (mode === 'quick') {
-      // Quick mode — single LLM call
-      await quickChat(query)
-      return
+    // 流式处理 SSE 事件
+    let assistantMsgId: string | null = null
+    let pipelineMsgId: string | null = null
+    // 每轮重置 pipeline ref，避免上一轮分析 pipeline 消息污染本轮澄清对话
+    pipelineMsgRef.current = null
+
+    const ensurePipelineMsg = (content: string): UIMessage => {
+      if (pipelineMsgRef.current) return pipelineMsgRef.current
+      const pm: UIMessage = {
+        id: genId(),
+        type: 'pipeline',
+        content,
+        completedNodes: [],
+        currentNode: '',
+        nodeOutputs: {},
+        progress: 0,
+        thinkingContent: '',
+      }
+      pipelineMsgId = pm.id
+      pipelineMsgRef.current = pm
+      setMessages(prev => [...prev, pm])
+      setAppState('analyzing')
+      return pm
     }
 
-    // Deep research — SSE stream
-    const pipelineMsg: UIMessage = {
-      id: genId(),
-      type: 'pipeline',
-      content: '',
-      completedNodes: [],
-      currentNode: '',
-      nodeOutputs: {},
-      progress: 0,
-      thinkingContent: '',
+    // 获取或创建对话流中的助手消息（承载思考过程、工具调用、澄清回复）。
+    // 澄清/解析阶段（search_stock / web_search / thinking）走对话流，不触发管线 UI；
+    // 仅 run_deep_analysis 才调用 ensurePipelineMsg 进入管线 UI（ADR-0017）。
+    const ensureAssistantMsg = (): string => {
+      if (assistantMsgId) return assistantMsgId
+      const newId = genId()
+      assistantMsgId = newId
+      setMessages(prev => [...prev, {
+        id: newId,
+        type: 'chat',
+        content: '',
+        chatResponse: '',
+        thinkingContent: '',
+        streaming: true,
+      }])
+      return newId
     }
-    pipelineMsgRef.current = pipelineMsg
-    setMessages(prev => [...prev, pipelineMsg])
+
+    // 将结构化结果（搜索结果 / 股票识别）附加到助手消息最近一次匹配的工具调用记录上，
+    // 把工具调用从思考过程中分离出来单独展示。优先按工具名匹配未完成条目，回退到最近
+    // 未完成条目，都没有则新建一条仅含结果的记录。
+    const attachToolResult = (chatId: string, names: string[] | string, resultText: string) => {
+      const nameList = Array.isArray(names) ? names : [names]
+      setMessages(prev => prev.map(m => {
+        if (m.id !== chatId) return m
+        const calls = [...(m.toolCalls || [])]
+        let idx = -1
+        for (let i = calls.length - 1; i >= 0; i--) {
+          if (nameList.includes(calls[i].name) && !calls[i].done) { idx = i; break }
+        }
+        if (idx === -1) {
+          for (let i = calls.length - 1; i >= 0; i--) {
+            if (!calls[i].done) { idx = i; break }
+          }
+        }
+        if (idx >= 0) {
+          calls[idx] = { ...calls[idx], resultText, done: true }
+        } else {
+          calls.push(buildToolCallEntry(nameList[0], undefined, resultText, true))
+        }
+        return { ...m, toolCalls: calls }
+      }))
+    }
 
     try {
+      // 每轮新建 controller；前一轮的已在 abortStreaming 时中断
+      abortRef.current = new AbortController()
       const resp = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -202,9 +346,12 @@ export default function App() {
           api_key: apiKey,
           user_id: getUserId(),
           analysis_type: 'comprehensive',
+          ...(sessionId ? { session_id: sessionId } : {}),
           ...(stockCode ? { stock_code: stockCode } : {}),
           ...(stockName ? { stock_name: stockName } : {}),
+          ...(focus ? { focus } : {}),
         }),
+        signal: abortRef.current.signal,
       })
 
       const reader = resp.body?.getReader()
@@ -225,18 +372,176 @@ export default function App() {
           if (!line.startsWith('data: ')) continue
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
-            handleSSEEvent(event, pipelineMsg)
+
+            if (event.type === 'session_created') {
+              setCurrentSessionId(event.session_id)
+              loadSessions()
+              continue
+            }
+
+            if (event.type === 'analysis_start') {
+              setAppState('analyzing')
+              const pipelineMsg: UIMessage = {
+                id: genId(),
+                type: 'pipeline',
+                content: `开始分析 ${event.stock_name} (${event.stock_code})`,
+                completedNodes: [],
+                currentNode: '',
+                nodeOutputs: {},
+                progress: 0,
+                thinkingContent: '',
+              }
+              pipelineMsgId = pipelineMsg.id
+              pipelineMsgRef.current = pipelineMsg
+              setMessages(prev => [...prev, pipelineMsg])
+              continue
+            }
+
+            if (event.type === 'chat_token') {
+              // Agent 的文本回复（澄清/追问）
+              if (!assistantMsgId) {
+                const newAssistantId = genId()
+                assistantMsgId = newAssistantId
+                setMessages(prev => [...prev, {
+                  id: newAssistantId,
+                  type: 'chat',
+                  content: '',
+                  chatResponse: event.token,
+                  streaming: true,
+                }])
+              } else {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgId
+                    ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
+                    : m
+                ))
+              }
+              continue
+            }
+
+            if (event.type === 'awaiting_input') {
+              setAppState('clarifying')
+              if (assistantMsgId) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgId ? { ...m, streaming: false } : m
+                ))
+              }
+              continue
+            }
+
+            if (event.type === 'tool_call') {
+              if (event.name === 'run_deep_analysis') {
+                // 仅深度分析管线触发管线 UI（ADR-0017 D1）
+                ensurePipelineMsg('开始深度分析...')
+              } else {
+                // search_stock / web_search / batch_web_search 走对话流，不触发管线 UI
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'search_result') {
+              const results = event.results || []
+              const count = event.count || results.length
+              const summary = results.slice(0, 3).map((r: any) => r?.title).filter(Boolean).join('、')
+              attachToolResult(ensureAssistantMsg(), ['web_search', 'batch_web_search'], `找到 ${count} 条结果：${summary}`)
+              continue
+            }
+
+            if (event.type === 'tool_result') {
+              if (event.name !== 'run_deep_analysis') {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'stock_resolved') {
+              if (pipelineMsgRef.current) {
+                updateMessage(pipelineMsgRef.current.id, { content: `已识别：${event.stock_name} (${event.stock_code})` })
+              } else {
+                // 澄清阶段识别出股票，作为 search_stock 的结构化结果附加到工具调用记录
+                attachToolResult(ensureAssistantMsg(), 'search_stock', `已识别：${event.stock_name} (${event.stock_code})`)
+              }
+              continue
+            }
+
+            if (event.type === 'thinking_token') {
+              if (pipelineMsgRef.current) {
+                // 管线运行期间的思考 -> 管线 UI
+                handleSSEEvent(event, pipelineMsgRef.current)
+              } else {
+                // 澄清/解析阶段的思考 -> 对话流（agent 思考过程）
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'thinking_replace') {
+              // 替换已流式输出的思考内容（DSML 清理等后处理）
+              if (!pipelineMsgRef.current) {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'thinking_to_answer') {
+              // 文本已作为 thinking_token 逐 token 流式输出，流末判定为最终回答。
+              if (!pipelineMsgRef.current) {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'parsing' ||
+                event.type === 'resolved' ||
+                event.type === 'node_start' ||
+                event.type === 'node_complete') {
+              const pm = ensurePipelineMsg('深度分析进行中...')
+              handleSSEEvent(event, pm)
+              continue
+            }
+
+            if (event.type === 'report_chunk' || event.type === 'report_ready') {
+              handleSSEEvent(event, pipelineMsgRef.current || { id: genId(), type: 'pipeline', content: '' } as UIMessage)
+              continue
+            }
+
+            if (event.type === 'done') {
+              // 流正常结束
+              if (assistantMsgId) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgId ? { ...m, streaming: false } : m
+                ))
+              }
+              continue
+            }
+
+            if (event.type === 'error') {
+              if (pipelineMsgRef.current) {
+                handleSSEEvent(event, pipelineMsgRef.current)
+              } else {
+                setMessages(prev => [...prev, {
+                  id: genId(),
+                  type: 'error',
+                  content: `错误: ${event.message}`,
+                }])
+              }
+              continue
+            }
           } catch {
             // Skip malformed lines
           }
         }
       }
     } catch (e) {
+      // 切换会话/新建分析主动中断，不是错误，静默退出
+      if (e instanceof Error && e.name === 'AbortError') return
       console.error('SSE error:', e)
-      updateMessage(pipelineMsg.id, {
+      setMessages(prev => [...prev, {
+        id: genId(),
         type: 'error',
         content: `连接错误: ${e instanceof Error ? e.message : 'Unknown'}`,
-      })
+      }])
     }
   }
 
@@ -308,7 +613,7 @@ export default function App() {
       }
 
       case 'report_ready': {
-        // Finalize streaming report or create new if no chunks were received
+        const webSources = event.web_sources || []
         if (streamingReportRef.current) {
           updateMessage(streamingReportRef.current.id, {
             reportMarkdown: event.report_markdown,
@@ -317,6 +622,7 @@ export default function App() {
             stockName: event.stock_name,
             durationMs: event.duration_ms,
             sessionId: event.session_id,
+            webSources,
             streaming: false,
           })
           streamingReportRef.current = null
@@ -331,6 +637,7 @@ export default function App() {
             stockName: event.stock_name,
             durationMs: event.duration_ms,
             sessionId: event.session_id,
+            webSources,
           }
           setMessages(prev => [...prev, reportMsg])
         }
@@ -360,6 +667,113 @@ export default function App() {
     }
   }
 
+  // ── 对话流 SSE 事件共享处理 ──
+  // 快速模式（/api/chat）与深度模式（/api/analyze）的澄清/解析阶段共用同一批
+  // "对话流"事件：thinking_token / thinking_replace / thinking_to_answer /
+  // tool_call / tool_result / chat_token / chat_done / error。
+  // 抽出此函数避免两处循环各写一份导致行为漂移（如 tool_call 曾在 quickChat 漏处理）。
+  //
+  // 返回 true 表示事件已处理（调用方应 continue），false 表示非对话流事件
+  // （调用方继续判断管线/搜索等专属事件）。
+  const handleChatStreamEvent = (event: SSEEvent, chatId: string): boolean => {
+    switch (event.type) {
+      case 'thinking_token':
+        setMessages(prev => prev.map(m =>
+          m.id === chatId
+            ? { ...m, thinkingContent: (m.thinkingContent || '') + event.token }
+            : m
+        ))
+        return true
+
+      case 'thinking_replace':
+        setMessages(prev => prev.map(m =>
+          m.id === chatId ? { ...m, thinkingContent: event.token } : m
+        ))
+        return true
+
+      case 'thinking_to_answer': {
+        // 文本已作为 thinking_token 逐 token 流式输出，流末判定为最终回答。
+        // 保留之前的思考+工具轨迹（ThinkingBanner 始终展示），仅将末尾当前轮
+        // 回答文本移至回答区，避免重复。
+        const ans = event.answer
+        setMessages(prev => prev.map(m => {
+          if (m.id !== chatId) return m
+          const tc = m.thinkingContent || ''
+          const remaining = ans && tc.endsWith(ans) ? tc.slice(0, -ans.length) : tc
+          return {
+            ...m,
+            thinkingContent: remaining,
+            chatResponse: (m.chatResponse || '') + ans,
+          }
+        }))
+        return true
+      }
+
+      case 'tool_call': {
+        // 工具调用单独记录到 toolCalls（与思考过程分离展示），非 run_deep_analysis
+        const entry = buildToolCallEntry(event.name, event.args, undefined, false)
+        setMessages(prev => prev.map(m =>
+          m.id === chatId
+            ? { ...m, toolCalls: [...(m.toolCalls || []), entry] }
+            : m
+        ))
+        return true
+      }
+
+      case 'tool_result': {
+        const resultSummary = summarizeToolResult(event.result)
+        setMessages(prev => prev.map(m => {
+          if (m.id !== chatId) return m
+          const calls = [...(m.toolCalls || [])]
+          // 优先附加到同名且未完成的最近一次调用；若已完成（结构化事件如
+          // search_result/stock_resolved 已先行附加），则跳过避免重复。
+          let idx = -1
+          for (let i = calls.length - 1; i >= 0; i--) {
+            if (calls[i].name === event.name && !calls[i].done) { idx = i; break }
+          }
+          if (idx === -1) {
+            for (let i = calls.length - 1; i >= 0; i--) {
+              if (calls[i].name === event.name) { idx = i; break }
+            }
+          }
+          if (idx >= 0) {
+            if (calls[idx].done) return m
+            calls[idx] = { ...calls[idx], resultText: resultSummary, done: true }
+          } else if (resultSummary) {
+            calls.push(buildToolCallEntry(event.name, undefined, resultSummary, true))
+          }
+          return { ...m, toolCalls: calls }
+        }))
+        return true
+      }
+
+      case 'chat_token':
+        setMessages(prev => prev.map(m =>
+          m.id === chatId
+            ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
+            : m
+        ))
+        return true
+
+      case 'chat_done':
+        setMessages(prev => prev.map(m =>
+          m.id === chatId ? { ...m, streaming: false } : m
+        ))
+        return true
+
+      case 'error':
+        setMessages(prev => prev.map(m =>
+          m.id === chatId
+            ? { ...m, chatResponse: `❌ ${event.message || '未知错误'}`, streaming: false }
+            : m
+        ))
+        return true
+
+      default:
+        return false
+    }
+  }
+
   const updateMessage = (id: string, updates: Partial<UIMessage>) => {
     setMessages(prev => prev.map(m => {
       if (m.id !== id) return m
@@ -373,6 +787,19 @@ export default function App() {
 
   // ── Streaming chat ──
   const quickChat = async (message: string) => {
+    // 首次从首页进入对话：切换到对话视图（与 startAnalysis 保持一致）
+    if (appState === 'empty') {
+      setAppState('clarifying')
+    }
+
+    // 添加用户消息
+    const userMsg: UIMessage = {
+      id: genId(),
+      type: 'user',
+      content: message,
+    }
+    setMessages(prev => [...prev, userMsg])
+
     const chatId = genId()
     const chatMsg: UIMessage = {
       id: chatId,
@@ -384,6 +811,7 @@ export default function App() {
     setMessages(prev => [...prev, chatMsg])
 
     try {
+      abortRef.current = new AbortController()
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -393,6 +821,7 @@ export default function App() {
           user_id: getUserId(),
           api_key: apiKey,
         }),
+        signal: abortRef.current.signal,
       })
 
       const reader = resp.body?.getReader()
@@ -413,6 +842,11 @@ export default function App() {
           if (!line.startsWith('data: ')) continue
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
+            // 对话流公共事件（thinking/tool/chat/error）统一走共享处理
+            if (handleChatStreamEvent(event, chatId)) {
+              continue
+            }
+            // 快速模式搜索专属事件
             if (event.type === 'search_start') {
               setMessages(prev => prev.map(m =>
                 m.id === chatId
@@ -431,28 +865,9 @@ export default function App() {
                   ? { ...m, searchStatus: 'error' }
                   : m
               ))
-            } else if (event.type === 'thinking_token') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, thinkingContent: (m.thinkingContent || '') + event.token }
-                  : m
-              ))
-            } else if (event.type === 'chat_token') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
-                  : m
-              ))
-            } else if (event.type === 'error') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, chatResponse: `❌ ${event.message || '未知错误'}`, streaming: false }
-                  : m
-              ))
-            } else if (event.type === 'chat_done') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId ? { ...m, streaming: false } : m
-              ))
+            } else if (event.type === 'session_created') {
+              setCurrentSessionId(event.session_id)
+              loadSessions()
             }
           } catch {
             // Skip malformed lines
@@ -460,6 +875,7 @@ export default function App() {
         }
       }
     } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return
       setMessages(prev => prev.map(m =>
         m.id === chatId
           ? { ...m, type: 'error', content: `错误: ${e instanceof Error ? e.message : 'Unknown'}`, streaming: false }
@@ -468,174 +884,13 @@ export default function App() {
     }
   }
 
-  // ── Deep research intent clarification (Kimi-style) ──
-  const startDeepClarify = async (query: string) => {
-    if (!apiKey.trim()) {
-      setShowApiKeyInput(true)
-      return
-    }
-
-    if (appState === 'empty') {
-      setAppState('analyzing')
-    }
-    setCurrentSessionId(null)
-    streamingReportRef.current = null
-
-    // 用户消息
-    const userMsg: UIMessage = { id: genId(), type: 'user', content: query }
-    setMessages(prev => [...prev, userMsg])
-
-    // 澄清卡片占位（loading 态）
-    const clarifyMsg: UIMessage = {
-      id: genId(),
-      type: 'clarify',
-      content: '',
-      clarifyData: null,
-      clarifyStarted: false,
-      streaming: true,
-      clarifyThinking: '',
-      clarifyTools: [],
-    }
-    setMessages(prev => [...prev, clarifyMsg])
-
-    try {
-      const resp = await fetch('/api/clarify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, api_key: apiKey, user_id: getUserId() }),
-      })
-      if (!resp.ok) {
-        throw new Error(`服务器错误 (${resp.status})`)
-      }
-      const reader = resp.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const event: SSEEvent = JSON.parse(line.slice(6))
-
-            if (event.type === 'clarify_tool') {
-              setMessages(prev => prev.map(m => {
-                if (m.id !== clarifyMsg.id) return m
-                const tools = [...(m.clarifyTools || [])]
-                if (event.status === 'running') {
-                  tools.push({ tool: event.tool, status: 'running' })
-                } else {
-                  const idx = tools.findIndex(t => t.tool === event.tool && t.status === 'running')
-                  if (idx >= 0) {
-                    tools[idx] = {
-                      tool: event.tool,
-                      status: event.status,
-                      result_summary: event.result_summary,
-                      source: event.source,
-                      error: event.error,
-                    }
-                  } else {
-                    tools.push({
-                      tool: event.tool,
-                      status: event.status,
-                      result_summary: event.result_summary,
-                      source: event.source,
-                      error: event.error,
-                    })
-                  }
-                }
-                return { ...m, clarifyTools: tools }
-              }))
-            } else if (event.type === 'clarify_thinking') {
-              setMessages(prev => prev.map(m =>
-                m.id === clarifyMsg.id
-                  ? { ...m, clarifyThinking: (m.clarifyThinking || '') + event.token }
-                  : m
-              ))
-            } else if (event.type === 'clarify_answer') {
-              setMessages(prev => prev.map(m =>
-                m.id === clarifyMsg.id
-                  ? { ...m, clarifyThinking: (m.clarifyThinking || '') + event.token }
-                  : m
-              ))
-            } else if (event.type === 'clarify_done') {
-              setMessages(prev => prev.map(m =>
-                m.id === clarifyMsg.id
-                  ? { ...m, clarifyData: event.data, streaming: false }
-                  : m
-              ))
-            }
-          } catch {
-            // Skip malformed line
-          }
-        }
-      }
-
-      // 如果流结束但没有收到 clarify_done，标记为错误
-      setMessages(prev => prev.map(m =>
-        m.id === clarifyMsg.id && m.streaming
-          ? {
-              ...m,
-              streaming: false,
-              clarifyData: m.clarifyData || {
-                status: 'error',
-                query,
-                stock_code: '',
-                stock_name: '',
-                understanding: '',
-                questions: [],
-                plan: [],
-                needs_selection: false,
-                candidates: [],
-                message: '意图识别未返回结果',
-              },
-            }
-          : m
-      ))
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : '连接错误'
-      setMessages(prev => prev.map(m =>
-        m.id === clarifyMsg.id
-          ? {
-              ...m,
-              streaming: false,
-              clarifyData: {
-                status: 'error',
-                query,
-                stock_code: '',
-                stock_name: '',
-                understanding: '',
-                questions: [],
-                plan: [],
-                needs_selection: false,
-                candidates: [],
-                message: `意图识别失败：${errMsg}`,
-              },
-            }
-          : m
-      ))
-    }
-  }
-
-  // 用户在澄清卡片上确认后，带 stock_code 启动深度分析
-  const handleClarifyStart = (stockCode: string, stockName: string, clarifyMsgId: string) => {
-    setMessages(prev => prev.map(m => m.id === clarifyMsgId ? { ...m, clarifyStarted: true } : m))
-    startAnalysis(stockName || stockCode, 'deep', stockCode, stockName)
-  }
-
   const handleSendFromEmpty = (text: string, mode: string = 'deep') => {
     const query = text.trim()
     if (!query) return
-    if (mode === 'deep') {
-      startDeepClarify(query)
+    if (mode === 'quick') {
+      quickChat(query)
     } else {
-      startAnalysis(query, mode)
+      startAnalysis(query, null)
     }
   }
 
@@ -643,16 +898,13 @@ export default function App() {
     const t = text.trim()
     if (!t) return
 
-    // Add user message
-    const userMsg: UIMessage = { id: genId(), type: 'user', content: t }
-    setMessages(prev => [...prev, userMsg])
-
-    // Deep mode: 先做意图澄清；Quick mode: 直接快速对话
-    if (mode === 'deep') {
-      startDeepClarify(t)
-    } else {
+    if (mode === 'quick') {
       quickChat(t)
+      return
     }
+
+    // Deep mode：直接走 /api/analyze，由 Agent 决定是否反问或执行分析
+    startAnalysis(t, currentSessionId)
   }
 
   // ── Render ──
@@ -702,13 +954,21 @@ export default function App() {
 
             {/* Chat messages */}
             <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
-              {messages.map(msg => (
-                <MessageRenderer key={msg.id} msg={msg} onClarifyStart={handleClarifyStart} />
-              ))}
+              {messages
+                .filter(msg => {
+                  // 只有在实际分析过程中才显示 pipeline 消息
+                  if (msg.type === 'pipeline') {
+                    return appState === 'analyzing';
+                  }
+                  return true;
+                })
+                .map(msg => (
+                  <MessageRenderer key={msg.id} msg={msg} />
+                ))}
             </div>
 
             {/* Fixed input at bottom */}
-            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} />
+            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} locked={currentSessionId !== null} />
           </>
         )}
       </div>
@@ -741,9 +1001,9 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   const [editText, setEditText] = useState('')
 
   const filtered = sessions.filter(s =>
-    s.stock_name.toLowerCase().includes(search.toLowerCase()) ||
-    s.stock_code.includes(search) ||
-    s.display_name.toLowerCase().includes(search.toLowerCase())
+    (s.stock_name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (s.stock_code || '').includes(search) ||
+    (s.display_name || '').toLowerCase().includes(search.toLowerCase())
   )
 
   if (!isOpen) {
@@ -785,8 +1045,10 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="搜索股票..."
-          className="w-full rounded-lg px-3 py-2 text-xs outline-none focus:ring-1"
-          style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'transparent' }}
+          className="w-full rounded-lg px-3 py-2 text-xs outline-none transition-all"
+          style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', border: '1px solid transparent' }}
+          onFocus={e => { e.target.style.borderColor = 'var(--bg-brand)'; e.target.style.boxShadow = '0 0 0 3px var(--bg-brand-popup)' }}
+          onBlur={e => { e.target.style.borderColor = 'transparent'; e.target.style.boxShadow = 'none' }}
         />
       </div>
 
@@ -840,7 +1102,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                   </div>
                   <div className="text-[10px] flex items-center gap-2" style={{ color: 'var(--text-tertiary)' }}>
                     <span>{s.stock_name}</span>
-                    <span>{new Date(s.created_at).toLocaleString()}</span>
+                    <span>{formatSessionTime(s.created_at)}</span>
                   </div>
                   <button
                     onClick={e => {
@@ -897,8 +1159,8 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
   }
 
   const modes = [
-    { id: 'quick' as const, label: '快速模式', icon: 'fa-bolt', color: 'text-yellow-400', desc: '单次 LLM + Web Search，秒级响应' },
-    { id: 'deep' as const, label: '深度研究', icon: 'fa-layer-group', color: 'text-indigo-400', desc: '5 层 Agent 流水线，2-5 分钟完整报告' },
+    { id: 'quick' as const, label: '快速模式', icon: 'fa-bolt', color: 'text-[var(--status-warning-default)]', desc: '单次 LLM + Web Search，秒级响应' },
+    { id: 'deep' as const, label: '深度研究', icon: 'fa-layer-group', color: 'text-[var(--text-brand)]', desc: '5 层 Agent 流水线，2-5 分钟完整报告' },
   ]
   const currentMode = modes.find(m => m.id === mode)!
 
@@ -909,14 +1171,14 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
         <div className="w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-5" style={{ background: 'var(--bg-brand)' }}>
           <i className="fas fa-chart-line text-white text-2xl"></i>
         </div>
-        <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-default)' }}>
+        <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-default)', fontFamily: 'var(--font-family-heading)' }}>
           Finance Analysis Agent
         </h1>
         <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>AI 驱动的 A 股投研分析系统</p>
       </div>
 
       {/* Input Box */}
-      <div className="w-full max-w-2xl animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
+      <div className="w-full max-w-2xl animate-fade-in-up relative z-10" style={{ animationDelay: '0.1s' }}>
         <div className="glass-input rounded-2xl p-2">
           {/* Mode dropdown */}
           <div className="relative px-4 pt-1 pb-0">
@@ -930,30 +1192,27 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
               <i className={`fas fa-chevron-${dropdownOpen ? 'up' : 'down'} text-[8px] ml-0.5`} style={{ color: 'var(--text-tertiary)' }}></i>
             </button>
             {dropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
-                <div className="absolute left-4 top-7 z-20 w-72 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
-                  {modes.map(m => (
-                    <button
-                      key={m.id}
-                      onClick={() => { setMode(m.id); setDropdownOpen(false) }}
-                      className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors"
-                      style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
-                      onMouseEnter={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
-                      onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
-                    >
-                      <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-xs font-medium ${mode === m.id ? m.color : ''}`} style={mode !== m.id ? { color: 'var(--text-secondary)' } : {}}>
-                          {m.label}
-                          {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
-                        </div>
-                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{m.desc}</div>
+              <div className="absolute left-4 top-7 z-[70] w-72 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
+                {modes.map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => { setMode(m.id); setDropdownOpen(false) }}
+                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors"
+                    style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                    onMouseEnter={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+                    onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-xs font-medium ${mode === m.id ? m.color : ''}`} style={mode !== m.id ? { color: 'var(--text-secondary)' } : {}}>
+                        {m.label}
+                        {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
                       </div>
-                    </button>
-                  ))}
-                </div>
-              </>
+                      <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{m.desc}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
           </div>
           <div className="flex items-end gap-2">
@@ -975,11 +1234,17 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
             </button>
           </div>
         </div>
-        {!apiKey && (
+        {!apiKey ? (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-info-circle mr-1"></i>
             需要配置 API Key 才能开始分析
             <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowApiKeyInput(true)}>去配置</button>
+          </p>
+        ) : (
+          <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
+            <i className="fas fa-check-circle mr-1" style={{ color: 'var(--status-success-default)' }}></i>
+            API Key 已配置
+            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowApiKeyInput(true)}>修改</button>
           </p>
         )}
       </div>
@@ -990,7 +1255,7 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
           { icon: 'users', color: 'text-[var(--text-brand)]', label: '4 维并行分析' },
           { icon: 'comments', color: 'text-[var(--status-warning-default)]', label: 'Bull/Bear 辩论' },
           { icon: 'shield-alt', color: 'text-[var(--status-error-default)]', label: 'Risk 压力测试' },
-          { icon: 'file-alt', color: 'text-[#14b8a6]', label: '结构化报告' },
+          { icon: 'file-alt', color: 'text-[var(--status-success-default)]', label: '结构化报告' },
         ].map(f => (
           <div key={f.label} className="glass-card rounded-xl p-3 text-center">
             <div className={`${f.color} text-lg mb-1`}><i className={`fas fa-${f.icon}`}></i></div>
@@ -1003,12 +1268,12 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
 }
 
 // ── Message Renderer ──
-function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifyStart?: (stockCode: string, stockName: string, clarifyMsgId: string) => void }) {
+function MessageRenderer({ msg }: { msg: UIMessage }) {
   if (msg.type === 'user') {
     return (
       <div className="flex justify-end animate-slide-in">
         <div className="max-w-[85%] md:max-w-[75%]">
-          <div className="msg-user rounded-2xl rounded-tr-sm px-5 py-3 text-sm text-white leading-relaxed shadow-lg shadow-indigo-500/10">
+          <div className="msg-user rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-relaxed" style={{ color: 'var(--text-onbrand)' }}>
             {msg.content}
           </div>
         </div>
@@ -1072,8 +1337,48 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
     )
   }
 
-  if (msg.type === 'clarify') {
-    return <ClarifyCard msg={msg} onStart={onClarifyStart} />
+  if (msg.type === 'chat') {
+    return (
+      <div className="flex justify-start animate-slide-in">
+        <div className="max-w-[95%] md:max-w-[90%] w-full">
+          <div className="flex items-start gap-3">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
+              <i className="fas fa-robot text-white text-xs"></i>
+            </div>
+            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
+              {msg.toolCalls && msg.toolCalls.length > 0 && (
+                <ToolCallBanner toolCalls={msg.toolCalls} streaming={!!msg.streaming && !msg.chatResponse} />
+              )}
+              {msg.thinkingContent && (
+                <ThinkingBanner content={msg.thinkingContent} streaming={!!msg.streaming && !msg.chatResponse} />
+              )}
+              {msg.chatResponse ? (
+                <div className="prose prose-sm max-w-none" style={{ color: 'var(--text-secondary)' }}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({href, children}) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--bg-brand)' }}>
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {msg.chatResponse}
+                  </ReactMarkdown>
+                </div>
+              ) : null}
+              {msg.streaming && (
+                <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                  <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
+                  <span>思考中...</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (msg.type === 'pipeline') {
@@ -1084,77 +1389,12 @@ function MessageRenderer({ msg, onClarifyStart }: { msg: UIMessage; onClarifySta
     return <ReportCard msg={msg} />
   }
 
-  if (msg.type === 'chat') {
-    return (
-      <div className="flex justify-start animate-slide-in">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-              <i className="fas fa-robot text-white text-xs"></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
-              {/* Thinking banner */}
-              {msg.thinkingContent && (
-                <ThinkingBanner content={msg.thinkingContent} streaming={!!msg.streaming && !msg.chatResponse} />
-              )}
-              {/* Search status (Kimi-style) */}
-              {msg.searchStatus === 'searching' && (
-                <div className="mb-3">
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-brand-popup)' }}>
-                    <span className="relative flex h-2 w-2 flex-shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
-                    </span>
-                    <span className="text-xs" style={{ color: 'var(--text-brand)' }}>正在搜索</span>
-                    <span className="text-xs truncate" style={{ color: 'var(--text-tertiary)' }}>{msg.searchQuery}</span>
-                  </div>
-                </div>
-              )}
-              {msg.searchStatus === 'done' && msg.searchResults && msg.searchResults.length > 0 && (
-                <SearchBanner results={msg.searchResults} query={msg.searchQuery || ''} />
-              )}
-              {msg.searchStatus === 'error' && (
-                <div className="mb-3">
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.1)' }}>
-                    <i className="fas fa-exclamation-triangle text-xs flex-shrink-0" style={{ color: 'var(--status-warning-default)' }}></i>
-                    <span className="text-xs" style={{ color: 'var(--status-warning-default)' }}>搜索失败</span>
-                    <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>基于已有知识回答</span>
-                  </div>
-                </div>
-              )}
-              {/* Response content or typing indicator */}
-              {msg.streaming && !msg.chatResponse && !msg.thinkingContent && msg.searchStatus !== 'searching' ? (
-                <div className="flex items-center gap-1.5 py-1">
-                  <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-                  <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-                  <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-                </div>
-              ) : (
-                <div className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                  <ReactMarkdown
-                    components={{
-                      p: ({ children }) => <p className="mb-2 whitespace-pre-wrap">{children}</p>,
-                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-brand)' }}>{children}</a>,
-                    }}
-                  >
-                    {msg.chatResponse || ''}
-                  </ReactMarkdown>
-                  {msg.streaming && msg.chatResponse && <span className="animate-pulse ml-0.5">▋</span>}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   return null
 }
 
 // ── Thinking Banner (Kimi-style collapsible reasoning) ──
 function ThinkingBanner({ content, streaming }: { content: string; streaming: boolean }) {
-  const [expanded, setExpanded] = useState(streaming)
+  const [expanded, setExpanded] = useState(true)
   const contentRef = useRef<HTMLDivElement>(null)
   const prevStreamingRef = useRef(streaming)
 
@@ -1213,26 +1453,95 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
   )
 }
 
+// ── Tool Call Banner (工具调用，与思考过程分离展示) ──
+function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEntry[]; streaming: boolean }) {
+  const [expanded, setExpanded] = useState(true)
+  const pendingCount = toolCalls.filter(t => !t.done).length
+  const prevStreamingRef = useRef(streaming)
+
+  useEffect(() => {
+    if (streaming) setExpanded(true)
+    prevStreamingRef.current = streaming
+  }, [streaming])
+
+  const isJustFinished = !streaming && prevStreamingRef.current
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
+        style={{ background: 'var(--bg-overlay-l1)' }}
+        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
+        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
+      >
+        {streaming && pendingCount > 0 ? (
+          <span className="relative flex h-2 w-2 flex-shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
+          </span>
+        ) : (
+          <i className="fas fa-tools text-xs flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
+        )}
+        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+          {streaming && pendingCount > 0 ? '调用工具中' : isJustFinished ? '已调用工具' : '工具调用'}
+          <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {toolCalls.length} 次</span>
+        </span>
+        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] ml-auto transition-transform`} style={{ color: 'var(--text-tertiary)' }}></i>
+      </button>
+      <div
+        className="overflow-hidden transition-all duration-300 ease-out"
+        style={{ maxHeight: expanded ? '240px' : '0px', opacity: expanded ? 1 : 0 }}
+      >
+        <div
+          className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg flex flex-col gap-2"
+          style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
+        >
+          {toolCalls.map((tc, i) => (
+            <div key={i} className="text-xs leading-relaxed break-words">
+              <div className="flex items-start gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+                <span className="flex-shrink-0">{tc.icon}</span>
+                <span className="font-medium">[{tc.label}]</span>
+                {tc.argText && <span style={{ color: 'var(--text-tertiary)' }}>{tc.argText}</span>}
+              </div>
+              {tc.resultText && (
+                <div className="ml-5 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>↳ {tc.resultText}</div>
+              )}
+              {!tc.done && (
+                <div className="ml-5 mt-0.5 flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                  <div className="w-2.5 h-2.5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
+                  <span>执行中...</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Utility functions ──
+function getDomain(url: string) {
+  try {
+    return new URL(url).hostname.replace('www.', '')
+  } catch {
+    return url
+  }
+}
+
+function getFavicon(url: string) {
+  try {
+    const domain = new URL(url).hostname
+    return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
+  } catch {
+    return ''
+  }
+}
+
 // ── Search Banner (Kimi-style collapsible search results) ──
 function SearchBanner({ results, query }: { results: Array<{ title: string; url: string; content: string }>; query: string }) {
   const [expanded, setExpanded] = useState(false)
-
-  const getDomain = (url: string) => {
-    try {
-      return new URL(url).hostname.replace('www.', '')
-    } catch {
-      return url
-    }
-  }
-
-  const getFavicon = (url: string) => {
-    try {
-      const domain = new URL(url).hostname
-      return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
-    } catch {
-      return ''
-    }
-  }
 
   return (
     <div className="mb-3">
@@ -1294,184 +1603,6 @@ function SearchBanner({ results, query }: { results: Array<{ title: string; url:
               </div>
             </a>
           ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Clarify Card (Kimi-style intent confirmation) ──
-function ClarifyCard({ msg, onStart }: { msg: UIMessage; onStart?: (stockCode: string, stockName: string, clarifyMsgId: string) => void }) {
-  if (msg.clarifyStarted) return null
-
-  const data = msg.clarifyData
-  const thinking = msg.clarifyThinking || ''
-  const tools = msg.clarifyTools || []
-
-  // Loading 状态
-  if (msg.streaming && !data) {
-    return (
-      <div className="flex justify-start animate-slide-in">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-              <i className="fas fa-robot text-white text-xs"></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
-              {/* 工具调用展示 */}
-              {tools.map((t, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
-                  {t.status === 'running' ? (
-                    <>
-                      <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-                      <span>正在搜索股票...</span>
-                    </>
-                  ) : t.status === 'done' ? (
-                    <>
-                      <i className="fas fa-check-circle text-xs" style={{ color: 'var(--status-success-default)' }}></i>
-                      <span>{t.result_summary}</span>
-                    </>
-                  ) : (
-                    <>
-                      <i className="fas fa-exclamation-circle text-xs" style={{ color: 'var(--status-error-default)' }}></i>
-                      <span>{t.error || '失败'}</span>
-                    </>
-                  )}
-                </div>
-              ))}
-              {/* 思考过程 */}
-              {thinking && (
-                <ThinkingBanner content={thinking} streaming={msg.streaming} />
-              )}
-              {/* 加载中 */}
-              {!thinking && tools.length === 0 && (
-                <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                  <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-                  <span>正在理解您的需求...</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // 错误状态
-  if (data?.status === 'error') {
-    return (
-      <div className="flex justify-start animate-slide-in">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'rgba(239, 68, 68, 0.2)' }}>
-              <i className="fas fa-exclamation text-xs" style={{ color: 'var(--status-error-default)' }}></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
-              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{data.message}</p>
-              <button
-                onClick={() => onStart?.('', '', msg.id)}
-                className="mt-3 px-4 py-2 rounded-lg text-xs text-white transition-colors"
-                style={{ background: 'var(--bg-brand)' }}
-                onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-brand-hover)'}}
-                onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-brand)'}}
-              >
-                重新输入
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // 正常结果
-  return (
-    <div className="flex justify-start animate-slide-in">
-      <div className="max-w-[95%] md:max-w-[90%] w-full">
-        <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-            <i className="fas fa-robot text-white text-xs"></i>
-          </div>
-          <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
-            {/* 思考过程（可折叠） */}
-            {thinking && <ThinkingBanner content={thinking} streaming={false} />}
-
-            {/* 意图摘要 - 重点展示 */}
-            {data?.understanding && (
-              <div className="mb-4 p-3 rounded-lg border" style={{ background: 'var(--bg-brand-popup)', borderColor: 'rgba(75, 63, 227, 0.2)' }}>
-                <div className="flex items-center gap-2 mb-1">
-                  <i className="fas fa-lightbulb text-xs" style={{ color: 'var(--text-brand)' }}></i>
-                  <span className="text-xs font-medium" style={{ color: 'var(--text-brand)' }}>意图理解</span>
-                </div>
-                <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{data.understanding}</p>
-              </div>
-            )}
-
-            {/* 股票信息 */}
-            {data?.stock_code && (
-              <div className="mb-3 flex items-center gap-2">
-                <i className="fas fa-chart-line text-xs" style={{ color: 'var(--status-success-default)' }}></i>
-                <span className="text-sm font-medium" style={{ color: 'var(--text-default)' }}>{data.stock_name}</span>
-                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{data.stock_code}</span>
-              </div>
-            )}
-
-            {/* 候选选择 */}
-            {data?.needs_selection && data.candidates.length > 0 && (
-              <div className="mb-3">
-                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>找到多个候选股票，请选择：</p>
-                <div className="space-y-1">
-                  {data.candidates.map(c => (
-                    <button
-                      key={c.stock_code}
-                      onClick={() => onStart?.(c.stock_code, c.stock_name, msg.id)}
-                      className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors text-left"
-                      style={{ background: 'var(--bg-overlay-l1)' }}
-                      onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
-                      onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
-                    >
-                      <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{c.stock_name}</span>
-                      <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{c.stock_code}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 研究计划 */}
-            {data?.plan && data.plan.length > 0 && (
-              <div className="mb-3">
-                <p className="text-xs mb-2 flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
-                  <i className="fas fa-list-ol text-[10px]"></i> 研究计划
-                </p>
-                <div className="space-y-1">
-                  {data.plan.map((step, i) => (
-                    <div key={i} className="flex items-start gap-2 text-xs">
-                      <span className="font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>{i + 1}.</span>
-                      <div>
-                        <span style={{ color: 'var(--text-secondary)' }}>{step.title}</span>
-                        <span className="ml-1" style={{ color: 'var(--text-tertiary)' }}>- {step.desc}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 开始分析按钮 */}
-            {data?.stock_code && !data.needs_selection && (
-              <button
-                onClick={() => onStart?.(data.stock_code, data.stock_name, msg.id)}
-                className="w-full py-2.5 rounded-xl text-sm text-white font-medium transition-all flex items-center justify-center gap-2"
-                style={{ background: 'var(--bg-brand)' }}
-                onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-brand-hover)'}}
-                onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-brand)'}}
-              >
-                <i className="fas fa-play text-xs"></i>
-                开始深度分析
-              </button>
-            )}
-          </div>
         </div>
       </div>
     </div>
@@ -1719,7 +1850,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
                       <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{msg.stockName}</h3>
                       <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold" style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>深度分析</span>
                     </div>
-                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · 耗时 {Math.round((msg.durationMs || 0) / 1000)}s</p>
+                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · {(msg.durationMs || 0) > 0 ? `耗时 ${Math.round(msg.durationMs / 1000)}s` : '耗时未知'}</p>
                   </div>
                   <div className="flex gap-2">
                     {msg.filePaths?.docx && (
@@ -1749,10 +1880,10 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 
             {/* Charts Section */}
             {msg.chartData && msg.chartData.annual && msg.chartData.annual.length > 0 && (
-              <div className="px-5 py-3 border-b border-zinc-800/50">
+              <div className="px-5 py-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
                 <div className="flex items-center gap-2 mb-3">
-                  <i className="fas fa-chart-bar text-indigo-400 text-xs"></i>
-                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">财务图表</span>
+                  <i className="fas fa-chart-bar text-xs" style={{ color: 'var(--text-brand)' }}></i>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>财务图表</span>
                 </div>
                 <ChartsSection data={msg.chartData} />
               </div>
@@ -1760,25 +1891,31 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 
             {/* Report Markdown */}
             {msg.reportMarkdown && (
-              <div className="px-5 py-3 border-b border-zinc-800/50">
-                <div className="text-sm text-zinc-300 leading-relaxed max-h-[600px] overflow-y-auto markdown-body">
+              <div className="px-5 py-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+                <div className="text-sm leading-relaxed max-h-[600px] overflow-y-auto markdown-body">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
                       img: () => null,
-                      h1: ({children}) => <h1 className="text-lg font-bold text-white mt-4 mb-2">{children}</h1>,
-                      h2: ({children}) => <h2 className="text-base font-bold text-zinc-100 mt-4 mb-2 pb-1 border-b border-zinc-800">{children}</h2>,
-                      h3: ({children}) => <h3 className="text-sm font-semibold text-zinc-200 mt-3 mb-1">{children}</h3>,
-                      p: ({children}) => <p className="text-sm text-zinc-300 mb-2 leading-relaxed">{children}</p>,
-                      ul: ({children}) => <ul className="text-sm text-zinc-300 mb-2 ml-4 list-disc">{children}</ul>,
-                      ol: ({children}) => <ol className="text-sm text-zinc-300 mb-2 ml-4 list-decimal">{children}</ol>,
+                      a: ({href, children}) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline inline-flex items-center gap-0.5" style={{ color: 'var(--bg-brand)' }}>
+                          {children}
+                          <i className="fas fa-external-link-alt text-[8px]"></i>
+                        </a>
+                      ),
+                      h1: ({children}) => <h1 className="text-lg font-bold mt-4 mb-2" style={{ color: 'var(--text-default)' }}>{children}</h1>,
+                      h2: ({children}) => <h2 className="text-base font-bold mt-4 mb-2 pb-1" style={{ color: 'var(--text-default)', borderBottom: '1px solid var(--border-neutral-l1)' }}>{children}</h2>,
+                      h3: ({children}) => <h3 className="text-sm font-semibold mt-3 mb-1" style={{ color: 'var(--text-default)' }}>{children}</h3>,
+                      p: ({children}) => <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{children}</p>,
+                      ul: ({children}) => <ul className="text-sm mb-2 ml-4 list-disc" style={{ color: 'var(--text-secondary)' }}>{children}</ul>,
+                      ol: ({children}) => <ol className="text-sm mb-2 ml-4 list-decimal" style={{ color: 'var(--text-secondary)' }}>{children}</ol>,
                       li: ({children}) => <li className="mb-0.5">{children}</li>,
-                      strong: ({children}) => <strong className="text-zinc-100 font-semibold">{children}</strong>,
+                      strong: ({children}) => <strong className="font-semibold" style={{ color: 'var(--text-default)' }}>{children}</strong>,
                       table: ({children}) => <table className="w-full text-xs border-collapse mb-2">{children}</table>,
-                      th: ({children}) => <th className="border border-zinc-700 px-2 py-1 bg-zinc-800 text-zinc-200 text-left">{children}</th>,
-                      td: ({children}) => <td className="border border-zinc-700 px-2 py-1 text-zinc-400">{children}</td>,
-                      hr: () => <hr className="border-zinc-800 my-3" />,
-                      blockquote: ({children}) => <blockquote className="border-l-2 border-indigo-500 pl-3 text-zinc-400 italic my-2">{children}</blockquote>,
+                      th: ({children}) => <th className="border px-2 py-1 text-left" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }}>{children}</th>,
+                      td: ({children}) => <td className="border px-2 py-1" style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-neutral-l1)' }}>{children}</td>,
+                      hr: () => <hr className="my-3" style={{ borderColor: 'var(--border-neutral-l1)' }} />,
+                      blockquote: ({children}) => <blockquote className="border-l-2 pl-3 italic my-2" style={{ borderColor: 'var(--bg-brand)', color: 'var(--text-secondary)' }}>{children}</blockquote>,
                     }}
                   >
                     {msg.reportMarkdown}
@@ -1787,10 +1924,63 @@ function ReportCard({ msg }: { msg: UIMessage }) {
               </div>
             )}
 
+            {/* Source Cards (Kimi-style citation cards) */}
+            {!msg.streaming && msg.webSources && msg.webSources.length > 0 && (
+              <div className="px-5 py-4 border-t" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+                <div className="flex items-center gap-2 mb-3">
+                  <i className="fas fa-link text-xs" style={{ color: 'var(--text-tertiary)' }}></i>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                    参考资料（{msg.webSources.length} 个信源）
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {msg.webSources.map((src, i) => (
+                    <a
+                      key={i}
+                      href={src.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block px-3 py-2 rounded-lg border transition-all hover:shadow-sm group"
+                      style={{
+                        background: 'var(--bg-overlay-l1)',
+                        borderColor: 'var(--border-neutral-l1)',
+                      }}
+                    >
+                      <div className="flex items-start gap-2">
+                        <img
+                          src={getFavicon(src.url)}
+                          alt=""
+                          className="w-4 h-4 rounded-sm flex-shrink-0 mt-0.5"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>[{i + 1}]</span>
+                            <span className="text-xs truncate font-medium" style={{ color: 'var(--text-secondary)' }}>
+                              {src.title}
+                            </span>
+                          </div>
+                          <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--text-tertiary)' }}>
+                            {src.content}
+                          </p>
+                          <div className="flex items-center gap-1 mt-1">
+                            <i className="fas fa-external-link-alt text-[8px]" style={{ color: 'var(--text-tertiary)' }}></i>
+                            <span className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>
+                              {getDomain(src.url)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Disclaimer */}
             {!msg.streaming && (
               <div className="px-5 py-3">
-                <p className="text-[10px] text-zinc-600 leading-relaxed">
+                <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
                   <i className="fas fa-info-circle mr-1"></i>
                   本报告由 AI 系统基于公开数据自动生成，仅供参考研究，不构成投资建议。投资有风险，入市需谨慎。
                 </p>
@@ -1804,7 +1994,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend, leftInset, mode, setMode }: { onSend: (text: string) => void; leftInset: number; mode: 'quick' | 'deep'; setMode: (m: 'quick' | 'deep') => void }) {
+function ChatInputBar({ onSend, leftInset, mode, setMode, locked }: { onSend: (text: string) => void; leftInset: number; mode: 'quick' | 'deep'; setMode: (m: 'quick' | 'deep') => void; locked: boolean }) {
   const [text, setText] = useState('')
 
   const handleKeydown = (e: React.KeyboardEvent) => {
@@ -1818,48 +2008,69 @@ function ChatInputBar({ onSend, leftInset, mode, setMode }: { onSend: (text: str
   return (
     <div
       className="fixed bottom-0 right-0 z-40 px-4 pb-4 pt-2"
-      style={{ left: leftInset, background: 'linear-gradient(to top, #0a0a0f 80%, transparent)' }}
+      style={{ left: leftInset, background: 'linear-gradient(to top, var(--bg-base-default) 80%, transparent)' }}
     >
       <div className="max-w-3xl mx-auto">
         <div className="glass-input rounded-2xl p-2">
           {/* Mode switcher */}
-          <div className="flex items-center gap-1 px-1 pb-1">
+          <div className="flex items-center gap-1 px-1 pb-1" title={locked ? '当前会话模式已锁定，新建分析可切换' : ''}>
             <button
-              onClick={() => setMode('deep')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${mode === 'deep' ? 'bg-indigo-600/30 text-indigo-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+              onClick={() => !locked && setMode('deep')}
+              disabled={locked}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors"
+              style={{
+                ...(mode === 'deep'
+                  ? { background: 'var(--bg-brand-popup)', color: 'var(--bg-brand)' }
+                  : { color: 'var(--text-tertiary)' }),
+                ...(locked ? { opacity: 0.55, cursor: 'not-allowed' } : {}),
+              }}
             >
               <i className="fas fa-layer-group text-[10px] mr-1"></i>深度研究
             </button>
             <button
-              onClick={() => setMode('quick')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${mode === 'quick' ? 'bg-amber-600/30 text-amber-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+              onClick={() => !locked && setMode('quick')}
+              disabled={locked}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors"
+              style={{
+                ...(mode === 'quick'
+                  ? { background: 'var(--bg-brand-popup)', color: 'var(--bg-brand)' }
+                  : { color: 'var(--text-tertiary)' }),
+                ...(locked ? { opacity: 0.55, cursor: 'not-allowed' } : {}),
+              }}
             >
               <i className="fas fa-bolt text-[10px] mr-1"></i>快速对话
             </button>
+            {locked && (
+              <i className="fas fa-lock text-[9px] ml-1" style={{ color: 'var(--text-tertiary)' }} title="会话模式已锁定"></i>
+            )}
           </div>
           <div className="flex items-end gap-2">
-            <button className="w-8 h-8 rounded-lg hover:bg-zinc-700/50 flex items-center justify-center text-zinc-500 transition-colors mb-1">
+            <button
+              className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors mb-1"
+              style={{ color: 'var(--icon-secondary)' }}
+            >
               <i className="fas fa-plus text-xs"></i>
             </button>
             <textarea
               rows={1}
               placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
-              className="flex-1 bg-transparent text-zinc-200 placeholder-zinc-600 px-2 py-3 resize-none outline-none text-sm leading-relaxed"
-              style={{ minHeight: '40px', maxHeight: '100px' }}
+              className="flex-1 bg-transparent px-2 py-3 resize-none outline-none text-sm leading-relaxed"
+              style={{ minHeight: '40px', maxHeight: '100px', color: 'var(--text-default)' }}
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={handleKeydown}
             />
             <button
               onClick={() => { onSend(text); setText('') }}
-              className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center hover:shadow-lg hover:shadow-indigo-500/30 transition-all mb-0.5 mr-0.5"
+              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all mb-0.5 mr-0.5"
+              style={{ background: 'var(--bg-brand)' }}
             >
-              <i className="fas fa-arrow-up text-white text-xs"></i>
+              <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
             </button>
           </div>
         </div>
         <div className="text-center mt-1">
-          <span className="text-zinc-600 text-[10px]">AI 生成仅供参考，不构成投资建议</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>AI 生成仅供参考，不构成投资建议</span>
         </div>
       </div>
     </div>
@@ -1875,27 +2086,30 @@ function ApiKeyModal({ apiKey, setApiKey, onClose }: {
   const [value, setValue] = useState(apiKey)
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.25)' }} onClick={onClose}>
       <div className="glass-card rounded-2xl p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-white mb-4">配置 API Key</h3>
-        <p className="text-xs text-zinc-500 mb-4">输入 DeepSeek API Key 用于 LLM 调用。Key 保存在浏览器本地，刷新页面不会丢失。</p>
+        <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-default)' }}>配置 API Key</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>输入 DeepSeek API Key 用于 LLM 调用。Key 保存在浏览器本地，刷新页面不会丢失。</p>
         <input
           type="password"
           placeholder="sk-..."
           value={value}
           onChange={e => setValue(e.target.value)}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm text-zinc-200 outline-none mb-4"
+          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          style={{ color: 'var(--text-default)' }}
         />
         <div className="flex gap-3">
           <button
             onClick={() => { setApiKey(value); onClose() }}
-            className="flex-1 py-2.5 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-sm font-medium hover:shadow-lg hover:shadow-indigo-500/30 transition-all"
+            className="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
+            style={{ background: 'var(--bg-brand)', color: 'var(--text-onbrand)' }}
           >
             确认
           </button>
           <button
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl bg-zinc-800 text-zinc-400 text-sm hover:bg-zinc-700 transition-colors"
+            className="px-4 py-2.5 rounded-xl text-sm transition-colors"
+            style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-secondary)' }}
           >
             取消
           </button>

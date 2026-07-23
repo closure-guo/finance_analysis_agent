@@ -291,6 +291,10 @@ def generate_report(state: dict) -> dict:
     if fm_decision:
         sections.append(f"{next_title('基金经理决策')}\n\n**{fm_decision}**\n")
 
+    # ── 参考资料信源（Kimi 风格 URL 引用溯源）──
+    # 信源列表在前端以卡片形式展示，报告 Markdown 中不再重复列出
+    # web_sources 通过 state 传入前端 report_ready 事件的 web_sources 字段
+
     return {
         "final_report": "\n".join(sections),
         "chart_data": chart_data,

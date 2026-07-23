@@ -119,3 +119,63 @@ class TestVerifyCitations:
         result = verify_citations(state)
         assert result["citation_pass"] is True
         assert result["citation_report"]["total"] == 2
+
+    def test_increments_iteration_count(self):
+        """verify_citations 必须递增 iteration_count，否则 after_citation 无限重试（无响应 bug 回归）。"""
+        report = AnalystReport(
+            agent_name="fundamental",
+            summary="基本面分析",
+            key_findings=["资产负债率 45%"],
+            claims=[
+                Claim(
+                    claim_type="numerical",
+                    source_type="data",
+                    field_ref="solvency_metrics.资产负债率.2024",
+                    stated_value=45.0,
+                    interpretation="资产负债率 45%",
+                ),
+            ],
+            markdown="## 基本面分析",
+        )
+        state = {
+            "analyst_reports": {"fundamental": report},
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+            "iteration_count": 0,
+        }
+        result = verify_citations(state)
+        assert result["citation_pass"] is False
+        assert result["iteration_count"] == 1
+
+    def test_retry_loop_terminates_after_max(self):
+        """citation 重试循环必须在 iteration_count 达上限后终止（回归无响应 bug）。"""
+        from finance_agent.routing import after_citation
+
+        report = AnalystReport(
+            agent_name="fundamental",
+            summary="",
+            key_findings=[],
+            claims=[
+                Claim(
+                    claim_type="numerical",
+                    source_type="data",
+                    field_ref="solvency_metrics.资产负债率.2024",
+                    stated_value=45.0,
+                    interpretation="",
+                ),
+            ],
+            markdown="",
+        )
+        state = {
+            "analyst_reports": {"fundamental": report},
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+        }
+        # 模拟图对 verify_citations 的反复调用（每次把返回的 iteration_count 写回 state）
+        for expected_count in (1, 2, 3):
+            result = verify_citations(state)
+            assert result["iteration_count"] == expected_count
+            state["iteration_count"] = result["iteration_count"]
+            state["citation_pass"] = result["citation_pass"]
+
+        # 重试上限已达 -> after_citation 必须返回 render，不再 retry
+        assert state["citation_pass"] is False
+        assert after_citation(state) == "render"

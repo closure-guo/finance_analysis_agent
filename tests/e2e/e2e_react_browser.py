@@ -133,8 +133,22 @@ def _run_playwright(api_key: str) -> bool:
         _screenshot(page, "02_apikey_set.png")
 
         # ── 触发深度分析（600519 贵州茅台）──
+        # 前端 EmptyState 默认 deep；通过下拉框确保 deep 模式
         print("[6/7] 触发深度分析 (600519)...")
-        page.locator("button").filter(has_text="深度报告").first.click()
+        try:
+            page.locator("button").filter(has_text="模式").first.click(timeout=3000)
+            time.sleep(0.5)
+            page.locator("button").filter(has_text="深度研究").first.click(timeout=3000)
+            time.sleep(0.5)
+        except PlaywrightError:
+            pass
+
+        # 输入股票代码并发送
+        print("  输入股票代码: 600519")
+        textarea = page.locator("textarea").first
+        textarea.fill("600519")
+        time.sleep(0.3)
+        textarea.press("Enter")
         time.sleep(1)
         _screenshot(page, "03_analysis_started.png")
 

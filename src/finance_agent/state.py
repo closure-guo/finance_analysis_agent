@@ -102,5 +102,8 @@ class AnalysisState(TypedDict, total=False):
     citation_pass: bool
     iteration_count: int  # 重试次数（上限 3）
 
+    # ── URL 信源溯源（Kimi 风格引用）──
+    web_sources: list[dict]  # [{"query","title","url","content"}]
+
     # ── 图表数据（用于前端 ECharts + docx/pptx PNG）──
     chart_data: dict  # 结构化财务/股价序列，JSON-serializable

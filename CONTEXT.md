@@ -159,6 +159,8 @@ _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章�
 
 三种模式均由 ReAct Agent（Agent Harness）统一编排。模式不再决定代码路径，而是影响 Agent 的工具集、迭代上限和 system prompt。深度模式将 5 层管线封装为一个流式工具（run_deep_analysis），Agent 通过工具调用触发管线，管线进度通过流式事件实时推送。快速模式和追问模式不暴露深度分析工具，从 schema 层面杜绝意外触发。
 
+深度模式的入口遵循对话流：用户输入自然语言查询后，Agent 先调用 `search_stock` 解析标的；若标的不明确或意图不完整，Agent 以普通助手消息反问，用户在主输入框回答；信息足够后 Agent 调用 `run_deep_analysis`。澄清阶段属于 Session 生命周期的一部分。
+
 **报告章节结构**（分析师主导，线性流程）：
 
 | 章 | 标题 | 内容来源 | 字数 |
@@ -180,11 +182,18 @@ _Avoid_: Financial Report（8 章版，已废弃）、Investment Report（7 章�
 
 ### Session
 
-会话。一次股票深度分析 + 后续追问的完整工作单元。每个会话独立存储于后端 SQLite，包含：最终报告 Markdown、chart_data、4 份 AnalystReport 完整 JSON、Layer II-V 中间输出（辩论/决策/风控/基金经理）、analyst summary 摘要。用户可在侧边栏新建/切换/搜索/重命名/删除会话。不支持多会话并行（一次只跑一个 pipeline）。
+会话。一次股票深度分析的完整工作单元，**从用户首次输入自然语言查询开始**（包含可能的意图澄清阶段），经过 5 层分析，最终生成报告，并支持后续追问。每个会话独立存储于后端 SQLite，包含：最终报告 Markdown、chart_data、4 份 AnalystReport 完整 JSON、Layer II-V 中间输出（辩论/决策/风控/基金经理）、analyst summary 摘要、完整的对话历史（含澄清阶段）。用户可在侧边栏新建/切换/搜索/重命名/删除会话。不支持多会话并行（一次只跑一个 pipeline）。
+
+会话状态流转：
+
+- `clarifying`：Agent 正在等待用户回答澄清问题（标的不明确或意图不完整）
+- `running`：5 层分析管线正在执行
+- `completed`：报告已生成
+- `failed`：执行失败
 
 _Avoid_: Conversation（泛指对话，不精确）、Chat Thread
 
-> **与 Langfuse Session 的区别**：同名不同义。Langfuse Session 不是存储单元，是 Langfuse 里附加在 Trace 上的分组属性（`session_id`），用于把多个 Trace 聚合成一次会话回放。本项目里 Langfuse `session_id` = 本 Session 的 ID（1:1 映射），一个 Session 对应 N 个 Langfuse Trace（深度分析 1 个 + 每次追问 1 个）。不要把"一次 Session = 一条 Langfuse Trace"。
+> **与 Langfuse Session 的区别**：同名不同义。Langfuse Session 不是存储单元，是 Langfuse 里附加在 Trace 上的分组属性（`session_id`），用于把多个 Trace 聚合成一次会话回放。本项目里 Langfuse `session_id` = 本 Session 的 ID（1:1 映射），一个 Session 对应 N 个 Langfuse Trace（深度分析 1 个 + 每次追问 1 个 + 澄清阶段可能产生 1 个）。不要把"一次 Session = 一条 Langfuse Trace"。
 
 ### Trace
 
@@ -234,7 +243,9 @@ _Avoid_: 让 LLM-as-Judge 判数字对错（评审 LLM 自身会幻觉，ADR-001
 
 ### Natural Language Input
 
-自然语言输入。用户可输入股票名称（"宁德时代"）或自然语言指令（"分析茅台"），后端先用 LLM 解析为股票代码，LLM 不认识时 fallback 到 AKShare `stock_info_a_code_name` 模糊匹配。
+自然语言输入。用户可输入股票名称（"宁德时代"）、6 位股票代码（"300750"）或自然语言指令（"分析茅台"）。后端 ReAct Agent 调用 `search_stock` 工具解析为股票代码；若 LLM 不认识或存在歧义，则工具 fallback 到 AKShare `stock_info_a_code_name` 模糊匹配。
+
+当用户输入存在歧义（如"光模块龙头"对应多个候选）或意图不完整（仅给出股票名称未说明分析方向）时，Agent 以对话消息反问，用户在主输入框回答。澄清后的关注点（focus）注入 5 层分析管线，用于调整各分析师的侧重点和报告章节排序。
 
 ### Quick Mode
 

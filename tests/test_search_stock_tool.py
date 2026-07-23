@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from finance_agent.agent_factory import _make_search_stock
+from finance_agent.react_agent import _classify_input, search_stock_tool
 
 
 class TestSearchStockTool:
@@ -77,3 +78,100 @@ class TestSearchStockTool:
             await search_stock(query="茅台")
 
             mock_func.assert_called_once_with("茅台", "my-secret-key")
+
+
+class TestClassifyInput:
+    """_classify_input 输入分类（零 LLM）。"""
+
+    def test_hot_stocks_phrase_is_description(self):
+        assert _classify_input("分析一下热门股票") == "description"
+
+    def test_hot_keyword_is_description(self):
+        assert _classify_input("热门股票") == "description"
+
+    def test_recommend_short_is_description(self):
+        assert _classify_input("推荐股") == "description"
+
+    def test_pure_name_still_name(self):
+        assert _classify_input("贵州茅台") == "name"
+
+    def test_concept_still_description(self):
+        assert _classify_input("白酒龙头") == "description"
+
+    def test_code_still_code(self):
+        assert _classify_input("600519") == "code"
+
+
+class TestSearchStockTimeSensitiveGuard:
+    """时效性查询（热门/推荐/今天…）不应走 LLM 常识推理，避免幻觉出单只股票。"""
+
+    def test_hot_stocks_skips_llm_reasoning(self):
+        """即使 LLM 会幻觉出贵州茅台，时效性守卫也不应让它通过。"""
+        hallucinated = {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "confidence": "high",
+        }
+        with patch(
+            "finance_agent.react_agent._search_with_llm_reasoning"
+        ) as mock_llm, patch(
+            "finance_agent.react_agent.has_tavily_key", return_value=False
+        ), patch(
+            "finance_agent.react_agent._akshare_fuzzy_search", return_value=[]
+        ):
+            mock_llm.return_value = hallucinated
+            result = search_stock_tool("分析一下热门股票")
+
+        mock_llm.assert_not_called()
+        assert not (
+            len(result.get("candidates", [])) == 1
+            and result.get("confidence", 0) >= 0.9
+        )
+
+    def test_hot_stocks_uses_web_search_when_available(self):
+        web_candidates = [
+            {"stock_code": "600519", "stock_name": "贵州茅台"},
+            {"stock_code": "300750", "stock_name": "宁德时代"},
+        ]
+        with patch(
+            "finance_agent.react_agent._search_with_llm_reasoning"
+        ) as mock_llm, patch(
+            "finance_agent.react_agent.has_tavily_key", return_value=True
+        ), patch(
+            "finance_agent.react_agent._search_with_web_search"
+        ) as mock_web, patch(
+            "finance_agent.react_agent._akshare_fuzzy_search"
+        ) as mock_fuzzy:
+            mock_llm.return_value = {
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "confidence": "high",
+            }
+            mock_web.return_value = web_candidates
+            result = search_stock_tool("热门股票")
+
+        mock_llm.assert_not_called()
+        mock_web.assert_called_once()
+        mock_fuzzy.assert_not_called()
+        assert result.get("needs_confirmation") is True
+        assert len(result["candidates"]) == 2
+
+    def test_concept_query_still_uses_llm_reasoning(self):
+        """概念词（如"龙头"）仍走 LLM 推理，这是稳定的常识映射，不应被守卫拦截。"""
+        verified = {"stock_code": "600519", "stock_name": "贵州茅台"}
+        with patch(
+            "finance_agent.react_agent._search_with_llm_reasoning"
+        ) as mock_llm, patch(
+            "finance_agent.react_agent._verify_stock_code", return_value=verified
+        ):
+            mock_llm.return_value = {
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "confidence": "high",
+            }
+            result = search_stock_tool("白酒龙头")
+
+        mock_llm.assert_called_once()
+        assert result.get("found") is True
+        assert len(result["candidates"]) == 1
+        assert result["candidates"][0]["stock_code"] == "600519"

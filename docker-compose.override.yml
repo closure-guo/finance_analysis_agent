@@ -1,0 +1,41 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  开发覆盖：容器内热重载                                            ║
+# ║  docker compose up -d 会自动合并本文件（开发默认开启热重载）       ║
+# ║  生产部署绕过：docker compose -f docker-compose.yml up -d --build ║
+# ║                                                                   ║
+# ║  后端：挂载 src/ → uvicorn --reload                               ║
+# ║  前端：改用 Dockerfile.dev → vite dev + 挂载源码                  ║
+# ║        容器内 vite 监听 80，沿用主 compose 的 5173:80 端口映射     ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+services:
+  backend:
+    # 挂载源码到容器，使 uvicorn 能监听到宿主机代码变更
+    volumes:
+      - ./src:/app/src
+    # 覆盖启动命令：开启 --reload，限定监听 /app/src 避免误触
+    command:
+      - uvicorn
+      - finance_agent.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/src
+
+  frontend:
+    build:
+      # context 仍为 ./frontend（继承自主 compose），仅切换 Dockerfile
+      dockerfile: Dockerfile.dev
+    volumes:
+      # 源码挂载进容器，vite HMR 感知文件变更
+      - ./frontend:/app
+      # 匿名卷隔离 node_modules，避免宿主机覆盖容器内 npm ci 安装的依赖
+      - /app/node_modules
+    environment:
+      # 容器内 vite 监听 80，与主 compose 的 5173:80 映射对齐
+      VITE_PORT: "80"
+      # /api 反代到后端服务名（容器网络内寻址）
+      VITE_API_TARGET: http://backend:8000
