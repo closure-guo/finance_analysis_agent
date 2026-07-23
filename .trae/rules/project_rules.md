@@ -1,5 +1,9 @@
 # Finance Analysis Agent
 
+## Mandatory skill invocation
+
+每个会话开始时，必须先调用 `using-superpowers` skill 激活 Superpowers 工作流，确保所有执行纪律（路由表、TDD 红线、verification 关卡）可用并正确初始化。
+
 ## Test asset locations
 
 测试和验证产物的约定存放位置（不要在根目录创建新目录）：
