@@ -3,7 +3,6 @@ node_modules/
 
 # Claude Code local settings
 .claude/*
-!.claude/skills/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
