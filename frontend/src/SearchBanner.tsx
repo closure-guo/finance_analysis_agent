@@ -73,6 +73,8 @@ export function SearchBanner({ status, query, results = [] }: SearchBannerProps)
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
         style={{ background: 'var(--bg-overlay-l1)' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l2)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
       >
         <i className="fas fa-search text-xs flex-shrink-0" style={{ color: 'var(--status-success-default)' }}></i>
         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
@@ -96,6 +98,14 @@ export function SearchBanner({ status, query, results = [] }: SearchBannerProps)
               rel="noopener noreferrer"
               className="block px-3 py-2 rounded-lg border transition-all"
               style={{ background: 'var(--bg-base-secondary)', borderColor: 'var(--border-neutral-l1)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-neutral-l2)'
+                e.currentTarget.style.background = 'var(--bg-overlay-l1)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-neutral-l1)'
+                e.currentTarget.style.background = 'var(--bg-base-secondary)'
+              }}
             >
               <div className="flex items-start gap-2">
                 <img
