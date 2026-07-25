@@ -1347,6 +1347,13 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
             <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
+              {msg.searchStatus && (
+                <SearchBanner
+                  status={msg.searchStatus}
+                  query={msg.searchQuery}
+                  results={msg.searchResults}
+                />
+              )}
               {msg.toolCalls && msg.toolCalls.length > 0 && (
                 <ToolCallBanner toolCalls={msg.toolCalls} streaming={!!msg.streaming && !msg.chatResponse} />
               )}
