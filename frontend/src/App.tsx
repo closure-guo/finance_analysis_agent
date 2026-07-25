@@ -441,11 +441,24 @@ export default function App() {
               continue
             }
 
+            if (event.type === 'search_start') {
+              const chatId = ensureAssistantMsg()
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, searchStatus: 'searching' as const, searchQuery: event.query }
+                  : m
+              ))
+              continue
+            }
+
             if (event.type === 'search_result') {
               const results = event.results || []
-              const count = event.count || results.length
-              const summary = results.slice(0, 3).map((r: any) => r?.title).filter(Boolean).join('、')
-              attachToolResult(ensureAssistantMsg(), ['web_search', 'batch_web_search'], `找到 ${count} 条结果：${summary}`)
+              const chatId = ensureAssistantMsg()
+              setMessages(prev => prev.map(m =>
+                m.id === chatId
+                  ? { ...m, searchStatus: 'done' as const, searchResults: results }
+                  : m
+              ))
               continue
             }
 
