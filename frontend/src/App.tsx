@@ -454,9 +454,24 @@ export default function App() {
             if (event.type === 'search_result') {
               const results = event.results || []
               const chatId = ensureAssistantMsg()
+              setMessages(prev => prev.map(m => {
+                if (m.id !== chatId) return m
+                // 标记 web_search/batch_web_search toolCall 为已完成，避免 tool_result 重复附加
+                const calls = (m.toolCalls || []).map(c =>
+                  (c.name === 'web_search' || c.name === 'batch_web_search') && !c.done
+                    ? { ...c, done: true }
+                    : c
+                )
+                return { ...m, searchStatus: 'done' as const, searchResults: results, toolCalls: calls }
+              }))
+              continue
+            }
+
+            if (event.type === 'search_error') {
+              const chatId = ensureAssistantMsg()
               setMessages(prev => prev.map(m =>
                 m.id === chatId
-                  ? { ...m, searchStatus: 'done' as const, searchResults: results }
+                  ? { ...m, searchStatus: 'error' as const }
                   : m
               ))
               continue
@@ -868,11 +883,15 @@ export default function App() {
                   : m
               ))
             } else if (event.type === 'search_result') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, searchStatus: 'done', searchResults: event.results }
-                  : m
-              ))
+              setMessages(prev => prev.map(m => {
+                if (m.id !== chatId) return m
+                const calls = (m.toolCalls || []).map(c =>
+                  (c.name === 'web_search' || c.name === 'batch_web_search') && !c.done
+                    ? { ...c, done: true }
+                    : c
+                )
+                return { ...m, searchStatus: 'done', searchResults: event.results, toolCalls: calls }
+              }))
             } else if (event.type === 'search_error') {
               setMessages(prev => prev.map(m =>
                 m.id === chatId
