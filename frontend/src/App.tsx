@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry } from './types'
 import { ChartsSection } from './Charts'
+import { SearchBanner } from './SearchBanner'
 
 // ── Pipeline steps (mirrors backend LAYER_STEPS) ──
 const PIPELINE_STEPS: PipelineStep[] = [
@@ -1537,76 +1538,6 @@ function getFavicon(url: string) {
   } catch {
     return ''
   }
-}
-
-// ── Search Banner (Kimi-style collapsible search results) ──
-function SearchBanner({ results, query }: { results: Array<{ title: string; url: string; content: string }>; query: string }) {
-  const [expanded, setExpanded] = useState(false)
-
-  return (
-    <div className="mb-3">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
-        style={{ background: 'var(--bg-overlay-l1)' }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l2)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
-      >
-        <i className="fas fa-search text-xs flex-shrink-0" style={{ color: 'var(--status-success-default)' }}></i>
-        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-          已搜索
-          <span className="mx-1 font-medium" style={{ color: 'var(--text-default)' }}>{results.length}</span>
-          个网页
-          {query && <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {query}</span>}
-        </span>
-        <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] ml-auto transition-transform`} style={{ color: 'var(--text-tertiary)' }}></i>
-      </button>
-      <div
-        className="overflow-hidden transition-all duration-300 ease-out"
-        style={{ maxHeight: expanded ? '400px' : '0px', opacity: expanded ? 1 : 0 }}
-      >
-        <div className="space-y-2 mt-1 max-h-[400px] overflow-y-auto pr-1">
-          {results.map((r, i) => (
-            <a
-              key={i}
-              href={r.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block px-3 py-2 rounded-lg border transition-all"
-              style={{ background: 'var(--bg-base-secondary)', borderColor: 'var(--border-neutral-l1)' }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-neutral-l2)'
-                e.currentTarget.style.background = 'var(--bg-overlay-l1)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-neutral-l1)'
-                e.currentTarget.style.background = 'var(--bg-base-secondary)'
-              }}
-            >
-              <div className="flex items-start gap-2">
-                <img
-                  src={getFavicon(r.url)}
-                  alt=""
-                  className="w-4 h-4 rounded-sm flex-shrink-0 mt-0.5"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>{i + 1}</span>
-                    <span className="text-xs truncate font-medium" style={{ color: 'var(--text-default)' }} onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-brand)' }} onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-default)' }}>
-                      {r.title}
-                    </span>
-                  </div>
-                  <p className="text-[11px] mt-1 line-clamp-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{r.content}</p>
-                  <span className="text-[10px] truncate block mt-1" style={{ color: 'var(--text-tertiary)' }}>{getDomain(r.url)}</span>
-                </div>
-              </div>
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
 }
 
 // ── Pipeline Card ──
