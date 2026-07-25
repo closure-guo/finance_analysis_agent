@@ -1,0 +1,48 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+context: |
+  项目：Finance Analysis Agent — 面向 A 股市场的多 Agent 投研分析系统
+  领域：A 股上市公司财务分析与交易决策报告
+
+  技术栈：
+    后端：Python 3.12, FastAPI, LangGraph, pandas, AKShare, LiteLLM(DeepSeek), SQLite
+    前端：React 18, Vite, TypeScript, TailwindCSS, ECharts
+    可观测性：Langfuse (LLM 调用链路追踪)
+    部署：Docker Compose
+
+  架构：5 层 LangGraph Agent 架构
+    Layer I: 4 个分析师并行（宏观/基本面/技术面/舆情）
+    Layer II: Bull/Bear 辩论 -> Research Manager
+    Layer III: Trader 交易决策
+    Layer IV: Risk Management 辩论（3 辩论者 + 裁决者）
+    Layer V: Fund Manager 批准/拒绝
+    统一编排：ReAct Agent Harness，三种模式（深度/快速/追问）
+
+  编码规范：
+    变量命名使用 camelCase
+    代码注释使用中文
+    优先使用 Python 标准库
+    commit 信息格式清晰，描述修改点和原因
+
+  测试规范：
+    后端测试：uv run pytest
+    E2E 测试禁止使用 mock 数据，必须通过前端模拟用户真实输入
+    测试产物存放：tests/fixtures/, tests/scripts/, tests/validation/, tests/e2e/
+
+  关键文档：
+    CONTEXT.md — 项目级架构记忆与领域术语
+    docs/adr/ — 架构决策记录（手动维护，只增不改）
+    docs/incidents/ — 事故记录
+    docs/PRD.md — 产品需求文档
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
