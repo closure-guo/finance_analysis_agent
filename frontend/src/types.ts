@@ -308,5 +308,5 @@ export interface UIMessage {
   // Search-specific (quick mode)
   searchQuery?: string
   searchResults?: Array<{ title: string; url: string; content: string }>
-  searchStatus?: 'searching' | 'done' | 'error' | 'unavailable'
+  searchStatus?: 'searching' | 'done' | 'error'
 }
