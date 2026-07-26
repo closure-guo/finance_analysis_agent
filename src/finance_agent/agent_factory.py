@@ -496,7 +496,18 @@ def _now() -> str:
 
 
 def _make_llm_client(model: str, api_key: str | None = None):
-    """创建 litellm 适配的 LLM 客户端。"""
+    """创建 litellm 适配的 LLM 客户端。
+
+    TESTING=1 时返回 None（占位），完整 stub 实现在 F3 落地。
+    见 docs/superpowers/specs/2026-07-26-e2e-workflow-integration-design.md §5 F3。
+    """
+    from finance_agent.api import TESTING
+
+    if TESTING:
+        # TODO F3: 返回可控 stub LLM 客户端（按固定节奏吐 SSE delta）
+        # 当前 smoke.spec 不触发真实分析流程，占位 return None 即可
+        return None
+
     from finance_agent.harness.litellm_client import LiteLLMClient
 
     return LiteLLMClient(model=model, api_key=api_key)
