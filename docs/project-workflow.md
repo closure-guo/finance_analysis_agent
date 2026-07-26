@@ -163,8 +163,8 @@ openspec validate <change-id> --strict
 
 1. 宣告: "I'm using the writing-plans skill to create the implementation plan."
 2. 读 delta spec，拆成 TDD 粒度的任务
-3. 每个任务包含：文件路径、接口契约、TDD 五步（写失败测试 → 运行确认失败 → 写最小实现 → 运行确认通过 → 提交）
-   - 交互类变更必须拆出 E2E spec 任务卡：先写失败的 Playwright spec（tests/e2e/playwright/tests/*.spec.ts）→ 实现 → spec 转绿，与单测同一 TDD 纪律。spec 写作红线见 §5.5
+3. 每个任务包含：文件路径、接口契约、TDD 五步（写失败测试 -> 运行确认失败 -> 写最小实现 -> 运行确认通过 -> 提交）
+   - 交互类变更必须拆出 E2E spec 任务卡：先跑 `npx playwright test explore --reporter=list`（在 `tests/e2e/playwright/`）获取真实 DOM 元素清单 -> 从清单中提取稳定 selector（data-testid > role+name > placeholder）-> 写失败的 Playwright spec（tests/e2e/playwright/tests/*.spec.ts）-> 实现 -> spec 转绿，与单测同一 TDD 纪律。spec 写作红线见 §5.5
 4. 自审：spec 覆盖率检查、占位符扫描、类型一致性检查
 5. 保存计划文件
 6. 选择执行方式（推荐 subagent-driven-development）
