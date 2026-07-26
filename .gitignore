@@ -241,3 +241,8 @@ frontend/tsconfig.tsbuildinfo
 
 # External reference
 Kimi_Agent_简化 Agent Harness/
+
+# Playwright E2E（F2 门禁基础设施）
+tests/e2e/playwright/node_modules/
+tests/e2e/playwright/playwright-report/
+tests/e2e/playwright/test-results/
