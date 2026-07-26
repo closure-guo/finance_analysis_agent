@@ -339,7 +339,7 @@ git commit -m "feat: add specific feature"
 
 **触发条件**: delta 涉及交互行为（前端 UI、SSE 流式、会话切换、状态流转，判别见 §2）。
 
-**生效状态**: F2（门禁基础设施）已完成，E2E 门禁对 smoke 级别已生效；streaming/contract/interaction spec 在 F3 补齐后对交互类变更完全生效。
+**生效状态**: F2（门禁基础设施）+ F3（核心 spec）均已完成，E2E 门禁对交互类变更完全生效。
 
 **操作**:
 
