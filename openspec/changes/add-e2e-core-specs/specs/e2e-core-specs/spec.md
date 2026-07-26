@@ -32,13 +32,15 @@ The E2E test suite SHALL include `contract.spec.ts` that verifies the frontend s
 - **AND** 请求体含 message、user_id、api_key 字段
 - **AND** 响应 Content-Type 含 text/event-stream
 
-### Requirement: Interaction Spec Verifies Button Disabled State
+### Requirement: Interaction Spec Verifies Streaming State Lifecycle
 
-The E2E test suite SHALL include `interaction.spec.ts` that verifies the send button is disabled during streaming.
+The E2E test suite SHALL include `interaction.spec.ts` that verifies the streaming state indicator's visibility lifecycle (appears when streaming starts, disappears when streaming ends) as the interaction state verification.
 
-#### Scenario: 发送中按钮禁用并变色
+> 备注：原计划断言「发送按钮 disabled + opacity 0.5」，但前端当前未实现流式中按钮禁用行为。改为断言 stream-status 可见性周期作为交互状态验证。按钮 disabled 行为属新功能，待前端实现后另立 delta 补充。
+
+#### Scenario: 流式状态指示器可见性周期
 
 - **GIVEN** 双 webServer 已启动（TESTING=1）
 - **WHEN** 用户输入文本并点击发送按钮（data-testid="send-button"）
-- **THEN** 发送按钮变为 disabled 状态
-- **AND** 发送按钮 opacity 变为 0.5（终态，等 transition 完成）
+- **THEN** 流式状态指示器（data-testid="stream-status"）可见（流式开始）
+- **AND** 流式状态指示器消失（data-testid="stream-status" hidden，流式结束）

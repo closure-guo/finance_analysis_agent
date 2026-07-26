@@ -1,4 +1,7 @@
-"""agent_factory._make_llm_client 的 TESTING 分支占位测试。"""
+"""agent_factory._make_llm_client 的 TESTING 分支测试。
+
+F3a: TESTING=1 时返回 StubLLMClient（非 None 占位，非真实 LiteLLMClient）。
+"""
 
 import os
 from unittest.mock import patch
@@ -7,10 +10,10 @@ from unittest.mock import patch
 class TestMakeLlmClientTestingBranch:
     """_make_llm_client 在 TESTING 模式下的行为。"""
 
-    def test_testing_mode_does_not_create_real_litellm_client(self):
-        """TESTING=1 时不创建真实 LiteLLMClient（避免连真 LLM）。
+    def test_testing_mode_returns_stub_llm_client(self):
+        """TESTING=1 时返回 StubLLMClient 实例。
 
-        F2 只验证分支存在且不连真 LLM；F3 会替换为 stub 客户端。
+        F3a 替换了 F2 的 return None 占位，stub 客户端按固定节奏吐文本 delta。
         """
         with patch.dict(os.environ, {"TESTING": "1"}):
             # 重新 import 以触发 TESTING 常量读取
@@ -24,11 +27,14 @@ class TestMakeLlmClientTestingBranch:
 
             importlib.reload(factory)
 
-            # 调用 _make_llm_client，应走 TESTING 分支（占位 return None）
-            # 而非创建真实 LiteLLMClient
+            from finance_agent.harness.stub_llm_client import StubLLMClient
+
+            # 调用 _make_llm_client，应返回 StubLLMClient 实例
             client = factory._make_llm_client("deepseek/test", "fake-key")
-            # F2 占位：client 应为 None（或占位对象），不应是 LiteLLMClient 实例
-            assert client is None or "LiteLLMClient" not in type(client).__name__
+            # 增强断言：必须是 StubLLMClient 类型（防止回退到 return None）
+            assert isinstance(client, StubLLMClient), (
+                f"期望 StubLLMClient，实际 {type(client).__name__}"
+            )
 
     def test_normal_mode_creates_real_litellm_client(self):
         """非 TESTING 模式下创建真实 LiteLLMClient。"""
