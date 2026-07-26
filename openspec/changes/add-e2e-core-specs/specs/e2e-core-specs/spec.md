@@ -14,12 +14,11 @@ The E2E test suite SHALL include `streaming.spec.ts` that verifies the quick cha
 - **AND** 流式输出区域（data-testid="stream-output"）内容逐步累积
 - **AND** 流式状态指示器消失（流结束）
 
-#### Scenario: 流式中断显示错误与重试
+#### Scenario: 流式中断显示错误
 
 - **GIVEN** 双 webServer 已启动
 - **WHEN** 用户发送消息，但 `page.route('**/api/chat', route => route.abort())` 拦截请求
 - **THEN** 错误提示（data-testid="stream-error"）可见
-- **AND** 重试按钮（data-testid="retry-button"）可见
 
 ### Requirement: Contract Spec Verifies Request Response SSE
 

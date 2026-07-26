@@ -9,7 +9,7 @@ F2（已归档）建立了 E2E 门禁基础设施：`npx playwright test` 能拉
 ## What Changes
 
 - 后端实现 LLM stub（替换 F2 的 `return None` 占位）：TESTING=1 时 LLM 客户端按固定节奏吐文本 delta，让流式断言是确定性的。**F3a stub 只支持快速模式**（ReAct Agent 返回纯文本，不触发 tool_call，1 轮完成）；深度模式完整 stub 推迟到 F3b @live 套件（5 层管线各节点 stub 复杂度高，且 @live 真 LLM 链路已覆盖深度模式）
-- 前端添加 `data-testid` 属性到关键交互元素（stream-output / stream-status / stream-error / retry-button / send-button），作为 E2E spec 的稳定断言锚点（不改行为，只加属性）
+- 前端添加 `data-testid` 属性到关键交互元素（stream-output / stream-status / stream-error / send-button），作为 E2E spec 的稳定断言锚点（不改行为，只加属性；retry-button 推迟，因前端当前无重试按钮）
 - 新增 `tests/e2e/playwright/tests/streaming.spec.ts`：3 场景（正常流式增量渲染 + 指示器生命周期 + 中断恢复）--基于快速模式
 - 新增 `tests/e2e/playwright/tests/contract.spec.ts`：1 场景（点击发送发出正确 POST /api/chat 请求并收到 SSE）
 - 新增 `tests/e2e/playwright/tests/interaction.spec.ts`：1 场景（发送中按钮禁用并变色）
