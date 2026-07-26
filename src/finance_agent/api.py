@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
 import time
 import uuid
@@ -47,6 +48,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── 测试模式开关（F2：E2E 门禁基础设施）──
+# TESTING=1 时注册测试专用端点（/api/test/seed, /api/test/reset），
+# 完整 LLM stub 实现推迟到 F3（见 agent_factory._make_llm_client）
+TESTING: bool = os.getenv("TESTING") == "1"
 
 graph = build_5layer_graph()
 
@@ -462,6 +468,20 @@ def _stream_report_chunks(markdown: str, chunk_size: int = 200) -> list[str]:
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── 测试专用端点（仅 TESTING=1 下可用）──
+if TESTING:
+
+    @app.post("/api/test/seed")
+    async def test_seed(req: dict):
+        """测试数据造数端点骨架（F2 只返回占位响应，造数据逻辑在 F3 落地）。"""
+        return {"status": "ok", "mode": "testing"}
+
+    @app.post("/api/test/reset")
+    async def test_reset(req: dict):
+        """测试数据清理端点骨架（F2 只返回占位响应，清理逻辑在 F3 落地）。"""
+        return {"status": "ok", "mode": "testing"}
 
 
 @app.get("/api/pipeline")
