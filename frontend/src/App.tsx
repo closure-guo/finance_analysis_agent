@@ -1259,6 +1259,7 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
               onKeyDown={handleKeydown}
             />
             <button
+              data-testid="send-button"
               onClick={handleSend}
               className="w-10 h-10 rounded-xl flex items-center justify-center mb-1 mr-1"
               style={{ background: 'var(--bg-brand)' }}
@@ -1316,7 +1317,7 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
 
   if (msg.type === 'error') {
     return (
-      <div className="flex justify-start animate-slide-in">
+      <div className="flex justify-start animate-slide-in" data-testid="stream-error">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--status-error-default)' }}>
@@ -1372,7 +1373,7 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
 
   if (msg.type === 'chat') {
     return (
-      <div className="flex justify-start animate-slide-in">
+      <div className="flex justify-start animate-slide-in" data-testid="stream-output">
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
@@ -1409,7 +1410,7 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
                 </div>
               ) : null}
               {msg.streaming && (
-                <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                <div data-testid="stream-status" className="mt-2 flex items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
                   <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
                   <span>思考中...</span>
                 </div>
@@ -2031,6 +2032,7 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, locked }: { onSend: (t
               onKeyDown={handleKeydown}
             />
             <button
+              data-testid="send-button"
               onClick={() => { onSend(text); setText('') }}
               className="w-9 h-9 rounded-xl flex items-center justify-center transition-all mb-0.5 mr-0.5"
               style={{ background: 'var(--bg-brand)' }}
