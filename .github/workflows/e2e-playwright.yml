@@ -1,0 +1,89 @@
+name: E2E Playwright
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 每天 UTC 18:00（北京时间次日 02:00）--触发 @live nightly
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  # stub 套件：PR/push 触发，确定性，秒级-分钟级
+  stub:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --group dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/playwright/package-lock.json
+
+      - name: Install Playwright dependencies
+        run: |
+          npm ci
+          npx playwright install chromium --with-deps
+        working-directory: tests/e2e/playwright
+
+      # Playwright webServer 自动拉起前后端（TESTING=1）
+      - name: Run Playwright E2E (stub suite)
+        run: npx playwright test
+        working-directory: tests/e2e/playwright
+        env:
+          CI: "true"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright/playwright-report/
+          retention-days: 7
+
+  # @live 套件：nightly 触发，真 LLM，防 stub 漂移
+  live:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --group dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Install Playwright browsers
+        run: uv run playwright install chromium --with-deps
+
+      - name: Run @live E2E tests
+        run: uv run pytest -m live -x -q
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

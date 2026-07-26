@@ -56,6 +56,30 @@ async def _web_search(query: str) -> str:
     return format_search_for_llm(response)
 
 
+async def _stub_web_search(query: str) -> str:
+    """TESTING=1 专用的 stub web_search 工具。
+
+    返回带固定标记的、可被 parse_search_output 解析的搜索结果，
+    不调用真实 Tavily API，使 E2E 能确定性验证"思考->web search->思考"序列
+    （agent-turn-box-display delta）。
+
+    Args:
+        query: 搜索关键词
+    """
+    # 加微小延迟，让 E2E 能确定性捕获"正在搜索"中间态
+    # （否则 search_start 与 search_result 几乎同时，中间态一闪而过）
+    await asyncio.sleep(0.5)
+    return (
+        "[1] STUB 搜索结果：茅台最新消息\n"
+        "https://stub.example.com/maotai-news\n"
+        f"针对查询“{query}”的固定 stub 搜索结果，用于 E2E 确定性测试。\n"
+        "\n"
+        "[2] STUB 搜索结果：茅台提价公告\n"
+        "https://stub.example.com/maotai-price\n"
+        "茅台年内第二次提价的固定 stub 内容。\n"
+    )
+
+
 MAX_WEB_SOURCES = 20
 MAX_SOURCE_CONTENT_LEN = 500
 
