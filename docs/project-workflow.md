@@ -335,13 +335,38 @@ git commit -m "feat: add specific feature"
 
 ---
 
+### Step 4.5: E2E 门禁（仅交互类变更）
+
+**触发条件**: delta 涉及交互行为（前端 UI、SSE 流式、会话切换、状态流转，判别见 §2）。
+
+**生效过渡**: E2E 门禁自 F2（门禁基础设施）完成之日起强制执行；此前交互类变更沿用原人工验证流程，本节可跳过。
+
+**操作**:
+
+```bash
+cd tests/e2e/playwright && npx playwright test
+```
+
+stub 套件（后端以 `TESTING=1` 启动，LLM 走可控 stub），确定性、秒级-分钟级完成。
+
+**通过标准**: 全绿。
+
+**失败处理**: 任一 spec 红 → 打回 Step 3 修复，禁止带病进人工验证。失败证据（trace、截图）在 `tests/e2e/playwright/playwright-report/`，可用 playwright-debugger skill 诊断。
+
+**证据要求**: playwright-report 路径记入验证材料（人工验证报告 §异常记录 引用）。
+
+**红线**: 禁止为了让门禁变绿而删除或放宽断言——断言被改弱必须能在 diff 中解释原因。
+
+---
+
 ### Step 5: 人工验证
 
 **触发条件**: 任何交互行为变更（前端 UI、SSE 流式、会话切换、状态流转）。
 
 **操作**:
-1. 开发者按 delta spec 中的 Scenario 逐条手动验证
-2. 记录验证结果到 `tests/validation/YYYY-MM-DD-<change-id>-validation.md`
+1. E2E 已覆盖的 Scenario：抽查确认（不必逐条手测，E2E 门禁已挡低级错误）
+2. E2E 覆盖不到的主观项（LLM 报告内容质量、整体体验）：逐条人工验证
+3. 记录验证结果到 `tests/validation/YYYY-MM-DD-<change-id>-validation.md`
 
 **模板**:
 
@@ -351,13 +376,14 @@ git commit -m "feat: add specific feature"
 **日期**: YYYY-MM-DD
 **验证人**: [姓名]
 **关联 delta**: openspec/changes/<change-id>/
+**E2E 门禁**: [playwright-report 路径 / 不适用]
 
 ## 验证结果
 
-| Scenario | 预期行为 | 实际结果 | 通过 |
-|---|---|---|---|
-| 会话切换时 SSE 断开重连 | 切换后旧连接断开，新会话建立新连接 | 符合 | ✅ |
-| 流式中断恢复 | 中断后重新发送，从断点继续 | 符合 | ✅ |
+| Scenario | E2E 已覆盖？ | 预期行为 | 实际结果 | 通过 |
+|---|---|---|---|---|
+| 会话切换时 SSE 断开重连 | 是（streaming.spec.ts） | 切换后旧连接断开，新会话建立新连接 | 抽查符合 | ✅ |
+| 报告内容无明显幻觉 | 否 | 关键财务数据与来源一致 | 逐条核对符合 | ✅ |
 
 ## 异常记录
 （如有失败项，记录复现步骤和实际行为）
@@ -366,6 +392,8 @@ git commit -m "feat: add specific feature"
 [ ] 全部通过，可 archive
 [ ] 存在失败项，需修复后重新验证
 ```
+
+> 人工验证的定位：E2E 看人会漏的（交互状态机、流式生命周期），人看机器看不了的（LLM 输出质量、整体体验）。两者是互补，不是重复。
 
 ---
 
@@ -376,6 +404,7 @@ git commit -m "feat: add specific feature"
 ```
 □ openspec/changes/<change-id>/tasks.md 全部勾选
 □ Superpowers verification-before-completion 已通过
+□ E2E 门禁通过（交互类变更适用）
 □ 人工验证报告已落 tests/validation/
 □ openspec validate <change-id> --strict 通过
 ```
