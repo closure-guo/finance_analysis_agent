@@ -30,7 +30,7 @@ export default defineConfig({
       url: 'http://localhost:8000/api/health',
       timeout: 30_000,
       reuseExistingServer: !process.env.CI,
-      cwd: '../../',
+      cwd: '../../../',
     },
     {
       command: 'npm run dev -- --port 5173',
