@@ -529,7 +529,8 @@ The system MUST <行为描述>.
 
 - [ ] 验收项 1（粗粒度，如「SSE 流式中断恢复可用」）
 - [ ] 验收项 2（如「会话切换时旧连接正确断开」）
-- [ ] 验收项 3（如「人工验证报告已落 tests/validation/」）
+- [ ] E2E spec 已覆盖核心交互场景（仅交互类变更）
+- [ ] 验收项 4（如「人工验证报告已落 tests/validation/」）
 ```
 
 > 执行中回填勾选。archive 前必须全勾。这是 delta 契约与 archive 关卡之间的桥梁。
@@ -556,6 +557,22 @@ Task 3: in progress
 
 > 对话记忆在上下文压缩后不存活。ledger 是恢复地图——压缩后信任 ledger 和 git log，不信自己的回忆。
 
+### 5.5 E2E spec 写作红线
+
+写 E2E spec 任务卡（Step 2）和审查 spec 代码（Step 3）时的检查清单：
+
+```markdown
+- ❌ 禁止恒真断言：`toBeDefined()` / `assert locator is not None`（P0）
+- ❌ 禁止 expect 缺 await（P0）
+- ❌ 禁止手动取值后断言（P1，用 web-first assertion 自动重试）
+- ❌ 禁止条件绕过：`if (await x.isVisible()) { 断言 }`（P1）
+- ❌ 禁止 `waitForTimeout` 赌时序（用 expect 自动重试或等具体事件）
+- ❌ 禁止 route.fulfill / MSW 伪造业务接口响应（AGENTS.md 红线；LLM/第三方 `TESTING=1` stub 除外）
+- ✅ selector 必须来自真实浏览器快照（data-testid / role+name 优先）
+- ✅ 断言稳定的终态，不断言过渡过程
+- ✅ 故障注入用 route.abort()，合法且推荐
+```
+
 ---
 
 ## 6. 并行变更规则
@@ -581,4 +598,7 @@ Task 3: in progress
 | 修改任何已有行为前必须先查 openspec/specs/ | AGENTS.md Spec contract rules |
 | 主规范库只能通过 sync 合并更新，禁止手改 | AGENTS.md Spec contract rules |
 | ADR 由人手动维护，agent 不得自动新建 | AGENTS.md Agent skills |
+| 交互类变更必须过 E2E 门禁（Step 4.5），红则打回禁止带病进人工验证 | workflow §3 Step 4.5 |
+| stub 套件（TESTING=1）跑门禁，@live 套件（真 LLM）nightly 防漂移 | AGENTS.md 测试约束 |
+| E2E spec 写作红线（P0/P1 反模式） | workflow §5.5 |
 | Bug fix: 一个 PR 只修一个 Bug，先写复现测试 | 用户规则 |
