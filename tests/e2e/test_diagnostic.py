@@ -66,13 +66,13 @@ async def main():
                     mode_related.append((el, text.strip()[:30], tag))
 
         print(f"  Mode-related elements: {len(mode_related)}")
-        for el, text, tag in mode_related[:10]:
+        for _el, text, tag in mode_related[:10]:
             print(f"    <{tag}> {text}")
 
         print("\n" + "=" * 60)
         print("Step 4: Try clicking '快速模式' button")
         quick_btn = None
-        for el, text, tag in mode_related:
+        for el, text, _tag in mode_related:
             if "快速" in text:
                 quick_btn = el
                 break
