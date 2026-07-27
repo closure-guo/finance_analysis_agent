@@ -570,6 +570,7 @@ class Agent:
             # 循环结束
             if iterations >= self.max_iterations:
                 # 不直接报错，让 LLM 基于已有上下文生成回复
+                answered = False
                 try:
                     api_messages = self.context.build_messages_for_api()
                     async for chunk in self.llm.chat_stream(
@@ -577,6 +578,7 @@ class Agent:
                         tools=None,  # 不提供工具，强制生成文本
                     ):
                         if chunk.text_delta:
+                            answered = True
                             yield StreamEvent(
                                 event_type=ActionType.ANSWER,
                                 content=chunk.text_delta,
@@ -585,6 +587,10 @@ class Agent:
                             break
                 except Exception as e:
                     logger.warning("max_iterations 后生成回复失败: %s", e)
+                    yield StreamEvent.error(
+                        f"达到最大迭代次数 ({self.max_iterations})，请提供更明确的信息"
+                    )
+                if not answered:
                     yield StreamEvent.error(
                         f"达到最大迭代次数 ({self.max_iterations})，请提供更明确的信息"
                     )
