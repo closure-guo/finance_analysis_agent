@@ -30,6 +30,9 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+markers = [
+    "live: 真实 LLM 链路测试（需 DEEPSEEK_API_KEY，nightly 触发，不进 PR 门禁）",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -53,6 +56,7 @@ ignore = ["E501"]  # line-too-long (handled by formatter)
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S310"]  # pytest uses assert; test scripts use urllib
+"tests/e2e/**/*.py" = ["S101", "S310", "S602", "S603", "S607", "E402", "F841", "SIM102", "SIM105"]  # E2E 脚本用 subprocess 管理服务，预存 lint 问题不修
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
