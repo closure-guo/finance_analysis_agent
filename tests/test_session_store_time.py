@@ -100,6 +100,7 @@ class TestBadDataMigration:
         }
         conn.close()
 
-        assert rows["dirty-1"] == "1970-01-01T00:00:00"
-        assert rows["dirty-2"] == "1970-01-01T00:00:00"
+        # 脏数据被 _repair_bad_created_at 改为 epoch 后，_purge_epoch_sessions 幂等删除
+        assert "dirty-1" not in rows  # 脏数据已删除
+        assert "dirty-2" not in rows
         assert rows["clean-1"] == "2026-07-15T10:00:00"
