@@ -31,7 +31,7 @@ jobs:
         run: uv run mypy src/ || true  # third-party stub issues (docx, pptx, langgraph)
 
       - name: Unit tests
-        run: uv run pytest tests/ --ignore=tests/e2e --ignore=tests/scripts -m "not live" -x -q
+        run: uv run pytest tests/ --ignore=tests/e2e --ignore=tests/scripts -m "not live" -q --tb=line
 
   e2e:
     runs-on: ubuntu-latest
