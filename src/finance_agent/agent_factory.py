@@ -441,7 +441,7 @@ def build_agent(
             api_key=api_key,
             system_prompt=prompt,
             permission_mode=PermissionMode.YOLO,
-            max_iterations=6,
+            max_iterations=10,
             llm=llm_client,
         )
         web_sources_collector: list[dict] = []
