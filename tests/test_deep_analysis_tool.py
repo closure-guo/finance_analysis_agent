@@ -20,9 +20,10 @@ class FakeGraph:
         self.last_input: dict | None = None
 
     def stream(self, initial_state, config=None, stream_mode="updates"):
-        """同步流式输出。"""
+        """同步流式输出。stream_mode 可以是 list（如 ["updates", "custom"]）。"""
         self.last_input = initial_state
-        yield from self._chunks
+        for chunk in self._chunks:
+            yield ("updates", chunk)
 
 
 def _make_node_chunk(node_name: str, **updates) -> dict:
