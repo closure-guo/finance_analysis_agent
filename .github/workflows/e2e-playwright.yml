@@ -31,7 +31,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: tests/e2e/playwright/package-lock.json
+          cache-dependency-path: |
+            tests/e2e/playwright/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
 
       - name: Install Playwright dependencies
         run: |
