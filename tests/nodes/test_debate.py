@@ -33,7 +33,7 @@ def _mock_bear_response() -> str:
 class TestBullDebater:
     """Layer II Bull 辩论 Agent。"""
 
-    @patch("finance_agent.nodes.debate.call_llm")
+    @patch("finance_agent.nodes.debate.call_llm_streaming")
     def test_produces_debate_message(self, mock_llm):
         mock_llm.return_value = _mock_bull_response()
         state = {
@@ -51,7 +51,7 @@ class TestBullDebater:
 class TestBearDebater:
     """Layer II Bear 辩论 Agent。"""
 
-    @patch("finance_agent.nodes.debate.call_llm")
+    @patch("finance_agent.nodes.debate.call_llm_streaming")
     def test_produces_debate_message(self, mock_llm):
         mock_llm.return_value = _mock_bear_response()
         state = {

@@ -38,21 +38,21 @@ def _mock_judge_response() -> str:
 class TestRiskDebaters:
     """Layer IV 风险辩论 Agent。"""
 
-    @patch("finance_agent.nodes.risk.call_llm")
+    @patch("finance_agent.nodes.risk.call_llm_streaming")
     def test_aggressive_debater(self, mock_llm):
         mock_llm.return_value = _mock_risk_msg("aggressive")
         result = aggressive_debater({"risk_debate_history": [], "trader_plan": {}})
         msg = result["risk_debate_history"][0]
         assert msg.role == "aggressive"
 
-    @patch("finance_agent.nodes.risk.call_llm")
+    @patch("finance_agent.nodes.risk.call_llm_streaming")
     def test_conservative_debater(self, mock_llm):
         mock_llm.return_value = _mock_risk_msg("conservative")
         result = conservative_debater({"risk_debate_history": [], "trader_plan": {}})
         msg = result["risk_debate_history"][0]
         assert msg.role == "conservative"
 
-    @patch("finance_agent.nodes.risk.call_llm")
+    @patch("finance_agent.nodes.risk.call_llm_streaming")
     def test_neutral_debater(self, mock_llm):
         mock_llm.return_value = _mock_risk_msg("neutral")
         result = neutral_debater({"risk_debate_history": [], "trader_plan": {}})
@@ -63,7 +63,7 @@ class TestRiskDebaters:
 class TestRiskJudge:
     """Layer IV Risk Judge — 最终交易决策。"""
 
-    @patch("finance_agent.nodes.risk.call_llm")
+    @patch("finance_agent.nodes.risk.call_llm_streaming")
     def test_produces_final_decision(self, mock_llm):
         mock_llm.return_value = _mock_judge_response()
         state = {
