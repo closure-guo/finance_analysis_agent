@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import (
     Any,
     Protocol,
@@ -24,14 +24,14 @@ from typing import (
 # ───────────────────────────────────────────────
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     """ReAct 循环中 Agent 的单步动作类型"""
 
     THINK = "think"  # 内部思考（Claude Code 的 <thinking>）
@@ -45,7 +45,7 @@ class ActionType(str, Enum):
     TOOL_METADATA = "tool_metadata"  # 工具的结构化元数据（不进入 LLM 上下文）
 
 
-class PermissionMode(str, Enum):
+class PermissionMode(StrEnum):
     """权限模式：从完全手动到完全自动的光谱"""
 
     ASK = "ask"  # 所有操作都询问（最保守）
@@ -55,7 +55,7 @@ class PermissionMode(str, Enum):
     YOLO = "yolo"  # 跳过所有确认（危险模式）
 
 
-class HookPoint(str, Enum):
+class HookPoint(StrEnum):
     """生命周期钩子挂载点（精简自 Claude Code 的 27 种）"""
 
     ON_SESSION_START = "on_session_start"
@@ -183,7 +183,7 @@ class PermissionRequest:
         return f"[{self.risk_level.value}] {self.tool_name}({args_str}) - {self.reason}"
 
 
-class RiskLevel(str, Enum):
+class RiskLevel(StrEnum):
     """操作风险等级"""
 
     READ = "read"  # 只读，无风险

@@ -149,7 +149,7 @@ def auto_test_hook(test_command: str = "pytest") -> HookCallback:
         import subprocess
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603 - test_command 来自配置，非用户输入
                 test_command.split(), capture_output=True, text=True, timeout=60
             )
             logger.info(f"自动测试: exit={result.returncode}")

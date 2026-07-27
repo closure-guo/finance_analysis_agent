@@ -300,11 +300,10 @@ class LLMClient:
         """关闭 HTTP 客户端"""
         if self._http_client:
             import asyncio
+            import contextlib
 
-            try:
+            with contextlib.suppress(Exception):
                 asyncio.get_event_loop().run_until_complete(self._http_client.aclose())
-            except Exception:
-                pass
 
     def __repr__(self) -> str:
         return f"LLMClient(model={self.model}, base_url={self.base_url})"

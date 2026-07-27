@@ -90,7 +90,9 @@ class TestReactLoop:
         event_types = [e.event_type for e in events]
         assert ActionType.TOOL_CALL in event_types, f"缺少 TOOL_CALL，实际: {event_types}"
         assert ActionType.TOOL_RESULT in event_types, f"缺少 TOOL_RESULT，实际: {event_types}"
-        assert ActionType.THINK_TO_ANSWER in event_types, f"缺少 THINK_TO_ANSWER，实际: {event_types}"
+        assert ActionType.THINK_TO_ANSWER in event_types, (
+            f"缺少 THINK_TO_ANSWER，实际: {event_types}"
+        )
         # 工具调用前的文本应作为 THINK 流式输出
         assert ActionType.THINK in event_types, f"缺少 THINK，实际: {event_types}"
 
@@ -132,7 +134,9 @@ class TestReactLoop:
 
         event_types = [e.event_type for e in events]
         # 直接回答：文本作为 THINK 流式输出，流末转为 THINK_TO_ANSWER（不再发 ANSWER）
-        assert ActionType.THINK_TO_ANSWER in event_types, f"缺少 THINK_TO_ANSWER，实际: {event_types}"
+        assert ActionType.THINK_TO_ANSWER in event_types, (
+            f"缺少 THINK_TO_ANSWER，实际: {event_types}"
+        )
         assert ActionType.TOOL_CALL not in event_types
 
     @pytest.mark.asyncio
@@ -187,14 +191,14 @@ class TestReactLoop:
     @pytest.mark.asyncio
     async def test_dsml_thinking_replaced_after_stream(self, echo_tool):
         """DSML 标记流式输出后，流末应发 THINK_REPLACE 用清理后文本覆盖。"""
-        BAR = "\uff5c"  # 全角竖线 ｜
+        bar = "\uff5c"  # 全角竖线 ｜
         dsml = (
             "让我查一下 "
-            f"<{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
-            f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"echo\">"
-            f"<{BAR}{BAR}DSML{BAR}{BAR}parameter name=\"text\">hi</{BAR}{BAR}DSML{BAR}{BAR}parameter>"
-            f"</{BAR}{BAR}DSML{BAR}{BAR}invoke>"
-            f"</{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
+            f"<{bar}{bar}DSML{bar}{bar}tool_calls>"
+            f'<{bar}{bar}DSML{bar}{bar}invoke name="echo">'
+            f'<{bar}{bar}DSML{bar}{bar}parameter name="text">hi</{bar}{bar}DSML{bar}{bar}parameter>'
+            f"</{bar}{bar}DSML{bar}{bar}invoke>"
+            f"</{bar}{bar}DSML{bar}{bar}tool_calls>"
         )
         mock_llm = MockLLMClient(
             [
@@ -222,8 +226,12 @@ class TestReactLoop:
         # 流末清理后发 THINK_REPLACE 覆盖原始 DSML 文本
         assert ActionType.THINK_REPLACE in event_types, f"缺少 THINK_REPLACE: {event_types}"
         replace_event = next(e for e in events if e.event_type == ActionType.THINK_REPLACE)
-        assert "DSML" not in replace_event.content, f"THINK_REPLACE 仍含 DSML: {replace_event.content!r}"
-        assert BAR not in replace_event.content, f"THINK_REPLACE 仍含竖线标记: {replace_event.content!r}"
+        assert "DSML" not in replace_event.content, (
+            f"THINK_REPLACE 仍含 DSML: {replace_event.content!r}"
+        )
+        assert bar not in replace_event.content, (
+            f"THINK_REPLACE 仍含竖线标记: {replace_event.content!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_max_iterations_truncation(self, echo_tool):

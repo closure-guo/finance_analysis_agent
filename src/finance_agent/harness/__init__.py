@@ -59,4 +59,15 @@ __all__ = [
     "LLMClient",
     "HookManager",
     "HookPoint",
+    # 类型
+    "ActionType",
+    "AgentRunResult",
+    "Message",
+    "PermissionRequest",
+    "RiskLevel",
+    "Role",
+    "StreamEvent",
+    "ToolCallRequest",
+    "ToolResult",
+    "ToolSchema",
 ]
