@@ -24,7 +24,9 @@ def tmp_db(monkeypatch, tmp_path):
     return db_path
 
 
-def _raw_insert(db_path: Path, session_id: str, created_at: str, session_type: str = "chat") -> None:
+def _raw_insert(
+    db_path: Path, session_id: str, created_at: str, session_type: str = "chat"
+) -> None:
     """绕过 create_session，直接写入指定 created_at（用于构造脏数据）。"""
     conn = sqlite3.connect(str(db_path))
     conn.execute(
@@ -53,6 +55,7 @@ class TestCreatedAtNormalization:
         assert ts != "chat"
         # 兜底值必须能被 Date/fromisoformat 解析
         from datetime import datetime
+
         datetime.fromisoformat(ts)
 
     def test_bad_value_analysis_falls_back(self, tmp_db):
@@ -73,6 +76,7 @@ class TestCreatedAtNormalization:
         sessions = [s for s in session_store.list_sessions() if s["session_id"] == sid]
         ts = sessions[0]["created_at"]
         from datetime import datetime
+
         datetime.fromisoformat(ts)  # 不抛异常即合法
 
 
@@ -90,9 +94,10 @@ class TestBadDataMigration:
 
         conn = sqlite3.connect(str(tmp_db))
         conn.row_factory = sqlite3.Row
-        rows = {r["session_id"]: r["created_at"] for r in conn.execute(
-            "SELECT session_id, created_at FROM sessions"
-        )}
+        rows = {
+            r["session_id"]: r["created_at"]
+            for r in conn.execute("SELECT session_id, created_at FROM sessions")
+        }
         conn.close()
 
         assert rows["dirty-1"] == "1970-01-01T00:00:00"

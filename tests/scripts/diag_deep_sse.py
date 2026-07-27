@@ -41,7 +41,9 @@ def main() -> None:
             json=payload,
             timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10),
         ) as resp:
-            print(f"[<-] HTTP {resp.status_code}  headers={dict(resp.headers)[:200] if False else {k: v for k, v in resp.headers.items() if k.lower() in ('content-type','x-accel-buffering')}}")
+            print(
+                f"[<-] HTTP {resp.status_code}  headers={dict(resp.headers)[:200] if False else {k: v for k, v in resp.headers.items() if k.lower() in ('content-type', 'x-accel-buffering')}}"
+            )
             buf = ""
             for raw in resp.iter_text():
                 if not raw:
@@ -56,7 +58,7 @@ def main() -> None:
                     if first_event_at is None:
                         first_event_at = now
                     last_event_at = now
-                    data_str = line[len("data: "):]
+                    data_str = line[len("data: ") :]
                     try:
                         evt = json.loads(data_str)
                         etype = evt.get("type", "?")
@@ -70,12 +72,12 @@ def main() -> None:
                         preview = preview[:180] + "…"
                     print(f"[{now:6.2f}s] {etype:<16} {preview}")
     except httpx.ReadTimeout:
-        print(f"[!!] ReadTimeout after {time.time()-t0:.2f}s")
+        print(f"[!!] ReadTimeout after {time.time() - t0:.2f}s")
     except Exception as e:
-        print(f"[!!] Exception after {time.time()-t0:.2f}s: {type(e).__name__}: {e}")
+        print(f"[!!] Exception after {time.time() - t0:.2f}s: {type(e).__name__}: {e}")
 
     print("\n===== SUMMARY =====")
-    print(f"total elapsed      : {time.time()-t0:.2f}s")
+    print(f"total elapsed      : {time.time() - t0:.2f}s")
     print(f"first event at     : {first_event_at}")
     print(f"last  event at     : {last_event_at}")
     print(f"event counts       : {event_counts}")

@@ -170,7 +170,10 @@ def _run_scenario_ambiguous(page) -> dict:
             last_body = body
 
         # 检测旧 ClarifyCard 特征文本
-        if any(kw in body for kw in ["找到多个候选股票，请选择", "意图理解", "研究计划", "开始深度分析"]):
+        if any(
+            kw in body
+            for kw in ["找到多个候选股票，请选择", "意图理解", "研究计划", "开始深度分析"]
+        ):
             got_old_clarify_card = True
             break
         if "分析完成" in body or "深度分析报告" in body or "开始分析" in body:
@@ -179,7 +182,10 @@ def _run_scenario_ambiguous(page) -> dict:
 
         # 检测 Agent 聊天回复（反问）
         if body and "光模块龙头" in body and len(body) > 50:
-            if any(kw in body for kw in ["哪个", "哪只", "具体", "确认", "是否", "想关注", "方面", "标的", "分析"]):
+            if any(
+                kw in body
+                for kw in ["哪个", "哪只", "具体", "确认", "是否", "想关注", "方面", "标的", "分析"]
+            ):
                 got_chat_reply = True
                 break
 
@@ -222,20 +228,41 @@ def _run_scenario_explicit(page, api_key: str) -> dict:
             last_body = body
 
         # 检测旧 ClarifyCard 特征文本
-        if any(kw in body for kw in ["找到多个候选股票，请选择", "意图理解", "研究计划", "开始深度分析"]):
+        if any(
+            kw in body
+            for kw in ["找到多个候选股票，请选择", "意图理解", "研究计划", "开始深度分析"]
+        ):
             got_old_clarify_card = True
             break
         # 检测分析管线启动（进度卡片、节点、报告等）
-        if any(kw in body for kw in [
-            "数据准备", "Layer", "分析中", "进度", "节点", "基本面", "宏观",
-            "分析完成", "深度分析报告", "开始分析", "报告生成", "pipeline",
-            "舆情", "技术面", "多空", "交易", "风控", "基金经理",
-        ]):
+        if any(
+            kw in body
+            for kw in [
+                "数据准备",
+                "Layer",
+                "分析中",
+                "进度",
+                "节点",
+                "基本面",
+                "宏观",
+                "分析完成",
+                "深度分析报告",
+                "开始分析",
+                "报告生成",
+                "pipeline",
+                "舆情",
+                "技术面",
+                "多空",
+                "交易",
+                "风控",
+                "基金经理",
+            ]
+        ):
             got_analysis_start = True
             break
         # 检测 Agent 有任何回复（反问也算）
         if body and "300750" in body:
-            body_after_input = body[body.index("300750") + 6:]
+            body_after_input = body[body.index("300750") + 6 :]
             if len(body_after_input.strip()) > 10:
                 got_agent_response = True
                 if any(kw in body for kw in ["哪个", "哪只", "具体", "确认", "想关注", "方面"]):
@@ -243,7 +270,10 @@ def _run_scenario_explicit(page, api_key: str) -> dict:
                     # 等待更长时间看是否后续启动分析
                     time.sleep(10)
                     body2 = _get_body_text(page)
-                    if any(kw in body2 for kw in ["数据准备", "Layer", "分析中", "进度", "节点", "基本面", "宏观"]):
+                    if any(
+                        kw in body2
+                        for kw in ["数据准备", "Layer", "分析中", "进度", "节点", "基本面", "宏观"]
+                    ):
                         got_analysis_start = True
                         got_chat_reply_only = False
                     break

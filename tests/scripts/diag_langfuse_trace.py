@@ -21,14 +21,18 @@ def main() -> None:
     headers = {"Authorization": f"Basic {token}"}
 
     # list recent traces
-    r = httpx.get(f"{BASE}/api/public/traces?limit=12&orderBy=timestamp.desc", headers=headers, timeout=30)
+    r = httpx.get(
+        f"{BASE}/api/public/traces?limit=12&orderBy=timestamp.desc", headers=headers, timeout=30
+    )
     r.raise_for_status()
     data = r.json()
     traces = data.get("data", data) if isinstance(data, dict) else data
     print(f"=== {len(traces)} recent traces ===")
     for t in traces:
         sess = (t.get("session_id") or "-")[:10]
-        print(f"  id={t['id'][:12]}  name={t.get('name','?')[:30]:30}  session={sess}  ts={t.get('timestamp')}")
+        print(
+            f"  id={t['id'][:12]}  name={t.get('name', '?')[:30]:30}  session={sess}  ts={t.get('timestamp')}"
+        )
 
     # fetch full detail (with observations) for the most recent few
     for t in traces[:4]:
@@ -37,20 +41,22 @@ def main() -> None:
         r.raise_for_status()
         detail = r.json()
         obs = detail.get("observations", [])
-        print(f"\n=== TRACE {tid[:12]}  name={detail.get('name')}  session={detail.get('session_id')} ===")
+        print(
+            f"\n=== TRACE {tid[:12]}  name={detail.get('name')}  session={detail.get('session_id')} ==="
+        )
         print(f"    observations: {len(obs)}")
         for o in obs:
             print(
-                f"    - {o.get('name','?')[:40]:40} "
-                f"type={o.get('type','?'):11} "
-                f"status={o.get('status','?'):8} "
-                f"start={o.get('start_time','')[:23]} "
+                f"    - {o.get('name', '?')[:40]:40} "
+                f"type={o.get('type', '?'):11} "
+                f"status={o.get('status', '?'):8} "
+                f"start={o.get('start_time', '')[:23]} "
                 f"end={(o.get('end_time') or '-')[:23]}"
             )
             # show error/level if any
             lvl = o.get("level")
             if lvl and lvl != "DEFAULT":
-                print(f"        LEVEL={lvl}  output={str(o.get('output',''))[:120]}")
+                print(f"        LEVEL={lvl}  output={str(o.get('output', ''))[:120]}")
 
 
 if __name__ == "__main__":

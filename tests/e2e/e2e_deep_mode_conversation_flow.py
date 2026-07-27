@@ -27,7 +27,8 @@ from dotenv import load_dotenv
 
 load_dotenv()  # 读取 .env 中的 LLM_API_KEY（配置到前端 UI）
 
-from playwright.sync_api import Error as PlaywrightError, sync_playwright
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import sync_playwright
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCREENSHOT_DIR = Path(__file__).parent
@@ -39,14 +40,35 @@ CLARIFY_TIMEOUT = 120
 
 # 管线 UI 专属文案（仅 run_deep_analysis 触发后才应出现）
 PIPELINE_MARKERS = [
-    "深度分析进行中", "开始深度分析", "Layer 0", "Layer 1", "数据准备",
-    "节点完成", "基本面分析", "宏观分析", "舆情分析", "技术面分析",
-    "报告生成中", "分析完成",
+    "深度分析进行中",
+    "开始深度分析",
+    "Layer 0",
+    "Layer 1",
+    "数据准备",
+    "节点完成",
+    "基本面分析",
+    "宏观分析",
+    "舆情分析",
+    "技术面分析",
+    "报告生成中",
+    "分析完成",
 ]
 # DSML 泄漏标记
 DSML_MARKERS = ["DSML", "｜｜", "invoke name=", "tool_calls>"]
 # 澄清反问关键词
-CLARIFY_KEYWORDS = ["哪个", "哪只", "具体", "确认", "是否", "想关注", "方面", "标的", "分析", "请", "？"]
+CLARIFY_KEYWORDS = [
+    "哪个",
+    "哪只",
+    "具体",
+    "确认",
+    "是否",
+    "想关注",
+    "方面",
+    "标的",
+    "分析",
+    "请",
+    "？",
+]
 
 
 def _resolve_api_key() -> str:
@@ -134,7 +156,6 @@ def _run_scenario(page, api_key: str, label: str, query: str) -> dict:
     print("  已发送，等待 Agent 响应...")
 
     deadline = time.time() + CLARIFY_TIMEOUT
-    last_body = ""
     got_chat_reply = False
     got_pipeline = False
     got_dsml = False
@@ -156,7 +177,7 @@ def _run_scenario(page, api_key: str, label: str, query: str) -> dict:
 
         # 检测 Agent 聊天回复（反问）
         if body and query in body:
-            after = body[body.index(query) + len(query):]
+            after = body[body.index(query) + len(query) :]
             if len(after.strip()) > 8 and any(k in after for k in CLARIFY_KEYWORDS):
                 got_chat_reply = True
 
