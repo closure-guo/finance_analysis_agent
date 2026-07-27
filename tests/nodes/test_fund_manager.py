@@ -23,7 +23,7 @@ def _mock_return_response() -> str:
 class TestFundManager:
     """Layer V Fund Manager Agent。"""
 
-    @patch("finance_agent.nodes.fund_manager.call_llm")
+    @patch("finance_agent.nodes.fund_manager.call_llm_streaming")
     def test_approve_decision(self, mock_llm):
         mock_llm.return_value = _mock_approve_response()
         state = {
@@ -37,7 +37,7 @@ class TestFundManager:
         result = fund_manager(state)
         assert result["fund_manager_decision"] == "approve"
 
-    @patch("finance_agent.nodes.fund_manager.call_llm")
+    @patch("finance_agent.nodes.fund_manager.call_llm_streaming")
     def test_return_decision(self, mock_llm):
         mock_llm.return_value = _mock_return_response()
         state = {
