@@ -45,18 +45,25 @@ def _call_ak(func, *args, **kwargs):
             except FuturesTimeoutError:
                 logger.warning(
                     "AKShare 调用超时 (%ds): %s (attempt %d/%d)",
-                    _AK_TIMEOUT, getattr(func, "__name__", str(func)), attempt, _AK_MAX_RETRIES,
+                    _AK_TIMEOUT,
+                    getattr(func, "__name__", str(func)),
+                    attempt,
+                    _AK_MAX_RETRIES,
                 )
             except Exception as e:
                 # 捕获 RemoteDisconnected / ConnectionError 等网络异常，重试而非直接抛出
                 logger.warning(
                     "AKShare 调用异常: %s: %s (attempt %d/%d)",
-                    getattr(func, "__name__", str(func)), type(e).__name__, attempt, _AK_MAX_RETRIES,
+                    getattr(func, "__name__", str(func)),
+                    type(e).__name__,
+                    attempt,
+                    _AK_MAX_RETRIES,
                 )
         if attempt < _AK_MAX_RETRIES:
             time.sleep(_AK_RETRY_DELAY * attempt)  # 线性退避
     logger.error(
-        "AKShare 调用全部失败 (%d 次): %s", _AK_MAX_RETRIES,
+        "AKShare 调用全部失败 (%d 次): %s",
+        _AK_MAX_RETRIES,
         getattr(func, "__name__", str(func)),
     )
     return None

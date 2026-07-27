@@ -82,7 +82,13 @@ async def main():
         await page.screenshot(path=f"{SS}/reg_06_after_enter.png")
 
         body = await page.inner_text("body")
-        if "API Key" in body or "DeepSeek" in body or "配置" in body or "贵州茅台" in body or "分析" in body:
+        if (
+            "API Key" in body
+            or "DeepSeek" in body
+            or "配置" in body
+            or "贵州茅台" in body
+            or "分析" in body
+        ):
             print("  [PASS] API key prompt shown OR analysis started (key configured)")
         else:
             print(f"  [WARN] Unexpected state - body snippet: {body[:300]}")

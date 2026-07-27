@@ -28,7 +28,7 @@ def test_user_reported_example():
     """用户报告的原始 DSML 泄漏文本（空参数 invoke）。"""
     text = (
         f"<{BAR}{BAR}DSML{BAR}{BAR}tool_calls> "
-        f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"search_stock\"> "
+        f'<{BAR}{BAR}DSML{BAR}{BAR}invoke name="search_stock"> '
         f"</{BAR}{BAR}DSML{BAR}{BAR}invoke> "
         f"</{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
     )
@@ -44,8 +44,8 @@ def test_invoke_with_parameter():
     """带 parameter 标签的 invoke。"""
     text = (
         f"<{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"search_stock\">"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}parameter name=\"query\">茅台</{BAR}{BAR}DSML{BAR}{BAR}parameter>"
+        f'<{BAR}{BAR}DSML{BAR}{BAR}invoke name="search_stock">'
+        f'<{BAR}{BAR}DSML{BAR}{BAR}parameter name="query">茅台</{BAR}{BAR}DSML{BAR}{BAR}parameter>'
         f"</{BAR}{BAR}DSML{BAR}{BAR}invoke>"
         f"</{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
     )
@@ -61,8 +61,8 @@ def test_mixed_text_preserves_non_dsml():
     text = (
         "我先搜索一下。"
         f"<{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"search_stock\">"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}parameter name=\"query\">茅台</{BAR}{BAR}DSML{BAR}{BAR}parameter>"
+        f'<{BAR}{BAR}DSML{BAR}{BAR}invoke name="search_stock">'
+        f'<{BAR}{BAR}DSML{BAR}{BAR}parameter name="query">茅台</{BAR}{BAR}DSML{BAR}{BAR}parameter>'
         f"</{BAR}{BAR}DSML{BAR}{BAR}invoke>"
         f"</{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
     )
@@ -76,7 +76,7 @@ def test_mixed_text_preserves_non_dsml():
 
 def test_lowercase_dsml_with_math_bar_variant():
     """小写 dsml + 数学双竖线 ‖(U+2016) 变体也应识别。"""
-    text = f"<{DBL}dsml{DBL}invoke name=\"web_search\"></{DBL}dsml{DBL}invoke>"
+    text = f'<{DBL}dsml{DBL}invoke name="web_search"></{DBL}dsml{DBL}invoke>'
     calls, cleaned = _parse_dsml_from_text(text)
     assert len(calls) == 1
     assert calls[0].name == "web_search"
@@ -87,11 +87,11 @@ def test_multiple_invokes():
     """多个 invoke 应全部解析。"""
     text = (
         f"<{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"search_stock\">"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}parameter name=\"query\">茅台</{BAR}{BAR}DSML{BAR}{BAR}parameter>"
+        f'<{BAR}{BAR}DSML{BAR}{BAR}invoke name="search_stock">'
+        f'<{BAR}{BAR}DSML{BAR}{BAR}parameter name="query">茅台</{BAR}{BAR}DSML{BAR}{BAR}parameter>'
         f"</{BAR}{BAR}DSML{BAR}{BAR}invoke>"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"web_search\">"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}parameter name=\"query\">白酒板块</{BAR}{BAR}DSML{BAR}{BAR}parameter>"
+        f'<{BAR}{BAR}DSML{BAR}{BAR}invoke name="web_search">'
+        f'<{BAR}{BAR}DSML{BAR}{BAR}parameter name="query">白酒板块</{BAR}{BAR}DSML{BAR}{BAR}parameter>'
         f"</{BAR}{BAR}DSML{BAR}{BAR}invoke>"
         f"</{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
     )
@@ -107,6 +107,7 @@ def test_multiple_invokes():
 # ───────────────────────────────────────────────
 # 端到端集成测试：ReAct 循环处理 DSML 文本
 # ───────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_react_loop_parses_dsml_as_tool_call():
@@ -142,8 +143,8 @@ async def test_react_loop_parses_dsml_as_tool_call():
 
     dsml = (
         f"<{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}invoke name=\"echo\">"
-        f"<{BAR}{BAR}DSML{BAR}{BAR}parameter name=\"text\">hello</{BAR}{BAR}DSML{BAR}{BAR}parameter>"
+        f'<{BAR}{BAR}DSML{BAR}{BAR}invoke name="echo">'
+        f'<{BAR}{BAR}DSML{BAR}{BAR}parameter name="text">hello</{BAR}{BAR}DSML{BAR}{BAR}parameter>'
         f"</{BAR}{BAR}DSML{BAR}{BAR}invoke>"
         f"</{BAR}{BAR}DSML{BAR}{BAR}tool_calls>"
     )
@@ -177,4 +178,3 @@ async def test_react_loop_parses_dsml_as_tool_call():
         content = e.content or ""
         assert "DSML" not in content, f"DSML 标记泄漏到事件: {e.event_type} = {content!r}"
         assert BAR not in content, f"DSML 竖线泄漏到事件: {e.event_type} = {content!r}"
-

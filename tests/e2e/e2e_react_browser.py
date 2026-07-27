@@ -28,6 +28,7 @@ import uvicorn  # noqa: E402
 from playwright.sync_api import Error as PlaywrightError, sync_playwright  # noqa: E402
 
 from finance_agent.api import app  # noqa: E402
+import contextlib
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = REPO_ROOT / "frontend"
@@ -179,10 +180,8 @@ def _run_playwright(api_key: str) -> bool:
 
         if errored or not done:
             print("[FAIL] 报告未在超时内生成")
-            try:
+            with contextlib.suppress(PlaywrightError):
                 print("  页面文本:", page.locator("body").inner_text(timeout=2000)[:1500])
-            except PlaywrightError:
-                pass
             browser.close()
             return False
 

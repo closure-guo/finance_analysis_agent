@@ -146,8 +146,23 @@ REACT_SYSTEM_PROMPT = """你是一个专业的A股投研分析助手，负责理
 # （如把"热门股票"→贵州茅台并以 high confidence 返回），导致 Agent 跳过确认
 # 直接进管线。命中此类词时跳过 STEP 2c，改走 Web Search / 模糊搜索返回多候选。
 _TIME_SENSITIVE_KEYWORDS = [
-    "热门", "热点", "热股", "推荐", "今天", "今日", "最近", "最新",
-    "当下", "现在", "当前", "涨幅", "跌幅", "涨停", "跌停", "利好", "利空",
+    "热门",
+    "热点",
+    "热股",
+    "推荐",
+    "今天",
+    "今日",
+    "最近",
+    "最新",
+    "当下",
+    "现在",
+    "当前",
+    "涨幅",
+    "跌幅",
+    "涨停",
+    "跌停",
+    "利好",
+    "利空",
 ]
 
 
@@ -203,11 +218,7 @@ def search_stock_tool(query: str, api_key: str | None = None) -> dict:
     is_time_sensitive = any(kw in query for kw in _TIME_SENSITIVE_KEYWORDS)
 
     # ── STEP 2c: LLM 常识推理 ──
-    llm_result = (
-        None
-        if is_time_sensitive
-        else _search_with_llm_reasoning(query, api_key)
-    )
+    llm_result = None if is_time_sensitive else _search_with_llm_reasoning(query, api_key)
     if llm_result and llm_result.get("confidence") == "high":
         verified = _verify_stock_code(llm_result["stock_code"])
         if verified:
