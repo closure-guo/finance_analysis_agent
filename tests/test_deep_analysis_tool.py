@@ -69,10 +69,10 @@ class TestRunDeepAnalysisStreaming:
         progress_events = [e for e in events if e.event_type == ActionType.PROGRESS]
         assert len(progress_events) >= 3  # check_cache, fetch_data, compute_metrics
 
-        # 验证进度事件包含节点名
-        contents = [e.content for e in progress_events]
-        assert any("check_cache" in c for c in contents)
-        assert any("fetch_data" in c for c in contents)
+        # 验证进度事件包含节点名（通过 metadata.node 而非 content）
+        nodes = [e.metadata.get("node") for e in progress_events]
+        assert "check_cache" in nodes
+        assert "fetch_data" in nodes
 
     @pytest.mark.asyncio
     async def test_final_event_has_tool_result_with_report(self):
