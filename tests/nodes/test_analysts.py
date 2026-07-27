@@ -39,7 +39,7 @@ def _mock_llm_response() -> str:
 class TestTechnicalAnalyst:
     """Layer I 技术面分析师 Agent 测试。"""
 
-    @patch("finance_agent.nodes.analysts.call_llm")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
     def test_produces_analyst_report(self, mock_llm):
         """技术分析师返回 AnalystReport 结构化输出。"""
         mock_llm.return_value = _mock_llm_response()
@@ -58,7 +58,7 @@ class TestTechnicalAnalyst:
         assert len(report.claims) == 1
         assert report.claims[0].stated_value == 13.0
 
-    @patch("finance_agent.nodes.analysts.call_llm")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
     def test_llm_response_with_code_block(self, mock_llm):
         """LLM 返回 markdown 代码块包裹的 JSON 也能正确解析。"""
         mock_llm.return_value = f"```json\n{_mock_llm_response()}\n```"
