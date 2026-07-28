@@ -839,7 +839,7 @@ export default function App() {
             </div>
 
             {/* Fixed input at bottom */}
-            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} locked={currentSessionId !== null} />
+            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} onNewAnalysis={newAnalysis} />
           </>
         )}
       </div>
@@ -1217,8 +1217,10 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
+            {/* Kimi 风格：思考区为统一白色时间轴容器，response 纯白底无框直接排版 */}
+            <div className="flex-1 min-w-0">
               {/* 按 agentTimeline 数组顺序渲染：每个思考片段/搜索/工具调用一个独立横幅，
+                  包在统一白色容器内用左侧竖线串联（时间轴效果），
                   反映 agent 实际执行时序（思考 -> 搜索 -> 再思考 -> 工具调用 -> ...） */}
               {msg.agentTimeline && msg.agentTimeline.length > 0 && (
                 <TimelineRenderer
@@ -1227,8 +1229,9 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
                   components={timelineBannerComponents}
                 />
               )}
+              {/* response：纯白底、无框体、无背景色，像普通文档直接排版 */}
               {msg.chatResponse ? (
-                <div className="prose prose-sm max-w-none" style={{ color: 'var(--text-secondary)' }}>
+                <div className={`prose prose-sm max-w-none px-1 py-1 response-streaming ${msg.streaming ? 'is-streaming' : ''}`} style={{ color: 'var(--text-secondary)' }}>
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
@@ -1241,12 +1244,18 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
                   >
                     {msg.chatResponse}
                   </ReactMarkdown>
+                  {/* 流式输出中：动态图标跟在 response 文字末尾（与最后段落同行） */}
+                  {msg.streaming && (
+                    <span data-testid="stream-status" className="streaming-cursor">
+                      <span className="block w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></span>
+                    </span>
+                  )}
                 </div>
               ) : null}
-              {msg.streaming && (
-                <div data-testid="stream-status" className="mt-2 flex items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              {/* 思考阶段（尚无 response）：动态图标单独显示，无文字 */}
+              {msg.streaming && !msg.chatResponse && (
+                <div data-testid="stream-status" className="mt-2 flex items-center">
                   <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-                  <span>思考中...</span>
                 </div>
               )}
             </div>
@@ -1270,12 +1279,14 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
 // ── Thinking Banner (Kimi-style collapsible reasoning) ──
 // 思考横幅：统一快速模式与深度模式澄清阶段的思考流式展示。
 // 思考中显示"思考中"并自动展开；完成后按横幅展开/折叠状态与是否有标题分别展示。
-export function ThinkingBanner({ content, streaming, title }: { content: string; streaming: boolean; title?: string }) {
+// embedded=true 时嵌入 TimelineRenderer 统一白色容器：去掉自身灰底框与外边距，融入时间轴。
+export function ThinkingBanner({ content, streaming, title, embedded = false }: { content: string; streaming: boolean; title?: string; embedded?: boolean }) {
   const [expanded, setExpanded] = useState(true)
   const contentRef = useRef<HTMLDivElement>(null)
 
+  // 流式时展开（实时看思考过程），完成后自动折叠（与 Kimi 一致）
   useEffect(() => {
-    if (streaming) setExpanded(true)
+    setExpanded(streaming)
   }, [streaming])
 
   useEffect(() => {
@@ -1292,13 +1303,13 @@ export function ThinkingBanner({ content, streaming, title }: { content: string;
       : (title || '思考已完成')
 
   return (
-    <div className="mb-3">
+    <div className={embedded ? '' : 'mb-3'}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
-        style={{ background: 'var(--bg-overlay-l1)' }}
+        style={{ background: embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}
         onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
-        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
+        onMouseLeave={(e) => {e.currentTarget.style.background = embedded ? 'transparent' : 'var(--bg-overlay-l1)'}}
       >
         {streaming ? (
           <span className="relative flex h-2 w-2 flex-shrink-0">
@@ -1320,7 +1331,10 @@ export function ThinkingBanner({ content, streaming, title }: { content: string;
         <div
           ref={contentRef}
           className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg"
-          style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
+          style={embedded
+            ? { background: 'transparent', borderLeft: '2px solid var(--border-neutral-l1)', borderRadius: 0, marginLeft: '12px' }
+            : { background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }
+          }
         >
           {/* 有标题时标题加粗置顶 */}
           {!streaming && title && (
@@ -1337,7 +1351,8 @@ export function ThinkingBanner({ content, streaming, title }: { content: string;
 }
 
 // ── Tool Call Banner (工具调用，与思考过程分离展示) ──
-export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEntry[]; streaming: boolean }) {
+// embedded=true 时嵌入 TimelineRenderer 统一白色容器：去掉自身灰底框与外边距，融入时间轴。
+export function ToolCallBanner({ toolCalls, streaming, embedded = false }: { toolCalls: ToolCallEntry[]; streaming: boolean; embedded?: boolean }) {
   const [expanded, setExpanded] = useState(true)
   const pendingCount = toolCalls.filter(t => !t.done).length
   const prevStreamingRef = useRef(streaming)
@@ -1350,13 +1365,13 @@ export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEn
   const isJustFinished = !streaming && prevStreamingRef.current
 
   return (
-    <div className="mb-3">
+    <div className={embedded ? '' : 'mb-3'}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
-        style={{ background: 'var(--bg-overlay-l1)' }}
+        style={{ background: embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}
         onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
-        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
+        onMouseLeave={(e) => {e.currentTarget.style.background = embedded ? 'transparent' : 'var(--bg-overlay-l1)'}}
       >
         {streaming && pendingCount > 0 ? (
           <span className="relative flex h-2 w-2 flex-shrink-0">
@@ -1378,7 +1393,10 @@ export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEn
       >
         <div
           className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg flex flex-col gap-2"
-          style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
+          style={embedded
+            ? { background: 'transparent', borderLeft: '2px solid var(--border-neutral-l1)', borderRadius: 0, marginLeft: '12px' }
+            : { background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }
+          }
         >
           {toolCalls.map((tc, i) => (
             <div key={i} className="text-xs leading-relaxed break-words">
@@ -1821,8 +1839,9 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend, leftInset, mode, setMode, locked }: { onSend: (text: string) => void; leftInset: number; mode: 'quick' | 'deep'; setMode: (m: 'quick' | 'deep') => void; locked: boolean }) {
+function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis }: { onSend: (text: string) => void; leftInset: number; mode: 'quick' | 'deep'; setMode: (m: 'quick' | 'deep') => void; onNewAnalysis: () => void }) {
   const [text, setText] = useState('')
+  const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
 
   const handleKeydown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1832,6 +1851,20 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, locked }: { onSend: (t
     }
   }
 
+  const modes = [
+    { id: 'quick' as const, label: '快速模式', icon: 'fa-bolt', color: 'text-[var(--status-warning-default)]', desc: '单次 LLM + Web Search，秒级响应' },
+    { id: 'deep' as const, label: '深度研究', icon: 'fa-layer-group', color: 'text-[var(--text-brand)]', desc: '5 层 Agent 流水线，2-5 分钟完整报告' },
+  ]
+  const currentMode = modes.find(m => m.id === mode)!
+
+  // 会话中切换模式：更新模式并直接开启新会话
+  const handleModeSelect = (m: 'quick' | 'deep') => {
+    setModeDropdownOpen(false)
+    if (m === mode) return
+    setMode(m)
+    onNewAnalysis()
+  }
+
   return (
     <div
       className="fixed bottom-0 right-0 z-40 px-4 pb-4 pt-2"
@@ -1839,36 +1872,41 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, locked }: { onSend: (t
     >
       <div className="max-w-3xl mx-auto">
         <div className="glass-input rounded-2xl p-2">
-          {/* Mode switcher */}
-          <div className="flex items-center gap-1 px-1 pb-1" title={locked ? '当前会话模式已锁定，新建分析可切换' : ''}>
+          {/* Mode switcher：下拉框，会话中切换模式直接开启新会话 */}
+          <div className="relative flex items-center gap-1 px-1 pb-1">
             <button
-              onClick={() => !locked && setMode('deep')}
-              disabled={locked}
-              className="px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors"
-              style={{
-                ...(mode === 'deep'
-                  ? { background: 'var(--bg-brand-popup)', color: 'var(--bg-brand)' }
-                  : { color: 'var(--text-tertiary)' }),
-                ...(locked ? { opacity: 0.55, cursor: 'not-allowed' } : {}),
-              }}
+              onClick={() => setModeDropdownOpen(!modeDropdownOpen)}
+              className="flex items-center gap-1.5 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
             >
-              <i className="fas fa-layer-group text-[10px] mr-1"></i>深度研究
+              <i className={`fas ${currentMode.icon} ${currentMode.color} text-[10px]`}></i>
+              <span className={currentMode.color}>{currentMode.label}</span>
+              <i className={`fas fa-chevron-${modeDropdownOpen ? 'down' : 'up'} text-[8px] ml-0.5`} style={{ color: 'var(--text-tertiary)' }}></i>
             </button>
-            <button
-              onClick={() => !locked && setMode('quick')}
-              disabled={locked}
-              className="px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors"
-              style={{
-                ...(mode === 'quick'
-                  ? { background: 'var(--bg-brand-popup)', color: 'var(--bg-brand)' }
-                  : { color: 'var(--text-tertiary)' }),
-                ...(locked ? { opacity: 0.55, cursor: 'not-allowed' } : {}),
-              }}
-            >
-              <i className="fas fa-bolt text-[10px] mr-1"></i>快速对话
-            </button>
-            {locked && (
-              <i className="fas fa-lock text-[9px] ml-1" style={{ color: 'var(--text-tertiary)' }} title="会话模式已锁定"></i>
+            {modeDropdownOpen && (
+              <div className="absolute left-1 bottom-8 z-[70] w-72 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
+                {modes.map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => handleModeSelect(m.id)}
+                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors"
+                    style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                    onMouseEnter={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+                    onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-xs font-medium ${mode === m.id ? m.color : ''}`} style={mode !== m.id ? { color: 'var(--text-secondary)' } : {}}>
+                        {m.label}
+                        {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
+                      </div>
+                      <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{m.desc}</div>
+                    </div>
+                    {mode !== m.id && (
+                      <span className="text-[10px] mt-0.5 flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>新会话</span>
+                    )}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
           <div className="flex items-end gap-2">

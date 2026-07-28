@@ -8,10 +8,12 @@ interface SearchResult {
 }
 
 // SearchBanner 组件支持三态：搜索中 / 完成 / 失败
+// embedded=true 时嵌入 TimelineRenderer 统一白色容器：去掉自身灰底框与外边距，融入时间轴。
 interface SearchBannerProps {
   status: 'searching' | 'done' | 'error'
   query?: string
   results?: SearchResult[]
+  embedded?: boolean
 }
 
 // 从 URL 提取域名
@@ -33,14 +35,14 @@ function getFavicon(url: string): string {
   }
 }
 
-export function SearchBanner({ status, query, results = [] }: SearchBannerProps) {
+export function SearchBanner({ status, query, results = [], embedded = false }: SearchBannerProps) {
   const [expanded, setExpanded] = useState(false)
 
   // 搜索中：脉冲动画 + "正在搜索：{query}"
   if (status === 'searching') {
     return (
-      <div className="mb-3">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-overlay-l1)' }}>
+      <div className={embedded ? '' : 'mb-3'}>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}>
           <span className="relative flex h-2 w-2 flex-shrink-0">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
             <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
@@ -57,8 +59,8 @@ export function SearchBanner({ status, query, results = [] }: SearchBannerProps)
   // 搜索失败
   if (status === 'error') {
     return (
-      <div className="mb-3">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-overlay-l1)' }}>
+      <div className={embedded ? '' : 'mb-3'}>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}>
           <i className="fas fa-exclamation-circle text-xs flex-shrink-0" style={{ color: 'var(--status-error-default)' }}></i>
           <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>搜索失败</span>
         </div>
@@ -68,13 +70,13 @@ export function SearchBanner({ status, query, results = [] }: SearchBannerProps)
 
   // 搜索完成：可折叠的结果列表
   return (
-    <div className="mb-3">
+    <div className={embedded ? '' : 'mb-3'}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
-        style={{ background: 'var(--bg-overlay-l1)' }}
+        style={{ background: embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}
         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l2)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}
       >
         <i className="fas fa-search text-xs flex-shrink-0" style={{ color: 'var(--status-success-default)' }}></i>
         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>

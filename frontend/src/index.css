@@ -106,6 +106,7 @@ input:focus, textarea:focus { outline: none; }
   border-radius: 18px 18px 6px 18px;
 }
 .msg-system {
+  /* error/system/pipeline/typing 消息保留灰底边框；chat response 区不引用此类（Kimi 白底无框） */
   background: var(--bg-base-secondary);
   border: 1px solid var(--border-neutral-l1);
   border-radius: 18px 18px 18px 6px;
@@ -114,6 +115,11 @@ input:focus, textarea:focus { outline: none; }
 /* Expandable sections */
 .expand-content { max-height: 0; overflow: hidden; transition: max-height 0.4s ease-out, opacity 0.3s ease; opacity: 0; }
 .expand-content.open { max-height: 2000px; opacity: 1; }
+
+/* 流式 response：动态图标跟在文字末尾（与最后块级元素同行） */
+/* ReactMarkdown 渲染的最后一个块级元素（cursor 的前一个兄弟）转为 inline，图标即可跟在末尾 */
+.response-streaming.is-streaming .streaming-cursor { display: inline-block; vertical-align: middle; margin-left: 4px; }
+.response-streaming.is-streaming > :nth-last-child(2) { display: inline; }
 
 /* Chips */
 .chip { transition: all 0.2s ease; cursor: pointer; }
