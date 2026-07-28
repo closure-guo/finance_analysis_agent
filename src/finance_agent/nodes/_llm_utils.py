@@ -166,6 +166,16 @@ def call_llm_streaming(
                     "token": f"[STUB] {node_name or 'unknown'} 正在分析（确定性测试数据）\n",
                 }
             )
+        # stub 管线默认瞬时推进，CI 等快环境下 node 分组标题（流式中间态）
+        # 一闪即逝导致 E2E 抓不到。加可配置的节点延迟，让分组标题在屏幕上
+        # 停留足够窗口（report_ready 后管线卡隐藏、分组消失）。
+        # 默认 0.4s；可用 STUB_NODE_DELAY 覆盖（0 表示不延迟）。
+        import os
+        import time
+
+        delay = float(os.getenv("STUB_NODE_DELAY", "0.4"))
+        if delay > 0:
+            time.sleep(delay)
         return _stub_pipeline_answer(node_name)
 
     answer_parts: list[str] = []
