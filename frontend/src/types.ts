@@ -308,6 +308,8 @@ export interface UIMessage {
   progress?: number
   // 管线启动时间戳（ms epoch），用于 ETA 已用时长计算
   startedAt?: number
+  // 分层时间轴状态树（redesign delta）：node_start/node_complete 驱动的 6 层→子节点状态
+  layerTree?: import('./pipelineTree').LayerNode[]
   // Report-specific
   reportMarkdown?: string
   chartData?: ChartData

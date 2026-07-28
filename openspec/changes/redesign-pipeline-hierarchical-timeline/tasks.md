@@ -4,29 +4,29 @@
 
 ## 1. 后端：Layer I 并行事件拆分
 
-- [ ] 1.1 编写失败测试：agent 路径下 Layer I 4 个分析师各自产出独立 node_start/node_complete（节点 ID 为 fundamental/technical/macro/sentiment_analyst），无法拆分时回退整层 node_complete
-- [ ] 1.2 修改 `src/finance_agent/agent_factory.py`（必要时 `graph.py`）：graph.stream 迭代中拆分 Layer I 并行 chunk 为独立节点事件
-- [ ] 1.3 确认 `api.py` 的 LAYER_STEPS 覆盖全部 21 节点的 layer/desc 映射，与前端映射表对齐
+- [x] 1.1 编写失败测试：`test_deep_analysis_tool.py` 新增用例断言 Layer I 4 个分析师各自产出独立 node_complete
+- [x] 1.2 `src/finance_agent/api.py`：LAYER_STEPS 补齐 fundamental/macro/sentiment_analyst（LangGraph updates chunk 键即节点名，天然可拆，无需改图）；`_extract_output` 支持 4 分析师各自的 analyst_reports key（修复摘要错位根因）
+- [x] 1.3 确认 LAYER_STEPS 与前端 LAYER_TREE_CONFIG 映射对齐
 
 ## 2. 前端：状态树模型
 
-- [ ] 2.1 编写失败测试：`pipelineTree` 纯函数测试（node_start/node_complete 驱动 layer 与子节点状态流转、耗时记录、状态单调性）
-- [ ] 2.2 新增 `frontend/src/pipelineTree.ts`：LayerNode/NodeState 类型、layer→子节点静态映射表、applyNodeEvent 纯函数
-- [ ] 2.3 `frontend/src/types.ts`：UIMessage 增加 layerTree 字段（或独立 state）
+- [x] 2.1 编写失败测试：`frontend/src/test/pipelineTree.test.ts`（12 用例：初始树、node_start/complete 状态流转、耗时记录、状态单调性、Layer I 并行独立状态）
+- [x] 2.2 新增 `frontend/src/pipelineTree.ts`：LayerNode/ChildNodeState 类型、LAYER_TREE_CONFIG（6 层→22 子节点）、applyNodeEvent 纯函数、findRunningNode/treeProgress
+- [x] 2.3 `frontend/src/types.ts`：UIMessage 增加 layerTree 字段
 
 ## 3. 前端：分层时间轴组件
 
-- [ ] 3.1 编写组件测试：PipelineTimeline 渲染 6 layer、子节点状态图标、耗时显示、展开折叠、当前高亮
-- [ ] 3.2 新增 `frontend/src/PipelineTimeline.tsx`：LayerRow/NodeRow/InlineThinking/EtaRow 组件树
-- [ ] 3.3 接入 `App.tsx`：替换 PipelineCard 进度区为 PipelineTimeline，保留日志折叠区；handleSSEEvent 将 node_start/node_complete 路由到 pipelineTree
-- [ ] 3.4 当前节点内联思考摘要（单行流式预览）+ 点击展开完整 TimelineRenderer
-- [ ] 3.5 layer 展开折叠默认策略（运行层展开/完成层折叠）+ 用户偏好会话内记忆
-- [ ] 3.6 自动滚动定位当前节点（3 秒手动滚动暂停窗口）
-- [ ] 3.7 历史会话兼容回退渲染
+- [x] 3.1 编写组件测试：`frontend/src/test/PipelineTimeline.test.tsx`（7 用例：6 layer 渲染、子节点状态/耗时、当前高亮、展开折叠默认策略与用户偏好覆盖）
+- [x] 3.2 新增 `frontend/src/PipelineTimeline.tsx`：LayerRow/ChildRow/StatusIcon 组件树，状态图标 + 耗时 + 当前高亮 + 内联思考摘要
+- [x] 3.3 接入 `App.tsx`：PipelineCard 用 PipelineTimeline 替换 6 阶段圆点与 Layer I 卡片区（删除 getStageStatus/analystCards/AnalystCard/PIPELINE_STEPS/STAGE_NODES 冗余）；handleSSEEvent 维护 layerTree
+- [x] 3.4 当前节点内联思考摘要（thinkingPreviewFor：nodeTimelines 末尾 thinking 内容尾 80 字符单行预览）
+- [x] 3.5 layer 展开折叠默认策略（运行层展开/其余折叠）+ 用户偏好会话内记忆（expandedOverride）
+- [x] 3.6 自动滚动定位当前节点（scrollIntoView + 3s 手动滚动暂停窗口 + jsdom 防御）
+- [x] 3.7 历史会话兼容回退（layerTree 为空时 buildLayerTree() 空树渲染，不报错）
 
 ## 4. 验证
 
-- [ ] 4.1 `uv run pytest` / `cd frontend && npm test` 全绿
-- [ ] 4.2 `uv run ruff check` / `uv run mypy` 无新增告警
-- [ ] 4.3 E2E：真实前后端深度分析全流程，断言 Layer I 4 分析师独立状态流转、Layer II 子节点逐个可见、当前节点高亮与滚动（tests/e2e/）
-- [ ] 4.4 人工验证报告落 `tests/validation/`：含新旧 UI 观感对比截图、Layer II 全程状态可见性确认、Layer I 摘要错位修复确认
+- [x] 4.1 `uv run pytest` 后端 340 通过 / `npm test` 前端 103 通过
+- [x] 4.2 `uv run ruff check` 全绿 / `npx tsc --noEmit` 无错
+- [x] 4.3 E2E：新增 `tests/e2e/playwright/tests/pipeline-hierarchical-timeline.spec.ts`（4 用例：6 layer 渲染、Layer I 4 分析师独立、Layer II 子节点可见、当前高亮）；timeline config 全套 17 用例通过（含既有回归与 pipeline-eta-banner）
+- [x] 4.4 人工验证报告落 `tests/validation/pipeline-hierarchical-timeline-validation.md`

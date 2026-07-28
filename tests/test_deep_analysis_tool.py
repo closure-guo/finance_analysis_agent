@@ -194,6 +194,39 @@ class TestRunDeepAnalysisStreaming:
         assert len(starts) == 1
 
     @pytest.mark.asyncio
+    async def test_layer1_parallel_analysts_emit_independent_events(self):
+        """Layer I 4 个并行分析师各自产出独立 node_start/node_complete（redesign delta task 1.1）。"""
+        chunks = [
+            _make_node_chunk("technical_analyst", summary="技术面"),
+            _make_node_chunk("fundamental_analyst", summary="基本面"),
+            _make_node_chunk("macro_analyst", summary="宏观"),
+            _make_node_chunk("sentiment_analyst", summary="舆情"),
+            _make_final_chunk(report="# 报告", chart_data={}, analyst_reports={}),
+        ]
+        fake_graph = FakeGraph(chunks)
+
+        with patch("finance_agent.graph.build_5layer_graph", return_value=fake_graph):
+            tool_fn = _make_run_deep_analysis(api_key="test")
+            events = []
+            async for event in tool_fn(stock_code="600519"):
+                events.append(event)
+
+        progress_events = [e for e in events if e.event_type == ActionType.PROGRESS]
+        complete_nodes = [
+            e.metadata.get("node")
+            for e in progress_events
+            if e.metadata.get("sse_type") == "node_complete"
+        ]
+        # 4 个分析师各自有独立 node_complete
+        for analyst in (
+            "technical_analyst",
+            "fundamental_analyst",
+            "macro_analyst",
+            "sentiment_analyst",
+        ):
+            assert analyst in complete_nodes, f"{analyst} 缺少独立 node_complete"
+
+    @pytest.mark.asyncio
     async def test_closure_params_injected_into_graph_input(self):
         """闭包参数（analysis_type, peer_codes, enable_web_search）注入到 graph 初始状态。"""
         chunks = [_make_final_chunk(report="# 报告", chart_data={}, analyst_reports={})]

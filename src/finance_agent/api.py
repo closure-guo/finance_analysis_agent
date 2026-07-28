@@ -69,7 +69,10 @@ LAYER_STEPS: list[dict] = [
     {"node": "fetch_data", "layer": "PREP", "desc": "获取财务数据", "icon": "download"},
     {"node": "validate_financials", "layer": "PREP", "desc": "勾稽校验", "icon": "check-double"},
     {"node": "compute_metrics", "layer": "PREP", "desc": "指标计算", "icon": "calculator"},
+    {"node": "fundamental_analyst", "layer": "Layer I", "desc": "基本面分析", "icon": "chart-line"},
     {"node": "technical_analyst", "layer": "Layer I", "desc": "技术面分析", "icon": "chart-line"},
+    {"node": "macro_analyst", "layer": "Layer I", "desc": "宏观分析", "icon": "globe"},
+    {"node": "sentiment_analyst", "layer": "Layer I", "desc": "舆情分析", "icon": "comments"},
     {"node": "verify_citations", "layer": "校验", "desc": "引用校验", "icon": "shield-alt"},
     {"node": "bull_r1", "layer": "Layer II", "desc": "看多辩论 R1", "icon": "arrow-up"},
     {"node": "bear_r1", "layer": "Layer II", "desc": "看空辩论 R1", "icon": "arrow-down"},
@@ -339,9 +342,16 @@ def _extract_output(node_name: str, update: dict, accumulated: dict) -> dict:
     """Extract structured output from a node update for the frontend."""
     output: dict[str, Any] = {}
 
-    if node_name in ("technical_analyst",):
+    if node_name in (
+        "technical_analyst",
+        "fundamental_analyst",
+        "macro_analyst",
+        "sentiment_analyst",
+    ):
+        # 4 个并行分析师各自写 analyst_reports 的不同 key（technical/fundamental/macro/sentiment）
         reports = accumulated.get("analyst_reports") or {}
-        report = reports.get("technical") or reports.get(node_name)
+        key = node_name.replace("_analyst", "")
+        report = reports.get(key) or reports.get(node_name)
         if report:
             if hasattr(report, "model_dump"):
                 output = report.model_dump()

@@ -15,8 +15,9 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './tests',
   // 运行时间序列专用 spec（快速/深度/历史恢复三个场景）
-  // + 管线分组（thinking-timeline-pipeline）与 ETA/横幅（pipeline-eta-banner）spec
-  testMatch: ['thinking-timeline*.spec.ts', 'pipeline-eta-banner.spec.ts'],
+  // + 管线分组（thinking-timeline-pipeline）、ETA/横幅（pipeline-eta-banner）
+  // 与分层时间轴（pipeline-hierarchical-timeline）spec
+  testMatch: ['thinking-timeline*.spec.ts', 'pipeline-eta-banner.spec.ts', 'pipeline-hierarchical-timeline.spec.ts'],
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,

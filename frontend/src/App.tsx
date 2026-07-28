@@ -6,6 +6,8 @@ import { ChartsSection } from './Charts'
 import { SearchBanner } from './SearchBanner'
 import { applyChatStreamEvent, applyPipelineThinkingToken, applyPipelineNodeComplete, buildTimelineFromHistory, nodeDisplayName } from './timeline'
 import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations, recordDuration } from './eta'
+import { buildLayerTree, applyNodeEvent } from './pipelineTree'
+import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 
 // 搜索类工具集合：这类工具的状态与结果由独立搜索横幅（SearchBanner）承载，
@@ -27,18 +29,7 @@ export function extractThinkingTitle(content: string): string | undefined {
   return match ? match[1] : undefined
 }
 
-// ── Pipeline steps (mirrors backend LAYER_STEPS) ──
-const PIPELINE_STEPS: PipelineStep[] = [
-  { node: 'check_cache', layer: 'PREP', desc: 'PREP', icon: 'database' },
-  { node: 'technical_analyst', layer: 'Layer I', desc: 'Layer I', icon: 'users' },
-  { node: 'bull_r1', layer: 'Layer II', desc: 'Layer II', icon: 'comments' },
-  { node: 'trader', layer: 'Layer III', desc: 'Trader', icon: 'hand-holding-usd' },
-  { node: 'aggressive_r1', layer: 'Layer IV', desc: 'Risk', icon: 'shield-alt' },
-  { node: 'fund_manager', layer: 'Layer V', desc: 'Fund', icon: 'user-tie' },
-]
-
-// 6-stage pipeline display nodes (one per layer)
-const STAGE_NODES = ['check_cache', 'technical_analyst', 'bull_r1', 'trader', 'aggressive_r1', 'fund_manager']
+// ── Pipeline steps 定义已迁移至 pipelineTree.LAYER_TREE_CONFIG（分层时间轴）──
 
 let msgIdCounter = 0
 const genId = () => `msg-${++msgIdCounter}`
@@ -533,6 +524,7 @@ export default function App() {
         updateMessage(pipelineMsg.id, {
           currentNode: event.node_id,
           content: `${event.layer}: ${event.desc}...`,
+          layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
         })
         break
 
@@ -546,6 +538,7 @@ export default function App() {
             ...(pipelineMsg.nodeOutputs || {}),
             [event.node_id]: event.output,
           },
+          layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
           content: `${event.layer}: ${event.desc} ✓`,
         })
         break
@@ -1469,66 +1462,16 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
     ? `总耗时 ${formatDurationMs(elapsedMs)}`
     : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
 
-  // Determine stage status
-  const getStageStatus = (node: string) => {
-    // Check if this stage or any node in the same layer is completed
-    const layerMap: Record<string, string[]> = {
-      'check_cache': ['check_cache', 'fetch_data', 'validate_financials', 'compute_metrics'],
-      'technical_analyst': ['technical_analyst', 'verify_citations'],
-      'bull_r1': ['bull_r1', 'bear_r1', 'bull_r2', 'bear_r2', 'research_manager'],
-      'trader': ['trader'],
-      'aggressive_r1': ['aggressive_r1', 'conservative_r1', 'neutral_r1', 'aggressive_r2', 'conservative_r2', 'neutral_r2', 'risk_judge'],
-      'fund_manager': ['fund_manager', 'generate_report', 'generate_file'],
-    }
-    const layerNodes = layerMap[node] || [node]
-    const allDone = layerNodes.every(n => completed.includes(n))
-    const anyRunning = layerNodes.some(n => n === current)
-    if (allDone) return 'completed'
-    if (anyRunning) return 'running'
-    // Check if any earlier stage is still running
-    const stageIdx = STAGE_NODES.indexOf(node)
-    if (stageIdx > 0) {
-      const prevStatus = getStageStatus(STAGE_NODES[stageIdx - 1])
-      if (prevStatus === 'completed') return 'running'  // Next stage should be running
-    }
-    return 'pending'
-  }
+  // 分层时间轴状态树（无事件数据的历史会话回退为空树，PipelineTimeline 空渲染）
+  const layerTree = msg.layerTree ?? buildLayerTree()
 
-  // 阶段→子节点映射（与 getStageStatus 的 layerMap 一致），用于节点级计时定位
-  const stageLayerMap: Record<string, string[]> = {
-    'check_cache': ['check_cache', 'fetch_data', 'validate_financials', 'compute_metrics'],
-    'technical_analyst': ['technical_analyst', 'verify_citations'],
-    'bull_r1': ['bull_r1', 'bear_r1', 'bull_r2', 'bear_r2', 'research_manager'],
-    'trader': ['trader'],
-    'aggressive_r1': ['aggressive_r1', 'conservative_r1', 'neutral_r1', 'aggressive_r2', 'conservative_r2', 'neutral_r2', 'risk_judge'],
-    'fund_manager': ['fund_manager', 'generate_report', 'generate_file'],
-  }
-  // 当前 running 节点的已运行时长：node_start 到达时前端尚无独立时间戳，
-  // 用"该阶段首个未完成的子节点"近似——currentNode 即 running 节点本身
-  const runningNodeElapsed = current && msg.startedAt ? elapsedMs : 0
-  const nodeElapsedFor = (stageNode: string): number | null => {
-    if (!current) return null
-    const nodes = stageLayerMap[stageNode] || [stageNode]
-    return nodes.includes(current) ? runningNodeElapsed : null
-  }
-
-  // Get analyst cards from outputs
-  const analystOutput = outputs['technical_analyst']
-  const analystCards = [
-    { name: 'Fundamental', nameZh: '基本面', summary: '分析中...', status: 'pending', color: 'green' as const },
-    { name: 'Technical', nameZh: '技术面', summary: '分析中...', status: 'pending', color: 'yellow' as const },
-    { name: 'Macro', nameZh: '宏观', summary: '分析中...', status: 'pending', color: 'green' as const },
-    { name: 'Sentiment', nameZh: '舆情', summary: '等待中...', status: 'pending', color: 'neutral' as const },
-  ]
-
-  // Update analyst cards based on completed nodes
-  if (completed.includes('technical_analyst')) {
-    analystCards[0] = { name: 'Fundamental', nameZh: '基本面', summary: analystOutput?.summary || '基本面分析完成', status: 'completed', color: 'green' }
-    analystCards[1] = { name: 'Technical', nameZh: '技术面', summary: analystOutput?.summary || '技术面分析完成', status: 'completed', color: 'yellow' }
-    analystCards[2] = { name: 'Macro', nameZh: '宏观', summary: '宏观分析完成', status: 'completed', color: 'green' }
-    analystCards[3] = { name: 'Sentiment', nameZh: '舆情', summary: '舆情分析完成', status: 'completed', color: 'green' }
-  } else if (current === 'technical_analyst') {
-    analystCards.forEach(c => { c.status = 'running'; c.summary = '分析中...' })
+  // 当前运行节点的实时思考单行预览（从 nodeTimelines 提取末尾 thinking 内容尾 80 字符）
+  const thinkingPreviewFor = (nodeId: string): string | undefined => {
+    const items = msg.nodeTimelines?.[nodeId]
+    if (!items || items.length === 0) return undefined
+    const last = items[items.length - 1]
+    if (last.type !== 'thinking' || !last.content) return undefined
+    return last.content.slice(-80)
   }
 
   return (
@@ -1548,7 +1491,7 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                 </div>
                 <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
               </div>
-              <div className="flex items-center gap-1 mb-4">
+              <div className="flex items-center gap-1 mb-2">
                 <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-overlay-l1)' }}>
                   <div
                     className="h-full rounded-full transition-all duration-1000"
@@ -1556,36 +1499,8 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                   />
                 </div>
               </div>
-              {/* Pipeline Nodes */}
-              <div className="flex justify-between px-1">
-                {PIPELINE_STEPS.map((step, i) => {
-                  const status = getStageStatus(step.node)
-                  return (
-                    <div key={step.node} className="flex items-center" style={{ flex: i < PIPELINE_STEPS.length - 1 ? '1' : 'none' }}>
-                      <div className="flex flex-col items-center gap-1">
-                        <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center node-${status} ${status === 'running' ? 'pulse-ring' : ''}`}
-                          style={status === 'running' ? { borderColor: 'var(--status-primary-default)', background: 'var(--bg-brand-popup)' } : status === 'completed' ? { borderColor: 'var(--status-success-default)', background: 'rgba(16, 185, 129, 0.15)' } : { borderColor: 'var(--border-neutral-l2)' }}>
-                          <i className={`fas fa-${step.icon} text-xs`}></i>
-                        </div>
-                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{step.desc}</span>
-                        {(() => {
-                          const nodeElapsed = nodeElapsedFor(step.node)
-                          return nodeElapsed !== null ? (
-                            <span className="text-[10px] font-mono" style={{ color: 'var(--status-warning-default)' }}>
-                              {formatDurationMs(nodeElapsed)}
-                            </span>
-                          ) : null
-                        })()}
-                      </div>
-                      {i < PIPELINE_STEPS.length - 1 && (
-                        <div className="flex-1 flex items-center justify-center pt-2 px-1">
-                          <div className={`w-full h-px ${status === 'completed' ? '' : ''}`} style={{ background: status === 'completed' ? 'rgba(16,185,129,0.5)' : 'var(--bg-overlay-l2)' }}></div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+              {/* 分层时间轴：6 层 layer + 可展开子节点（替换原 6 阶段圆点） */}
+              <PipelineTimeline tree={layerTree} nowMs={nowMs} thinkingPreviewFor={thinkingPreviewFor} />
             </div>
 
             {/* 各 agent 阶段的思考/工具调用时序：按 node 分组，阶段间用角色名标题分隔（非折叠框）。
@@ -1606,23 +1521,6 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                     />
                   </div>
                 ))}
-              </div>
-            )}
-
-            {/* Layer I: Analyst Cards */}
-            {(completed.includes('check_cache') || current === 'technical_analyst' || completed.includes('technical_analyst')) && (
-              <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Layer I - 并行分析师</span>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {completed.includes('technical_analyst') ? '4/4 完成' : '0/4 完成'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 pipeline-grid">
-                  {analystCards.map(card => (
-                    <AnalystCard key={card.name} {...card} />
-                  ))}
-                </div>
               </div>
             )}
 
@@ -1671,42 +1569,6 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-// ── Analyst Card ──
-function AnalystCard({ name, nameZh, summary, status, color }: {
-  name: string
-  nameZh: string
-  summary: string
-  status: string
-  color: 'green' | 'yellow' | 'red' | 'neutral'
-}) {
-  const colors = {
-    green: { border: 'rgba(16,185,129,0.3)', bg: 'rgba(16,185,129,0.08)', text: 'var(--status-success-default)' },
-    yellow: { border: 'rgba(245,158,11,0.3)', bg: 'rgba(245,158,11,0.08)', text: 'var(--status-warning-default)' },
-    red: { border: 'rgba(239,68,68,0.3)', bg: 'rgba(239,68,68,0.08)', text: 'var(--status-error-default)' },
-    neutral: { border: 'rgba(75,63,227,0.3)', bg: 'var(--bg-brand-popup)', text: 'var(--text-brand)' },
-  }
-  const c = colors[color]
-
-  const statusIcon = status === 'completed'
-    ? <i className="fas fa-check-circle" style={{ color: 'var(--status-success-default)' }}></i>
-    : status === 'running'
-    ? <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-    : <div className="w-2 h-2 rounded-full" style={{ background: 'var(--text-tertiary)' }}></div>
-
-  return (
-    <div className="border rounded-xl p-3 cursor-pointer hover:border-opacity-60 transition-all" style={{ borderColor: c.border, background: c.bg }}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium" style={{ color: c.text }}>{name}</span>
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{nameZh}</span>
-        </div>
-        {statusIcon}
-      </div>
-      <div className="text-[11px] leading-snug" style={{ color: 'var(--text-secondary)' }}>{summary}</div>
     </div>
   )
 }
