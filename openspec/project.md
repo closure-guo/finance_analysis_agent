@@ -19,7 +19,7 @@
 - `docs/adr/0001-0017` - 架构决策记录（手动维护，只增不改）
 - `docs/PRD.md` - 产品需求文档
 - `docs/incidents/` - 事故记录与解决方案
-- `docs/openspec-superpowers-实施文档.md` - OpenSpec + Superpowers 双框架实施文档
+- `docs/project-workflow.md` - OpenSpec + Superpowers 双框架实施文档
 
 ## Spec Domains
 

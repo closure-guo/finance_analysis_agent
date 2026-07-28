@@ -45,7 +45,7 @@ AI 辅助开发与测试后宣称「测试全部通过」，但开发者手动�
 
 ## 修复方案
 
-引入 SDD（Spec-Driven Development）规范体系，重构文档架构与开发流程，让行为契约成为代码与测试的共同依据。详细实施步骤见 `docs/openspec-superpowers-实施文档.md`，要点：
+引入 SDD（Spec-Driven Development）规范体系，重构文档架构与开发流程，让行为契约成为代码与测试的共同依据。详细实施步骤见 `docs/project-workflow.md`，要点：
 
 | # | 动作 | 内容 |
 |---|------|------|
@@ -68,4 +68,4 @@ AI 辅助开发与测试后宣称「测试全部通过」，但开发者手动�
 
 - [005](005-garp-dupont-test-pollution-20260604.md) 测试污染与文档漂移（同根源问题的前次局部表现）
 - [007](007-sidebar-invalid-date-20260716.md)、[008](008-deep-analysis-stuck-akshare-20260716.md) 前端/交互类 bug 的典型个案
-- `docs/openspec-superpowers-实施文档.md` 修复方案的完整实施计划
+- `docs/project-workflow.md` 修复方案的完整实施计划

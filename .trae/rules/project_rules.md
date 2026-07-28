@@ -38,7 +38,7 @@
 
 ## Workflow routing
 
-所有任务进站前先分类（详见 docs/openspec-superpowers-实施文档.md §4）：
+所有任务进站前先分类（详见 docs/project-workflow.md §4）：
 
 - **新功能** -> OpenSpec delta 提案 -> Superpowers 管线 -> 验证 -> sync + archive
 - **修 bug · 意图不变** -> 复现测试 + systematic-debugging，不触碰 openspec

@@ -16,6 +16,7 @@
   - 后端：`uv run uvicorn finance_agent.api:app --host 127.0.0.1 --port 8000 --reload`
   - 前端：`cd frontend && npm run dev`
   - 测试 `uv run pytest` ｜ Lint `uv run ruff check` ｜ 类型 `uv run mypy`
+  - 前端测试 `cd frontend && npm test`
 
   ## 任务路由（所有任务进站先分类）
 
@@ -23,7 +24,7 @@
   - **修 bug · 意图不变** → 复现测试 + superpowers:systematic-debugging，不动 openspec
   - **修 bug · 意图变更 / 行为未定义** → 同新功能流程，delta 先行
   - **重大架构决策** → 人工落 `docs/adr/`；**小改动** → 直接改
-  - 详见 `docs/workflow-handbook.md`项目工作流文档
+  - 详见 `docs/project-workflow.md`项目工作流文档
 
   ## 契约与红线
 
