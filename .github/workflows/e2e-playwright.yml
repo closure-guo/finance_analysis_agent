@@ -15,7 +15,8 @@ jobs:
   stub:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # stub 管线含节点延迟（STUB_NODE_DELAY），timeline suite 耗时增加，放宽到 15 分钟
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
