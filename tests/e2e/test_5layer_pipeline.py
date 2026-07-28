@@ -14,10 +14,13 @@ import pytest
 
 from finance_agent.graph import build_5layer_graph
 
-pytestmark = pytest.mark.skipif(
-    not (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")),
-    reason="E2E 测试需要真实 LLM，请设置 DEEPSEEK_API_KEY 或 LLM_API_KEY 环境变量",
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")),
+        reason="E2E 测试需要真实 LLM，请设置 DEEPSEEK_API_KEY 或 LLM_API_KEY 环境变量",
+    ),
+]
 
 
 STOCK_CODE = "600519"
