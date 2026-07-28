@@ -80,6 +80,6 @@ jobs:
           curl -sf http://127.0.0.1:8000/api/health > /dev/null || (echo "backend not ready" && exit 1)
 
       - name: E2E tests
-        run: uv run pytest tests/e2e/ -x -q
+        run: uv run pytest tests/e2e/ -m "not live" -x -q
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
