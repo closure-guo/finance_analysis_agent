@@ -80,14 +80,14 @@ class LiteLLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
 
-        # DeepSeek: harness 自己管理思考过程，始终禁用原生 thinking mode
-        # （thinking mode 的 reasoning_content 与 tool calling 不兼容，
-        #   且多轮对话时历史消息缺少 reasoning_content 会导致 400 错误）
+        # DeepSeek: 开启原生思考模式（reasoning_content 与 content 分离下发）
+        # 官方文档（2025-12 起更新）：思考模式支持工具调用，仅要求工具调用轮次
+        # 在后续请求中回传 reasoning_content 字段（见 Message.to_api_dict / ContextManager）。
+        # 思考模式不支持 temperature/top_p 等参数（设置不报错但不生效）。
         is_ds = _is_deepseek(self.model)
 
         if is_ds:
-            kwargs["temperature"] = temperature
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
         else:
             kwargs["temperature"] = temperature
 
@@ -142,7 +142,12 @@ class LiteLLMClient:
                     delta = choices[0].delta
                     finish_reason = choices[0].finish_reason
 
-                    # 文本增量
+                    # 原生思考增量（DeepSeek reasoning_content）-- 先于 content 输出
+                    reasoning = getattr(delta, "reasoning_content", None) or ""
+                    if reasoning:
+                        yield LLMResponse(reasoning_delta=reasoning)
+
+                    # 文本增量（content，最终回答）
                     text = getattr(delta, "content", None) or ""
                     if text:
                         _accumulated_text += text

@@ -66,9 +66,10 @@ async def _stub_web_search(query: str) -> str:
     Args:
         query: 搜索关键词
     """
-    # 加微小延迟，让 E2E 能确定性捕获"正在搜索"中间态
-    # （否则 search_start 与 search_result 几乎同时，中间态一闪而过）
-    await asyncio.sleep(0.5)
+    # 加延迟，让 E2E 能确定性捕获"正在搜索"中间态
+    # （否则 search_start 与 search_result 几乎同时，中间态一闪而过；
+    #  需足够长以覆盖 Playwright 轮询间隔与首轮渲染时机的不确定性）
+    await asyncio.sleep(5.0)
     return (
         "[1] STUB 搜索结果：茅台最新消息\n"
         "https://stub.example.com/maotai-news\n"
@@ -309,7 +310,12 @@ def _make_run_deep_analysis(
             # Custom mode: forward thinking tokens
             if mode == "custom":
                 if isinstance(chunk, dict) and chunk.get("type") == "thinking":
-                    yield StreamEvent.think(chunk.get("token", ""))
+                    # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
+                    # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
+                    node = chunk.get("node", "")
+                    yield StreamEvent.think(
+                        chunk.get("token", ""), metadata={"node": node} if node else None
+                    )
                 continue
 
             # Updates mode: existing node progress logic
@@ -452,7 +458,11 @@ def build_agent(
             max_iterations=3,
             llm=llm_client,
         )
-        agent.tools.register(_web_search, name="web_search")
+        # TESTING=1 时注册 stub web_search（固定结果，不调真实 Tavily），
+        # 与 StubLLMClient 的 tool_call 场景配合，确定性复现"思考->web search->思考"。
+        from finance_agent.api import TESTING
+
+        agent.tools.register(_stub_web_search if TESTING else _web_search, name="web_search")
         session_id = kwargs.get("session_id")
         if session_id:
             _inject_chat_history(agent, session_id)
@@ -481,8 +491,14 @@ def build_agent(
             ),
             name="run_deep_analysis",
         )
+        # TESTING=1 时注册 stub web_search（固定结果，不调真实 Tavily），
+        # 与 quick 分支同一 stub 逻辑，使深度模式澄清阶段也能确定性复现
+        # "思考->web search->思考"时间序列（agent-turn-box-display delta task 5.4）。
+        from finance_agent.api import TESTING
+
         agent.tools.register(
-            _make_web_search_with_collector(web_sources_collector), name="web_search"
+            _stub_web_search if TESTING else _make_web_search_with_collector(web_sources_collector),
+            name="web_search",
         )
         agent.tools.register(_make_batch_web_search(web_sources_collector), name="batch_web_search")
         session_id = kwargs.get("session_id")
@@ -529,9 +545,11 @@ def _make_llm_client(model: str, api_key: str | None = None):
 
     if TESTING:
         # F3a: 返回可控 stub LLM 客户端（按固定节奏吐文本 delta）
+        # STUB_SCENARIO=tool_call 时启用"思考1->tool_call(web_search)->思考2->回答"场景，
+        # 用于 E2E 确定性验证思考-搜索-思考时间序列（agent-turn-box-display delta）。
         from finance_agent.harness.stub_llm_client import StubLLMClient
 
-        return StubLLMClient()
+        return StubLLMClient(scenario=os.getenv("STUB_SCENARIO"))
 
     from finance_agent.harness.litellm_client import LiteLLMClient
 
@@ -681,16 +699,13 @@ async def stream_agent_to_sse(
             yield _sse({"type": "chat_token", "token": event.content, "timestamp": ts})
 
         elif event.event_type == ActionType.THINK:
-            yield _sse({"type": "thinking_token", "token": event.content, "timestamp": ts})
-
-        elif event.event_type == ActionType.THINK_TO_ANSWER:
-            # 文本已作为 thinking_token 逐 token 流式输出；流末判定为最终回答。
-            # answer 字段供后端持久化（api.py 收集），前端据此把思考区转为回答区。
-            yield _sse({"type": "thinking_to_answer", "answer": event.content, "timestamp": ts})
-
-        elif event.event_type == ActionType.THINK_REPLACE:
-            # 替换已流式输出的思考内容（DSML 清理等后处理）
-            yield _sse({"type": "thinking_replace", "token": event.content, "timestamp": ts})
+            # 原生思考增量（DeepSeek reasoning_content），与回答（chat_token）分离。
+            # 管线运行期间的思考带 node metadata（管线节点名），透传给前端按 agent 阶段分组。
+            meta = event.metadata or {}
+            payload: dict = {"type": "thinking_token", "token": event.content, "timestamp": ts}
+            if meta.get("node"):
+                payload["node"] = meta["node"]
+            yield _sse(payload)
 
         elif event.event_type == ActionType.TOOL_CALL:
             tc = event.tool_call

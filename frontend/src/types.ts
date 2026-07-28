@@ -273,7 +273,7 @@ export interface PipelineStep {
 // UI message types
 export type MessageType = 'user' | 'pipeline' | 'report' | 'chat' | 'system' | 'error'
 
-// 单次工具调用记录（与思考过程分离展示）
+// 单次工具调用记录（ToolCallBanner 渲染用，从 TimelineItem tool_call 转换而来）
 export interface ToolCallEntry {
   name: string
   label: string
@@ -282,6 +282,20 @@ export interface ToolCallEntry {
   resultText?: string
   done?: boolean
 }
+
+// Agent 时序条目：按 SSE 事件到达顺序追加，渲染时按 type 分发为独立横幅。
+// - thinking：思考片段（被搜索/工具调用断开的多段思考各自独立，title 由 extractThinkingTitle 提取）
+// - search：搜索（web_search / batch_web_search 由 search_* 事件驱动，不生成 tool_call 条目）
+// - tool_call：其他工具调用（每次调用一个独立条目）
+export type TimelineItem =
+  | { type: 'thinking'; content: string; title?: string }
+  | {
+      type: 'search'
+      query: string
+      results?: Array<{ title: string; url: string; content: string }>
+      status: 'searching' | 'done' | 'error'
+    }
+  | { type: 'tool_call'; name: string; args: string; result?: string; done: boolean }
 
 export interface UIMessage {
   id: string
@@ -303,10 +317,8 @@ export interface UIMessage {
   webSources?: Array<{ query: string; title: string; url: string; content: string }>
   // Chat-specific
   chatResponse?: string
-  thinkingContent?: string
-  toolCalls?: ToolCallEntry[]
-  // Search-specific (quick mode)
-  searchQuery?: string
-  searchResults?: Array<{ title: string; url: string; content: string }>
-  searchStatus?: 'searching' | 'done' | 'error'
+  // Agent 时序：思考/搜索/工具调用按 SSE 事件到达顺序纵向排列（chat 消息与管线消息共用）
+  agentTimeline?: TimelineItem[]
+  // 管线模式：按 node 分组的时序（key 为 thinking_token 事件的 node 字段，如 bull_debater）
+  nodeTimelines?: Record<string, TimelineItem[]>
 }

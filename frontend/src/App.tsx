@@ -4,6 +4,27 @@ import remarkGfm from 'remark-gfm'
 import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry } from './types'
 import { ChartsSection } from './Charts'
 import { SearchBanner } from './SearchBanner'
+import { applyChatStreamEvent, applyPipelineThinkingToken, buildTimelineFromHistory, nodeDisplayName } from './timeline'
+import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
+
+// 搜索类工具集合：这类工具的状态与结果由独立搜索横幅（SearchBanner）承载，
+// 不进入工具调用横幅（ToolCallBanner），避免同一搜索行为同时出现两个横幅。
+export const SEARCH_TOOL_NAMES = new Set<string>(['web_search', 'batch_web_search'])
+
+// 判断工具是否为搜索类（web_search / batch_web_search）
+export function isSearchTool(name: string): boolean {
+  return SEARCH_TOOL_NAMES.has(name)
+}
+
+// 从思考内容中提取首个 ## 二级标题作为思考横幅展示标题。
+// 策略对齐：LLM 按信息密度决定输出 ## 标题分层 / **加粗** 分段 / 无标题，
+// 仅 ## 层级标题提取为横幅标题，**加粗** 与无格式返回 undefined。
+export function extractThinkingTitle(content: string): string | undefined {
+  if (!content) return undefined
+  // 允许 ## 前有空白（Markdown 缩进），## 后必须有空格，标题末尾空白被裁剪
+  const match = content.match(/^\s*##\s+(.+?)\s*$/m)
+  return match ? match[1] : undefined
+}
 
 // ── Pipeline steps (mirrors backend LAYER_STEPS) ──
 const PIPELINE_STEPS: PipelineStep[] = [
@@ -20,6 +41,13 @@ const STAGE_NODES = ['check_cache', 'technical_analyst', 'bull_r1', 'trader', 'a
 
 let msgIdCounter = 0
 const genId = () => `msg-${++msgIdCounter}`
+
+// TimelineRenderer 注入的横幅组件集合（ThinkingBanner/ToolCallBanner 为函数声明，提升后可用）
+const timelineBannerComponents: TimelineBannerComponents = {
+  ThinkingBanner: (props) => <ThinkingBanner {...props} />,
+  SearchBanner,
+  ToolCallBanner: (props) => <ToolCallBanner {...props} />,
+}
 
 const getUserId = (): string => {
   const KEY = 'fa_user_id'
@@ -40,44 +68,6 @@ function formatSessionTime(ts: string | undefined | null): string {
   // 可能按本地时区得到 epoch 之前的负值时间戳，所以用 <= 0 或年份 <= 1970 兜底。
   if (d.getTime() <= 0 || d.getFullYear() <= 1970) return '未知时间'
   return d.toLocaleString()
-}
-
-// 根据工具名/参数构建展示用的 ToolCallEntry（图标、标签、参数摘要）
-function buildToolCallEntry(
-  name: string,
-  args?: Record<string, any>,
-  resultText?: string,
-  done?: boolean,
-): ToolCallEntry {
-  const icon =
-    name === 'search_stock' ? '🔍' :
-    name === 'batch_web_search' ? '🌐' : '🛠️'
-  const label =
-    name === 'search_stock' ? '识别股票' :
-    name === 'batch_web_search' ? '批量搜索' :
-    name === 'web_search' ? '网络搜索' : name
-  const argText = args?.query
-    ? args.query
-    : Array.isArray(args?.queries)
-      ? args.queries.join('、')
-      : Object.keys(args || {}).length
-        ? JSON.stringify(args)
-        : ''
-  return { name, label, icon, argText, resultText, done }
-}
-
-// 将工具结果浓缩为简短文本（与后端 _summarize_tool_result 保持一致）
-function summarizeToolResult(result: any): string {
-  if (typeof result === 'string') return result.substring(0, 150)
-  if (Array.isArray(result)) {
-    return result.slice(0, 3)
-      .map((r: any) => r?.title || r?.name || r?.code || JSON.stringify(r).substring(0, 50))
-      .join('、')
-  }
-  if (result && typeof result === 'object') {
-    return JSON.stringify(result).substring(0, 150)
-  }
-  return ''
 }
 
 export default function App() {
@@ -181,10 +171,9 @@ export default function App() {
             type: 'chat',
             content: '',
             chatResponse: h.content,
-            thinkingContent: h.thinking || undefined,
-            toolCalls: (h.tool_calls || []).map((tc: any) =>
-              buildToolCallEntry(tc.name, tc.args, tc.result_text, tc.done),
-            ),
+            // 历史恢复：从 chat_history.thinking + tool_calls 重建 agentTimeline
+            // （思考在前、工具调用在后近似还原；搜索类工具不还原为 tool_call item）
+            agentTimeline: buildTimelineFromHistory(h.thinking, h.tool_calls),
           })
         }
       }
@@ -283,7 +272,6 @@ export default function App() {
         currentNode: '',
         nodeOutputs: {},
         progress: 0,
-        thinkingContent: '',
       }
       pipelineMsgId = pm.id
       pipelineMsgRef.current = pm
@@ -304,36 +292,9 @@ export default function App() {
         type: 'chat',
         content: '',
         chatResponse: '',
-        thinkingContent: '',
         streaming: true,
       }])
       return newId
-    }
-
-    // 将结构化结果（搜索结果 / 股票识别）附加到助手消息最近一次匹配的工具调用记录上，
-    // 把工具调用从思考过程中分离出来单独展示。优先按工具名匹配未完成条目，回退到最近
-    // 未完成条目，都没有则新建一条仅含结果的记录。
-    const attachToolResult = (chatId: string, names: string[] | string, resultText: string) => {
-      const nameList = Array.isArray(names) ? names : [names]
-      setMessages(prev => prev.map(m => {
-        if (m.id !== chatId) return m
-        const calls = [...(m.toolCalls || [])]
-        let idx = -1
-        for (let i = calls.length - 1; i >= 0; i--) {
-          if (nameList.includes(calls[i].name) && !calls[i].done) { idx = i; break }
-        }
-        if (idx === -1) {
-          for (let i = calls.length - 1; i >= 0; i--) {
-            if (!calls[i].done) { idx = i; break }
-          }
-        }
-        if (idx >= 0) {
-          calls[idx] = { ...calls[idx], resultText, done: true }
-        } else {
-          calls.push(buildToolCallEntry(nameList[0], undefined, resultText, true))
-        }
-        return { ...m, toolCalls: calls }
-      }))
     }
 
     try {
@@ -390,7 +351,6 @@ export default function App() {
                 currentNode: '',
                 nodeOutputs: {},
                 progress: 0,
-                thinkingContent: '',
               }
               pipelineMsgId = pipelineMsg.id
               pipelineMsgRef.current = pipelineMsg
@@ -441,39 +401,9 @@ export default function App() {
               continue
             }
 
-            if (event.type === 'search_start') {
-              const chatId = ensureAssistantMsg()
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, searchStatus: 'searching' as const, searchQuery: event.query }
-                  : m
-              ))
-              continue
-            }
-
-            if (event.type === 'search_result') {
-              const results = event.results || []
-              const chatId = ensureAssistantMsg()
-              setMessages(prev => prev.map(m => {
-                if (m.id !== chatId) return m
-                // 标记 web_search/batch_web_search toolCall 为已完成，避免 tool_result 重复附加
-                const calls = (m.toolCalls || []).map(c =>
-                  (c.name === 'web_search' || c.name === 'batch_web_search') && !c.done
-                    ? { ...c, done: true }
-                    : c
-                )
-                return { ...m, searchStatus: 'done' as const, searchResults: results, toolCalls: calls }
-              }))
-              continue
-            }
-
-            if (event.type === 'search_error') {
-              const chatId = ensureAssistantMsg()
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, searchStatus: 'error' as const }
-                  : m
-              ))
+            if (event.type === 'search_start' || event.type === 'search_result' || event.type === 'search_error') {
+              // 搜索事件统一走对话流共享处理，写入 agentTimeline 的 search item
+              handleChatStreamEvent(event, ensureAssistantMsg())
               continue
             }
 
@@ -488,8 +418,11 @@ export default function App() {
               if (pipelineMsgRef.current) {
                 updateMessage(pipelineMsgRef.current.id, { content: `已识别：${event.stock_name} (${event.stock_code})` })
               } else {
-                // 澄清阶段识别出股票，作为 search_stock 的结构化结果附加到工具调用记录
-                attachToolResult(ensureAssistantMsg(), 'search_stock', `已识别：${event.stock_name} (${event.stock_code})`)
+                // 澄清阶段识别出股票：作为 search_stock 的结构化结果写入 timeline 中对应 tool_call item
+                handleChatStreamEvent(
+                  { type: 'tool_result', name: 'search_stock', result: `已识别：${event.stock_name} (${event.stock_code})`, timestamp: '' } as SSEEvent,
+                  ensureAssistantMsg(),
+                )
               }
               continue
             }
@@ -615,9 +548,8 @@ export default function App() {
         break
 
       case 'thinking_token':
-        updateMessage(pipelineMsg.id, {
-          thinkingContent: (pipelineMsg.thinkingContent || '') + event.token,
-        })
+        // 管线运行期间的思考按 node 字段写入对应 agent 阶段的 timeline（nodeTimelines）
+        updateMessage(pipelineMsg.id, applyPipelineThinkingToken(pipelineMsg, event))
         break
 
       case 'report_chunk': {
@@ -707,95 +639,23 @@ export default function App() {
   const handleChatStreamEvent = (event: SSEEvent, chatId: string): boolean => {
     switch (event.type) {
       case 'thinking_token':
-        setMessages(prev => prev.map(m =>
-          m.id === chatId
-            ? { ...m, thinkingContent: (m.thinkingContent || '') + event.token }
-            : m
-        ))
-        return true
-
       case 'thinking_replace':
-        setMessages(prev => prev.map(m =>
-          m.id === chatId ? { ...m, thinkingContent: event.token } : m
-        ))
-        return true
-
-      case 'thinking_to_answer': {
-        // 文本已作为 thinking_token 逐 token 流式输出，流末判定为最终回答。
-        // 保留之前的思考+工具轨迹（ThinkingBanner 始终展示），仅将末尾当前轮
-        // 回答文本移至回答区，避免重复。
-        const ans = event.answer
-        setMessages(prev => prev.map(m => {
-          if (m.id !== chatId) return m
-          const tc = m.thinkingContent || ''
-          const remaining = ans && tc.endsWith(ans) ? tc.slice(0, -ans.length) : tc
-          return {
-            ...m,
-            thinkingContent: remaining,
-            chatResponse: (m.chatResponse || '') + ans,
-          }
-        }))
-        return true
-      }
-
-      case 'tool_call': {
-        // 工具调用单独记录到 toolCalls（与思考过程分离展示），非 run_deep_analysis
-        const entry = buildToolCallEntry(event.name, event.args, undefined, false)
-        setMessages(prev => prev.map(m =>
-          m.id === chatId
-            ? { ...m, toolCalls: [...(m.toolCalls || []), entry] }
-            : m
-        ))
-        return true
-      }
-
-      case 'tool_result': {
-        const resultSummary = summarizeToolResult(event.result)
-        setMessages(prev => prev.map(m => {
-          if (m.id !== chatId) return m
-          const calls = [...(m.toolCalls || [])]
-          // 优先附加到同名且未完成的最近一次调用；若已完成（结构化事件如
-          // search_result/stock_resolved 已先行附加），则跳过避免重复。
-          let idx = -1
-          for (let i = calls.length - 1; i >= 0; i--) {
-            if (calls[i].name === event.name && !calls[i].done) { idx = i; break }
-          }
-          if (idx === -1) {
-            for (let i = calls.length - 1; i >= 0; i--) {
-              if (calls[i].name === event.name) { idx = i; break }
-            }
-          }
-          if (idx >= 0) {
-            if (calls[idx].done) return m
-            calls[idx] = { ...calls[idx], resultText: resultSummary, done: true }
-          } else if (resultSummary) {
-            calls.push(buildToolCallEntry(event.name, undefined, resultSummary, true))
-          }
-          return { ...m, toolCalls: calls }
-        }))
-        return true
-      }
-
+      case 'search_start':
+      case 'search_result':
+      case 'search_error':
+      case 'tool_call':
+      case 'tool_result':
       case 'chat_token':
-        setMessages(prev => prev.map(m =>
-          m.id === chatId
-            ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
-            : m
-        ))
-        return true
-
       case 'chat_done':
-        setMessages(prev => prev.map(m =>
-          m.id === chatId ? { ...m, streaming: false } : m
-        ))
+      case 'error':
+        // 统一写入 agentTimeline（含思考片段断开、搜索/工具调用 item 生命周期），
+        // 具体规则见 timeline.ts 与 agent-turn-box-display design.md
+        setMessages(prev => prev.map(m => (m.id === chatId ? applyChatStreamEvent(m, event) : m)))
         return true
 
-      case 'error':
-        setMessages(prev => prev.map(m =>
-          m.id === chatId
-            ? { ...m, chatResponse: `❌ ${event.message || '未知错误'}`, streaming: false }
-            : m
-        ))
+      case 'thinking_to_answer':
+        // DeepSeek 原生思考模式：reasoning 与 content 天然分离，不再下发此事件。
+        // 保留 case 仅作向后兼容（旧后端可能仍下发），忽略不影响新逻辑。
         return true
 
       default:
@@ -875,30 +735,8 @@ export default function App() {
             if (handleChatStreamEvent(event, chatId)) {
               continue
             }
-            // 快速模式搜索专属事件
-            if (event.type === 'search_start') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, searchStatus: 'searching', searchQuery: event.query }
-                  : m
-              ))
-            } else if (event.type === 'search_result') {
-              setMessages(prev => prev.map(m => {
-                if (m.id !== chatId) return m
-                const calls = (m.toolCalls || []).map(c =>
-                  (c.name === 'web_search' || c.name === 'batch_web_search') && !c.done
-                    ? { ...c, done: true }
-                    : c
-                )
-                return { ...m, searchStatus: 'done', searchResults: event.results, toolCalls: calls }
-              }))
-            } else if (event.type === 'search_error') {
-              setMessages(prev => prev.map(m =>
-                m.id === chatId
-                  ? { ...m, searchStatus: 'error' }
-                  : m
-              ))
-            } else if (event.type === 'session_created') {
+            // search_* 已由共享分支处理；此处仅处理 session_created
+            if (event.type === 'session_created') {
               setCurrentSessionId(event.session_id)
               loadSessions()
             }
@@ -1380,18 +1218,14 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
               <i className="fas fa-robot text-white text-xs"></i>
             </div>
             <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
-              {msg.searchStatus && (
-                <SearchBanner
-                  status={msg.searchStatus}
-                  query={msg.searchQuery}
-                  results={msg.searchResults}
+              {/* 按 agentTimeline 数组顺序渲染：每个思考片段/搜索/工具调用一个独立横幅，
+                  反映 agent 实际执行时序（思考 -> 搜索 -> 再思考 -> 工具调用 -> ...） */}
+              {msg.agentTimeline && msg.agentTimeline.length > 0 && (
+                <TimelineRenderer
+                  timeline={msg.agentTimeline}
+                  streaming={!!msg.streaming}
+                  components={timelineBannerComponents}
                 />
-              )}
-              {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <ToolCallBanner toolCalls={msg.toolCalls} streaming={!!msg.streaming && !msg.chatResponse} />
-              )}
-              {msg.thinkingContent && (
-                <ThinkingBanner content={msg.thinkingContent} streaming={!!msg.streaming && !msg.chatResponse} />
               )}
               {msg.chatResponse ? (
                 <div className="prose prose-sm max-w-none" style={{ color: 'var(--text-secondary)' }}>
@@ -1434,14 +1268,14 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
 }
 
 // ── Thinking Banner (Kimi-style collapsible reasoning) ──
-function ThinkingBanner({ content, streaming }: { content: string; streaming: boolean }) {
+// 思考横幅：统一快速模式与深度模式澄清阶段的思考流式展示。
+// 思考中显示"思考中"并自动展开；完成后按横幅展开/折叠状态与是否有标题分别展示。
+export function ThinkingBanner({ content, streaming, title }: { content: string; streaming: boolean; title?: string }) {
   const [expanded, setExpanded] = useState(true)
   const contentRef = useRef<HTMLDivElement>(null)
-  const prevStreamingRef = useRef(streaming)
 
   useEffect(() => {
     if (streaming) setExpanded(true)
-    prevStreamingRef.current = streaming
   }, [streaming])
 
   useEffect(() => {
@@ -1450,8 +1284,12 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
     }
   }, [content, expanded, streaming])
 
-  const charCount = content.length
-  const isJustFinished = !streaming && prevStreamingRef.current
+  // 横幅标题文案：思考中显示"思考中"；完成折叠按标题有无显示标题/"思考已完成"；完成展开固定"思考已完成"
+  const bannerText = streaming
+    ? '思考中'
+    : expanded
+      ? '思考已完成'
+      : (title || '思考已完成')
 
   return (
     <div className="mb-3">
@@ -1471,10 +1309,7 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
           <i className="fas fa-check-circle text-xs flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
         )}
         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-          {streaming ? '正在思考' : isJustFinished ? `已深度思考` : '思考过程'}
-          {!streaming && charCount > 0 && (
-            <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {charCount} 字</span>
-          )}
+          {bannerText}
         </span>
         <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] ml-auto transition-transform`} style={{ color: 'var(--text-tertiary)' }}></i>
       </button>
@@ -1487,7 +1322,14 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
           className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg"
           style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
         >
-          <p className="text-xs leading-relaxed whitespace-pre-wrap break-words" style={{ color: 'var(--text-tertiary)' }}>{content}</p>
+          {/* 有标题时标题加粗置顶 */}
+          {!streaming && title && (
+            <p className="font-bold text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{title}</p>
+          )}
+          {/* 思考正文按 Markdown 渲染（支持 ## 标题分层与 **加粗** 分段） */}
+          <div className="text-xs leading-relaxed prose prose-sm max-w-none" style={{ color: 'var(--text-tertiary)' }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          </div>
         </div>
       </div>
     </div>
@@ -1495,7 +1337,7 @@ function ThinkingBanner({ content, streaming }: { content: string; streaming: bo
 }
 
 // ── Tool Call Banner (工具调用，与思考过程分离展示) ──
-function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEntry[]; streaming: boolean }) {
+export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEntry[]; streaming: boolean }) {
   const [expanded, setExpanded] = useState(true)
   const pendingCount = toolCalls.filter(t => !t.done).length
   const prevStreamingRef = useRef(streaming)
@@ -1681,10 +1523,24 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
               </div>
             </div>
 
-            {/* 流式思考过程（真实 LLM reasoning） */}
-            {msg.thinkingContent && (
+            {/* 各 agent 阶段的思考/工具调用时序：按 node 分组，阶段间用角色名标题分隔（非折叠框）。
+                阶段内按时间序列渲染该 agent 的 timeline items；当前活动 node 的横幅展开流式。 */}
+            {msg.nodeTimelines && Object.keys(msg.nodeTimelines).length > 0 && (
               <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
-                <ThinkingBanner content={msg.thinkingContent} streaming={!!current} />
+                {Object.entries(msg.nodeTimelines).map(([node, items]) => (
+                  <div key={node} className="mb-2">
+                    {node && (
+                      <div className="text-xs font-semibold mb-1" style={{ color: 'var(--text-secondary)' }}>
+                        {nodeDisplayName(node)}
+                      </div>
+                    )}
+                    <TimelineRenderer
+                      timeline={items}
+                      streaming={current === node}
+                      components={timelineBannerComponents}
+                    />
+                  </div>
+                ))}
               </div>
             )}
 
@@ -1821,7 +1677,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
                       <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{msg.stockName}</h3>
                       <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold" style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>深度分析</span>
                     </div>
-                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · {(msg.durationMs || 0) > 0 ? `耗时 ${Math.round(msg.durationMs / 1000)}s` : '耗时未知'}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · {(msg.durationMs ?? 0) > 0 ? `耗时 ${Math.round((msg.durationMs ?? 0) / 1000)}s` : '耗时未知'}</p>
                   </div>
                   <div className="flex gap-2">
                     {msg.filePaths?.docx && (

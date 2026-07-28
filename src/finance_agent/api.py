@@ -475,8 +475,28 @@ if TESTING:
 
     @app.post("/api/test/seed")
     async def test_seed(req: dict):
-        """测试数据造数端点骨架（F2 只返回占位响应，造数据逻辑在 F3 落地）。"""
-        return {"status": "ok", "mode": "testing"}
+        """测试数据造数端点。
+
+        接收 display_name / session_type / chat_history（含可选 thinking + tool_calls），
+        内部经 session_store.create_session + append_chat 写入真实存储，
+        供历史会话恢复等 E2E 确定性构造会话（agent-turn-box-display delta task 5.6）。
+        """
+        # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约
+        if "chat_history" not in req:
+            return {"status": "ok", "mode": "testing"}
+        session_id = create_session(
+            session_type=req.get("session_type", "chat"),
+            display_name=req.get("display_name"),
+        )
+        for entry in req.get("chat_history", []):
+            append_chat(
+                session_id,
+                role=entry["role"],
+                content=entry["content"],
+                thinking=entry.get("thinking"),
+                tool_calls=entry.get("tool_calls"),
+            )
+        return {"session_id": session_id}
 
     @app.post("/api/test/reset")
     async def test_reset(req: dict):
@@ -803,18 +823,11 @@ class _ChatCollector:
     def feed(self, data: dict) -> None:
         t = data.get("type")
         if t == "chat_token":
+            # 回答增量（content，与 reasoning 分离）
             self.response += data.get("token", "")
-        elif t == "thinking_to_answer":
-            # 文本已作为 thinking_token 流式输出，流末判定为最终回答：
-            # 将末尾回答文本从 thinking 中剥离，避免重复持久化。
-            ans = data.get("answer", "")
-            self.response += ans
-            if ans and self.thinking.endswith(ans):
-                self.thinking = self.thinking[: -len(ans)]
         elif t == "thinking_token":
+            # 原生思考增量（DeepSeek reasoning_content），直接累积
             self.thinking += data.get("token", "")
-        elif t == "thinking_replace":
-            self.thinking = data.get("token", "")
         elif t == "tool_call":
             name = data.get("name", "")
             # run_deep_analysis 触发的是管线 UI（非对话流工具调用框），跳过以与前端保持一致
