@@ -5,6 +5,102 @@ from __future__ import annotations
 import json
 import re
 
+# ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
+#
+# TESTING=1 时 call_llm_streaming 不连真实 LLM，按 node_name 产出：
+#   1. 固定思考 token（经 stream writer 写入 custom 流，node 用图节点名），
+#      使前端 PipelineCard 能按 agent 阶段分组渲染（E2E 断言对象）；
+#   2. 该节点 schema 合法的最小 answer（AnalystReport/DebateMessage/TradeDecision 等），
+#      保证 parse_json_response + Pydantic 校验通过、管线确定推进。
+# 生产链路（无 TESTING）不受影响，仍走 call_llm_stream -> litellm。
+
+# 函数级 node_name -> 图节点名（前端 NODE_DISPLAY_NAMES 的 key）。
+# 节点 writer 用的是函数级名（如 bull_debater 被 bull_r1/bull_r2 两个图节点复用，
+# 图上下文不可知），统一映射为首个图节点名，保证前端分组标题正确。
+_NODE_NAME_MAP: dict[str, str] = {
+    "technical_analyst": "technical_analyst",
+    "macro_analyst": "technical_analyst",
+    "fundamental_analyst": "technical_analyst",
+    "sentiment_analyst": "technical_analyst",
+    "bull_debater": "bull_r1",
+    "bear_debater": "bear_r1",
+    "research_manager": "research_manager",
+    "trader": "trader",
+    "aggressive_debater": "aggressive_r1",
+    "conservative_debater": "conservative_r1",
+    "neutral_debater": "neutral_r1",
+    "risk_judge": "risk_judge",
+    "fund_manager": "fund_manager",
+}
+
+# 各分析师 stub answer 的 agent_name（AnalystReport.agent_name 字段值）
+_ANALYST_AGENT_NAMES: dict[str, str] = {
+    "technical_analyst": "technical",
+    "macro_analyst": "macro",
+    "fundamental_analyst": "fundamental",
+    "sentiment_analyst": "sentiment",
+}
+
+# 各辩论角色 stub answer 的 role（DebateMessage.role 字段值）
+_DEBATER_ROLES: dict[str, str] = {
+    "bull_debater": "bull",
+    "bear_debater": "bear",
+    "aggressive_debater": "aggressive",
+    "conservative_debater": "conservative",
+    "neutral_debater": "neutral",
+}
+
+# 交易决策 stub answer（Trader / Risk Judge 共用 TradeDecision schema）
+_STUB_TRADE_DECISION: dict = {
+    "action": "hold",
+    "confidence": 0.6,
+    "reasoning": "STUB 交易决策：多因素均衡，建议持有观察（测试数据）",
+}
+
+
+def _stub_pipeline_answer(node_name: str) -> str:
+    """按 node_name 返回该节点可解析的最小合法 answer（JSON 字符串或纯文本）。"""
+    if node_name in _ANALYST_AGENT_NAMES:
+        agent_name = _ANALYST_AGENT_NAMES[node_name]
+        # claims 为空：verify_citations 零 claim 时 all_passed=True，管线确定推进
+        return json.dumps(
+            {
+                "agent_name": agent_name,
+                "summary": f"STUB {agent_name} 分析摘要（测试数据）",
+                "key_findings": [f"STUB 发现：{agent_name} 指标正常"],
+                "claims": [],
+                "markdown": f"## {agent_name} 分析\n\nSTUB 分析正文（测试数据）。",
+            },
+            ensure_ascii=False,
+        )
+    if node_name in _DEBATER_ROLES:
+        role = _DEBATER_ROLES[node_name]
+        return json.dumps(
+            {
+                "role": role,
+                "round": 1,
+                "content": f"STUB {role} 方论点（测试数据）",
+                "key_arguments": [f"STUB 论据：{role} 方观点成立"],
+            },
+            ensure_ascii=False,
+        )
+    if node_name in ("trader", "risk_judge"):
+        return json.dumps(_STUB_TRADE_DECISION, ensure_ascii=False)
+    if node_name == "fund_manager":
+        # 固定 approve：保证管线确定走 generate_report（return 会回退 trader 引入不确定性）
+        return json.dumps(
+            {"decision": "approve", "reasoning": "STUB 审批通过（测试数据）"}, ensure_ascii=False
+        )
+    # research_manager 输出纯文本结论；未知节点兜底纯文本
+    return f"STUB {node_name or 'unknown'} 结论（测试数据）"
+
+
+def _is_testing() -> bool:
+    """运行时读取 TESTING 开关（与 finance_agent.api 同源，避免模块级缓存导致测试隔离失效）。"""
+    import os
+
+    return os.getenv("TESTING") == "1"
+
 
 def parse_json_response(text: str) -> dict:
     """从 LLM 响应中提取 JSON，处理 markdown 代码块包裹和尾部多余文本。"""
@@ -57,6 +153,20 @@ def call_llm_streaming(
         writer = get_stream_writer()
     except Exception:
         writer = None
+
+    # TESTING=1：管线确定性 stub（不调真实 LLM）。
+    # 思考 token 的 node 用图节点名（前端 NODE_DISPLAY_NAMES 的 key），
+    # 使 PipelineCard 按 agent 阶段分组；answer 为该节点 schema 合法的最小 JSON。
+    if _is_testing():
+        if writer:
+            writer(
+                {
+                    "type": "thinking",
+                    "node": _NODE_NAME_MAP.get(node_name, node_name),
+                    "token": f"[STUB] {node_name or 'unknown'} 正在分析（确定性测试数据）\n",
+                }
+            )
+        return _stub_pipeline_answer(node_name)
 
     answer_parts: list[str] = []
     for kind, text in call_llm_stream(prompt, system=system, api_key=api_key):

@@ -351,10 +351,11 @@ class Agent:
                 api_messages = self.context.build_messages_for_api()
 
                 # ── 调用 LLM（流式）──
+                # DeepSeek 思考模式：reasoning_delta（思维链）与 text_delta（content）
+                # 天然分离，无需 thinking_to_answer 剥离。
                 assistant_text = ""
+                assistant_reasoning = ""  # 累积 reasoning_content 用于上下文回传
                 pending_tool_calls: list[ToolCallRequest] = []
-                _streamed_len = 0  # assistant_text 中已作为 THINK 流式输出的偏移量
-                _dsml_active = False  # 检测到 DSML 标记后停止流式，留待流末清理
 
                 # 第一次迭代且 force_tool=True 时，强制调用工具
                 _tool_choice = "required" if (force_tool and iterations == 1) else "auto"
@@ -364,20 +365,15 @@ class Agent:
                     tools=tool_schemas if tool_schemas else None,
                     tool_choice=_tool_choice,
                 ):
+                    # 原生思考增量 -> THINK 事件（思考横幅消费）
+                    if chunk.reasoning_delta:
+                        assistant_reasoning += chunk.reasoning_delta
+                        yield StreamEvent.think(chunk.reasoning_delta)
+
+                    # 回答增量 -> ANSWER 事件（回答区消费，与思考分离）
                     if chunk.text_delta:
-                        # 逐 token 实时下发为思考过程。流末再依据是否伴随工具调用
-                        # 决定是 THINK 还是最终回答：
-                        #   - 伴随工具调用 -> 确为思考，保留。
-                        #   - 无工具调用 -> 实为回答，发 THINK_TO_ANSWER 让前端转换。
-                        # 安全流式：DSML 标记部分不下发，避免在流末清理前泄漏给用户。
                         assistant_text += chunk.text_delta
-                        if not _dsml_active:
-                            _safe_end, _dsml_found = _safe_think_len(assistant_text, _streamed_len)
-                            if _safe_end > _streamed_len:
-                                yield StreamEvent.think(assistant_text[_streamed_len:_safe_end])
-                            _streamed_len = _safe_end
-                            if _dsml_found:
-                                _dsml_active = True
+                        yield StreamEvent.answer(chunk.text_delta)
 
                     if chunk.tool_calls:
                         pending_tool_calls = chunk.tool_calls
@@ -388,23 +384,15 @@ class Agent:
                 # ── DSML 防御性解析 ──
                 # DeepSeek 偶发以 DSML 文本标记输出工具调用，litellm 未解析为
                 # 结构化 tool_calls。此处从文本中还原工具调用，避免标记泄漏给用户。
-                _raw_text = assistant_text
+                # 注意：DSML 标记在 content 中，不影响 reasoning_content。
                 if not pending_tool_calls and assistant_text:
                     dsml_calls, dsml_cleaned = _parse_dsml_from_text(assistant_text)
                     if dsml_calls:
                         pending_tool_calls = dsml_calls
                         assistant_text = dsml_cleaned
 
-                # DSML 清理可能改变了已逐 token 流式输出的文本 -> 用清理后内容覆盖
-                if assistant_text != _raw_text:
-                    yield StreamEvent.think_replace(assistant_text)
-
-                # ── 根据是否有工具调用，决定文本是推理还是回复 ──
-                if assistant_text and pending_tool_calls:
-                    # 有工具调用 -> 文本是推理过程，已逐 token 流式输出，无需再整段发送
-                    pass
-                elif assistant_text and not pending_tool_calls:
-                    # 无工具调用但有文本 -> 检查是否应该继续调用工具
+                # ── 无工具调用但有文本 -> 检查是否应该继续调用工具 ──
+                if assistant_text and not pending_tool_calls:
                     has_prior_tools = any(m.role == Role.TOOL for m in self.context.messages)
                     # 仅在强制工具模式（force_tool）下重试；深度模式允许 Agent 自主
                     # 返回纯文本澄清反问（ADR-0017 D2：反问触发条件由 Agent 自主判断），
@@ -420,7 +408,11 @@ class Agent:
                             f"LLM 返回纯文本但未调用工具（第 {text_only_retries}/{max_text_only_retries} 次重试）"
                         )
                         # 先把 LLM 的文本回复追加到上下文，让 LLM 知道自己说了什么
-                        self.context.append_assistant(assistant_text, None)
+                        self.context.append_assistant(
+                            assistant_text,
+                            None,
+                            reasoning_content=assistant_reasoning or None,
+                        )
                         # 追加 system 提示，引导 LLM 继续调用工具
                         self.context.append_system(
                             "你刚才返回了文字但没有调用工具。请根据对话上下文，"
@@ -430,8 +422,7 @@ class Agent:
                         iterations -= 1
                         continue
                     # 确实是最终回复（澄清反问或分析摘要）
-                    # 文本已作为思考逐 token 流式输出，流末判定为回答 -> 通知前端转换
-                    yield StreamEvent.think_to_answer(assistant_text)
+                    # reasoning 与 content 已分离下发，无需 thinking_to_answer 转换
 
                 # ── 发送工具调用事件 ──
                 if pending_tool_calls:
@@ -439,6 +430,7 @@ class Agent:
                         yield StreamEvent.for_tool_call(tc)
 
                 # ── 追加助手消息到上下文 ──
+                # 工具调用轮次必须回传 reasoning_content（DeepSeek 思考模式要求）
                 tool_calls_raw = []
                 for tc in pending_tool_calls:
                     tool_calls_raw.append(
@@ -449,7 +441,9 @@ class Agent:
                         }
                     )
                 self.context.append_assistant(
-                    assistant_text, tool_calls_raw if tool_calls_raw else None
+                    assistant_text,
+                    tool_calls_raw if tool_calls_raw else None,
+                    reasoning_content=assistant_reasoning or None,
                 )
 
                 # ── 检查是否有工具调用 ──
@@ -521,11 +515,15 @@ class Agent:
 
                     # 执行工具：流式工具走 execute_stream，普通工具走 execute
                     if self.tools.is_streaming(tc.name):
-                        # 流式工具：透传 PROGRESS 事件，提取最终 ToolResult
+                        # 流式工具：透传 PROGRESS / THINK 事件，提取最终 ToolResult
                         result = None
                         async for event in self.tools.execute_stream(tc.id, tc.name, tc.arguments):
                             if isinstance(event, StreamEvent):
                                 if event.event_type == ActionType.PROGRESS:
+                                    yield event
+                                elif event.event_type == ActionType.THINK:
+                                    # 透传管线节点思考（含 node metadata），供 SSE 按 agent 分组
+                                    # （此前只透传 PROGRESS/TOOL_RESULT，丢 THINK——真实 bug 修复）
                                     yield event
                                 elif (
                                     event.event_type == ActionType.TOOL_RESULT and event.tool_result

@@ -111,9 +111,15 @@ def build_schema_from_function(
 
 @dataclass
 class LLMResponse:
-    """LLM 响应 -- 可能是增量文本或工具调用"""
+    """LLM 响应 -- 可能是增量文本、增量思考或工具调用
+
+    思考模式（DeepSeek）下：
+    - reasoning_delta：原生思维链增量（reasoning_content），先于 text_delta 输出
+    - text_delta：最终回答增量（content），与 reasoning_delta 分离
+    """
 
     text_delta: str = ""
+    reasoning_delta: str = ""  # 原生思考增量（DeepSeek reasoning_content）
     tool_calls: list[ToolCallRequest] | None = None
     is_finished: bool = False
     usage: dict[str, int] | None = None

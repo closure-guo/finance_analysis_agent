@@ -264,6 +264,10 @@ class ToolManager:
             async for event in gen:
                 if event.event_type == ActionType.PROGRESS:
                     yield event
+                elif event.event_type == ActionType.THINK:
+                    # 透传管线节点思考（含 node metadata），供 SSE 按 agent 分组
+                    # （与 loop.py 同步：此前只透传 PROGRESS/TOOL_RESULT，丢 THINK）
+                    yield event
                 elif event.event_type == ActionType.TOOL_RESULT:
                     # 流式工具的最终结果
                     if event.tool_result:

@@ -122,9 +122,27 @@ class ContextManager:
         """追加用户消息"""
         self.append(Message(role=Role.USER, content=content))
 
-    def append_assistant(self, content: str, tool_calls: list[dict] | None = None) -> None:
-        """追加助手消息"""
-        self.append(Message(role=Role.ASSISTANT, content=content, tool_calls=tool_calls))
+    def append_assistant(
+        self,
+        content: str,
+        tool_calls: list[dict] | None = None,
+        reasoning_content: str | None = None,
+    ) -> None:
+        """追加助手消息
+
+        Args:
+            content: 最终回答文本（content）
+            tool_calls: 工具调用记录
+            reasoning_content: DeepSeek 原生思维链，工具调用轮次需回传 API
+        """
+        self.append(
+            Message(
+                role=Role.ASSISTANT,
+                content=content,
+                tool_calls=tool_calls,
+                reasoning_content=reasoning_content,
+            )
+        )
 
     def append_system(self, content: str) -> None:
         """追加系统提示消息"""
@@ -212,15 +230,20 @@ class ContextManager:
             if m.role == Role.USER:
                 last_user_idx = i
 
-        # 删除 last_user_idx 之前的所有 think（以 <thinking> 标记）
+        # 删除 last_user_idx 之前的所有旧式 think（以 <thinking> 标记，遗留机制）
+        # 清理非工具调用轮次的 reasoning_content 节省 token（DeepSeek 思考模式：
+        # 非工具调用轮次的 reasoning_content 可不回传，API 忽略；工具调用轮次必须保留）
         to_remove = []
         for i, m in enumerate(self.messages):
-            if (
-                i < last_user_idx
-                and m.role == Role.ASSISTANT
-                and m.content.startswith("<thinking>")
-            ):
-                to_remove.append(i)
+            if i < last_user_idx and m.role == Role.ASSISTANT:
+                # 旧式 <thinking> 标记消息：整体删除
+                if m.content.startswith("<thinking>"):
+                    to_remove.append(i)
+                # 原生思考：非工具调用轮次的 reasoning_content 清理（工具调用轮次保留）
+                elif m.reasoning_content and not m.tool_calls:
+                    self._current_tokens -= estimate_tokens(m.reasoning_content)
+                    m.reasoning_content = None
+                    removed += 1
 
         for i in reversed(to_remove):
             removed += 1

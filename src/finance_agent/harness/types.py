@@ -81,19 +81,31 @@ class Message:
     Claude Code 的设计洞察：消息不只是 (role, content) 元组，
     而是包含完整元数据的上下文单元。tool_calls 和 tool_call_id
     使消息自描述，无需外部状态就能重建对话历史。
+
+    DeepSeek 思考模式：reasoning_content 是原生思维链，工具调用轮次
+    必须在后续请求中回传（否则 API 返回 400），非工具调用轮次可省略。
     """
 
     role: Role
     content: str
     tool_calls: list[ToolCallDict] | None = None
     tool_call_id: str | None = None
+    reasoning_content: str | None = None  # DeepSeek 原生思维链
     timestamp: float = field(default_factory=time.time)
 
     def to_api_dict(self) -> dict[str, Any]:
-        """转换为 LLM API 请求格式"""
+        """转换为 LLM API 请求格式
+
+        DeepSeek 思考模式约束：带 tool_calls 的 assistant 消息必须输出
+        reasoning_content 字段回传 API，否则触发 400 Missing reasoning_content。
+        非工具调用轮次不输出以节省 token（API 忽略）。
+        """
         result: dict[str, Any] = {"role": self.role.value, "content": self.content}
         if self.tool_calls:
             result["tool_calls"] = self.tool_calls
+            # 工具调用轮次必须回传 reasoning_content（DeepSeek 思考模式要求）
+            if self.reasoning_content:
+                result["reasoning_content"] = self.reasoning_content
         if self.tool_call_id:
             result["tool_call_id"] = self.tool_call_id
         return result
@@ -210,8 +222,9 @@ class StreamEvent:
     metadata: dict[str, Any] | None = None  # 新增
 
     @classmethod
-    def think(cls, content: str) -> StreamEvent:
-        return cls(event_type=ActionType.THINK, content=content)
+    def think(cls, content: str, metadata: dict[str, Any] | None = None) -> StreamEvent:
+        # metadata 可携带管线节点名（{"node": "bull_r1"}），供 SSE 透传给前端按 agent 分组
+        return cls(event_type=ActionType.THINK, content=content, metadata=metadata)
 
     @classmethod
     def think_to_answer(cls, content: str) -> StreamEvent:
