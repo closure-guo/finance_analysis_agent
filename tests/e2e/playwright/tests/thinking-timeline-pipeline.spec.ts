@@ -47,18 +47,24 @@ test.describe('管线模式 PipelineCard 按 agent 阶段分组', () => {
     // 多个不同 agent（技术面/Trader/基金经理）各自成为独立分组标题。
     // 若 node 字段丢失（delta 修复前的 bug），所有管线思考归入 nodeTimelines['']，
     // 不会渲染任何 nodeDisplayName 分组标题——本断言正是对该 bug 的回归防护。
+    // 选择器锁定分组标题（div.text-xs.font-semibold），避免与 analyst 卡片的
+    // nameZh（span.text-[10px]，同样含"Trader"等角色名）冲突导致 strict violation。
+    const groupTitle = (name: string) =>
+      page.locator('div.text-xs.font-semibold', { hasText: new RegExp(`^${name}$`) })
     await Promise.all([
-      expect(page.getByText('技术面分析师', { exact: true })).toBeVisible({ timeout: 120_000 }),
-      expect(page.getByText('Trader', { exact: true })).toBeVisible({ timeout: 120_000 }),
-      expect(page.getByText('基金经理', { exact: true })).toBeVisible({ timeout: 120_000 }),
+      expect(groupTitle('技术面分析师')).toBeVisible({ timeout: 120_000 }),
+      expect(groupTitle('Trader')).toBeVisible({ timeout: 120_000 }),
+      expect(groupTitle('基金经理')).toBeVisible({ timeout: 120_000 }),
     ])
   })
 
   test('2. 分组内渲染该 agent 的思考横幅', async ({ page }) => {
     // 管线分组区域的思考横幅（"思考中/思考已完成"）。用 Promise.all 在管线卡可见窗口内
     // 同时捕获分组标题与横幅，避免流式中间态窗口短导致的串行断言竞态。
+    const groupTitle = (name: string) =>
+      page.locator('div.text-xs.font-semibold', { hasText: new RegExp(`^${name}$`) })
     await Promise.all([
-      expect(page.getByText('技术面分析师', { exact: true })).toBeVisible({ timeout: 120_000 }),
+      expect(groupTitle('技术面分析师')).toBeVisible({ timeout: 120_000 }),
       expect(
         page.getByRole('button', { name: /思考已完成|思考中/ }).first()
       ).toBeVisible({ timeout: 120_000 }),
