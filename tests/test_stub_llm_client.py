@@ -1,9 +1,4 @@
-"""StubLLMClient 单元测试。
-
-注意：项目当前未安装 pytest-asyncio（仅 pyproject.toml 配置了 asyncio_mode，
-但插件本身缺失），故采用计划文档注释中的回退方案：用 asyncio.run() 包裹异步逻辑，
-保持同步 def test_* 签名。
-"""
+"""StubLLMClient 单元测试。"""
 
 import asyncio
 

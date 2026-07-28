@@ -15,7 +15,7 @@
 | L1 前端  | React 18 + Vite               | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
 | L2 Agent | LangGraph                     | 5 层架构: 4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager |
 | L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（v2.0 计划 Chroma）       |
-| L4 LLM   | DeepSeek (deepseek-v4-pro)    | LiteLLM 路由                                                        |
+| L4 LLM   | DeepSeek (deepseek-chat)      | LiteLLM 路由                                                        |
 
 ### 1.2 核心原则
 
@@ -360,8 +360,8 @@ class AnalysisState(TypedDict, total=False):
     # ── PREP 新增（ADR-0011）──
     kline_data: pd.DataFrame | None          # 个股日K线(1-2年OHLCV)
     market_kline: pd.DataFrame | None        # 沪深300日K线(Beta基准)
-    macro_indicators: dict | None            # CPI/PMI/M2/LPR (metrics/macro.py)
-    news_list: list[dict] | None             # 新闻列表(metrics/sentiment.py 统计)
+    macro_indicators: dict | None            # CPI/PMI/M2/LPR (已移除/未实现)
+    news_list: list[dict] | None             # 新闻列表(已移除/未实现)
     technical_indicators: dict | None        # MACD/RSI/布林带/KDJ (metrics/technical.py)
     risk_metrics: dict | None                # max_drawdown/annual_volatility/beta/VaR (metrics/risk.py)
 
@@ -419,7 +419,7 @@ def after_fund_manager(state):
 | --------- | ----------------- | --------------- | ------------------------------- |
 | 前端      | React 18 + Vite   | Gradio          | 组件生态 + 状态管理(zustand) + ECharts 图表   |
 | Agent     | LangGraph         | CrewAI          | Supervisor + Sub-graph 原生支持 |
-| LLM(开发) | DeepSeek-V4-Pro  | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
+| LLM(开发) | deepseek-chat    | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
 | LLM 路由  | LiteLLM           | 自定义          | 100+ 模型统一接口               |
 | PDF       | pdfplumber        | Unstructured.io | 表格准确率 98.3%，速度快 6x     |
 | 数据      | AKShare           | Tushare         | 免费无 API Key                  |
