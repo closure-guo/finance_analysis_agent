@@ -52,13 +52,13 @@ class TestReactLoop:
     @pytest.mark.asyncio
     async def test_tool_call_then_answer(self, echo_tool):
         """Agent 调用工具后给出最终回答。"""
-        # 第一次 LLM 调用：返回工具调用
-        # 第二次 LLM 调用：返回最终回答
+        # 第一次 LLM 调用：返回思考（reasoning_delta）+ 工具调用
+        # 第二次 LLM 调用：返回最终回答（text_delta）
         mock_llm = MockLLMClient(
             [
                 [
                     LLMResponse(
-                        text_delta="我来帮你查一下",
+                        reasoning_delta="我来帮你查一下",
                         tool_calls=[_make_tool_call("echo", {"text": "hello"})],
                         is_finished=True,
                     )
@@ -85,15 +85,13 @@ class TestReactLoop:
         async for event in agent.run("测试"):
             events.append(event)
 
-        # 验证事件序列包含 TOOL_CALL, TOOL_RESULT, THINK_TO_ANSWER
-        # （最终回答不再发 ANSWER，改为 THINK_TO_ANSWER：思考已逐 token 流式，流末转为回答）
+        # 验证事件序列包含 TOOL_CALL, TOOL_RESULT, ANSWER
+        # （DeepSeek 思考模式：reasoning_delta -> THINK，text_delta -> ANSWER，原生分离）
         event_types = [e.event_type for e in events]
         assert ActionType.TOOL_CALL in event_types, f"缺少 TOOL_CALL，实际: {event_types}"
         assert ActionType.TOOL_RESULT in event_types, f"缺少 TOOL_RESULT，实际: {event_types}"
-        assert ActionType.THINK_TO_ANSWER in event_types, (
-            f"缺少 THINK_TO_ANSWER，实际: {event_types}"
-        )
-        # 工具调用前的文本应作为 THINK 流式输出
+        assert ActionType.ANSWER in event_types, f"缺少 ANSWER，实际: {event_types}"
+        # 工具调用前的思考应作为 THINK 流式输出（来自 reasoning_delta）
         assert ActionType.THINK in event_types, f"缺少 THINK，实际: {event_types}"
 
         # TOOL_CALL 在 TOOL_RESULT 之前
@@ -133,10 +131,8 @@ class TestReactLoop:
             events.append(event)
 
         event_types = [e.event_type for e in events]
-        # 直接回答：文本作为 THINK 流式输出，流末转为 THINK_TO_ANSWER（不再发 ANSWER）
-        assert ActionType.THINK_TO_ANSWER in event_types, (
-            f"缺少 THINK_TO_ANSWER，实际: {event_types}"
-        )
+        # 直接回答：text_delta 作为 ANSWER 流式输出（DeepSeek 思考模式原生分离）
+        assert ActionType.ANSWER in event_types, f"缺少 ANSWER，实际: {event_types}"
         assert ActionType.TOOL_CALL not in event_types
 
     @pytest.mark.asyncio
@@ -149,9 +145,9 @@ class TestReactLoop:
         mock_llm = MockLLMClient(
             [
                 [
-                    LLMResponse(text_delta="我", is_finished=False),
-                    LLMResponse(text_delta="来", is_finished=False),
-                    LLMResponse(text_delta="查一下", is_finished=False),
+                    LLMResponse(reasoning_delta="我", is_finished=False),
+                    LLMResponse(reasoning_delta="来", is_finished=False),
+                    LLMResponse(reasoning_delta="查一下", is_finished=False),
                     LLMResponse(
                         tool_calls=[_make_tool_call("echo", {"text": "hi"})],
                         is_finished=True,
@@ -177,7 +173,7 @@ class TestReactLoop:
             events.append(event)
 
         think_events = [e for e in events if e.event_type == ActionType.THINK]
-        # "我来查一下" 拆成 3 个增量 -> 至少 3 个 THINK 事件（逐 token 流式，非整段）
+        # "我来查一下" 拆成 3 个 reasoning_delta 增量 -> 至少 3 个 THINK 事件（逐 token 流式，非整段）
         assert len(think_events) >= 3, (
             f"思考未逐 token 流式：THINK 事件数 {len(think_events)}，期望 >= 3，"
             f"事件序列: {[e.event_type for e in events]}"
@@ -185,12 +181,17 @@ class TestReactLoop:
         # 工具调用前的 3 个 THINK 文本可拼接还原原文
         pre_tool_think = "".join(e.content for e in think_events[:3])
         assert pre_tool_think == "我来查一下", f"思考文本不匹配: {pre_tool_think!r}"
-        # 第二轮回答应转为 THINK_TO_ANSWER（不再发 ANSWER）
-        assert ActionType.THINK_TO_ANSWER in [e.event_type for e in events]
+        # 第二轮 text_delta 作为 ANSWER 流式输出（DeepSeek 思考模式原生分离）
+        assert ActionType.ANSWER in [e.event_type for e in events]
 
     @pytest.mark.asyncio
     async def test_dsml_thinking_replaced_after_stream(self, echo_tool):
-        """DSML 标记流式输出后，流末应发 THINK_REPLACE 用清理后文本覆盖。"""
+        """DSML 标记从 text 中清理后作为 ANSWER 下发，标记不泄漏给用户。
+
+        DeepSeek 思考模式：DSML 标记出现在 content（text_delta）中，loop 安全
+        流式跳过标记部分，流末解析为结构化工具调用并清理文本，清理后的安全部分
+        作为 ANSWER 下发（不再发 THINK_REPLACE）。
+        """
         bar = "\uff5c"  # 全角竖线 ｜
         dsml = (
             "让我查一下 "
@@ -223,15 +224,12 @@ class TestReactLoop:
         event_types = [e.event_type for e in events]
         # DSML 被还原为结构化工具调用
         assert ActionType.TOOL_CALL in event_types, f"DSML 未解析为工具调用: {event_types}"
-        # 流末清理后发 THINK_REPLACE 覆盖原始 DSML 文本
-        assert ActionType.THINK_REPLACE in event_types, f"缺少 THINK_REPLACE: {event_types}"
-        replace_event = next(e for e in events if e.event_type == ActionType.THINK_REPLACE)
-        assert "DSML" not in replace_event.content, (
-            f"THINK_REPLACE 仍含 DSML: {replace_event.content!r}"
-        )
-        assert bar not in replace_event.content, (
-            f"THINK_REPLACE 仍含竖线标记: {replace_event.content!r}"
-        )
+        # 新版 reasoning/text 分离：DSML 标记从 text 中清理，安全部分作为 ANSWER 流式。
+        # 验证所有 ANSWER 内容不含 DSML 标记/竖线（标记未泄漏给用户）。
+        answer_events = [e for e in events if e.event_type == ActionType.ANSWER]
+        answer_text = "".join(e.content for e in answer_events)
+        assert "DSML" not in answer_text, f"ANSWER 仍含 DSML: {answer_text!r}"
+        assert bar not in answer_text, f"ANSWER 仍含竖线标记: {answer_text!r}"
 
     @pytest.mark.asyncio
     async def test_max_iterations_truncation(self, echo_tool):
