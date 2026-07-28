@@ -356,6 +356,8 @@ class Agent:
                 assistant_text = ""
                 assistant_reasoning = ""  # 累积 reasoning_content 用于上下文回传
                 pending_tool_calls: list[ToolCallRequest] = []
+                _streamed_answer_len = 0  # assistant_text 中已作为 ANSWER 流式输出的偏移量
+                _dsml_active = False  # 检测到 DSML 标记后停止流式，留待流末清理
 
                 # 第一次迭代且 force_tool=True 时，强制调用工具
                 _tool_choice = "required" if (force_tool and iterations == 1) else "auto"
@@ -371,9 +373,20 @@ class Agent:
                         yield StreamEvent.think(chunk.reasoning_delta)
 
                     # 回答增量 -> ANSWER 事件（回答区消费，与思考分离）
+                    # 安全流式：DSML 标记部分不下发，避免在流末清理前泄漏给用户
                     if chunk.text_delta:
                         assistant_text += chunk.text_delta
-                        yield StreamEvent.answer(chunk.text_delta)
+                        if not _dsml_active:
+                            _safe_end, _dsml_found = _safe_think_len(
+                                assistant_text, _streamed_answer_len
+                            )
+                            if _safe_end > _streamed_answer_len:
+                                yield StreamEvent.answer(
+                                    assistant_text[_streamed_answer_len:_safe_end]
+                                )
+                            _streamed_answer_len = _safe_end
+                            if _dsml_found:
+                                _dsml_active = True
 
                     if chunk.tool_calls:
                         pending_tool_calls = chunk.tool_calls
@@ -390,6 +403,10 @@ class Agent:
                     if dsml_calls:
                         pending_tool_calls = dsml_calls
                         assistant_text = dsml_cleaned
+                        # DSML 清理后，把未流式的安全部分下发给消费者
+                        if _streamed_answer_len < len(assistant_text):
+                            yield StreamEvent.answer(assistant_text[_streamed_answer_len:])
+                        _streamed_answer_len = len(assistant_text)
 
                 # ── 无工具调用但有文本 -> 检查是否应该继续调用工具 ──
                 if assistant_text and not pending_tool_calls:
