@@ -52,7 +52,25 @@ function appendThinkingToken(timeline: TimelineItem[], token: string): TimelineI
     next[next.length - 1] = { ...last, content: last.content + token }
     return next
   }
-  return [...timeline, { type: 'thinking', content: token }]
+  return [...timeline, { type: 'thinking', content: token, done: false }]
+}
+
+// 将 timeline 末尾未完成（done 不为 true）的 thinking item 置为完成态
+function closeLastThinking(timeline: TimelineItem[]): TimelineItem[] {
+  const last = timeline[timeline.length - 1]
+  if (last && last.type === 'thinking' && last.done !== true) {
+    const next = timeline.slice()
+    next[next.length - 1] = { ...last, done: true }
+    return next
+  }
+  return timeline
+}
+
+// 将所有未完成 thinking item 置为完成态（chat_done / error 收口用）
+function closeAllThinking(timeline: TimelineItem[]): TimelineItem[] {
+  return timeline.map((item) =>
+    item.type === 'thinking' && item.done !== true ? { ...item, done: true } : item,
+  )
 }
 
 // 对话流事件（快速模式 + 深度澄清阶段共用）应用到消息的 agentTimeline。
@@ -82,7 +100,7 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
         const idx = last.content.lastIndexOf(event.answer)
         if (idx >= 0) {
           const next = timeline.slice()
-          next[next.length - 1] = { ...last, content: last.content.slice(0, idx) }
+          next[next.length - 1] = { ...last, content: last.content.slice(0, idx), done: true }
           return { ...msg, agentTimeline: next, chatResponse: event.answer }
         }
       }
@@ -127,10 +145,11 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
     case 'tool_call': {
       // 搜索类工具由 search_* 事件驱动 SearchBanner，不生成 tool_call item
       if (isSearchToolName(event.name)) return msg
+      // 思考后接工具调用：末尾未完成 thinking item 显式收口
       return {
         ...msg,
         agentTimeline: [
-          ...timeline,
+          ...closeLastThinking(timeline),
           { type: 'tool_call', name: event.name, args: summarizeToolArgs(event.args), done: false },
         ],
       }
@@ -172,11 +191,12 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
     }
 
     case 'chat_token':
-      return { ...msg, chatResponse: (msg.chatResponse || '') + event.token }
+      // 思考后接回答：末尾未完成 thinking item 显式收口
+      return { ...msg, chatResponse: (msg.chatResponse || '') + event.token, agentTimeline: closeLastThinking(timeline) }
 
     case 'chat_done': {
-      // 流式结束：所有 thinking item 提取标题写入 title
-      const next = timeline.map((item) =>
+      // 流式结束：所有 thinking item 收口并提取标题写入 title
+      const next = closeAllThinking(timeline).map((item) =>
         item.type === 'thinking' && item.title === undefined
           ? { ...item, title: extractThinkingTitleLocal(item.content) }
           : item,
@@ -185,7 +205,7 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
     }
 
     case 'error':
-      return { ...msg, chatResponse: `❌ ${event.message || '未知错误'}`, streaming: false }
+      return { ...msg, chatResponse: `❌ ${event.message || '未知错误'}`, streaming: false, agentTimeline: closeAllThinking(timeline) }
 
     default:
       return msg
@@ -194,13 +214,29 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
 
 // 管线模式：thinking_token 按 node 字段写入对应 agent 阶段的 timeline（nodeTimelines）。
 // node 缺失时归入 '' 键（与历史未分组思考兼容）。
+// 收到新节点的 thinking_token 时，将其他节点未完成的 thinking item 防御性收口。
 export function applyPipelineThinkingToken(msg: UIMessage, event: SSEEvent): UIMessage {
   if (event.type !== 'thinking_token') return msg
   const node = event.node || ''
   const nodeTimelines = { ...(msg.nodeTimelines ?? {}) }
+  // 防御性收口：其他节点末尾未完成的 thinking item 置为完成态
+  for (const key of Object.keys(nodeTimelines)) {
+    if (key !== node) {
+      nodeTimelines[key] = closeLastThinking(nodeTimelines[key])
+    }
+  }
   const current = nodeTimelines[node] ?? []
   nodeTimelines[node] = appendThinkingToken(current, event.token)
   return { ...msg, nodeTimelines }
+}
+
+// 管线模式：node_complete 将该节点末尾未完成的 thinking item 显式置为完成态（折叠横幅）。
+export function applyPipelineNodeComplete(msg: UIMessage, nodeId: string): UIMessage {
+  const nodeTimelines = msg.nodeTimelines
+  if (!nodeTimelines || !nodeTimelines[nodeId]) return msg
+  const next = { ...nodeTimelines }
+  next[nodeId] = closeLastThinking(next[nodeId])
+  return { ...msg, nodeTimelines: next }
 }
 
 // 历史会话恢复：从 chat_history 的 thinking（合并字符串）+ tool_calls 重建 agentTimeline。

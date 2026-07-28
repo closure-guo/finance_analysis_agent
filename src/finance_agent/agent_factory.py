@@ -280,6 +280,7 @@ def _make_run_deep_analysis(
 
         accumulated: dict = dict(initial_state)
         completed: set[str] = set()
+        started_nodes: set[str] = set()  # 已发 node_start 的节点（去重）
 
         # 在线程中运行同步 graph.stream，避免阻塞事件循环
         # ADR-0015：CallbackHandler 通过 langchain callback 机制工作（不依赖 OTel
@@ -331,6 +332,21 @@ def _make_run_deep_analysis(
                     completed.add(_ALL_NODES[i])
 
                 step_info = {s["node"]: s for s in LAYER_STEPS}.get(node_name, {})
+
+                # 节点首次出现：先发 node_start（与 fast path 事件序列对齐）
+                if node_name not in started_nodes:
+                    started_nodes.add(node_name)
+                    yield StreamEvent.progress(
+                        content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
+                        metadata={
+                            "node": node_name,
+                            "sse_type": "node_start",
+                            "node_id": node_name,
+                            "layer": step_info.get("layer", ""),
+                            "desc": step_info.get("desc", node_name),
+                        },
+                    )
+
                 output = _extract_output(
                     node_name, update if isinstance(update, dict) else {}, accumulated
                 )
@@ -729,10 +745,20 @@ async def stream_agent_to_sse(
             )
 
         elif event.event_type == ActionType.PROGRESS:
-            # 映射为前端期望的 node_complete 事件
+            # 映射为前端期望的 node_start / node_complete 事件
             meta = event.metadata or {}
             sse_type = meta.get("sse_type", "node_complete")
-            if sse_type == "node_complete":
+            if sse_type == "node_start":
+                yield _sse(
+                    {
+                        "type": "node_start",
+                        "node_id": meta.get("node_id", ""),
+                        "layer": meta.get("layer", ""),
+                        "desc": meta.get("desc", ""),
+                        "timestamp": ts,
+                    }
+                )
+            elif sse_type == "node_complete":
                 yield _sse(
                     {
                         "type": "node_complete",

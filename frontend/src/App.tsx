@@ -4,7 +4,8 @@ import remarkGfm from 'remark-gfm'
 import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry } from './types'
 import { ChartsSection } from './Charts'
 import { SearchBanner } from './SearchBanner'
-import { applyChatStreamEvent, applyPipelineThinkingToken, buildTimelineFromHistory, nodeDisplayName } from './timeline'
+import { applyChatStreamEvent, applyPipelineThinkingToken, applyPipelineNodeComplete, buildTimelineFromHistory, nodeDisplayName } from './timeline'
+import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations, recordDuration } from './eta'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 
 // 搜索类工具集合：这类工具的状态与结果由独立搜索横幅（SearchBanner）承载，
@@ -272,6 +273,7 @@ export default function App() {
         currentNode: '',
         nodeOutputs: {},
         progress: 0,
+        startedAt: Date.now(),
       }
       pipelineMsgId = pm.id
       pipelineMsgRef.current = pm
@@ -536,6 +538,7 @@ export default function App() {
 
       case 'node_complete':
         updateMessage(pipelineMsg.id, {
+          ...applyPipelineNodeComplete(pipelineMsg, event.node_id),
           completedNodes: event.completed,
           currentNode: '',
           progress: event.progress,
@@ -574,6 +577,8 @@ export default function App() {
       }
 
       case 'report_ready': {
+        // 管线完成：记录本次总耗时用于 ETA 历史中位数预估
+        if (event.duration_ms > 0) recordDuration(event.duration_ms)
         const webSources = event.web_sources || []
         if (streamingReportRef.current) {
           updateMessage(streamingReportRef.current.id, {
@@ -1448,6 +1453,22 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
   const progress = msg.progress || 0
   const outputs = msg.nodeOutputs || {}
 
+  // ETA 每秒刷新（仅管线运行中；完成后停止计时）
+  const pipelineDone = completed.includes('generate_file') || completed.includes('fund_manager')
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (pipelineDone) return
+    const timer = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [pipelineDone])
+
+  const elapsedMs = msg.startedAt ? Math.max(0, nowMs - msg.startedAt) : 0
+  const estimatedTotalMs = estimateTotalMs(loadDurations())
+  const remainingMs = estimateRemainingMs(elapsedMs, progress, estimatedTotalMs)
+  const etaText = pipelineDone
+    ? `总耗时 ${formatDurationMs(elapsedMs)}`
+    : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
+
   // Determine stage status
   const getStageStatus = (node: string) => {
     // Check if this stage or any node in the same layer is completed
@@ -1471,6 +1492,24 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
       if (prevStatus === 'completed') return 'running'  // Next stage should be running
     }
     return 'pending'
+  }
+
+  // 阶段→子节点映射（与 getStageStatus 的 layerMap 一致），用于节点级计时定位
+  const stageLayerMap: Record<string, string[]> = {
+    'check_cache': ['check_cache', 'fetch_data', 'validate_financials', 'compute_metrics'],
+    'technical_analyst': ['technical_analyst', 'verify_citations'],
+    'bull_r1': ['bull_r1', 'bear_r1', 'bull_r2', 'bear_r2', 'research_manager'],
+    'trader': ['trader'],
+    'aggressive_r1': ['aggressive_r1', 'conservative_r1', 'neutral_r1', 'aggressive_r2', 'conservative_r2', 'neutral_r2', 'risk_judge'],
+    'fund_manager': ['fund_manager', 'generate_report', 'generate_file'],
+  }
+  // 当前 running 节点的已运行时长：node_start 到达时前端尚无独立时间戳，
+  // 用"该阶段首个未完成的子节点"近似——currentNode 即 running 节点本身
+  const runningNodeElapsed = current && msg.startedAt ? elapsedMs : 0
+  const nodeElapsedFor = (stageNode: string): number | null => {
+    if (!current) return null
+    const nodes = stageLayerMap[stageNode] || [stageNode]
+    return nodes.includes(current) ? runningNodeElapsed : null
   }
 
   // Get analyst cards from outputs
@@ -1507,7 +1546,7 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                   <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>分析进度</span>
                   <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{msg.content || '准备中...'}</span>
                 </div>
-                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>~90s</span>
+                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
               </div>
               <div className="flex items-center gap-1 mb-4">
                 <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-overlay-l1)' }}>
@@ -1529,6 +1568,14 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                           <i className={`fas fa-${step.icon} text-xs`}></i>
                         </div>
                         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{step.desc}</span>
+                        {(() => {
+                          const nodeElapsed = nodeElapsedFor(step.node)
+                          return nodeElapsed !== null ? (
+                            <span className="text-[10px] font-mono" style={{ color: 'var(--status-warning-default)' }}>
+                              {formatDurationMs(nodeElapsed)}
+                            </span>
+                          ) : null
+                        })()}
                       </div>
                       {i < PIPELINE_STEPS.length - 1 && (
                         <div className="flex-1 flex items-center justify-center pt-2 px-1">

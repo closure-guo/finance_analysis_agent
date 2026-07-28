@@ -126,6 +126,74 @@ class TestRunDeepAnalysisStreaming:
         assert tool_result.metadata["chart_data"] == chart_data
 
     @pytest.mark.asyncio
+    async def test_node_start_emitted_before_node_complete(self):
+        """agent 路径：每个图节点首次出现时先产出 node_start，再产出 node_complete。"""
+        chunks = [
+            _make_node_chunk("check_cache", status="done"),
+            _make_node_chunk("fetch_data", stock_quote={"name": "贵州茅台"}),
+            _make_node_chunk("compute_metrics", metrics={"pe": 30}),
+            _make_final_chunk(report="# 报告", chart_data={}, analyst_reports={}),
+        ]
+        fake_graph = FakeGraph(chunks)
+
+        with patch("finance_agent.graph.build_5layer_graph", return_value=fake_graph):
+            tool_fn = _make_run_deep_analysis(api_key="test")
+            events = []
+            async for event in tool_fn(stock_code="600519"):
+                events.append(event)
+
+        progress_events = [e for e in events if e.event_type == ActionType.PROGRESS]
+        # 每个节点应有 node_start + node_complete 两个 PROGRESS 事件
+        starts = [e for e in progress_events if e.metadata.get("sse_type") == "node_start"]
+        completes = [e for e in progress_events if e.metadata.get("sse_type") == "node_complete"]
+
+        start_nodes = [e.metadata.get("node") for e in starts]
+        complete_nodes = [e.metadata.get("node") for e in completes]
+
+        assert "check_cache" in start_nodes
+        assert "fetch_data" in start_nodes
+        assert "compute_metrics" in start_nodes
+        assert "check_cache" in complete_nodes
+        assert "fetch_data" in complete_nodes
+
+        # node_start 必须携带 node/layer/desc
+        for e in starts:
+            assert e.metadata.get("node")
+            assert e.metadata.get("layer")
+            assert e.metadata.get("desc")
+
+        # 事件顺序：对同一节点，node_start 先于 node_complete
+        seq = [(e.metadata.get("node"), e.metadata.get("sse_type")) for e in progress_events]
+        first_start = seq.index(("check_cache", "node_start"))
+        first_complete = seq.index(("check_cache", "node_complete"))
+        assert first_start < first_complete
+
+    @pytest.mark.asyncio
+    async def test_node_start_not_repeated_for_same_node(self):
+        """同一节点多次出现（多轮 updates chunk）时，node_start 只发一次。"""
+        chunks = [
+            _make_node_chunk("bull_r1", round=1),
+            _make_node_chunk("bull_r1", round=1, extra="dup"),
+            _make_node_chunk("bear_r1", round=1),
+            _make_final_chunk(report="# 报告", chart_data={}, analyst_reports={}),
+        ]
+        fake_graph = FakeGraph(chunks)
+
+        with patch("finance_agent.graph.build_5layer_graph", return_value=fake_graph):
+            tool_fn = _make_run_deep_analysis(api_key="test")
+            events = []
+            async for event in tool_fn(stock_code="600519"):
+                events.append(event)
+
+        progress_events = [e for e in events if e.event_type == ActionType.PROGRESS]
+        starts = [
+            e
+            for e in progress_events
+            if e.metadata.get("sse_type") == "node_start" and e.metadata.get("node") == "bull_r1"
+        ]
+        assert len(starts) == 1
+
+    @pytest.mark.asyncio
     async def test_closure_params_injected_into_graph_input(self):
         """闭包参数（analysis_type, peer_codes, enable_web_search）注入到 graph 初始状态。"""
         chunks = [_make_final_chunk(report="# 报告", chart_data={}, analyst_reports={})]

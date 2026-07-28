@@ -288,7 +288,7 @@ export interface ToolCallEntry {
 // - search：搜索（web_search / batch_web_search 由 search_* 事件驱动，不生成 tool_call 条目）
 // - tool_call：其他工具调用（每次调用一个独立条目）
 export type TimelineItem =
-  | { type: 'thinking'; content: string; title?: string }
+  | { type: 'thinking'; content: string; title?: string; done?: boolean }
   | {
       type: 'search'
       query: string
@@ -306,6 +306,8 @@ export interface UIMessage {
   currentNode?: string
   nodeOutputs?: Record<string, any>
   progress?: number
+  // 管线启动时间戳（ms epoch），用于 ETA 已用时长计算
+  startedAt?: number
   // Report-specific
   reportMarkdown?: string
   chartData?: ChartData
