@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { TimelineRenderer, type TimelineBannerComponents } from '../TimelineRenderer'
 import { timelineToolCallToEntry, nodeDisplayName } from '../timeline'
@@ -59,10 +59,19 @@ describe('TimelineRenderer - 按 agentTimeline 数组顺序渲染', () => {
 
   it('每个 thinking item 渲染为独立 ThinkingBanner（独立折叠状态）', () => {
     render(<TimelineRenderer timeline={timeline} streaming={false} components={components} />)
-    // 两段思考各自独立：思考1有标题（展开态横幅固定"思考已完成"，框内标题加粗置顶），
-    // 思考2无标题 -> 展开态横幅也显示"思考已完成"；两个独立横幅 => "思考已完成"出现两次
-    expect(screen.getByText('初步判断')).toBeInTheDocument()
-    expect(screen.getAllByText('思考已完成').length).toBeGreaterThanOrEqual(2)
+    // 完成后默认折叠：思考1有标题（横幅直接显示标题），
+    // 思考2无标题 -> 横幅显示"思考已完成"；两个独立横幅互不影响
+    expect(screen.getByText('初步判断', { selector: 'span' })).toBeInTheDocument()
+    expect(screen.getByText('思考已完成')).toBeInTheDocument()
+  })
+
+  it('所有 timeline item 包在一个统一白色容器内（Kimi 时间轴样式）', () => {
+    const { container } = render(<TimelineRenderer timeline={timeline} streaming={false} components={components} />)
+    // 统一容器：白底 + 边框 + 圆角，包住所有 data-timeline-index 条目
+    const wrapper = container.firstElementChild as HTMLElement
+    expect(wrapper.style.background).toContain('var(--bg-base-default)')
+    expect(wrapper.style.border).toContain('var(--border-neutral-l1)')
+    expect(wrapper.querySelectorAll('[data-timeline-index]')).toHaveLength(4)
   })
 
   it('search item 渲染为独立 SearchBanner', () => {
