@@ -1356,7 +1356,10 @@ export function ToolCallBanner({ toolCalls, streaming, embedded = false }: { too
   const prevStreamingRef = useRef(streaming)
 
   useEffect(() => {
-    if (streaming) setExpanded(true)
+    // 与 ThinkingBanner 对称：流式（有 pending 工具）时展开实时看调用过程，
+    // 完成后自动折叠（深度模式 run_deep_analysis 使工具停留末尾 streaming 滞留 true，
+    // 但 done=true 无 pending 时 streaming 已转 false，此处随 streaming 变 false 折叠）
+    setExpanded(streaming)
     prevStreamingRef.current = streaming
   }, [streaming])
 
