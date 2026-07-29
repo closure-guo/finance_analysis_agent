@@ -227,3 +227,138 @@ def test_pipeline_timelines_defensive_close_across_nodes(tmp_path, monkeypatch):
     timelines = session_store.get_session(sid)["pipeline_timelines"]
     assert timelines["check_cache"][0]["done"] is True
     assert timelines["fetch_data"][0]["done"] is False
+
+
+def _search_tool_events():
+    """模拟 fast path 事件序列：node_start/thinking/search/tool/node_complete 交错。
+
+    search/tool 事件不带 node 字段，应按「当前运行节点」（最近 node_start
+    且未 node_complete）归属持久化到 pipeline_timelines。
+    """
+    yield _sse({"type": "analysis_start", "session_id": "s1"})
+    yield _sse({"type": "node_start", "node_id": "fetch_data", "layer": "PREP"})
+    yield _sse({"type": "thinking_token", "token": "拉取行情", "node": "fetch_data"})
+    yield _sse({"type": "tool_call", "name": "search_stock", "args": {"query": "茅台"}})
+    yield _sse({"type": "tool_result", "name": "search_stock", "result": "600519"})
+    yield _sse(
+        {
+            "type": "node_complete",
+            "node_id": "fetch_data",
+            "layer": "PREP",
+            "output": {},
+        }
+    )
+    yield _sse({"type": "node_start", "node_id": "market_analyst", "layer": "I"})
+    yield _sse({"type": "thinking_token", "token": "分析中", "node": "market_analyst"})
+    yield _sse({"type": "search_start", "query": "茅台 最新消息"})
+    yield _sse(
+        {
+            "type": "search_result",
+            "query": "茅台 最新消息",
+            "results": [{"title": "新闻", "url": "http://x", "content": "c"}],
+        }
+    )
+    yield _sse(
+        {
+            "type": "node_complete",
+            "node_id": "market_analyst",
+            "layer": "I",
+            "output": {},
+        }
+    )
+    yield _sse({"type": "report_ready", "session_id": "s1", "report_markdown": "# 报告"})
+
+
+def test_search_tool_events_attributed_to_current_node(tmp_path, monkeypatch):
+    """search/tool 事件归入当前运行节点；node_complete 后该节点 timeline 收口。"""
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid,
+        _search_tool_events,
+        {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0},
+    )
+    _wait_done(sid)
+
+    timelines = session_store.get_session(sid)["pipeline_timelines"]
+    # fetch_data 节点：thinking 被 tool_call 收口，tool_result 同名回填
+    assert timelines["fetch_data"] == [
+        {"type": "thinking", "content": "拉取行情", "done": True},
+        {
+            "type": "tool_call",
+            "name": "search_stock",
+            "args": "茅台",
+            "result": "600519",
+            "done": True,
+        },
+    ]
+    # market_analyst 节点：search_start → search_result 归入该节点；
+    # 该节点 thinking 末尾是 search item，node_complete 不再收口
+    # （close_last_thinking 仅作用于末尾 thinking item，与前端语义一致）
+    assert timelines["market_analyst"] == [
+        {"type": "thinking", "content": "分析中", "done": False},
+        {
+            "type": "search",
+            "query": "茅台 最新消息",
+            "status": "done",
+            "results": [{"title": "新闻", "url": "http://x", "content": "c"}],
+        },
+    ]
+    # 不应泄漏到 '' 键或其他节点
+    assert "" not in timelines
+
+
+def test_search_tool_before_any_node_start_falls_into_empty_key(tmp_path, monkeypatch):
+    """无任何 node_start 前到达的 search/tool 事件（currentNode 为 ''）归入 '' 键。"""
+
+    def _events_before_node():
+        yield _sse({"type": "search_start", "query": "预热搜索"})
+        yield _sse({"type": "search_result", "query": "预热搜索", "results": []})
+
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid,
+        _events_before_node,
+        {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0},
+    )
+    _wait_done(sid)
+
+    timelines = session_store.get_session(sid)["pipeline_timelines"]
+    assert timelines[""] == [
+        {"type": "search", "query": "预热搜索", "status": "done", "results": []}
+    ]
+
+
+def test_search_tool_after_node_complete_falls_into_empty_key(tmp_path, monkeypatch):
+    """node_complete 清空 currentNode 后到达的 search 事件归入 '' 键。"""
+
+    def _events_after_complete():
+        yield _sse({"type": "node_start", "node_id": "check_cache", "layer": "PREP"})
+        yield _sse(
+            {
+                "type": "node_complete",
+                "node_id": "check_cache",
+                "layer": "PREP",
+                "output": {},
+            }
+        )
+        yield _sse({"type": "search_start", "query": "节点间隙搜索"})
+
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid,
+        _events_after_complete,
+        {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0},
+    )
+    _wait_done(sid)
+
+    timelines = session_store.get_session(sid)["pipeline_timelines"]
+    assert timelines[""] == [{"type": "search", "query": "节点间隙搜索", "status": "searching"}]

@@ -155,6 +155,37 @@ def apply_pipeline_node_complete(
     return nextTimelines
 
 
+def apply_pipeline_search_event(
+    node_timelines: dict[str, list[dict]], node: str | None, event: dict
+) -> dict[str, list[dict]]:
+    """管线模式：search_start/search_result/search_error 归属当前运行节点的 timeline。
+
+    事件本身不带 node 字段，由调用方解析「当前运行节点」传入；
+    node 缺失/空串归入 '' 键（与 thinking_token 的历史未分组兼容）。
+    三态语义复用 apply_chat_event（search_start append searching；
+    search_result 更新最近 searching→done+results；search_error→error）。
+    """
+    nodeKey = node or ""
+    nextTimelines = dict(node_timelines)
+    nextTimelines[nodeKey] = apply_chat_event(nextTimelines.get(nodeKey, []), event)
+    return nextTimelines
+
+
+def apply_pipeline_tool_event(
+    node_timelines: dict[str, list[dict]], node: str | None, event: dict
+) -> dict[str, list[dict]]:
+    """管线模式：tool_call/tool_result 归属当前运行节点的 timeline。
+
+    语义复用 apply_chat_event（搜索类工具名跳过 tool_call item，由 search 事件承载；
+    tool_call 收口末段 thinking 后 append；tool_result 同名回填/回退/仅结果项）。
+    node 缺失/空串归入 '' 键。
+    """
+    nodeKey = node or ""
+    nextTimelines = dict(node_timelines)
+    nextTimelines[nodeKey] = apply_chat_event(nextTimelines.get(nodeKey, []), event)
+    return nextTimelines
+
+
 def apply_chat_event(timeline: list[dict], event: dict) -> list[dict]:
     """将对话流 SSE 事件应用到 agentTimeline，返回新 list（不可变更新）。
 

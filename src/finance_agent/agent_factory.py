@@ -361,6 +361,13 @@ def _make_run_deep_analysis(
                 mode, chunk = item
 
                 # Custom mode: forward thinking tokens + 节点生命周期时间戳
+                # 局限说明（persist-full-session-timeline）：管线节点的 search/tool
+                # 事件不会出现在本工具的 custom/updates 流内——custom 流仅含
+                # thinking/node_start/node_end（nodes/_llm_utils.py 与 nodes/_timing.py
+                # 的 writer），updates 流仅含节点状态 dict；search_start/tool_call 等
+                # 事件是 Agent 层工具（web_search 等）经 stream_agent_to_sse 发出的
+                # 对话流事件，与管线节点无映射。故 ReAct 路径下管线 search/tool 归属
+                # 不可达，仅 fast path（PipelineRunner._run）生效；此处不维护 currentNode。
                 if mode == "custom":
                     if isinstance(chunk, dict):
                         ctype = chunk.get("type")

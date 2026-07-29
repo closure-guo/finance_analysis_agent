@@ -17,7 +17,9 @@ from finance_agent.timeline_builder import (
     append_thinking_token,
     apply_chat_event,
     apply_pipeline_node_complete,
+    apply_pipeline_search_event,
     apply_pipeline_thinking_token,
+    apply_pipeline_tool_event,
     close_all_thinking,
     close_last_thinking,
     extract_thinking_title,
@@ -666,6 +668,180 @@ class TestPipelineTimelineSequence:
         timelines = apply_pipeline_thinking_token(timelines, "check_cache", "未收口")
         timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "新节点")
         assert timelines["check_cache"][0]["done"] is True
+
+
+# ── 管线 search/tool 事件按当前运行节点归属（persist-full-session-timeline）──
+
+
+class TestApplyPipelineSearchEvent:
+    """apply_pipeline_search_event：search_* 三态应用到指定节点的 timeline。"""
+
+    def test_search_start归属当前节点(self):
+        result = apply_pipeline_search_event(
+            {}, "check_cache", {"type": "search_start", "query": "茅台"}
+        )
+        assert result == {
+            "check_cache": [{"type": "search", "query": "茅台", "status": "searching"}]
+        }
+
+    def test_search_result回填该节点最近searching(self):
+        timelines = {
+            "check_cache": [{"type": "search", "query": "q", "status": "searching"}],
+        }
+        result = apply_pipeline_search_event(
+            timelines,
+            "check_cache",
+            {"type": "search_result", "query": "q", "results": [{"title": "t"}]},
+        )
+        assert result["check_cache"] == [
+            {"type": "search", "query": "q", "status": "done", "results": [{"title": "t"}]}
+        ]
+
+    def test_search_error置该节点error(self):
+        timelines = {
+            "check_cache": [{"type": "search", "query": "q", "status": "searching"}],
+        }
+        result = apply_pipeline_search_event(
+            timelines, "check_cache", {"type": "search_error", "message": "超时"}
+        )
+        assert result["check_cache"][0]["status"] == "error"
+
+    def test_不影响其他节点(self):
+        timelines = {
+            "check_cache": [{"type": "thinking", "content": "a", "done": False}],
+        }
+        result = apply_pipeline_search_event(
+            timelines, "fetch_data", {"type": "search_start", "query": "q"}
+        )
+        # 其他节点原样（不触发防御性收口——与 apply_pipeline_thinking_token 不同，
+        # search/tool 事件不跨节点收口，仅作用于归属节点）
+        assert result["check_cache"][0]["done"] is False
+        assert result["fetch_data"][0]["type"] == "search"
+
+    def test_node空串归入空键(self):
+        result = apply_pipeline_search_event({}, "", {"type": "search_start", "query": "q"})
+        assert result[""] == [{"type": "search", "query": "q", "status": "searching"}]
+
+    def test_node为None归入空键(self):
+        result = apply_pipeline_search_event({}, None, {"type": "search_start", "query": "q"})
+        assert result[""][0]["status"] == "searching"
+
+    def test_不可变更新不修改原dict(self):
+        original = {"check_cache": [{"type": "search", "query": "q", "status": "searching"}]}
+        snapshot = {k: [dict(item) for item in v] for k, v in original.items()}
+        result = apply_pipeline_search_event(
+            original, "check_cache", {"type": "search_result", "query": "q", "results": []}
+        )
+        assert original == snapshot
+        assert result is not original
+
+
+class TestApplyPipelineToolEvent:
+    """apply_pipeline_tool_event：tool_call/tool_result 应用到指定节点的 timeline。"""
+
+    def test_tool_call收口该节点末尾thinking并追加(self):
+        timelines = {
+            "check_cache": [{"type": "thinking", "content": "思考", "done": False}],
+        }
+        result = apply_pipeline_tool_event(
+            timelines,
+            "check_cache",
+            {"type": "tool_call", "name": "search_stock", "args": {"query": "茅台"}},
+        )
+        assert result["check_cache"] == [
+            {"type": "thinking", "content": "思考", "done": True},
+            {"type": "tool_call", "name": "search_stock", "args": "茅台", "done": False},
+        ]
+
+    def test_搜索类tool_call跳过不生成item(self):
+        for name in ("web_search", "batch_web_search"):
+            result = apply_pipeline_tool_event(
+                {}, "check_cache", {"type": "tool_call", "name": name, "args": {"query": "q"}}
+            )
+            assert result == {"check_cache": []}
+
+    def test_tool_result同名回填(self):
+        timelines = {
+            "check_cache": [
+                {"type": "tool_call", "name": "search_stock", "args": "茅台", "done": False}
+            ],
+        }
+        result = apply_pipeline_tool_event(
+            timelines,
+            "check_cache",
+            {"type": "tool_result", "name": "search_stock", "result": "找到了"},
+        )
+        assert result["check_cache"][0]["result"] == "找到了"
+        assert result["check_cache"][0]["done"] is True
+
+    def test_tool_result无匹配新建仅结果项(self):
+        result = apply_pipeline_tool_event(
+            {}, "check_cache", {"type": "tool_result", "name": "t", "result": "结果文本"}
+        )
+        assert result["check_cache"] == [
+            {"type": "tool_call", "name": "t", "args": "", "result": "结果文本", "done": True}
+        ]
+
+    def test_不影响其他节点(self):
+        timelines = {
+            "check_cache": [{"type": "thinking", "content": "a", "done": False}],
+        }
+        result = apply_pipeline_tool_event(
+            timelines, "fetch_data", {"type": "tool_call", "name": "t", "args": {}}
+        )
+        assert result["check_cache"][0]["done"] is False
+        assert result["fetch_data"][0]["type"] == "tool_call"
+
+    def test_node空串归入空键(self):
+        result = apply_pipeline_tool_event({}, "", {"type": "tool_call", "name": "t", "args": {}})
+        assert result[""][0]["type"] == "tool_call"
+
+    def test_不可变更新不修改原dict(self):
+        original = {"check_cache": [{"type": "tool_call", "name": "t", "args": "", "done": False}]}
+        snapshot = {k: [dict(item) for item in v] for k, v in original.items()}
+        result = apply_pipeline_tool_event(
+            original, "check_cache", {"type": "tool_result", "name": "t", "result": "r"}
+        )
+        assert original == snapshot
+        assert result is not original
+
+
+class TestPipelineSearchToolSequence:
+    """search/tool 与 thinking 在节点 timeline 中的组合序列（镜像前端同构语义）。"""
+
+    def test_thinking到search到tool到thinking分段(self):
+        timelines: dict = {}
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "先搜索")
+        timelines = apply_pipeline_search_event(
+            timelines, "fetch_data", {"type": "search_start", "query": "q"}
+        )
+        timelines = apply_pipeline_search_event(
+            timelines, "fetch_data", {"type": "search_result", "query": "q", "results": []}
+        )
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "再调用工具")
+        timelines = apply_pipeline_tool_event(
+            timelines,
+            "fetch_data",
+            {"type": "tool_call", "name": "get_metrics", "args": {"code": "600519"}},
+        )
+        timelines = apply_pipeline_tool_event(
+            timelines,
+            "fetch_data",
+            {"type": "tool_result", "name": "get_metrics", "result": {"pe": 20}},
+        )
+        timelines = apply_pipeline_node_complete(timelines, "fetch_data")
+        assert timelines["fetch_data"] == [
+            {"type": "thinking", "content": "先搜索", "done": False},
+            {"type": "search", "query": "q", "status": "done", "results": []},
+            {"type": "thinking", "content": "再调用工具", "done": True},
+            {
+                "type": "tool_call",
+                "name": "get_metrics",
+                "args": '{"code": "600519"}',
+                "result": '{"pe": 20}',
+                "done": True,
+            },
+        ]
 
 
 # ── api._ChatCollector 集成 ──────────────────────────────────

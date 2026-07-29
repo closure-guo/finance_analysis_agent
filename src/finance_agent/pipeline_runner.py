@@ -21,7 +21,9 @@ from collections.abc import Callable, Generator
 from finance_agent import session_store
 from finance_agent.timeline_builder import (
     apply_pipeline_node_complete,
+    apply_pipeline_search_event,
     apply_pipeline_thinking_token,
+    apply_pipeline_tool_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -292,6 +294,9 @@ class PipelineRunner:
         # 管线节点时序（persist-full-session-timeline）：thinking_token 按 node 分组
         # 持久化到 sessions.pipeline_timelines，写入节奏与 snapshot 一致（每相关事件一次）
         nodeTimelines: dict[str, list[dict]] = {}
+        # search/tool 事件不带 node 字段，归入「当前运行节点」：
+        # node_start 置位、node_complete 清空（用户决策 2026-07-30）
+        currentNode = ""
         try:
             for sse_str in event_source():
                 if state is not None:
@@ -307,12 +312,23 @@ class PipelineRunner:
                         nodeTimelines, event.get("node") or "", event.get("token", "")
                     )
                     session_store.update_pipeline_timelines(session_id, nodeTimelines)
+                elif eventType in ("search_start", "search_result", "search_error"):
+                    nodeTimelines = apply_pipeline_search_event(nodeTimelines, currentNode, event)
+                    session_store.update_pipeline_timelines(session_id, nodeTimelines)
+                elif eventType in ("tool_call", "tool_result"):
+                    nodeTimelines = apply_pipeline_tool_event(nodeTimelines, currentNode, event)
+                    session_store.update_pipeline_timelines(session_id, nodeTimelines)
                 elif eventType in ("node_start", "node_complete", "node_timing"):
-                    if eventType == "node_complete":
+                    if eventType == "node_start":
+                        currentNode = event.get("node_id", "")
+                    elif eventType == "node_complete":
                         nodeTimelines = apply_pipeline_node_complete(
                             nodeTimelines, event.get("node_id", "")
                         )
                         session_store.update_pipeline_timelines(session_id, nodeTimelines)
+                        # 该节点完成即非当前运行节点；间隙事件归入 '' 键
+                        if currentNode == event.get("node_id", ""):
+                            currentNode = ""
                     now_ms = int(time.time() * 1000)
                     tree = apply_node_event(tree, event, now_ms)
                     snapshot = {
