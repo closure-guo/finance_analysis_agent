@@ -22,6 +22,7 @@ from pydantic import BaseModel
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
 from finance_agent.graph import build_5layer_graph  # noqa: E402
+from finance_agent.pipeline_runner import PipelineRunner, build_layer_tree  # noqa: E402
 from finance_agent.react_agent import (  # noqa: E402
     _TIME_SENSITIVE_KEYWORDS as _TIME_SENSITIVE_KEYWORDS_REACT,
 )
@@ -61,6 +62,10 @@ REPORTS_DIR.mkdir(exist_ok=True)
 
 # Initialize session DB
 init_db()
+
+# 启动清扫：悬挂 running 会话置 failed（后端重启后 PipelineRunner 内存态已丢失，
+# DB 中残留 running 状态的会话不可能继续推进，直接置 failed 供前端恢复展示）
+PipelineRunner.mark_swept_failed()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -916,17 +921,42 @@ async def analyze(req: AnalyzeRequest):
         stock_name = req.stock_name or ""
 
         # ── Fast path: stock_code 已知，直接走管线 ──
-        # 只有当没有 session_id 时才走 fast path，或者用户显式要求重新分析
-        if stock_code and not session_id:
+        # 新会话（未传 session_id）且已解析出股票代码时走 fast path；
+        # 追问/复用旧会话时走 ReAct 路径
+        if stock_code and not req.session_id:
             update_session_for_clarify(
                 session_id, stock_code=stock_code, stock_name=stock_name, status="running"
             )
-            async for event in _stream_from_sync(
-                _run_graph_streaming(
+            # 管线后台执行：SSE 仅订阅事件队列，客户端断开不中断管线，
+            # 节点事件由 PipelineRunner 持续写入 pipeline_snapshot 供断线恢复
+            PipelineRunner.start(
+                session_id,
+                lambda: _run_graph_streaming(
                     stock_code, stock_name, req, analysis_id, start_time, session_id=session_id
-                )
-            ):
-                yield event
+                ),
+                {
+                    "layerTree": build_layer_tree(),
+                    "currentNodeId": "",
+                    "progress": 0.0,
+                    "updatedAt": int(time.time() * 1000),
+                },
+            )
+            # 订阅事件队列：在线时实时转发，断开仅停止订阅；
+            # 空转时定期发心跳注释，防止代理断连并保持响应活跃
+            heartbeat_counter = 0
+            while True:
+                events = PipelineRunner.get_events(session_id)
+                for event in events:
+                    yield event
+                if not events:
+                    if not PipelineRunner.is_running(session_id):
+                        break
+                    # 每 10 次空转（约 2 秒）发一次心跳，保持 SSE 连接活跃
+                    heartbeat_counter += 1
+                    if heartbeat_counter >= 10:
+                        heartbeat_counter = 0
+                        yield ": heartbeat\n\n"
+                await asyncio.sleep(0.2)
             yield _sse(
                 {
                     "type": "done",
