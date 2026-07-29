@@ -26,7 +26,7 @@ export interface LayerNode {
   durationMs?: number
 }
 
-// ── 静态配置：6 层 → 子节点映射（与后端 LAYER_STEPS 对齐）──
+// ── 静态配置：6 层 → 子节点映射（与后端 pipeline_runner.LAYER_TREE_CONFIG 对齐）──
 
 interface ChildConfig {
   nodeId: string
@@ -222,4 +222,22 @@ export function treeProgress(tree: LayerNode[]): { completed: number; total: num
     }
   }
   return { completed, total }
+}
+
+// ── 序列化（会话快照持久化/恢复，resume-pipeline-across-sessions）──
+
+// LayerNode 为纯数据，可直接 JSON；反序列化失败时回退初始树
+export function serializeLayerTree(tree: LayerNode[]): string {
+  return JSON.stringify(tree)
+}
+
+export function deserializeLayerTree(json: string | null | undefined): LayerNode[] {
+  if (!json) return buildLayerTree()
+  try {
+    const data = JSON.parse(json)
+    if (!Array.isArray(data)) return buildLayerTree()
+    return data as LayerNode[]
+  } catch {
+    return buildLayerTree()
+  }
 }

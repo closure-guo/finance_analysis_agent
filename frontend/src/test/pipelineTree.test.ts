@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildLayerTree,
   applyNodeEvent,
+  serializeLayerTree,
+  deserializeLayerTree,
   LAYER_TREE_CONFIG,
   type LayerNode,
 } from '../pipelineTree'
@@ -203,5 +205,22 @@ describe('applyNodeEvent - 后端真实时间戳（fix-node-timer-real-lifecycle
     const child = tree.find((l) => l.id === 'prep')!.children.find((c) => c.nodeId === 'check_cache')!
     expect(child.startedAt).toBe(1_000)
     expect(child.durationMs).toBe(2_500)
+  })
+})
+
+// 序列化/反序列化（resume-pipeline-across-sessions Task 4）：
+// layerTree JSON 为后端 pipeline_snapshot 的持久化格式，切回会话时经 deserialize 恢复时间轴。
+describe('serialize/deserializeLayerTree', () => {
+  it('往返一致', () => {
+    let tree = buildLayerTree()
+    tree = applyNodeEvent(tree, { type: 'node_start', node_id: 'check_cache' }, 1000)
+    tree = applyNodeEvent(tree, { type: 'node_complete', node_id: 'check_cache', output: { summary: 'ok' } }, 2000)
+    const restored = deserializeLayerTree(serializeLayerTree(tree))
+    expect(restored).toEqual(tree)
+  })
+
+  it('空输入回退初始树', () => {
+    expect(deserializeLayerTree(null)).toEqual(buildLayerTree())
+    expect(deserializeLayerTree('not json')).toEqual(buildLayerTree())
   })
 })
