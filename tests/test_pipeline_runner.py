@@ -91,8 +91,9 @@ def test_snapshot_tracks_node_completion(tmp_path, monkeypatch):
         time.sleep(0.05)
 
     snap = json.loads(session_store.get_session(sid)["pipeline_snapshot"])
-    # layerTree 中 check_cache 与 fetch_data 均 completed
-    all_children = [c for layer in snap["layerTree"] for c in layer["children"]]
+    # layerTree 为内嵌的序列化 JSON 字符串，需二次解析得到树结构
+    tree = json.loads(snap["layerTree"])
+    all_children = [c for layer in tree for c in layer["children"]]
     by_id = {c["nodeId"]: c for c in all_children}
     assert by_id["check_cache"]["status"] == "completed"
     assert by_id["fetch_data"]["status"] == "completed"

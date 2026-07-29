@@ -293,7 +293,8 @@ def _make_run_deep_analysis(
             _session_store.update_pipeline_snapshot(
                 session_id,
                 {
-                    "layerTree": tree,
+                    # layerTree 序列化为内嵌 JSON 字符串，对齐前端 deserializeLayerTree 契约
+                    "layerTree": json.dumps(tree, ensure_ascii=False),
                     "currentNodeId": _current_node(tree),
                     "progress": _progress(tree),
                     "updatedAt": now_ms,

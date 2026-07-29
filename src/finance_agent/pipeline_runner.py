@@ -294,7 +294,8 @@ class PipelineRunner:
                     now_ms = int(time.time() * 1000)
                     tree = apply_node_event(tree, event, now_ms)
                     snapshot = {
-                        "layerTree": tree,
+                        # layerTree 序列化为内嵌 JSON 字符串，对齐前端 deserializeLayerTree 契约
+                        "layerTree": json.dumps(tree, ensure_ascii=False),
                         "currentNodeId": _current_node(tree),
                         "progress": _progress(tree),
                         "updatedAt": now_ms,

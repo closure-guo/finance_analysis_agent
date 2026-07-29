@@ -89,11 +89,10 @@ def test_pipeline_continues_after_sse_disconnect(isolated_db, monkeypatch):
     snap_raw = session_store.get_session(sid)["pipeline_snapshot"]
     assert snap_raw is not None
     snap = json.loads(snap_raw)
+    # layerTree 为内嵌的序列化 JSON 字符串，需二次解析得到树结构
+    tree = json.loads(snap["layerTree"])
     done_nodes = [
-        c["nodeId"]
-        for layer in snap["layerTree"]
-        for c in layer["children"]
-        if c["status"] == "completed"
+        c["nodeId"] for layer in tree for c in layer["children"] if c["status"] == "completed"
     ]
     # 断开后仍推进到后续节点
     assert "validate_financials" in done_nodes
@@ -140,11 +139,10 @@ def test_pipeline_snapshot_persists_after_completion(isolated_db, monkeypatch):
     snap_raw = session_store.get_session(sid)["pipeline_snapshot"]
     assert snap_raw is not None
     snap = json.loads(snap_raw)
+    # layerTree 为内嵌的序列化 JSON 字符串，需二次解析得到树结构
+    tree = json.loads(snap["layerTree"])
     done_nodes = [
-        c["nodeId"]
-        for layer in snap["layerTree"]
-        for c in layer["children"]
-        if c["status"] == "completed"
+        c["nodeId"] for layer in tree for c in layer["children"] if c["status"] == "completed"
     ]
     assert "validate_financials" in done_nodes
     assert snap["progress"] > 0

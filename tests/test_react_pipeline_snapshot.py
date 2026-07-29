@@ -62,7 +62,9 @@ def _snapshot(session_id: str) -> dict:
 
 
 def _snapshot_node_status(snapshot: dict, node_id: str) -> str:
-    for layer in snapshot["layerTree"]:
+    # layerTree 为内嵌的序列化 JSON 字符串，需二次解析得到树结构
+    tree = json.loads(snapshot["layerTree"])
+    for layer in tree:
         for child in layer["children"]:
             if child["nodeId"] == node_id:
                 return child["status"]
