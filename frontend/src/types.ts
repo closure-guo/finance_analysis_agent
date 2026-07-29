@@ -266,6 +266,14 @@ export interface ChatHistoryEntry {
   tool_calls?: Array<{ name: string; args?: Record<string, any>; result_text?: string; done?: boolean }>
 }
 
+// 管线进度快照（后端 sessions.pipeline_snapshot，JSON 字符串；layerTree 为内嵌的序列化 JSON 字符串）
+export interface PipelineSnapshot {
+  layerTree: string
+  currentNodeId: string
+  progress: number
+  updatedAt: number
+}
+
 export interface SessionDetail extends SessionMeta {
   report_markdown: string
   chart_data: ChartData
@@ -273,6 +281,8 @@ export interface SessionDetail extends SessionMeta {
   agent_process: Record<string, any>
   analyst_summaries: Record<string, any>
   chat_history: ChatHistoryEntry[]
+  // 管线进度快照（running/completed 会话切回时恢复分层时间轴；无快照为 null）
+  pipeline_snapshot: string | null
 }
 
 // Pipeline step definition

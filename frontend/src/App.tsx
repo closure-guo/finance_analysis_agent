@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry } from './types'
+import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
 import { ChartsSection } from './Charts'
 import { SearchBanner } from './SearchBanner'
 import { applyChatStreamEvent, applyPipelineThinkingToken, applyPipelineNodeComplete, buildTimelineFromHistory, nodeDisplayName } from './timeline'
 import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations, recordDuration } from './eta'
-import { buildLayerTree, applyNodeEvent } from './pipelineTree'
+import { buildLayerTree, applyNodeEvent, deserializeLayerTree } from './pipelineTree'
 import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 
@@ -118,13 +118,25 @@ export default function App() {
   }, [loadSessions])
 
   const selectSession = async (sessionId: string) => {
-    // 中断进行中的 SSE 流，避免残留事件把 pipeline UI 推回到新载入的会话视图
+    // 中断进行中的 SSE 流，避免残留事件把 pipeline UI 推回到新载入的会话视图。
+    // 语义说明（resume-pipeline-across-sessions）：旧语义=中断一切；新语义下深度管线
+    // 已由后端 PipelineRunner 后台化保护，前端 abort 仅断开 SSE 订阅，不影响后台续跑。
     abortStreaming()
     try {
       const resp = await fetch(`/api/sessions/${sessionId}`)
       if (!resp.ok) throw new Error('Failed to load session')
       const data: SessionDetail = await resp.json()
-      
+
+      // 管线进度快照（snapshot.layerTree 为内嵌的序列化 JSON 字符串，需二次解析）
+      let snapshot: PipelineSnapshot | null = null
+      if (data.pipeline_snapshot) {
+        try {
+          snapshot = JSON.parse(data.pipeline_snapshot)
+        } catch {
+          snapshot = null // 非法快照按无快照处理，走现有恢复逻辑
+        }
+      }
+
       // 先完全重置所有状态
       setMessages([])
       setCurrentSessionId(sessionId)
@@ -133,6 +145,40 @@ export default function App() {
       setMode(data.session_type === 'chat' ? 'quick' : 'deep')
       streamingReportRef.current = null
       pipelineMsgRef.current = null
+
+      // 运行中会话：恢复快照分层时间轴并进入 analyzing（轮询 hook 接手进度更新）
+      if (data.status === 'running' && snapshot) {
+        const pm: UIMessage = {
+          id: genId(),
+          type: 'pipeline',
+          content: '',
+          completedNodes: [],
+          currentNode: snapshot.currentNodeId,
+          nodeOutputs: {},
+          progress: snapshot.progress,
+          startedAt: Date.now(),
+          layerTree: deserializeLayerTree(snapshot.layerTree),
+        }
+        pipelineMsgRef.current = pm
+        setMessages([pm])
+        setAppState('analyzing')
+        return
+      }
+
+      // 已完成会话（有快照）：报告消息 + 静态完成时间轴（时间轴插在报告消息之前）
+      const pipelineDoneMsg: UIMessage | null =
+        data.status === 'completed' && snapshot && data.session_type !== 'chat'
+          ? {
+              id: genId(),
+              type: 'pipeline',
+              content: '',
+              completedNodes: [],
+              currentNode: '',
+              nodeOutputs: {},
+              progress: 1,
+              layerTree: deserializeLayerTree(snapshot.layerTree),
+            }
+          : null
 
       const reportMsg: UIMessage | null = data.session_type !== 'chat'
         ? {
@@ -154,6 +200,7 @@ export default function App() {
         if (h.role === 'user') {
           newMessages.push({ id: genId(), type: 'user', content: h.content })
           if (reportMsg && !reportInserted) {
+            if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
             newMessages.push(reportMsg)
             reportInserted = true
           }
@@ -170,7 +217,10 @@ export default function App() {
         }
       }
       if (reportMsg && !reportInserted) {
+        if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
         newMessages.push(reportMsg)
+      } else if (!reportMsg && pipelineDoneMsg) {
+        newMessages.push(pipelineDoneMsg)
       }
       setMessages(newMessages)
     } catch (e) {
@@ -680,6 +730,49 @@ export default function App() {
     }))
   }
 
+  // 运行中会话快照轮询（resume-pipeline-across-sessions Task 5）：
+  // 切回 running 会话进入 analyzing 且无活跃 SSE（abortRef 为空=仅恢复态、非实时订阅）时，
+  // 每 2s 拉取会话详情刷新分层时间轴；completed 则走 selectSession 完整恢复报告并自然停止；
+  // failed 仅停止轮询（MVP 不展示失败态）。
+  useEffect(() => {
+    if (appState !== 'analyzing' || !currentSessionId) return
+    if (abortRef.current) return // 有活跃 SSE 订阅，进度由事件流驱动，无需轮询
+    const timer = setInterval(async () => {
+      try {
+        const resp = await fetch(`/api/sessions/${currentSessionId}`)
+        if (!resp.ok) return
+        const data: SessionDetail = await resp.json()
+        if (data.status === 'running' && data.pipeline_snapshot) {
+          let snap: PipelineSnapshot | null = null
+          try {
+            snap = JSON.parse(data.pipeline_snapshot)
+          } catch {
+            snap = null
+          }
+          const pm = pipelineMsgRef.current
+          if (snap && pm) {
+            const updated: UIMessage = {
+              ...pm,
+              layerTree: deserializeLayerTree(snap.layerTree),
+              currentNode: snap.currentNodeId,
+              progress: snap.progress,
+            }
+            pipelineMsgRef.current = updated
+            updateMessage(pm.id, updated)
+          }
+        } else if (data.status === 'completed') {
+          // 后台管线完成：完整恢复报告 + 最终静态时间轴（appState 切 report 后轮询自动停止）
+          selectSession(currentSessionId)
+        }
+        // failed：不处理，随下一次状态变化或停留 analyzing 由用户操作离开（MVP）
+      } catch {
+        // 轮询失败静默，下个周期重试
+      }
+    }, 2000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appState, currentSessionId])
+
   // ── Streaming chat ──
   const quickChat = async (message: string) => {
     // 首次从首页进入对话：切换到对话视图（与 startAnalysis 保持一致）
@@ -833,9 +926,11 @@ export default function App() {
             <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
               {messages
                 .filter(msg => {
-                  // 只有在实际分析过程中才显示 pipeline 消息
+                  // pipeline 消息渲染时机：运行中（analyzing）始终显示；
+                  // completed 会话恢复的静态完成时间轴（progress===1）随报告一并展示；
+                  // 其他情况（如历史会话无快照回退的空树）不显示
                   if (msg.type === 'pipeline') {
-                    return appState === 'analyzing';
+                    return appState === 'analyzing' || msg.progress === 1;
                   }
                   return true;
                 })
