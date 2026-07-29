@@ -80,6 +80,7 @@ def init_db() -> None:
         ("session_type", "ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'analysis'"),
         ("focus", "ALTER TABLE sessions ADD COLUMN focus TEXT DEFAULT ''"),
         ("pending_intent", "ALTER TABLE sessions ADD COLUMN pending_intent TEXT DEFAULT ''"),
+        ("pipeline_snapshot", "ALTER TABLE sessions ADD COLUMN pipeline_snapshot TEXT"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -415,3 +416,15 @@ def append_chat(
     )
     conn.commit()
     conn.close()
+
+
+def update_pipeline_snapshot(session_id: str, snapshot: dict) -> bool:
+    """持久化管线进度快照（JSON）。返回是否更新到行。"""
+    conn = _get_db()
+    cur = conn.execute(
+        "UPDATE sessions SET pipeline_snapshot = ? WHERE session_id = ?",
+        (json.dumps(snapshot, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
