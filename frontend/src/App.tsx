@@ -153,22 +153,22 @@ export default function App() {
       pipelineMsgRef.current = null
 
       // 运行中会话：恢复快照分层时间轴并进入 analyzing（轮询 hook 接手进度更新）
-      if (data.status === 'running' && snapshot) {
-        const pm: UIMessage = {
-          id: genId(),
-          type: 'pipeline',
-          content: '',
-          completedNodes: [],
-          currentNode: snapshot.currentNodeId,
-          nodeOutputs: {},
-          progress: snapshot.progress,
-          startedAt: Date.now(),
-          layerTree: deserializeLayerTree(snapshot.layerTree),
-        }
-        pipelineMsgRef.current = pm
-        setMessages([pm])
-        setAppState('analyzing')
-        return
+      const runningPipelineMsg: UIMessage | null =
+        data.status === 'running' && snapshot
+          ? {
+              id: genId(),
+              type: 'pipeline',
+              content: '',
+              completedNodes: [],
+              currentNode: snapshot.currentNodeId,
+              nodeOutputs: {},
+              progress: snapshot.progress,
+              startedAt: Date.now(),
+              layerTree: deserializeLayerTree(snapshot.layerTree),
+            }
+          : null
+      if (runningPipelineMsg) {
+        pipelineMsgRef.current = runningPipelineMsg
       }
 
       // 已完成会话（有快照）：报告消息 + 静态完成时间轴（时间轴插在报告消息之前）
@@ -186,7 +186,7 @@ export default function App() {
             }
           : null
 
-      const reportMsg: UIMessage | null = data.session_type !== 'chat'
+      const reportMsg: UIMessage | null = data.status !== 'running' && data.session_type !== 'chat'
         ? {
             id: genId(),
             type: 'report',
@@ -227,6 +227,11 @@ export default function App() {
         newMessages.push(reportMsg)
       } else if (!reportMsg && pipelineDoneMsg) {
         newMessages.push(pipelineDoneMsg)
+      }
+      // 运行中管线消息追加在 chat_history 之后（管线正在跑，无报告）
+      if (runningPipelineMsg) {
+        newMessages.push(runningPipelineMsg)
+        setAppState('analyzing')
       }
       setMessages(newMessages)
     } catch (e) {
