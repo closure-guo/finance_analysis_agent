@@ -260,6 +260,11 @@ def _make_run_deep_analysis(
             stock_code: A 股股票代码，如 "600519"
             stock_name: 股票名称，如 "贵州茅台"
         """
+        # ReAct 主链路快照与状态兜底（design.md §8 第 1 层）：
+        # 工具自带 executor 线程不经 PipelineRunner，故在工具内维护
+        # pipeline_snapshot 与会话 status，使「切换会话恢复」对真实主链路生效。
+        # 事件流（StreamEvent yield 序列、metadata 结构、chunk_queue）保持不变。
+        from finance_agent import session_store as _session_store
         from finance_agent.api import (
             _ALL_NODES,
             LAYER_STEPS,
@@ -267,6 +272,33 @@ def _make_run_deep_analysis(
             _merge_update,
         )
         from finance_agent.harness import ActionType, StreamEvent, ToolResult
+        from finance_agent.pipeline_runner import (
+            _current_node,
+            _progress,
+            apply_node_event,
+            build_layer_tree,
+        )
+
+        # session_id 非空时才写快照/状态（理论空路径保持现状行为）
+        _track_snapshot = bool(session_id)
+        _tree: list[dict] = build_layer_tree() if _track_snapshot else []
+
+        def _now_ms() -> int:
+            import time as _time
+
+            return int(_time.time() * 1000)
+
+        def _persist_snapshot(tree: list[dict], now_ms: int) -> None:
+            """把当前 layerTree 组装成快照并落库（与 PipelineRunner._run 同契约）。"""
+            _session_store.update_pipeline_snapshot(
+                session_id,
+                {
+                    "layerTree": tree,
+                    "currentNodeId": _current_node(tree),
+                    "progress": _progress(tree),
+                    "updatedAt": now_ms,
+                },
+            )
 
         initial_state = {
             "stock_code": stock_code,
@@ -281,6 +313,10 @@ def _make_run_deep_analysis(
         accumulated: dict = dict(initial_state)
         completed: set[str] = set()
         started_nodes: set[str] = set()  # 已发 node_start 的节点（去重）
+
+        # 状态兜底：工具入口置 running（管线本体已在 executor 线程运行）
+        if _track_snapshot:
+            _session_store.update_session_status(session_id, "running")
 
         # 在线程中运行同步 graph.stream，避免阻塞事件循环
         # ADR-0015：CallbackHandler 通过 langchain callback 机制工作（不依赖 OTel
@@ -303,103 +339,152 @@ def _make_run_deep_analysis(
         # 用于给 updates 流的 node_complete 附加 server_*（修复快速节点计时恒 0）。
         node_lifecycle: dict[str, dict] = {}
 
-        while True:
-            item = await chunk_queue.get()
-            if item is None:
-                break
-            if isinstance(item, Exception):
-                raise item
+        try:
+            while True:
+                item = await chunk_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    raise item
 
-            mode, chunk = item
+                mode, chunk = item
 
-            # Custom mode: forward thinking tokens + 节点生命周期时间戳
-            if mode == "custom":
-                if isinstance(chunk, dict):
-                    ctype = chunk.get("type")
-                    if ctype == "thinking":
-                        # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
-                        # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
-                        node = chunk.get("node", "")
-                        yield StreamEvent.think(
-                            chunk.get("token", ""), metadata={"node": node} if node else None
-                        )
-                    elif ctype == "node_start":
-                        # 节点真实入口时间戳（timed_node 装饰器发出）
-                        node_lifecycle.setdefault(chunk["node"], {})["start_ts"] = chunk["ts"]
-                    elif ctype == "node_end":
-                        # 节点真实出口时间戳与耗时；记录并立即下发 node_timing 事件
-                        # （node_complete 由 updates chunk 驱动、可能已先于 node_end 发出，
-                        #  故真实耗时经独立 node_timing 下发，前端据此覆盖近似值）。
-                        node_name = chunk["node"]
-                        lc = node_lifecycle.setdefault(node_name, {})
-                        lc["end_ts"] = chunk["ts"]
-                        lc["duration_ms"] = chunk.get("duration_ms")
-                        yield StreamEvent.progress(
-                            content=f"{node_name} timing",
-                            metadata={
-                                "node": node_name,
-                                "sse_type": "node_timing",
-                                "node_id": node_name,
-                                "server_start_ts": lc.get("start_ts"),
-                                "server_end_ts": lc.get("end_ts"),
-                                "server_duration_ms": lc.get("duration_ms"),
-                            },
-                        )
-                continue
-
-            # Updates mode: existing node progress logic
-            for node_name, update in chunk.items():
-                if node_name not in _ALL_NODES:
+                # Custom mode: forward thinking tokens + 节点生命周期时间戳
+                if mode == "custom":
+                    if isinstance(chunk, dict):
+                        ctype = chunk.get("type")
+                        if ctype == "thinking":
+                            # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
+                            # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
+                            node = chunk.get("node", "")
+                            yield StreamEvent.think(
+                                chunk.get("token", ""), metadata={"node": node} if node else None
+                            )
+                        elif ctype == "node_start":
+                            # 节点真实入口时间戳（timed_node 装饰器发出）
+                            node_lifecycle.setdefault(chunk["node"], {})["start_ts"] = chunk["ts"]
+                        elif ctype == "node_end":
+                            # 节点真实出口时间戳与耗时；记录并立即下发 node_timing 事件
+                            # （node_complete 由 updates chunk 驱动、可能已先于 node_end 发出，
+                            #  故真实耗时经独立 node_timing 下发，前端据此覆盖近似值）。
+                            node_name = chunk["node"]
+                            lc = node_lifecycle.setdefault(node_name, {})
+                            lc["end_ts"] = chunk["ts"]
+                            lc["duration_ms"] = chunk.get("duration_ms")
+                            if _track_snapshot:
+                                _now = _now_ms()
+                                _tree = apply_node_event(
+                                    _tree,
+                                    {
+                                        "type": "node_timing",
+                                        "node_id": node_name,
+                                        "server_start_ts": lc.get("start_ts"),
+                                        "server_end_ts": lc.get("end_ts"),
+                                        "server_duration_ms": lc.get("duration_ms"),
+                                    },
+                                    _now,
+                                )
+                                _persist_snapshot(_tree, _now)
+                            yield StreamEvent.progress(
+                                content=f"{node_name} timing",
+                                metadata={
+                                    "node": node_name,
+                                    "sse_type": "node_timing",
+                                    "node_id": node_name,
+                                    "server_start_ts": lc.get("start_ts"),
+                                    "server_end_ts": lc.get("end_ts"),
+                                    "server_duration_ms": lc.get("duration_ms"),
+                                },
+                            )
                     continue
 
-                if isinstance(update, dict) and update:
-                    _merge_update(accumulated, node_name, update)
+                # Updates mode: existing node progress logic
+                for node_name, update in chunk.items():
+                    if node_name not in _ALL_NODES:
+                        continue
 
-                idx = _ALL_NODES.index(node_name)
-                for i in range(idx + 1):
-                    completed.add(_ALL_NODES[i])
+                    if isinstance(update, dict) and update:
+                        _merge_update(accumulated, node_name, update)
 
-                step_info = {s["node"]: s for s in LAYER_STEPS}.get(node_name, {})
+                    idx = _ALL_NODES.index(node_name)
+                    for i in range(idx + 1):
+                        completed.add(_ALL_NODES[i])
 
-                # 节点首次出现：先发 node_start（与 fast path 事件序列对齐）
-                if node_name not in started_nodes:
-                    started_nodes.add(node_name)
-                    start_meta = {
-                        "node": node_name,
-                        "sse_type": "node_start",
-                        "node_id": node_name,
-                        "layer": step_info.get("layer", ""),
-                        "desc": step_info.get("desc", node_name),
-                    }
-                    # 附加后端真实入口时间戳（custom 流 node_start 已先行到达）
-                    _lc = node_lifecycle.get(node_name, {})
-                    if "start_ts" in _lc:
-                        start_meta["server_start_ts"] = _lc["start_ts"]
-                    yield StreamEvent.progress(
-                        content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
-                        metadata=start_meta,
+                    step_info = {s["node"]: s for s in LAYER_STEPS}.get(node_name, {})
+
+                    # 节点首次出现：先发 node_start（与 fast path 事件序列对齐）
+                    if node_name not in started_nodes:
+                        started_nodes.add(node_name)
+                        start_meta = {
+                            "node": node_name,
+                            "sse_type": "node_start",
+                            "node_id": node_name,
+                            "layer": step_info.get("layer", ""),
+                            "desc": step_info.get("desc", node_name),
+                        }
+                        # 附加后端真实入口时间戳（custom 流 node_start 已先行到达）
+                        _lc = node_lifecycle.get(node_name, {})
+                        if "start_ts" in _lc:
+                            start_meta["server_start_ts"] = _lc["start_ts"]
+                        if _track_snapshot:
+                            _now = _now_ms()
+                            _tree = apply_node_event(
+                                _tree,
+                                {
+                                    "type": "node_start",
+                                    "node_id": node_name,
+                                    **(
+                                        {"server_start_ts": start_meta["server_start_ts"]}
+                                        if "server_start_ts" in start_meta
+                                        else {}
+                                    ),
+                                },
+                                _now,
+                            )
+                            _persist_snapshot(_tree, _now)
+                        yield StreamEvent.progress(
+                            content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
+                            metadata=start_meta,
+                        )
+
+                    output = _extract_output(
+                        node_name, update if isinstance(update, dict) else {}, accumulated
                     )
 
-                output = _extract_output(
-                    node_name, update if isinstance(update, dict) else {}, accumulated
-                )
+                    # yield PROGRESS with detailed metadata -> stream_agent_to_sse 映射为 node_complete
+                    # 注：真实耗时经独立 node_timing 事件下发（node_end 到达时），此处不附加，
+                    # 因 node_end 时序上晚于本 updates chunk，duration 此刻尚不可得。
+                    if _track_snapshot:
+                        _now = _now_ms()
+                        _tree = apply_node_event(
+                            _tree,
+                            {"type": "node_complete", "node_id": node_name, "output": output},
+                            _now,
+                        )
+                        _persist_snapshot(_tree, _now)
+                    yield StreamEvent.progress(
+                        content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
+                        metadata={
+                            "node": node_name,
+                            "sse_type": "node_complete",
+                            "node_id": node_name,
+                            "layer": step_info.get("layer", ""),
+                            "desc": step_info.get("desc", node_name),
+                            "completed": sorted(completed),
+                            "progress": len(completed) / len(LAYER_STEPS),
+                            "output": output,
+                        },
+                    )
+        except Exception:
+            # 异常兜底：置 failed 后 re-raise（行为与 PipelineRunner._run 对齐）
+            if _track_snapshot:
+                _session_store.update_session_status(session_id, "failed")
+            raise
 
-                # yield PROGRESS with detailed metadata -> stream_agent_to_sse 映射为 node_complete
-                # 注：真实耗时经独立 node_timing 事件下发（node_end 到达时），此处不附加，
-                # 因 node_end 时序上晚于本 updates chunk，duration 此刻尚不可得。
-                yield StreamEvent.progress(
-                    content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
-                    metadata={
-                        "node": node_name,
-                        "sse_type": "node_complete",
-                        "node_id": node_name,
-                        "layer": step_info.get("layer", ""),
-                        "desc": step_info.get("desc", node_name),
-                        "completed": sorted(completed),
-                        "progress": len(completed) / len(LAYER_STEPS),
-                        "output": output,
-                    },
-                )
+        # 正常结束：写最终快照并置 completed（组装 report metadata 前）
+        if _track_snapshot:
+            _persist_snapshot(_tree, _now_ms())
+            _session_store.update_session_status(session_id, "completed")
 
         report_md = accumulated.get("final_report", "")
         metadata = {
