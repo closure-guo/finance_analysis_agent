@@ -1001,6 +1001,9 @@ async def analyze(req: AnalyzeRequest):
             }
             collector.feed(_pre_tool_call)
             yield _sse(_pre_tool_call)
+            # 补发 search_start：前端 tool_call 对 web_search 因 isSearchToolName 被跳过，
+            # 搜索横幅由 search_start/search_result 驱动——预搜索此前漏发致无搜索横幅。
+            yield _sse({"type": "search_start", "query": search_query, "timestamp": _now()})
 
             search_result = ""
             try:
@@ -1017,6 +1020,21 @@ async def analyze(req: AnalyzeRequest):
             }
             collector.feed(_pre_tool_result)
             yield _sse(_pre_tool_result)
+            # 补发 search_result（结构化来源），驱动前端搜索横幅从"搜索中"转"已搜索 N 个网页"
+            from finance_agent.web_search import parse_search_output
+
+            _pre_results = parse_search_output(search_result)
+            yield _sse(
+                {
+                    "type": "search_result",
+                    "query": search_query,
+                    "results": [
+                        {"title": r.title, "url": r.url, "content": r.content} for r in _pre_results
+                    ],
+                    "count": len(_pre_results),
+                    "timestamp": _now(),
+                }
+            )
             user_query = (
                 f"{req.query}\n\n"
                 f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
