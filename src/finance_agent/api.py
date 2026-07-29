@@ -39,6 +39,7 @@ from finance_agent.session_store import (  # noqa: E402
     update_session_report,
     update_session_status,
 )
+from finance_agent.timeline_builder import apply_chat_event  # noqa: E402
 
 
 @contextlib.asynccontextmanager
@@ -838,9 +839,14 @@ class _ChatCollector:
         self.response: str = ""
         self.thinking: str = ""
         self.tool_calls: list[dict] = []
+        # 结构化时序（思考/搜索/工具调用交错），镜像前端 applyChatStreamEvent，
+        # 持久化到 chat_history 的 agentTimeline 字段
+        self.agent_timeline: list[dict] = []
 
     def feed(self, data: dict) -> None:
         t = data.get("type")
+        # 维护结构化时序（timeline 构建器为纯函数，不可变更新后重新赋值）
+        self.agent_timeline = apply_chat_event(self.agent_timeline, data)
         if t == "chat_token":
             # 回答增量（content，与 reasoning 分离）
             self.response += data.get("token", "")
@@ -1148,6 +1154,7 @@ async def analyze(req: AnalyzeRequest):
                 collector.response.strip(),
                 thinking=collector.thinking.strip() or None,
                 tool_calls=collector.tool_calls or None,
+                agent_timeline=collector.agent_timeline or None,
             )
 
         # 如果 Agent 调用了 run_deep_analysis，说明已进入分析阶段
@@ -1259,6 +1266,7 @@ async def quick_chat(req: ChatRequest):
                     collector.response,
                     thinking=collector.thinking.strip() or None,
                     tool_calls=collector.tool_calls or None,
+                    agent_timeline=collector.agent_timeline or None,
                 )
                 if not req.session_id:
                     # 新对话：通知前端 session_id
