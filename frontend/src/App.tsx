@@ -420,10 +420,10 @@ export default function App() {
                   streaming: true,
                 }])
               } else {
+                // 复用 applyChatStreamEvent：累加 chatResponse 同时收口末尾 thinking item，
+                // 避免思考横幅在 agent 回复期间持续显示"思考中"（与 quickChat 路径行为一致）
                 setMessages(prev => prev.map(m =>
-                  m.id === assistantMsgId
-                    ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
-                    : m
+                  m.id === assistantMsgId ? applyChatStreamEvent(m, event) : m
                 ))
               }
               continue
