@@ -891,6 +891,29 @@ class _ChatCollector:
                     break
 
 
+def _persist_collector(session_id: str, collector: _ChatCollector) -> None:
+    """将 collector 内容持久化到 chat_history。
+
+    条件放宽：思考阶段（仅有 thinking/agent_timeline，无 response）也要持久化，
+    否则用户中途切走/中断后返回会话时思考内容丢失。
+    任一非空字段（response/thinking/tool_calls/agent_timeline）即触发。
+    """
+    response = collector.response.strip()
+    thinking = collector.thinking.strip() or None
+    tool_calls = collector.tool_calls or None
+    agent_timeline = collector.agent_timeline or None
+    if not (response or thinking or tool_calls or agent_timeline):
+        return
+    append_chat(
+        session_id,
+        "assistant",
+        response,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        agent_timeline=agent_timeline,
+    )
+
+
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
     """深度分析 -- 通过 harness ReAct Agent 编排工具调用。
@@ -1160,17 +1183,12 @@ async def analyze(req: AnalyzeRequest):
                     "timestamp": _now(),
                 }
             )
-
-        # 保存 Assistant 回复到 chat_history（含思考过程与工具调用，便于历史会话回显）
-        if collector.response.strip():
-            append_chat(
-                session_id,
-                "assistant",
-                collector.response.strip(),
-                thinking=collector.thinking.strip() or None,
-                tool_calls=collector.tool_calls or None,
-                agent_timeline=collector.agent_timeline or None,
-            )
+        finally:
+            # 保存 Assistant 回复到 chat_history（含思考过程与工具调用，便于历史会话回显）
+            # 持久化条件放宽：思考阶段（仅有 thinking/agent_timeline，无 response）也要持久化，
+            # 否则用户中途切走/中断后返回会话时思考内容丢失。
+            # finally 兜底：客户端断开（abort）导致 async for 中断时也执行持久化。
+            _persist_collector(session_id, collector)
 
         # 如果 Agent 调用了 run_deep_analysis，说明已进入分析阶段
         if collected_metadata.get("report_markdown") or collected_metadata.get("stock_code"):
@@ -1274,25 +1292,18 @@ async def quick_chat(req: ChatRequest):
                 yield sse_str
 
             # 持久化对话到 session（含思考过程与工具调用，便于历史会话回显）
-            if collector.response:
-                append_chat(
-                    req_session_id,
-                    "assistant",
-                    collector.response,
-                    thinking=collector.thinking.strip() or None,
-                    tool_calls=collector.tool_calls or None,
-                    agent_timeline=collector.agent_timeline or None,
+            # 条件放宽：思考阶段（仅有 thinking/agent_timeline，无 response）也要持久化
+            _persist_collector(req_session_id, collector)
+            if collector.response and not req.session_id:
+                # 新对话：通知前端 session_id
+                yield _sse(
+                    {
+                        "type": "session_created",
+                        "session_id": req_session_id,
+                        "display_name": _display_name,
+                        "timestamp": _now(),
+                    }
                 )
-                if not req.session_id:
-                    # 新对话：通知前端 session_id
-                    yield _sse(
-                        {
-                            "type": "session_created",
-                            "session_id": req_session_id,
-                            "display_name": _display_name,
-                            "timestamp": _now(),
-                        }
-                    )
 
         except Exception as e:
             yield _sse({"type": "error", "message": str(e), "timestamp": _now()})
