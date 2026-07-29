@@ -17,7 +17,13 @@ export default defineConfig({
   // 运行时间序列专用 spec（快速/深度/历史恢复三个场景）
   // + 管线分组（thinking-timeline-pipeline）、ETA/横幅（pipeline-eta-banner）
   // 与分层时间轴（pipeline-hierarchical-timeline）spec
-  testMatch: ['thinking-timeline*.spec.ts', 'pipeline-eta-banner.spec.ts', 'pipeline-hierarchical-timeline.spec.ts'],
+  // + 切换会话恢复管线（resume-pipeline-across-sessions）spec
+  testMatch: [
+    'thinking-timeline*.spec.ts',
+    'pipeline-eta-banner.spec.ts',
+    'pipeline-hierarchical-timeline.spec.ts',
+    'resume-pipeline-across-sessions.spec.ts',
+  ],
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
@@ -56,7 +62,7 @@ export default defineConfig({
     // 与 tool_call 场景隔离：两组后端 STUB_SCENARIO 不同，不能共用端口。
     {
       command: 'uv run uvicorn finance_agent.api:app --port 8002',
-      env: { TESTING: '1', STUB_SCENARIO: 'pipeline', STUB_NODE_DELAY: '0.6' },
+      env: { TESTING: '1', STUB_SCENARIO: 'pipeline', STUB_NODE_DELAY: '1.5' },
       url: 'http://localhost:8002/api/health',
       timeout: 30_000,
       reuseExistingServer: !process.env.CI,
