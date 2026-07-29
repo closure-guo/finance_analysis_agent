@@ -23,6 +23,7 @@ export default defineConfig({
     'pipeline-eta-banner.spec.ts',
     'pipeline-hierarchical-timeline.spec.ts',
     'resume-pipeline-across-sessions.spec.ts',
+    'persist-full-session-timeline.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },

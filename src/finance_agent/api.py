@@ -35,6 +35,8 @@ from finance_agent.session_store import (  # noqa: E402
     init_db,
     list_sessions,
     rename_session,
+    update_pipeline_snapshot,
+    update_pipeline_timelines,
     update_session_for_clarify,
     update_session_report,
     update_session_status,
@@ -497,9 +499,11 @@ if TESTING:
     async def test_seed(req: dict):
         """测试数据造数端点。
 
-        接收 display_name / session_type / chat_history（含可选 thinking + tool_calls），
-        内部经 session_store.create_session + append_chat 写入真实存储，
-        供历史会话恢复等 E2E 确定性构造会话（agent-turn-box-display delta task 5.6）。
+        接收 display_name / session_type / chat_history（含可选 thinking + tool_calls
+        + agentTimeline），内部经 session_store.create_session + append_chat 写入真实存储；
+        顶层可选 pipeline_timelines（{node: [TimelineItem]}）与 pipeline_snapshot（dict），
+        分别经 update_pipeline_timelines / update_pipeline_snapshot 落库，
+        供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）。
         """
         # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约
         if "chat_history" not in req:
@@ -507,6 +511,8 @@ if TESTING:
         session_id = create_session(
             session_type=req.get("session_type", "chat"),
             display_name=req.get("display_name"),
+            report_markdown=req.get("report_markdown", ""),
+            status=req.get("status", "completed"),
         )
         for entry in req.get("chat_history", []):
             append_chat(
@@ -515,7 +521,16 @@ if TESTING:
                 content=entry["content"],
                 thinking=entry.get("thinking"),
                 tool_calls=entry.get("tool_calls"),
+                agent_timeline=entry.get("agentTimeline"),
             )
+        # 顶层管线字段（persist-full-session-timeline）：E2E 造「已完成管线会话」需要
+        # pipeline_snapshot（走 completed 分支恢复分层时间轴）与 pipeline_timelines（恢复节点时序）
+        pipeline_timelines = req.get("pipeline_timelines")
+        if isinstance(pipeline_timelines, dict):
+            update_pipeline_timelines(session_id, pipeline_timelines)
+        pipeline_snapshot = req.get("pipeline_snapshot")
+        if isinstance(pipeline_snapshot, dict):
+            update_pipeline_snapshot(session_id, pipeline_snapshot)
         return {"session_id": session_id}
 
     @app.post("/api/test/reset")
