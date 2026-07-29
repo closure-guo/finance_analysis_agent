@@ -81,6 +81,7 @@ def init_db() -> None:
         ("focus", "ALTER TABLE sessions ADD COLUMN focus TEXT DEFAULT ''"),
         ("pending_intent", "ALTER TABLE sessions ADD COLUMN pending_intent TEXT DEFAULT ''"),
         ("pipeline_snapshot", "ALTER TABLE sessions ADD COLUMN pipeline_snapshot TEXT"),
+        ("pipeline_timelines", "ALTER TABLE sessions ADD COLUMN pipeline_timelines TEXT"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -349,6 +350,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         "agent_process",
         "analyst_summaries",
         "chat_history",
+        "pipeline_timelines",
     ):
         if d.get(key):
             with contextlib.suppress(json.JSONDecodeError, TypeError):
@@ -383,6 +385,7 @@ def append_chat(
     content: str,
     thinking: str | None = None,
     tool_calls: list | None = None,
+    agent_timeline: list | None = None,
 ) -> None:
     """Append a chat message to session's chat_history.
 
@@ -392,6 +395,8 @@ def append_chat(
         content: 最终回复文本
         thinking: 可选的 agent 思考过程原文（用于历史会话回显）
         tool_calls: 可选的工具调用记录列表（含 name/args/result_text/done）
+        agent_timeline: 可选的结构化时序（TimelineItem 数组：思考/搜索/工具调用交错），
+            供前端原样恢复（不再走拍平近似）
     """
     conn = _get_db()
     row = conn.execute(
@@ -409,6 +414,8 @@ def append_chat(
         entry["thinking"] = thinking
     if tool_calls:
         entry["tool_calls"] = tool_calls
+    if agent_timeline:
+        entry["agentTimeline"] = agent_timeline
     history.append(entry)
     conn.execute(
         "UPDATE sessions SET chat_history = ? WHERE session_id = ?",
@@ -424,6 +431,18 @@ def update_pipeline_snapshot(session_id: str, snapshot: dict) -> bool:
     cur = conn.execute(
         "UPDATE sessions SET pipeline_snapshot = ? WHERE session_id = ?",
         (json.dumps(snapshot, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def update_pipeline_timelines(session_id: str, timelines: dict) -> bool:
+    """持久化管线节点时序（JSON：{node: [TimelineItem]}）。返回是否更新到行。"""
+    conn = _get_db()
+    cur = conn.execute(
+        "UPDATE sessions SET pipeline_timelines = ? WHERE session_id = ?",
+        (json.dumps(timelines, ensure_ascii=False), session_id),
     )
     conn.commit()
     conn.close()
