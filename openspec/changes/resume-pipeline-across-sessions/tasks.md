@@ -36,5 +36,5 @@
 
 - [x] 4.1 后端 pytest / 前端 vitest 全绿
 - [x] 4.2 ruff / tsc 全绿
-- [x] 4.3 E2E：stub 管线运行中切换会话再切回 -> 时间轴恢复且进度推进；完成后切回 -> 报告+静态时间轴；现有套件不回归
+- [x] 4.3 E2E：stub 管线运行中切换会话再切回 -> 时间轴恢复且快照不回退；完成后切回 -> 报告+静态时间轴；现有套件不回归
 - [ ] 4.4 人工验证报告落 `tests/validation/resume-pipeline-across-sessions-validation.md`（真实 LLM 下切换会话管线后台续跑 + 切回恢复）

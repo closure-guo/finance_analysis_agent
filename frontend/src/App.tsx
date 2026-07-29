@@ -34,6 +34,10 @@ export function extractThinkingTitle(content: string): string | undefined {
 let msgIdCounter = 0
 const genId = () => `msg-${++msgIdCounter}`
 
+// 轮询超时上限（Final Review Fix 2）：ReAct 路径切走后 status 可能永久 running，
+// 轮询无限进行会泄漏资源。超过该时长后停止轮询并提示用户刷新或重新发起。
+const MAX_POLLING_MS = 5 * 60 * 1000 // 5 分钟（150 次 × 2s）
+
 // TimelineRenderer 注入的横幅组件集合（ThinkingBanner/ToolCallBanner 为函数声明，提升后可用）
 const timelineBannerComponents: TimelineBannerComponents = {
   ThinkingBanner: (props) => <ThinkingBanner {...props} />,
@@ -74,6 +78,8 @@ export default function App() {
   const setApiKey = saveApiKey
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
   const pipelineMsgRef = useRef<UIMessage | null>(null)
+  // 轮询起始时间（超时保护基准，cleanup 时重置）
+  const pollStartRef = useRef<number | null>(null)
 
   // Session state
   const [sessions, setSessions] = useState<SessionMeta[]>([])
@@ -734,16 +740,28 @@ export default function App() {
   // 切回 running 会话进入 analyzing 且无活跃 SSE（abortRef 为空=仅恢复态、非实时订阅）时，
   // 每 2s 拉取会话详情刷新分层时间轴；completed 则走 selectSession 完整恢复报告并自然停止；
   // failed 仅停止轮询（MVP 不展示失败态）。
+  // 超时保护（Final Review Fix 2）：超过 MAX_POLLING_MS（5 分钟）后停止轮询并提示
+  // 「管线可能已中断」，避免 ReAct 路径 status 永久 running 时轮询无限泄漏。
   // 前提不变量：abortRef 作为「SSE 在线」信号，依赖「analyzing 态必然发生在 SSE 存活期间」；
   // 用户在恢复态发起新分析时 startAnalysis 会设置 abortRef，但可能无 setState 触发 effect 重跑，
   // 因此 interval 回调内必须复查 abortRef，避免 SSE 与轮询双写消息、以及轮询误调 selectSession 掐断新 SSE。
   useEffect(() => {
     if (appState !== 'analyzing' || !currentSessionId) return
     if (abortRef.current) return // 有活跃 SSE 订阅，进度由事件流驱动，无需轮询
+    pollStartRef.current = Date.now() // 记录轮询起始时间（超时保护基准）
     const timer = setInterval(async () => {
       // 复查 SSE 在线信号：用户在恢复态发起新分析（startAnalysis 已设置 abortRef）时轮询立即让位，
       // 等 effect 因状态变化重跑后 interval 自然清理
       if (abortRef.current) return
+      // 超时保护：超过 MAX_POLLING_MS 则停止轮询并提示（ReAct 路径 status 可能永久 running）
+      if (pollStartRef.current && Date.now() - pollStartRef.current >= MAX_POLLING_MS) {
+        clearInterval(timer)
+        const pm = pipelineMsgRef.current
+        if (pm) {
+          updateMessage(pm.id, { content: '管线可能已中断，请刷新或重新发起' })
+        }
+        return
+      }
       try {
         const resp = await fetch(`/api/sessions/${currentSessionId}`)
         if (!resp.ok) return
@@ -776,7 +794,10 @@ export default function App() {
         // 轮询失败静默，下个周期重试
       }
     }, 2000)
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      pollStartRef.current = null // cleanup 重置，下次轮询重新计时
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appState, currentSessionId])
 

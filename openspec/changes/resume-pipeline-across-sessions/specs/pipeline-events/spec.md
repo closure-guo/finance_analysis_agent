@@ -14,6 +14,8 @@
 - **AND** 管线完成后 SHALL 照常写入会话的报告与分析产物（report_markdown/agent_process/analyst_reports）
 - **AND** 会话 status 在管线完成后 SHALL 更新为 completed
 
+> **适用范围（design.md §8）**：该「SSE 断开后后台续跑到底」行为当前仅适用于 **fast path**（`/api/analyze` 带 `stock_code` 且无 `session_id` 的直传路径，由后端 PipelineRunner 后台线程保护）。ReAct 主链路（自然语言输入，前端从不传 `stock_code`）的 SSE 断开完整后台化为**后续 change**（design.md §8 第 2 层）。ReAct 路径当前能力为：快照在断开前持续写入、会话状态兜底（running/completed/failed），切回时前端通过快照 + 轮询恢复时间轴。
+
 #### Scenario: 管线进度快照持久化
 
 - **GIVEN** 管线正在后台运行

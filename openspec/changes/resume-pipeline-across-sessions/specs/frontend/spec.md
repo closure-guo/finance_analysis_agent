@@ -26,7 +26,7 @@
 
 - **GIVEN** 某深度分析会话的管线正在运行
 - **WHEN** 用户切换到其他会话
-- **THEN** 前端 SHALL NOT 调用 abortStreaming 中断该管线对应的后端执行
+- **THEN** 前端 abortStreaming 仅断开 SSE 订阅，SHALL NOT 中断后端管线执行
 - **AND** 管线在后台继续，切回时可恢复
 
 #### Scenario: 切回失败的管线会话显示失败状态
@@ -34,6 +34,8 @@
 - **GIVEN** 某会话的管线已失败（status=failed，含后端重启悬挂的 running 被标记）
 - **WHEN** 用户切换到该会话
 - **THEN** 前端 SHALL 显示分析失败状态而非误认为仍在运行
+
+> **MVP 决策**：MVP 阶段 failed 分支不专门处理 UI（回退到现有 report/chat_history 恢复逻辑），失败态 UI 为后续改进。
 
 #### Scenario: 快速模式会话切换行为不变
 
@@ -45,11 +47,13 @@
 
 ### Requirement: 会话状态管理
 
-前端 `selectSession` 不再无条件 `abortStreaming()`。系统 SHALL 区分会话类型与会话内活动：深度管线会话切换离开时保留后台执行（不 abort），快速模式流切换离开时维持 abort。`selectSession` SHALL 按目标会话的 status 与 pipeline_snapshot 决定恢复管线 UI、报告、或仅对话历史。
+前端 `selectSession` SHALL 无条件调用 `abortStreaming()`--该调用仅断开 SSE 订阅，不影响后端管线执行。深度管线后台续跑由后端保护：fast path 由 PipelineRunner 后台线程保护，ReAct 路径由快照回调保护（design.md §8）。`selectSession` SHALL 按目标会话的 status 与 pipeline_snapshot 决定恢复管线 UI、报告、或仅对话历史。
+
+> **简化决策（plan Task 5）**：原设计拟按会话类型条件化 abort（深度管线会话不 abort），实现中简化为无条件 abort--前端 abort 仅断开 SSE 订阅、不中断后端管线，故无需区分会话类型即可保证后台续跑。
 
 #### Scenario: selectSession 按会话状态分发恢复逻辑
 
 - **GIVEN** 用户点击切换到某会话
 - **WHEN** 前端加载该会话详情
-- **THEN** 系统 SHALL 根据 status 恢复：running+snapshot → 实时管线时间轴；completed → 报告+静态时间轴；failed → 失败状态；无管线 → 仅对话历史
-- **AND** 仅当离开的会话是快速模式流时才 abortStreaming
+- **THEN** 系统 SHALL 根据 status 恢复：running+snapshot -> 实时管线时间轴；completed -> 报告+静态时间轴；failed -> 失败状态；无管线 -> 仅对话历史
+- **AND** selectSession SHALL 无条件 abortStreaming（仅断开 SSE 订阅，不影响后端管线）

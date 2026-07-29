@@ -23,7 +23,7 @@ _SSE_DATA_RE = re.compile(r"^data: (.*)$", re.MULTILINE)
 
 # 与前端 pipelineTree.ts LAYER_TREE_CONFIG（42-102 行）逐项对齐的静态配置。
 # 快照 layerTree 结构即前端 PipelineTimeline 渲染结构：恢复时快照直接替换
-# 前端树，因此 layer id/label/children 必须与前端完全一致（6 层 24 节点）。
+# 前端树，因此 layer id/label/children 必须与前端完全一致（6 层 25 节点）。
 LAYER_TREE_CONFIG: list[dict] = [
     {
         "id": "prep",

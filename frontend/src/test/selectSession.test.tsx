@@ -337,4 +337,41 @@ describe('selectSession 按会话状态恢复管线', () => {
     // 用户刚发起的分析输入仍在消息流中
     expect(screen.getByText('分析宁德时代')).toBeInTheDocument()
   })
+
+  it('running 会话轮询超过 5 分钟后停止并提示管线可能已中断', async () => {
+    // 超时保护（Final Review Fix 2）：ReAct 路径切走后 status 可能永久 running，
+    // 轮询无限进行会泄漏资源。超过 MAX_POLLING_MS（5 分钟）后停止轮询并提示用户。
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const treeRunning = treeWithRunningNode('trader', ['check_cache', 'trader'])
+    const snapshotRunning = makeSnapshot(treeRunning, 'trader', 0.5)
+    const detailRunning = makeSessionDetail({ status: 'running', pipeline_snapshot: snapshotRunning })
+
+    // 永远返回 running（管线卡住不完成，模拟 ReAct 路径切走后台未续跑）
+    const fetchMock = stubFetchWithSessionList('s1', '卡住会话', [
+      { ok: true, body: detailRunning },
+    ])
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('卡住会话')).toBeInTheDocument())
+    await act(async () => {
+      fireEvent.click(screen.getByText('卡住会话'))
+    })
+    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+
+    // 推进超过 5 分钟（MAX_POLLING_MS = 300_000，每 2s 一次轮询）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(305_000)
+    })
+
+    // 轮询已停止：再推进 10s 不应有新的详情请求
+    const callsAtTimeout = fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/sessions/s1')).length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    const callsAfterWait = fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/sessions/s1')).length
+    expect(callsAfterWait).toBe(callsAtTimeout)
+
+    // 提示消息出现
+    expect(screen.getByText(/管线可能已中断/)).toBeInTheDocument()
+  })
 })
