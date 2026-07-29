@@ -3,6 +3,7 @@
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from finance_agent.nodes._timing import timed_node
 from finance_agent.nodes.analysts import (
     fundamental_analyst,
     macro_analyst,
@@ -49,51 +50,56 @@ def build_5layer_graph() -> CompiledStateGraph:
     """ADR-0011 五层架构图：PREP -> 5 层 Agent -> 报告。"""
     graph = StateGraph(AnalysisState)  # pyrefly: ignore[bad-specialization]
 
+    # 全部业务节点统一用 timed_node 包裹：在真实入口/出口发 node_start/node_end
+    # custom 事件（修复 updates 流对快速节点只产出一个 chunk 导致的计时恒 0）。
+    # _passthrough entry 节点无业务逻辑、瞬时完成，不包裹。
+    _t = timed_node
+
     # ── PREP 节点（复用现有）──
-    graph.add_node("check_cache", check_cache)
-    graph.add_node("fetch_data", fetch_data)
-    graph.add_node("validate_financials", validate_node)
-    graph.add_node("compute_metrics", compute_metrics)
+    graph.add_node("check_cache", _t("check_cache")(check_cache))
+    graph.add_node("fetch_data", _t("fetch_data")(fetch_data))
+    graph.add_node("validate_financials", _t("validate_financials")(validate_node))
+    graph.add_node("compute_metrics", _t("compute_metrics")(compute_metrics))
 
     # ── Layer I: Analyst Team ──
     graph.add_node("analysts_entry", _passthrough)
-    graph.add_node("technical_analyst", technical_analyst)
-    graph.add_node("macro_analyst", macro_analyst)
-    graph.add_node("fundamental_analyst", fundamental_analyst)
-    graph.add_node("sentiment_analyst", sentiment_analyst)
+    graph.add_node("technical_analyst", _t("technical_analyst")(technical_analyst))
+    graph.add_node("macro_analyst", _t("macro_analyst")(macro_analyst))
+    graph.add_node("fundamental_analyst", _t("fundamental_analyst")(fundamental_analyst))
+    graph.add_node("sentiment_analyst", _t("sentiment_analyst")(sentiment_analyst))
 
     # ── Citation Verification ──
-    graph.add_node("verify_citations", verify_citations)
+    graph.add_node("verify_citations", _t("verify_citations")(verify_citations))
 
     # ── Layer II: Bull/Bear Debate ──
     graph.add_node("debate_r1_entry", _passthrough)
-    graph.add_node("bull_r1", bull_debater)
-    graph.add_node("bear_r1", bear_debater)
+    graph.add_node("bull_r1", _t("bull_r1")(bull_debater))
+    graph.add_node("bear_r1", _t("bear_r1")(bear_debater))
     graph.add_node("debate_r2_entry", _passthrough)
-    graph.add_node("bull_r2", bull_debater)
-    graph.add_node("bear_r2", bear_debater)
-    graph.add_node("research_manager", research_manager)
+    graph.add_node("bull_r2", _t("bull_r2")(bull_debater))
+    graph.add_node("bear_r2", _t("bear_r2")(bear_debater))
+    graph.add_node("research_manager", _t("research_manager")(research_manager))
 
     # ── Layer III: Trader ──
-    graph.add_node("trader", trader)
+    graph.add_node("trader", _t("trader")(trader))
 
     # ── Layer IV: Risk Management ──
     graph.add_node("risk_r1_entry", _passthrough)
-    graph.add_node("aggressive_r1", aggressive_debater)
-    graph.add_node("conservative_r1", conservative_debater)
-    graph.add_node("neutral_r1", neutral_debater)
+    graph.add_node("aggressive_r1", _t("aggressive_r1")(aggressive_debater))
+    graph.add_node("conservative_r1", _t("conservative_r1")(conservative_debater))
+    graph.add_node("neutral_r1", _t("neutral_r1")(neutral_debater))
     graph.add_node("risk_r2_entry", _passthrough)
-    graph.add_node("aggressive_r2", aggressive_debater)
-    graph.add_node("conservative_r2", conservative_debater)
-    graph.add_node("neutral_r2", neutral_debater)
-    graph.add_node("risk_judge", risk_judge)
+    graph.add_node("aggressive_r2", _t("aggressive_r2")(aggressive_debater))
+    graph.add_node("conservative_r2", _t("conservative_r2")(conservative_debater))
+    graph.add_node("neutral_r2", _t("neutral_r2")(neutral_debater))
+    graph.add_node("risk_judge", _t("risk_judge")(risk_judge))
 
     # ── Layer V: Fund Manager ──
-    graph.add_node("fund_manager", fund_manager)
+    graph.add_node("fund_manager", _t("fund_manager")(fund_manager))
 
     # ── Report ──
-    graph.add_node("generate_report", generate_report)
-    graph.add_node("generate_file", generate_file)
+    graph.add_node("generate_report", _t("generate_report")(generate_report))
+    graph.add_node("generate_file", _t("generate_file")(generate_file))
 
     # ── 边：PREP ──
     graph.add_edge(START, "check_cache")

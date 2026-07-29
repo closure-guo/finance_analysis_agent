@@ -143,3 +143,65 @@ describe('LAYER_TREE_CONFIG 完整性', () => {
     }
   })
 })
+
+describe('applyNodeEvent - 后端真实时间戳（fix-node-timer-real-lifecycle）', () => {
+  it('node_start 优先使用 server_start_ts 作为 startedAt', () => {
+    let tree = buildLayerTree()
+    tree = applyNodeEvent(
+      tree,
+      { type: 'node_start', node_id: 'fetch_data', server_start_ts: 5_000_000 } as never,
+      9_999_999,
+    )
+    const child = tree.find((l) => l.id === 'prep')!.children.find((c) => c.nodeId === 'fetch_data')!
+    // 用后端真实入口时间戳，而非 nowMs
+    expect(child.startedAt).toBe(5_000_000)
+  })
+
+  it('node_timing 用 server_duration_ms 覆盖 updates 近似耗时', () => {
+    let tree = buildLayerTree()
+    // updates 近似：start/complete 同刻 → durationMs≈0（快速节点恒 0 的旧行为）
+    tree = applyNodeEvent(tree, { type: 'node_start', node_id: 'check_cache' } as never, 1_000_000)
+    tree = applyNodeEvent(tree, { type: 'node_complete', node_id: 'check_cache' } as never, 1_000_000)
+    let child = tree.find((l) => l.id === 'prep')!.children.find((c) => c.nodeId === 'check_cache')!
+    expect(child.durationMs).toBe(0) // 近似值为 0
+    // node_timing 到达：真实 20ms 覆盖
+    tree = applyNodeEvent(
+      tree,
+      {
+        type: 'node_timing',
+        node_id: 'check_cache',
+        server_start_ts: 999_000,
+        server_end_ts: 999_020,
+        server_duration_ms: 20,
+      } as never,
+      1_000_500,
+    )
+    child = tree.find((l) => l.id === 'prep')!.children.find((c) => c.nodeId === 'check_cache')!
+    expect(child.durationMs).toBe(20)
+    expect(child.startedAt).toBe(999_000)
+    expect(child.completedAt).toBe(999_020)
+    // 状态不被 node_timing 改变（仍 completed）
+    expect(child.status).toBe('completed')
+  })
+
+  it('node_timing 缺 server_duration_ms 时由 end-start 推导', () => {
+    let tree = buildLayerTree()
+    tree = applyNodeEvent(tree, { type: 'node_start', node_id: 'fetch_data' } as never, 1_000)
+    tree = applyNodeEvent(
+      tree,
+      { type: 'node_timing', node_id: 'fetch_data', server_start_ts: 500, server_end_ts: 2_300 } as never,
+      3_000,
+    )
+    const child = tree.find((l) => l.id === 'prep')!.children.find((c) => c.nodeId === 'fetch_data')!
+    expect(child.durationMs).toBe(1_800)
+  })
+
+  it('无 server_* 时回退 Date.now() 到达时刻（stub/fast path/历史会话兼容）', () => {
+    let tree = buildLayerTree()
+    tree = applyNodeEvent(tree, { type: 'node_start', node_id: 'check_cache' } as never, 1_000)
+    tree = applyNodeEvent(tree, { type: 'node_complete', node_id: 'check_cache' } as never, 3_500)
+    const child = tree.find((l) => l.id === 'prep')!.children.find((c) => c.nodeId === 'check_cache')!
+    expect(child.startedAt).toBe(1_000)
+    expect(child.durationMs).toBe(2_500)
+  })
+})

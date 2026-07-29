@@ -49,9 +49,10 @@ describe('PipelineTimeline - 状态与耗时', () => {
       { type: 'node_start', node_id: 'trader', t: 1000 },
       { type: 'node_complete', node_id: 'trader', t: 3000 },
     )
-    render(<PipelineTimeline tree={tree} nowMs={3000} />)
-    // trader 完成耗时 2s
-    expect(screen.getByText('0:02')).toBeInTheDocument()
+    const { container } = render(<PipelineTimeline tree={tree} nowMs={3000} />)
+    // trader 完成耗时 2s（子节点行内；层标题也显示层耗时，故限定子节点区域）
+    const child = container.querySelector('[data-node-id="trader"]')
+    expect(child?.textContent).toContain('0:02')
   })
 
   it('当前运行子节点显示已运行时长', () => {
@@ -72,18 +73,27 @@ describe('PipelineTimeline - 状态与耗时', () => {
 })
 
 describe('PipelineTimeline - 展开折叠交互', () => {
-  it('点击已完成 layer 展开其子节点（用户偏好覆盖默认折叠）', () => {
+  it('已完成 layer 默认展开显示子节点（非 pending 层展开策略）', () => {
     const tree = treeWith(
       { type: 'node_start', node_id: 'trader', t: 1000 },
       { type: 'node_complete', node_id: 'trader', t: 2000 },
-      // trader 完成后 fund 开始运行，trader 层完成默认折叠
       { type: 'node_start', node_id: 'fund_manager', t: 3000 },
     )
     render(<PipelineTimeline tree={tree} nowMs={4000} />)
-    // trader 层完成默认折叠，子节点"交易决策"不可见
-    expect(screen.queryByText('交易决策')).not.toBeInTheDocument()
-    // 点击 Trader 层标题展开
-    fireEvent.click(screen.getByText('Trader'))
+    // trader 层已完成，默认展开，子节点"交易决策"可见（无需点击）
     expect(screen.getByText('交易决策')).toBeInTheDocument()
+  })
+
+  it('用户点击已完成 layer 折叠（用户偏好覆盖默认展开）', () => {
+    const tree = treeWith(
+      { type: 'node_start', node_id: 'trader', t: 1000 },
+      { type: 'node_complete', node_id: 'trader', t: 2000 },
+      { type: 'node_start', node_id: 'fund_manager', t: 3000 },
+    )
+    render(<PipelineTimeline tree={tree} nowMs={4000} />)
+    expect(screen.getByText('交易决策')).toBeInTheDocument()
+    // 点击 Trader 层标题折叠
+    fireEvent.click(screen.getByText('Trader'))
+    expect(screen.queryByText('交易决策')).not.toBeInTheDocument()
   })
 })

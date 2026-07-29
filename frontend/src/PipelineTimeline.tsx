@@ -199,7 +199,8 @@ export function PipelineTimeline({
   const running = findRunningNode(tree)
   const runningNodeId = running?.nodeId ?? null
 
-  // 展开状态：默认策略 = 运行层展开、其余折叠；用户手动操作覆盖（会话内记忆）
+  // 展开状态：默认策略 = 非 pending 层（运行中/已完成）展开、未开始层折叠；
+  // 用户手动操作覆盖（会话内记忆）。已完成层保持展开以便回看分析师结果与耗时。
   const [expandedOverride, setExpandedOverride] = useState<Record<string, boolean>>({})
 
   // 自动滚动定位当前节点（running 节点切换时平滑滚动；用户手动滚动 3s 内暂停）
@@ -227,7 +228,7 @@ export function PipelineTimeline({
 
   const isExpanded = (layer: LayerNode): boolean => {
     if (layer.id in expandedOverride) return expandedOverride[layer.id]
-    return layer.status === 'running'
+    return layer.status !== 'pending'
   }
 
   const toggle = (layer: LayerNode) => {

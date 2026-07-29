@@ -56,7 +56,7 @@ export default defineConfig({
     // 与 tool_call 场景隔离：两组后端 STUB_SCENARIO 不同，不能共用端口。
     {
       command: 'uv run uvicorn finance_agent.api:app --port 8002',
-      env: { TESTING: '1', STUB_SCENARIO: 'pipeline' },
+      env: { TESTING: '1', STUB_SCENARIO: 'pipeline', STUB_NODE_DELAY: '0.6' },
       url: 'http://localhost:8002/api/health',
       timeout: 30_000,
       reuseExistingServer: !process.env.CI,

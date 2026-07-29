@@ -120,13 +120,19 @@ export function buildLayerTree(): LayerNode[] {
 // ── 事件应用 ──
 
 interface NodeEventLike {
-  type: 'node_start' | 'node_complete'
+  type: 'node_start' | 'node_complete' | 'node_timing'
   node_id: string
   output?: { summary?: string; [k: string]: unknown }
+  // 后端真实生命周期时间戳（fix-node-timer-real-lifecycle）：
+  // node_start 携带 server_start_ts；node_timing 携带完整三元组（node_end 到达时下发）
+  server_start_ts?: number
+  server_end_ts?: number
+  server_duration_ms?: number
 }
 
-// 应用一个 node_start / node_complete 事件，返回新树（不可变更新）。
-// nowMs 为事件时间戳（ms epoch），由调用方注入以便测试。
+// 应用 node_start / node_complete / node_timing 事件，返回新树（不可变更新）。
+// nowMs 为事件到达时间戳（ms epoch），由调用方注入以便测试。
+// 时间戳优先级：后端 server_*（真实生命周期）> nowMs（到达时刻近似）。
 export function applyNodeEvent(tree: LayerNode[], event: NodeEventLike, nowMs: number): LayerNode[] {
   const loc = NODE_INDEX[event.node_id]
   if (!loc) return tree
@@ -136,13 +142,33 @@ export function applyNodeEvent(tree: LayerNode[], event: NodeEventLike, nowMs: n
 
     const children = layer.children.map((child) => {
       if (child.nodeId !== event.node_id) return child
+
+      // node_timing：node_end 到达时下发，用后端真实耗时覆盖 updates 近似值。
+      // 不受"completed 不回退"限制——它只更新时间戳/耗时，不改状态。
+      if (event.type === 'node_timing') {
+        const startedAt = event.server_start_ts ?? child.startedAt
+        const durationMs =
+          event.server_duration_ms ??
+          (event.server_end_ts !== undefined && startedAt !== undefined
+            ? Math.max(0, event.server_end_ts - startedAt)
+            : child.durationMs)
+        return {
+          ...child,
+          startedAt,
+          completedAt: event.server_end_ts ?? child.completedAt,
+          durationMs,
+        }
+      }
+
       // 状态单调：completed 不回退
       if (child.status === 'completed') return child
       if (event.type === 'node_start') {
-        return { ...child, status: 'running' as NodeStatus, startedAt: child.startedAt ?? nowMs }
+        // 优先后端真实入口时间戳
+        const startedAt = event.server_start_ts ?? child.startedAt ?? nowMs
+        return { ...child, status: 'running' as NodeStatus, startedAt }
       }
-      // node_complete
-      const startedAt = child.startedAt ?? nowMs
+      // node_complete：优先后端入口时间戳；耗时为近似值（node_timing 到达后被覆盖）
+      const startedAt = event.server_start_ts ?? child.startedAt ?? nowMs
       return {
         ...child,
         status: 'completed' as NodeStatus,

@@ -299,6 +299,10 @@ def _make_run_deep_analysis(
 
         loop.run_in_executor(None, _run_graph)
 
+        # 节点真实生命周期时间戳（custom 流的 node_start/node_end），
+        # 用于给 updates 流的 node_complete 附加 server_*（修复快速节点计时恒 0）。
+        node_lifecycle: dict[str, dict] = {}
+
         while True:
             item = await chunk_queue.get()
             if item is None:
@@ -308,15 +312,39 @@ def _make_run_deep_analysis(
 
             mode, chunk = item
 
-            # Custom mode: forward thinking tokens
+            # Custom mode: forward thinking tokens + 节点生命周期时间戳
             if mode == "custom":
-                if isinstance(chunk, dict) and chunk.get("type") == "thinking":
-                    # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
-                    # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
-                    node = chunk.get("node", "")
-                    yield StreamEvent.think(
-                        chunk.get("token", ""), metadata={"node": node} if node else None
-                    )
+                if isinstance(chunk, dict):
+                    ctype = chunk.get("type")
+                    if ctype == "thinking":
+                        # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
+                        # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
+                        node = chunk.get("node", "")
+                        yield StreamEvent.think(
+                            chunk.get("token", ""), metadata={"node": node} if node else None
+                        )
+                    elif ctype == "node_start":
+                        # 节点真实入口时间戳（timed_node 装饰器发出）
+                        node_lifecycle.setdefault(chunk["node"], {})["start_ts"] = chunk["ts"]
+                    elif ctype == "node_end":
+                        # 节点真实出口时间戳与耗时；记录并立即下发 node_timing 事件
+                        # （node_complete 由 updates chunk 驱动、可能已先于 node_end 发出，
+                        #  故真实耗时经独立 node_timing 下发，前端据此覆盖近似值）。
+                        node_name = chunk["node"]
+                        lc = node_lifecycle.setdefault(node_name, {})
+                        lc["end_ts"] = chunk["ts"]
+                        lc["duration_ms"] = chunk.get("duration_ms")
+                        yield StreamEvent.progress(
+                            content=f"{node_name} timing",
+                            metadata={
+                                "node": node_name,
+                                "sse_type": "node_timing",
+                                "node_id": node_name,
+                                "server_start_ts": lc.get("start_ts"),
+                                "server_end_ts": lc.get("end_ts"),
+                                "server_duration_ms": lc.get("duration_ms"),
+                            },
+                        )
                 continue
 
             # Updates mode: existing node progress logic
@@ -336,15 +364,20 @@ def _make_run_deep_analysis(
                 # 节点首次出现：先发 node_start（与 fast path 事件序列对齐）
                 if node_name not in started_nodes:
                     started_nodes.add(node_name)
+                    start_meta = {
+                        "node": node_name,
+                        "sse_type": "node_start",
+                        "node_id": node_name,
+                        "layer": step_info.get("layer", ""),
+                        "desc": step_info.get("desc", node_name),
+                    }
+                    # 附加后端真实入口时间戳（custom 流 node_start 已先行到达）
+                    _lc = node_lifecycle.get(node_name, {})
+                    if "start_ts" in _lc:
+                        start_meta["server_start_ts"] = _lc["start_ts"]
                     yield StreamEvent.progress(
                         content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
-                        metadata={
-                            "node": node_name,
-                            "sse_type": "node_start",
-                            "node_id": node_name,
-                            "layer": step_info.get("layer", ""),
-                            "desc": step_info.get("desc", node_name),
-                        },
+                        metadata=start_meta,
                     )
 
                 output = _extract_output(
@@ -352,6 +385,8 @@ def _make_run_deep_analysis(
                 )
 
                 # yield PROGRESS with detailed metadata -> stream_agent_to_sse 映射为 node_complete
+                # 注：真实耗时经独立 node_timing 事件下发（node_end 到达时），此处不附加，
+                # 因 node_end 时序上晚于本 updates chunk，duration 此刻尚不可得。
                 yield StreamEvent.progress(
                     content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
                     metadata={
@@ -748,16 +783,30 @@ async def stream_agent_to_sse(
             # 映射为前端期望的 node_start / node_complete 事件
             meta = event.metadata or {}
             sse_type = meta.get("sse_type", "node_complete")
-            if sse_type == "node_start":
+            if sse_type == "node_timing":
+                # 节点真实耗时（node_end 到达时下发），前端据此覆盖 updates 近似值
                 yield _sse(
                     {
-                        "type": "node_start",
+                        "type": "node_timing",
                         "node_id": meta.get("node_id", ""),
-                        "layer": meta.get("layer", ""),
-                        "desc": meta.get("desc", ""),
+                        "server_start_ts": meta.get("server_start_ts"),
+                        "server_end_ts": meta.get("server_end_ts"),
+                        "server_duration_ms": meta.get("server_duration_ms"),
                         "timestamp": ts,
                     }
                 )
+            elif sse_type == "node_start":
+                payload = {
+                    "type": "node_start",
+                    "node_id": meta.get("node_id", ""),
+                    "layer": meta.get("layer", ""),
+                    "desc": meta.get("desc", ""),
+                    "timestamp": ts,
+                }
+                # 透传后端真实入口时间戳（当前运行节点实时已运行时长基于此）
+                if "server_start_ts" in meta:
+                    payload["server_start_ts"] = meta["server_start_ts"]
+                yield _sse(payload)
             elif sse_type == "node_complete":
                 yield _sse(
                     {

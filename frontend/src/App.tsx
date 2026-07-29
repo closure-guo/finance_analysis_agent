@@ -450,6 +450,7 @@ export default function App() {
             if (event.type === 'parsing' ||
                 event.type === 'resolved' ||
                 event.type === 'node_start' ||
+                event.type === 'node_timing' ||
                 event.type === 'node_complete') {
               const pm = ensurePipelineMsg('深度分析进行中...')
               handleSSEEvent(event, pm)
@@ -524,6 +525,13 @@ export default function App() {
         updateMessage(pipelineMsg.id, {
           currentNode: event.node_id,
           content: `${event.layer}: ${event.desc}...`,
+          layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
+        })
+        break
+
+      case 'node_timing':
+        // 节点真实耗时（node_end 到达时下发），覆盖 updates 到达时刻的近似值
+        updateMessage(pipelineMsg.id, {
           layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
         })
         break

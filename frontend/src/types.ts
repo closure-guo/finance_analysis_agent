@@ -15,6 +15,8 @@ export interface NodeStartEvent {
   desc: string
   icon: string
   timestamp: string
+  // 后端真实入口时间戳（fix-node-timer-real-lifecycle）
+  server_start_ts?: number
 }
 
 export interface NodeCompleteEvent {
@@ -25,6 +27,16 @@ export interface NodeCompleteEvent {
   completed: string[]
   progress: number
   output: Record<string, any>
+  timestamp: string
+}
+
+// 节点真实耗时（node_end 到达时下发，覆盖 updates 近似值）
+export interface NodeTimingEvent {
+  type: 'node_timing'
+  node_id: string
+  server_start_ts?: number
+  server_end_ts?: number
+  server_duration_ms?: number
   timestamp: string
 }
 
@@ -211,6 +223,7 @@ export type SSEEvent =
   | AnalysisStartEvent
   | NodeStartEvent
   | NodeCompleteEvent
+  | NodeTimingEvent
   | ReportReadyEvent
   | ParsingEvent
   | ResolvedEvent
