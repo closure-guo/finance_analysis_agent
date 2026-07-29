@@ -21,57 +21,99 @@ logger = logging.getLogger(__name__)
 
 _SSE_DATA_RE = re.compile(r"^data: (.*)$", re.MULTILINE)
 
-# 与前端 pipelineTree.LAYER_TREE_CONFIG 对齐的 节点 -> layer 映射。
-# 由 api._NODE_MAP 惰性派生（避免模块级循环导入）。
-_NODE_TO_LAYER: dict[str, str] | None = None
-_LAYER_ORDER: list[str] | None = None
+# 与前端 pipelineTree.ts LAYER_TREE_CONFIG（42-102 行）逐项对齐的静态配置。
+# 快照 layerTree 结构即前端 PipelineTimeline 渲染结构：恢复时快照直接替换
+# 前端树，因此 layer id/label/children 必须与前端完全一致（6 层 24 节点）。
+LAYER_TREE_CONFIG: list[dict] = [
+    {
+        "id": "prep",
+        "label": "PREP",
+        "children": [
+            {"nodeId": "check_cache", "label": "数据准备"},
+            {"nodeId": "fetch_data", "label": "获取数据"},
+            {"nodeId": "validate_financials", "label": "勾稽校验"},
+            {"nodeId": "compute_metrics", "label": "指标计算"},
+            {"nodeId": "verify_citations", "label": "引用校验"},
+        ],
+    },
+    {
+        "id": "layer1",
+        "label": "Layer I",
+        "children": [
+            {"nodeId": "fundamental_analyst", "label": "基本面"},
+            {"nodeId": "technical_analyst", "label": "技术面"},
+            {"nodeId": "macro_analyst", "label": "宏观"},
+            {"nodeId": "sentiment_analyst", "label": "舆情"},
+        ],
+    },
+    {
+        "id": "layer2",
+        "label": "Layer II",
+        "children": [
+            {"nodeId": "bull_r1", "label": "看多 R1"},
+            {"nodeId": "bear_r1", "label": "看空 R1"},
+            {"nodeId": "bull_r2", "label": "看多 R2"},
+            {"nodeId": "bear_r2", "label": "看空 R2"},
+            {"nodeId": "research_manager", "label": "研究结论"},
+        ],
+    },
+    {
+        "id": "trader",
+        "label": "Trader",
+        "children": [{"nodeId": "trader", "label": "交易决策"}],
+    },
+    {
+        "id": "risk",
+        "label": "Risk",
+        "children": [
+            {"nodeId": "aggressive_r1", "label": "激进风控 R1"},
+            {"nodeId": "conservative_r1", "label": "保守风控 R1"},
+            {"nodeId": "neutral_r1", "label": "中性风控 R1"},
+            {"nodeId": "aggressive_r2", "label": "激进风控 R2"},
+            {"nodeId": "conservative_r2", "label": "保守风控 R2"},
+            {"nodeId": "neutral_r2", "label": "中性风控 R2"},
+            {"nodeId": "risk_judge", "label": "风控裁决"},
+        ],
+    },
+    {
+        "id": "fund",
+        "label": "Fund",
+        "children": [
+            {"nodeId": "fund_manager", "label": "基金经理"},
+            {"nodeId": "generate_report", "label": "报告生成"},
+            {"nodeId": "generate_file", "label": "文件导出"},
+        ],
+    },
+]
 
-
-def _node_layer_map() -> tuple[dict[str, str], list[str]]:
-    global _NODE_TO_LAYER, _LAYER_ORDER
-    if _NODE_TO_LAYER is None:
-        from finance_agent.api import _ALL_NODES, _NODE_MAP
-
-        _NODE_TO_LAYER = {nid: info["layer"] for nid, info in _NODE_MAP.items()}
-        # layer 顺序按节点出现顺序去重
-        order: list[str] = []
-        for nid in _ALL_NODES:
-            layer = _NODE_TO_LAYER.get(nid)
-            if layer and layer not in order:
-                order.append(layer)
-        _LAYER_ORDER = order
-    return _NODE_TO_LAYER, _LAYER_ORDER  # type: ignore[return-value]
+# 节点 -> layer 映射，模块级一次构建（与前端 NODE_INDEX 等价）
+_NODE_TO_LAYER: dict[str, str] = {
+    child["nodeId"]: layer["id"] for layer in LAYER_TREE_CONFIG for child in layer["children"]
+}
 
 
 # ── layerTree 快照维护（与前端 pipelineTree.applyNodeEvent 语义等价）──
 
 
 def build_layer_tree() -> list[dict]:
-    """构建初始 layerTree（与前端 buildLayerTree 等价）。"""
-    node_to_layer, layer_order = _node_layer_map()
-    layers: dict[str, list[str]] = {layer: [] for layer in layer_order}
-    from finance_agent.api import _ALL_NODES, _NODE_MAP
-
-    for nid in _ALL_NODES:
-        info = _NODE_MAP.get(nid)
-        if info:
-            layers[info["layer"]].append(nid)
+    """构建初始 layerTree（与前端 buildLayerTree 等价，status 全 pending）。"""
     return [
         {
-            "id": layer,
-            "label": layer,
+            "id": layer["id"],
+            "label": layer["label"],
             "status": "pending",
             "children": [
-                {"nodeId": nid, "label": nid, "status": "pending"} for nid in layers[layer]
+                {"nodeId": c["nodeId"], "label": c["label"], "status": "pending"}
+                for c in layer["children"]
             ],
         }
-        for layer in layer_order
+        for layer in LAYER_TREE_CONFIG
     ]
 
 
 def apply_node_event(tree: list[dict], event: dict, now_ms: int) -> list[dict]:
     """应用 node_start/node_complete/node_timing 事件（与前端语义等价，不可变更新）。"""
-    node_to_layer, _ = _node_layer_map()
+    node_to_layer = _NODE_TO_LAYER
     layer_id = node_to_layer.get(event.get("node_id", ""))
     if not layer_id:
         return tree
@@ -225,7 +267,9 @@ class PipelineRunner:
                 return []
             with state.lock:
                 events, state.events = state.events, []
-            if state.done and not state.events:
+            # 不变量：done 置位后后台线程不再 append 事件，
+            # 故 swap 后 events 必为空列表，取空即可安全清理条目
+            if state.done:
                 cls._running.pop(session_id, None)
             return events
 

@@ -105,3 +105,47 @@ def test_sweep_marks_running_failed(tmp_path, monkeypatch):
     n = PipelineRunner.mark_swept_failed()
     assert n >= 1
     assert session_store.get_session(sid)["status"] == "failed"
+
+
+def _failing_events():
+    """迭代中途抛异常的事件源。"""
+    yield _sse({"type": "node_start", "node_id": "check_cache", "layer": "prep"})
+    raise RuntimeError("模拟事件源异常")
+
+
+def test_event_source_exception_marks_failed(tmp_path, monkeypatch):
+    """事件源迭代中抛异常 → session 置 failed 且 is_running 归 False。"""
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid,
+        _failing_events,
+        {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0},
+    )
+    deadline = time.time() + 5
+    while PipelineRunner.is_running(sid) and time.time() < deadline:
+        time.sleep(0.05)
+
+    assert not PipelineRunner.is_running(sid)
+    assert session_store.get_session(sid)["status"] == "failed"
+
+
+def test_get_events_cleanup_after_done(tmp_path, monkeypatch):
+    """管线跑完后 get_events 消费取空 → _running 条目被清理。"""
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid, _fake_events, {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0}
+    )
+    deadline = time.time() + 5
+    while PipelineRunner.is_running(sid) and time.time() < deadline:
+        time.sleep(0.05)
+
+    # 第一次取走全部累积事件；第二次取空触发清理
+    assert PipelineRunner.get_events(sid)
+    assert PipelineRunner.get_events(sid) == []
+    assert sid not in PipelineRunner._running
