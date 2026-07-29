@@ -243,4 +243,98 @@ describe('selectSession 按会话状态恢复管线', () => {
     const detailCallsAfter = fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/sessions/s1')).length
     expect(detailCallsAfter).toBe(detailCallsDone)
   })
+
+  it('恢复态轮询期间用户发起新分析：轮询让位，不写消息、不调 selectSession', async () => {
+    // 竞态场景（Task 5 review）：startAnalysis 设置 abortRef 前无 setState、effect 不重跑、
+    // interval 不清理；若轮询读到 completed 会调 selectSession → abortStreaming() 掐断新 SSE。
+    // 修复后 interval 回调开头复查 abortRef，SSE 在线时轮询直接返回。
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    localStorage.setItem('fa_api_key', 'test-key')
+
+    const treeRunning = treeWithRunningNode('trader', ['check_cache', 'trader'])
+    const snapshotRunning = makeSnapshot(treeRunning, 'trader', 0.5)
+    const detailRunning = makeSessionDetail({ status: 'running', pipeline_snapshot: snapshotRunning })
+
+    // 关键陷阱：新分析 SSE 建立后，恢复态的 currentSessionId（s1）仍指向旧会话，
+    // 而旧会话恰在此刻 completed → 若轮询不让位，必然触发 selectSession → abortStreaming。
+    const treeDone = treeAllCompleted()
+    const snapshotDone = makeSnapshot(treeDone, '', 1)
+    const detailCompleted = makeSessionDetail({
+      status: 'completed',
+      pipeline_snapshot: snapshotDone,
+      report_markdown: '# 旧会话报告',
+    })
+
+    // 永不结束的 SSE 流：模拟新分析已建立订阅、正在流式产出（SSE 在线期间）
+    const sseStream = new ReadableStream<Uint8Array>({
+      start() { /* 保持打开，不推送、不关闭 */ },
+    })
+    let detailCallCount = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url === '/api/sessions' && (!init || !init.method)) {
+        return new Response(
+          JSON.stringify({
+            sessions: [{
+              session_id: 's1',
+              stock_code: '600519',
+              stock_name: '贵州茅台',
+              display_name: '轮询让位会话',
+              status: 'completed',
+              created_at: '2026-07-01T00:00:00Z',
+              duration_ms: 60_000,
+            }],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === '/api/analyze') {
+        return new Response(sseStream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      if (url.startsWith('/api/sessions/')) {
+        detailCallCount += 1
+        // 首次为 selectSession 恢复（running + 快照）；此后若轮询未让位则命中 completed，
+        // 走 selectSession → abortStreaming()，放大竞态后果便于断言
+        const body = detailCallCount === 1 ? detailRunning : detailCompleted
+        return new Response(JSON.stringify(body), { status: 200 })
+      }
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('轮询让位会话')).toBeInTheDocument())
+    await act(async () => {
+      fireEvent.click(screen.getByText('轮询让位会话'))
+    })
+    // 恢复 running 时间轴，进入 analyzing + 轮询启动
+    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+
+    // 模拟用户在恢复态发起新分析：ChatInput 输入 → 点击发送 → startAnalysis 设置 abortRef 并建立 SSE。
+    // 注意：此过程无 setState 改变 appState/currentSessionId（仅 session_created 事件才会），
+    // 轮询 effect 不重跑、interval 不清理——正是竞态窗口。
+    const input = screen.getByPlaceholderText(/输入股票名称或代码|输入问题/)
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '分析宁德时代' } })
+      fireEvent.click(screen.getByTestId('send-button'))
+    })
+    // 等待 /api/analyze 请求发出（abortRef 已设置、SSE 已建立）
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/analyze')).toBe(true))
+
+    const callsBefore = fetchMock.mock.calls.length
+
+    // 推进 6s（3 个轮询周期）：轮询应让位——零网络请求、零消息写入、零 selectSession 调用
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_300)
+    })
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+    // selectSession 未被误调：旧会话报告未插入、未被 abortStreaming 掐断（时间轴仍在 analyzing 渲染）
+    expect(screen.queryByText('旧会话报告')).not.toBeInTheDocument()
+    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+    // 用户刚发起的分析输入仍在消息流中
+    expect(screen.getByText('分析宁德时代')).toBeInTheDocument()
+  })
 })

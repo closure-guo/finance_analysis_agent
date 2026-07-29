@@ -734,10 +734,16 @@ export default function App() {
   // 切回 running 会话进入 analyzing 且无活跃 SSE（abortRef 为空=仅恢复态、非实时订阅）时，
   // 每 2s 拉取会话详情刷新分层时间轴；completed 则走 selectSession 完整恢复报告并自然停止；
   // failed 仅停止轮询（MVP 不展示失败态）。
+  // 前提不变量：abortRef 作为「SSE 在线」信号，依赖「analyzing 态必然发生在 SSE 存活期间」；
+  // 用户在恢复态发起新分析时 startAnalysis 会设置 abortRef，但可能无 setState 触发 effect 重跑，
+  // 因此 interval 回调内必须复查 abortRef，避免 SSE 与轮询双写消息、以及轮询误调 selectSession 掐断新 SSE。
   useEffect(() => {
     if (appState !== 'analyzing' || !currentSessionId) return
     if (abortRef.current) return // 有活跃 SSE 订阅，进度由事件流驱动，无需轮询
     const timer = setInterval(async () => {
+      // 复查 SSE 在线信号：用户在恢复态发起新分析（startAnalysis 已设置 abortRef）时轮询立即让位，
+      // 等 effect 因状态变化重跑后 interval 自然清理
+      if (abortRef.current) return
       try {
         const resp = await fetch(`/api/sessions/${currentSessionId}`)
         if (!resp.ok) return
@@ -760,6 +766,7 @@ export default function App() {
             pipelineMsgRef.current = updated
             updateMessage(pm.id, updated)
           }
+          // running 但无快照（或快照解析失败）：本周期静默忽略，等下个周期重试
         } else if (data.status === 'completed') {
           // 后台管线完成：完整恢复报告 + 最终静态时间轴（appState 切 report 后轮询自动停止）
           selectSession(currentSessionId)
