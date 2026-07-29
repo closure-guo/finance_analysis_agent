@@ -118,6 +118,43 @@ def summarize_tool_args(args: dict | None) -> str:
     return _json_dumps(args) if args else ""
 
 
+# ── 管线分组件（nodeTimelines，镜像 applyPipelineThinkingToken / applyPipelineNodeComplete）──
+
+
+def apply_pipeline_thinking_token(
+    node_timelines: dict[str, list[dict]], node: str | None, token: str
+) -> dict[str, list[dict]]:
+    """管线模式：thinking_token 按 node 写入对应节点的 timeline（不可变更新）。
+
+    镜像前端 applyPipelineThinkingToken：
+    - node 缺失/空串归入 '' 键（与历史未分组思考兼容）
+    - 其他节点末尾未完成的 thinking item 防御性收口（close_last_thinking）
+    - 当前节点 append_thinking_token
+    """
+    nodeKey = node or ""
+    nextTimelines: dict[str, list[dict]] = {}
+    # 防御性收口：其他节点末尾未完成的 thinking item 置为完成态
+    for key, timeline in node_timelines.items():
+        nextTimelines[key] = timeline if key == nodeKey else close_last_thinking(timeline)
+    current = nextTimelines.get(nodeKey, [])
+    nextTimelines[nodeKey] = append_thinking_token(current, token)
+    return nextTimelines
+
+
+def apply_pipeline_node_complete(
+    node_timelines: dict[str, list[dict]], node: str
+) -> dict[str, list[dict]]:
+    """管线模式：node_complete 将该节点末尾未完成的 thinking item 显式收口。
+
+    镜像前端 applyPipelineNodeComplete：无该节点则原样返回同引用。
+    """
+    if node not in node_timelines:
+        return node_timelines
+    nextTimelines = dict(node_timelines)
+    nextTimelines[node] = close_last_thinking(nextTimelines[node])
+    return nextTimelines
+
+
 def apply_chat_event(timeline: list[dict], event: dict) -> list[dict]:
     """将对话流 SSE 事件应用到 agentTimeline，返回新 list（不可变更新）。
 

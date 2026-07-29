@@ -209,3 +209,52 @@ def test_no_session_id_skips_snapshot(tmp_path, monkeypatch):
     events = _consume_tool(tool, "600519", "贵州茅台")
 
     assert _sse_types(events) == _BASELINE_SSE_TYPES
+
+
+# ───────────────────────────────────────────────
+# 管线时序持久化（persist-full-session-timeline Task 3）
+# ───────────────────────────────────────────────
+
+# 含 thinking chunk（custom ctype=='thinking'，带 node）的受控序列
+_FAKE_CHUNKS_WITH_THINKING: list[tuple[str, dict]] = [
+    ("custom", {"type": "node_start", "node": "check_cache", "ts": 900}),
+    ("custom", {"type": "thinking", "node": "check_cache", "token": "读取缓存"}),
+    ("updates", {"check_cache": {"summary": "数据就绪"}}),
+    ("custom", {"type": "thinking", "node": "check_cache", "token": "…命中"}),
+    ("custom", {"type": "node_end", "node": "check_cache", "ts": 1500, "duration_ms": 600}),
+    ("custom", {"type": "thinking", "node": "fetch_data", "token": "拉取行情"}),
+    ("updates", {"fetch_data": {"summary": "行情获取完成"}}),
+    ("custom", {"type": "node_end", "node": "fetch_data", "ts": 2200, "duration_ms": 700}),
+]
+
+
+def _stub_stream_graph_with_thinking(initial_state, config=None, session_id=None):
+    yield from _FAKE_CHUNKS_WITH_THINKING
+
+
+def test_pipeline_timelines_grouped_by_node(tmp_path, monkeypatch):
+    """custom 流 thinking chunk 按 node 累积；updates 流 node_complete 收口。"""
+    sid = _make_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(agent_factory, "_stream_graph", _stub_stream_graph_with_thinking)
+
+    tool = agent_factory._make_run_deep_analysis(session_id=sid)
+    _consume_tool(tool, "600519", "贵州茅台")
+
+    timelines = session_store.get_session(sid)["pipeline_timelines"]
+    assert timelines["check_cache"] == [
+        {"type": "thinking", "content": "读取缓存…命中", "done": True}
+    ]
+    assert timelines["fetch_data"] == [{"type": "thinking", "content": "拉取行情", "done": True}]
+
+
+def test_pipeline_timelines_skipped_without_session_id(tmp_path, monkeypatch):
+    """session_id 为空时不写 pipeline_timelines（事件流不变）。"""
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    monkeypatch.setattr(agent_factory, "_stream_graph", _stub_stream_graph_with_thinking)
+
+    tool = agent_factory._make_run_deep_analysis(session_id=None)
+    events = _consume_tool(tool, "600519", "贵州茅台")
+
+    # thinking 事件仍正常透传（sse_type 为空、无 progress 标记）
+    assert any(ev.event_type.value == "think" for ev in events)

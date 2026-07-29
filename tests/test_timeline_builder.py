@@ -16,6 +16,8 @@ from finance_agent.timeline_builder import (
     SEARCH_TOOL_NAMES,
     append_thinking_token,
     apply_chat_event,
+    apply_pipeline_node_complete,
+    apply_pipeline_thinking_token,
     close_all_thinking,
     close_last_thinking,
     extract_thinking_title,
@@ -533,6 +535,137 @@ class TestFrontendParity:
         apply_chat_event(original, {"type": "thinking_token", "token": "b"})
         apply_chat_event(original, {"type": "chat_done"})
         assert original == snapshot
+
+
+# ── 管线分组件（nodeTimelines，镜像 applyPipelineThinkingToken / applyPipelineNodeComplete）──
+
+
+class TestApplyPipelineThinkingToken:
+    def test_空分组新建节点thinking(self):
+        result = apply_pipeline_thinking_token({}, "check_cache", "思")
+        assert result == {"check_cache": [{"type": "thinking", "content": "思", "done": False}]}
+
+    def test_同节点token累加(self):
+        timelines: dict = {}
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "思")
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "考")
+        assert timelines["check_cache"] == [{"type": "thinking", "content": "思考", "done": False}]
+
+    def test_按节点分组互不干扰(self):
+        timelines: dict = {}
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "缓存")
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "行情")
+        assert timelines["check_cache"][0]["content"] == "缓存"
+        assert timelines["fetch_data"][0]["content"] == "行情"
+
+    def test_跨节点防御性收口其他节点thinking(self):
+        # 新节点 thinking_token 到达时，其他节点末尾未完成 thinking 置 done
+        timelines: dict = {}
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "缓存")
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "行情")
+        assert timelines["check_cache"][0]["done"] is True
+        assert timelines["fetch_data"][0]["done"] is False
+
+    def test_防御性收口不影响其他节点末尾非thinking(self):
+        timelines = {
+            "check_cache": [{"type": "search", "query": "q", "status": "searching"}],
+        }
+        result = apply_pipeline_thinking_token(timelines, "fetch_data", "思")
+        assert result["check_cache"][0]["status"] == "searching"
+
+    def test_回到旧节点继续累加(self):
+        timelines: dict = {}
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "缓存")
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "行情")
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "继续")
+        # fetch_data 被防御性收口；check_cache 末尾 thinking 已 done 仍累加（前端语义）
+        assert timelines["fetch_data"][0]["done"] is True
+        assert timelines["check_cache"][0]["content"] == "缓存继续"
+
+    def test_node空串归入空键(self):
+        result = apply_pipeline_thinking_token({}, "", "未分组")
+        assert result[""] == [{"type": "thinking", "content": "未分组", "done": False}]
+
+    def test_node为None归入空键(self):
+        # 前端 event.node || '' 语义
+        result = apply_pipeline_thinking_token({}, None, "未分组")
+        assert result[""] == [{"type": "thinking", "content": "未分组", "done": False}]
+
+    def test_不可变更新不修改原dict(self):
+        original = {"check_cache": [{"type": "thinking", "content": "a", "done": False}]}
+        snapshot = {k: [dict(item) for item in v] for k, v in original.items()}
+        result = apply_pipeline_thinking_token(original, "check_cache", "b")
+        assert original == snapshot
+        assert result is not original
+        assert result["check_cache"] is not original["check_cache"]
+
+
+class TestApplyPipelineNodeComplete:
+    def test_该节点末尾未完成thinking置done(self):
+        timelines = {"check_cache": [{"type": "thinking", "content": "a", "done": False}]}
+        result = apply_pipeline_node_complete(timelines, "check_cache")
+        assert result["check_cache"][0]["done"] is True
+
+    def test_无该节点原样返回(self):
+        timelines = {"check_cache": [{"type": "thinking", "content": "a", "done": False}]}
+        result = apply_pipeline_node_complete(timelines, "fetch_data")
+        assert result is timelines
+
+    def test_空分组原样返回(self):
+        timelines: dict = {}
+        result = apply_pipeline_node_complete(timelines, "check_cache")
+        assert result is timelines
+
+    def test_该节点末尾已完成thinking不变(self):
+        timelines = {"check_cache": [{"type": "thinking", "content": "a", "done": True}]}
+        result = apply_pipeline_node_complete(timelines, "check_cache")
+        assert result["check_cache"][0]["done"] is True
+        assert result["check_cache"] is timelines["check_cache"]  # 无变化返回同引用
+
+    def test_不影响其他节点(self):
+        timelines = {
+            "check_cache": [{"type": "thinking", "content": "a", "done": False}],
+            "fetch_data": [{"type": "thinking", "content": "b", "done": False}],
+        }
+        result = apply_pipeline_node_complete(timelines, "check_cache")
+        assert result["check_cache"][0]["done"] is True
+        assert result["fetch_data"][0]["done"] is False
+
+    def test_不可变更新不修改原dict(self):
+        original = {"check_cache": [{"type": "thinking", "content": "a", "done": False}]}
+        snapshot = {k: [dict(item) for item in v] for k, v in original.items()}
+        result = apply_pipeline_node_complete(original, "check_cache")
+        assert original == snapshot
+        assert result is not original
+
+
+class TestPipelineTimelineSequence:
+    """模拟真实管线事件序列：thinking_token（带 node）+ node_complete 的组合行为。"""
+
+    def test_节点完成收口后新节点开始(self):
+        timelines: dict = {}
+        # check_cache 节点思考
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "读取缓存")
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "…命中")
+        # 节点完成收口
+        timelines = apply_pipeline_node_complete(timelines, "check_cache")
+        assert timelines["check_cache"][0] == {
+            "type": "thinking",
+            "content": "读取缓存…命中",
+            "done": True,
+        }
+        # fetch_data 节点思考（check_cache 已收口，防御性收口为无操作）
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "拉取行情")
+        assert timelines["fetch_data"][0]["content"] == "拉取行情"
+        assert timelines["fetch_data"][0]["done"] is False
+
+    def test_node_complete缺失时防御性收口兜底(self):
+        # 节点未发 node_complete 直接切到下一节点（异常路径），
+        # 新节点 thinking_token 触发防御性收口
+        timelines: dict = {}
+        timelines = apply_pipeline_thinking_token(timelines, "check_cache", "未收口")
+        timelines = apply_pipeline_thinking_token(timelines, "fetch_data", "新节点")
+        assert timelines["check_cache"][0]["done"] is True
 
 
 # ── api._ChatCollector 集成 ──────────────────────────────────

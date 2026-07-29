@@ -8,6 +8,9 @@
 - follow-up: 工具=[web_search], max_iterations=3, 注入 session 上下文
 """
 
+# 项目规范使用 camelCase 变量名（如 _nodeTimelines），与 pep8-naming 冲突，统一豁免
+# ruff: noqa: N806
+
 from __future__ import annotations
 
 import asyncio
@@ -278,10 +281,17 @@ def _make_run_deep_analysis(
             apply_node_event,
             build_layer_tree,
         )
+        from finance_agent.timeline_builder import (
+            apply_pipeline_node_complete,
+            apply_pipeline_thinking_token,
+        )
 
         # session_id 非空时才写快照/状态（理论空路径保持现状行为）
         _track_snapshot = bool(session_id)
         _tree: list[dict] = build_layer_tree() if _track_snapshot else []
+        # 管线节点时序（persist-full-session-timeline）：thinking chunk 按 node 分组
+        # 持久化到 sessions.pipeline_timelines，写入节奏与 _persist_snapshot 一致
+        _nodeTimelines: dict[str, list[dict]] = {}
 
         def _now_ms() -> int:
             import time as _time
@@ -358,6 +368,12 @@ def _make_run_deep_analysis(
                             # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
                             # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
                             node = chunk.get("node", "")
+                            # 管线时序持久化：thinking chunk 按 node 累积（仅跟踪快照时）
+                            if _track_snapshot:
+                                _nodeTimelines = apply_pipeline_thinking_token(
+                                    _nodeTimelines, node, chunk.get("token", "")
+                                )
+                                _session_store.update_pipeline_timelines(session_id, _nodeTimelines)
                             yield StreamEvent.think(
                                 chunk.get("token", ""), metadata={"node": node} if node else None
                             )
@@ -463,6 +479,9 @@ def _make_run_deep_analysis(
                             _now,
                         )
                         _persist_snapshot(_tree, _now)
+                        # 管线时序收口：node_complete 将该节点末尾未完成 thinking 置 done
+                        _nodeTimelines = apply_pipeline_node_complete(_nodeTimelines, node_name)
+                        _session_store.update_pipeline_timelines(session_id, _nodeTimelines)
                     yield StreamEvent.progress(
                         content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
                         metadata={

@@ -6,6 +6,9 @@ graph.stream 是同步生成器，用独立线程执行，与 SSE 订阅解耦�
 SSE 端通过 get_events 轮询拉取累积事件。
 """
 
+# 项目规范使用 camelCase 变量名（如 nodeTimelines），与 pep8-naming 冲突，统一豁免
+# ruff: noqa: N806
+
 from __future__ import annotations
 
 import json
@@ -16,6 +19,10 @@ import time
 from collections.abc import Callable, Generator
 
 from finance_agent import session_store
+from finance_agent.timeline_builder import (
+    apply_pipeline_node_complete,
+    apply_pipeline_thinking_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +289,9 @@ class PipelineRunner:
     ) -> None:
         state = cls._running.get(session_id)
         tree = snapshot.get("layerTree") or build_layer_tree()
+        # 管线节点时序（persist-full-session-timeline）：thinking_token 按 node 分组
+        # 持久化到 sessions.pipeline_timelines，写入节奏与 snapshot 一致（每相关事件一次）
+        nodeTimelines: dict[str, list[dict]] = {}
         try:
             for sse_str in event_source():
                 if state is not None:
@@ -290,7 +300,19 @@ class PipelineRunner:
                 event = cls._parse_event(sse_str)
                 if event is None:
                     continue
-                if event.get("type") in ("node_start", "node_complete", "node_timing"):
+                eventType = event.get("type")
+                # 管线模式 thinking_token：node 字段缺失/空串归入 '' 键（与前端一致）
+                if eventType == "thinking_token":
+                    nodeTimelines = apply_pipeline_thinking_token(
+                        nodeTimelines, event.get("node") or "", event.get("token", "")
+                    )
+                    session_store.update_pipeline_timelines(session_id, nodeTimelines)
+                elif eventType in ("node_start", "node_complete", "node_timing"):
+                    if eventType == "node_complete":
+                        nodeTimelines = apply_pipeline_node_complete(
+                            nodeTimelines, event.get("node_id", "")
+                        )
+                        session_store.update_pipeline_timelines(session_id, nodeTimelines)
                     now_ms = int(time.time() * 1000)
                     tree = apply_node_event(tree, event, now_ms)
                     snapshot = {

@@ -150,3 +150,80 @@ def test_get_events_cleanup_after_done(tmp_path, monkeypatch):
     assert PipelineRunner.get_events(sid)
     assert PipelineRunner.get_events(sid) == []
     assert sid not in PipelineRunner._running
+
+
+def _timeline_events():
+    """含 thinking_token（带 node）与 node_complete 的受控事件序列。"""
+    yield _sse({"type": "analysis_start", "session_id": "s1"})
+    yield _sse({"type": "node_start", "node_id": "check_cache", "layer": "PREP"})
+    yield _sse({"type": "thinking_token", "token": "读取缓存", "node": "check_cache"})
+    yield _sse({"type": "thinking_token", "token": "…命中", "node": "check_cache"})
+    yield _sse(
+        {
+            "type": "node_complete",
+            "node_id": "check_cache",
+            "layer": "PREP",
+            "output": {"summary": "ok"},
+        }
+    )
+    yield _sse({"type": "node_start", "node_id": "fetch_data", "layer": "PREP"})
+    yield _sse({"type": "thinking_token", "token": "拉取行情", "node": "fetch_data"})
+    yield _sse(
+        {
+            "type": "node_complete",
+            "node_id": "fetch_data",
+            "layer": "PREP",
+            "output": {},
+        }
+    )
+    yield _sse({"type": "report_ready", "session_id": "s1", "report_markdown": "# 报告"})
+
+
+def _wait_done(sid: str) -> None:
+    deadline = time.time() + 5
+    while PipelineRunner.is_running(sid) and time.time() < deadline:
+        time.sleep(0.05)
+
+
+def test_pipeline_timelines_grouped_and_closed(tmp_path, monkeypatch):
+    """thinking_token 按 node 分组持久化；node_complete 收口该节点末尾 thinking。"""
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid,
+        _timeline_events,
+        {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0},
+    )
+    _wait_done(sid)
+
+    timelines = session_store.get_session(sid)["pipeline_timelines"]
+    assert isinstance(timelines, dict)
+    assert timelines["check_cache"] == [
+        {"type": "thinking", "content": "读取缓存…命中", "done": True}
+    ]
+    assert timelines["fetch_data"] == [{"type": "thinking", "content": "拉取行情", "done": True}]
+
+
+def test_pipeline_timelines_defensive_close_across_nodes(tmp_path, monkeypatch):
+    """node_complete 缺失时，下一节点 thinking_token 防御性收口上一节点。"""
+
+    def _events_without_complete():
+        yield _sse({"type": "thinking_token", "token": "未收口", "node": "check_cache"})
+        yield _sse({"type": "thinking_token", "token": "新节点", "node": "fetch_data"})
+
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+
+    PipelineRunner.start(
+        sid,
+        _events_without_complete,
+        {"layerTree": [], "currentNodeId": "", "progress": 0.0, "updatedAt": 0},
+    )
+    _wait_done(sid)
+
+    timelines = session_store.get_session(sid)["pipeline_timelines"]
+    assert timelines["check_cache"][0]["done"] is True
+    assert timelines["fetch_data"][0]["done"] is False
