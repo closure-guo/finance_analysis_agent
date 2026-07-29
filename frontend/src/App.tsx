@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
 import { ChartsSection } from './Charts'
 import { SearchBanner } from './SearchBanner'
-import { applyChatStreamEvent, applyPipelineThinkingToken, applyPipelineNodeComplete, buildTimelineFromHistory, nodeDisplayName } from './timeline'
+import { applyChatStreamEvent, applyPipelineThinkingToken, applyPipelineNodeComplete, buildTimelineFromHistory, deserializeTimeline, deserializeNodeTimelines, nodeDisplayName } from './timeline'
 import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations, recordDuration } from './eta'
 import { buildLayerTree, applyNodeEvent, deserializeLayerTree } from './pipelineTree'
 import { PipelineTimeline } from './PipelineTimeline'
@@ -153,6 +153,10 @@ export default function App() {
       pipelineMsgRef.current = null
 
       // 运行中会话：恢复快照分层时间轴并进入 analyzing（轮询 hook 接手进度更新）
+      // nodeTimelines：pipeline_timelines 存在时恢复各节点结构化时序（后端已反序列化为 dict）
+      const restoredNodeTimelines = data.pipeline_timelines
+        ? deserializeNodeTimelines(data.pipeline_timelines)
+        : undefined
       const runningPipelineMsg: UIMessage | null =
         data.status === 'running' && snapshot
           ? {
@@ -165,6 +169,7 @@ export default function App() {
               progress: snapshot.progress,
               startedAt: Date.now(),
               layerTree: deserializeLayerTree(snapshot.layerTree),
+              ...(restoredNodeTimelines ? { nodeTimelines: restoredNodeTimelines } : {}),
             }
           : null
       if (runningPipelineMsg) {
@@ -183,6 +188,7 @@ export default function App() {
               nodeOutputs: {},
               progress: 1,
               layerTree: deserializeLayerTree(snapshot.layerTree),
+              ...(restoredNodeTimelines ? { nodeTimelines: restoredNodeTimelines } : {}),
             }
           : null
 
@@ -216,9 +222,12 @@ export default function App() {
             type: 'chat',
             content: '',
             chatResponse: h.content,
-            // 历史恢复：从 chat_history.thinking + tool_calls 重建 agentTimeline
-            // （思考在前、工具调用在后近似还原；搜索类工具不还原为 tool_call item）
-            agentTimeline: buildTimelineFromHistory(h.thinking, h.tool_calls),
+            // 历史恢复：优先结构化 agentTimeline（防御式反序列化）；
+            // 旧数据无该字段时回退 thinking + tool_calls 拍平近似还原
+            // （思考在前、工具调用在后；搜索类工具不还原为 tool_call item）
+            agentTimeline: Array.isArray(h.agentTimeline)
+              ? deserializeTimeline(h.agentTimeline)
+              : buildTimelineFromHistory(h.thinking, h.tool_calls),
           })
         }
       }

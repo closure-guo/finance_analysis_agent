@@ -263,6 +263,30 @@ export function buildTimelineFromHistory(
   return timeline
 }
 
+// 持久化时序恢复（persist-full-session-timeline）：防御式反序列化 chat_history.agentTimeline。
+// 后端落盘数据可能缺失/非法/含脏项——逐项校验 type 枚举，合法项原样保留，非法输入回退空数组。
+// 仅校验 type，不做深度字段校验（字段缺失由渲染层容错）。
+const TIMELINE_ITEM_TYPES = new Set<string>(['thinking', 'search', 'tool_call'])
+
+export function deserializeTimeline(raw: unknown): TimelineItem[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item): item is TimelineItem =>
+      item !== null && typeof item === 'object' && TIMELINE_ITEM_TYPES.has((item as { type?: unknown }).type as string),
+  )
+}
+
+// 防御式反序列化 sessions.pipeline_timelines（后端 GET 已 json.loads，传入的是 dict 而非 JSON 字符串）。
+// 逐 key 调 deserializeTimeline；非法节点值回退空数组，非对象/数组输入整体回退空对象。
+export function deserializeNodeTimelines(raw: unknown): Record<string, TimelineItem[]> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const result: Record<string, TimelineItem[]> = {}
+  for (const [node, value] of Object.entries(raw as Record<string, unknown>)) {
+    result[node] = deserializeTimeline(value)
+  }
+  return result
+}
+
 // 将 tool_call 类型 TimelineItem 转为 ToolCallBanner 展示用的 ToolCallEntry（label/icon 映射）
 export function timelineToolCallToEntry(item: Extract<TimelineItem, { type: 'tool_call' }>): ToolCallEntry {
   const icon =

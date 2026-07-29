@@ -375,3 +375,148 @@ describe('selectSession 按会话状态恢复管线', () => {
     expect(screen.getByText(/管线可能已中断/)).toBeInTheDocument()
   })
 })
+
+describe('selectSession 结构化时序恢复（persist-full-session-timeline）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('chat_history 条目含 agentTimeline 时按结构化时序恢复（不拍平为"思考在前、工具在后"）', async () => {
+    // 结构化时序：思考A -> 工具调用 -> 思考B（交错顺序）。
+    // 旧逻辑 buildTimelineFromHistory 会拍平成 思考A+B -> 工具调用，可通过横幅 DOM 顺序区分。
+    const detail = makeSessionDetail({
+      session_type: 'chat',
+      chat_history: [
+        { role: 'user', content: '茅台怎么样', ts: '2026-07-01T00:00:00Z' },
+        {
+          role: 'assistant',
+          content: '最终回答',
+          ts: '2026-07-01T00:01:00Z',
+          // 拍平字段仍存在（旧逻辑会用它），但应被 agentTimeline 优先
+          thinking: '思考A思考B',
+          tool_calls: [{ name: 'get_stock_data', args: {}, result_text: 'ok', done: true }],
+          agentTimeline: [
+            { type: 'thinking', content: '思考A', done: true },
+            { type: 'tool_call', name: 'get_stock_data', args: '', result: 'ok', done: true },
+            { type: 'thinking', content: '思考B', done: true },
+          ],
+        },
+      ],
+    })
+    stubFetchWithSessionList('s1', '结构化对话会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '结构化对话会话')
+
+    const chatMsg = screen.getByTestId('stream-output')
+    const banners = chatMsg.querySelectorAll('button')
+    // 结构化恢复：3 个横幅按 思考A -> 工具 -> 思考B 顺序（拍平恢复只有 2 个横幅且顺序相反）
+    expect(banners).toHaveLength(3)
+    // 中间为工具调用横幅（折叠态显示"工具调用· 1 次"），展开后可见工具名 label
+    expect(banners[1].textContent).toContain('工具调用')
+    fireEvent.click(banners[1])
+    expect((await screen.findByText('[get_stock_data]')).closest('[data-testid="stream-output"]')).toBeTruthy()
+  })
+
+  it('旧数据无 agentTimeline 时回退近似恢复（不报错）', async () => {
+    const detail = makeSessionDetail({
+      session_type: 'chat',
+      chat_history: [
+        { role: 'user', content: '茅台怎么样', ts: '2026-07-01T00:00:00Z' },
+        {
+          role: 'assistant',
+          content: '最终回答',
+          ts: '2026-07-01T00:01:00Z',
+          thinking: '历史思考内容',
+          tool_calls: [{ name: 'get_stock_data', args: {}, result_text: 'ok', done: true }],
+          // 无 agentTimeline 字段
+        },
+      ],
+    })
+    stubFetchWithSessionList('s1', '旧版对话会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '旧版对话会话')
+
+    // 回退近似：思考在前、工具调用在后，两个横幅
+    const chatMsg = screen.getByTestId('stream-output')
+    const banners = chatMsg.querySelectorAll('button')
+    expect(banners).toHaveLength(2)
+    expect(banners[1].textContent).toContain('工具调用')
+    expect(screen.getByText('最终回答')).toBeInTheDocument()
+  })
+
+  it('completed 会话恢复 pipeline_timelines 为管线消息的 nodeTimelines', async () => {
+    const tree = treeAllCompleted()
+    const snapshot = makeSnapshot(tree, '', 1)
+    const detail = makeSessionDetail({
+      status: 'completed',
+      pipeline_snapshot: snapshot,
+      report_markdown: '# 报告',
+      chat_history: [{ role: 'user', content: '分析茅台', ts: '2026-07-01T00:00:00Z' }],
+      pipeline_timelines: {
+        bull_r1: [{ type: 'thinking', content: '多头结构化思考内容', done: true }],
+      },
+    })
+    stubFetchWithSessionList('s1', '结构化管线会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '结构化管线会话')
+
+    // 管线消息渲染 nodeTimelines 分组：节点角色名标题 + 该节点思考横幅
+    expect(screen.getByText('多头分析师')).toBeInTheDocument()
+    const pipelineMsg = screen.getByTestId('pipeline-timeline').closest('.msg-system')!
+    const thinkingBtn = Array.from(pipelineMsg.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('思考已完成'),
+    )
+    expect(thinkingBtn).toBeTruthy()
+    fireEvent.click(thinkingBtn!)
+    expect(await screen.findByText('多头结构化思考内容')).toBeInTheDocument()
+  })
+
+  it('running 会话恢复 pipeline_timelines 为管线消息的 nodeTimelines', async () => {
+    const tree = treeWithRunningNode('trader', ['check_cache', 'trader'])
+    const snapshot = makeSnapshot(tree, 'trader', 0.5)
+    const detail = makeSessionDetail({
+      status: 'running',
+      pipeline_snapshot: snapshot,
+      pipeline_timelines: {
+        check_cache: [{ type: 'thinking', content: '数据准备节点思考', done: true }],
+      },
+    })
+    stubFetchWithSessionList('s1', '运行中结构化会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '运行中结构化会话')
+
+    // 运行中管线消息同样恢复节点时序（角色名标题 + 思考横幅）。
+    // "数据准备"在分层时间轴与节点时序分组标题中均出现，断言至少一处且思考横幅存在。
+    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+    expect(screen.getAllByText('数据准备').length).toBeGreaterThan(0)
+    const pipelineMsg = screen.getByTestId('pipeline-timeline').closest('.msg-system')!
+    const thinkingBtn = Array.from(pipelineMsg.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('思考已完成'),
+    )
+    expect(thinkingBtn).toBeTruthy()
+  })
+
+  it('旧数据无 pipeline_timelines 时管线消息不设 nodeTimelines（不渲染节点时序区）', async () => {
+    const tree = treeAllCompleted()
+    const snapshot = makeSnapshot(tree, '', 1)
+    const detail = makeSessionDetail({
+      status: 'completed',
+      pipeline_snapshot: snapshot,
+      report_markdown: '# 报告',
+      chat_history: [{ role: 'user', content: '分析茅台', ts: '2026-07-01T00:00:00Z' }],
+      // 无 pipeline_timelines 字段
+    })
+    stubFetchWithSessionList('s1', '旧版管线会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '旧版管线会话')
+
+    // 时间轴树照常恢复，但无节点时序分组（无角色名标题）
+    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+    expect(screen.queryByText('多头分析师')).not.toBeInTheDocument()
+  })
+})

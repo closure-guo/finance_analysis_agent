@@ -264,6 +264,8 @@ export interface ChatHistoryEntry {
   ts: string
   thinking?: string
   tool_calls?: Array<{ name: string; args?: Record<string, any>; result_text?: string; done?: boolean }>
+  // 结构化 agent 时序（persist-full-session-timeline）：存在时优先于 thinking/tool_calls 拍平恢复
+  agentTimeline?: TimelineItem[]
 }
 
 // 管线进度快照（后端 sessions.pipeline_snapshot，JSON 字符串；layerTree 为内嵌的序列化 JSON 字符串）
@@ -283,6 +285,8 @@ export interface SessionDetail extends SessionMeta {
   chat_history: ChatHistoryEntry[]
   // 管线进度快照（running/completed 会话切回时恢复分层时间轴；无快照为 null）
   pipeline_snapshot: string | null
+  // 管线各节点的结构化时序（persist-full-session-timeline；后端已反序列化为 dict，可能为 null/缺失）
+  pipeline_timelines?: Record<string, TimelineItem[]> | null
 }
 
 // Pipeline step definition
