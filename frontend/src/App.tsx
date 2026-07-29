@@ -128,6 +128,9 @@ export default function App() {
     // 语义说明（resume-pipeline-across-sessions）：旧语义=中断一切；新语义下深度管线
     // 已由后端 PipelineRunner 后台化保护，前端 abort 仅断开 SSE 订阅，不影响后台续跑。
     abortStreaming()
+    // 提前切换 currentSessionId：让轮询 effect 立即 cleanup 旧 timer，
+    // 避免 fetch 期间旧轮询命中 completed 调 selectSession 把视图切回原会话
+    setCurrentSessionId(sessionId)
     try {
       const resp = await fetch(`/api/sessions/${sessionId}`)
       if (!resp.ok) throw new Error('Failed to load session')
@@ -145,7 +148,6 @@ export default function App() {
 
       // 先完全重置所有状态
       setMessages([])
-      setCurrentSessionId(sessionId)
       setAppState('report')
       // 按会话类型锁定模式：chat -> quick，analysis -> deep
       setMode(data.session_type === 'chat' ? 'quick' : 'deep')
@@ -800,8 +802,40 @@ export default function App() {
           }
           // running 但无快照（或快照解析失败）：本周期静默忽略，等下个周期重试
         } else if (data.status === 'completed') {
-          // 后台管线完成：完整恢复报告 + 最终静态时间轴（appState 切 report 后轮询自动停止）
-          selectSession(currentSessionId)
+          // 后台管线完成：直接恢复报告 + 最终静态时间轴，不调 selectSession
+          // （避免递归切换 + 切换 async 窗口期旧 timer 残留导致强制跳转）
+          const pm = pipelineMsgRef.current
+          const finalSnap: PipelineSnapshot | null = data.pipeline_snapshot
+            ? (() => {
+                try { return JSON.parse(data.pipeline_snapshot) } catch { return null }
+              })()
+            : null
+          if (pm) {
+            const updated: UIMessage = {
+              ...pm,
+              layerTree: finalSnap ? deserializeLayerTree(finalSnap.layerTree) : pm.layerTree,
+              currentNode: '',
+              progress: 1,
+            }
+            pipelineMsgRef.current = updated
+            updateMessage(pm.id, updated)
+          }
+          // 报告消息追加（若后端有 report_markdown）
+          if (data.report_markdown) {
+            const reportMsg: UIMessage = {
+              id: genId(),
+              type: 'report',
+              content: '',
+              reportMarkdown: data.report_markdown,
+              chartData: data.chart_data || {},
+              stockName: data.stock_name,
+              durationMs: data.duration_ms,
+              sessionId: currentSessionId,
+            }
+            setMessages(prev => [...prev, reportMsg])
+          }
+          setAppState('report') // 切 report 后轮询 effect cleanup 自然停止
+          loadSessions()
         }
         // failed：不处理，随下一次状态变化或停留 analyzing 由用户操作离开（MVP）
       } catch {
