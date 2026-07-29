@@ -40,7 +40,15 @@ from finance_agent.session_store import (  # noqa: E402
     update_session_status,
 )
 
-app = FastAPI(title="Finance Analysis Agent API")
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """启动时清扫悬挂 running 会话：后端重启后 PipelineRunner 内存态已丢失，置 failed 供前端恢复展示。"""
+    PipelineRunner.mark_swept_failed()
+    yield
+
+
+app = FastAPI(title="Finance Analysis Agent API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,10 +70,6 @@ REPORTS_DIR.mkdir(exist_ok=True)
 
 # Initialize session DB
 init_db()
-
-# 启动清扫：悬挂 running 会话置 failed（后端重启后 PipelineRunner 内存态已丢失，
-# DB 中残留 running 状态的会话不可能继续推进，直接置 failed 供前端恢复展示）
-PipelineRunner.mark_swept_failed()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -957,15 +961,30 @@ async def analyze(req: AnalyzeRequest):
                         heartbeat_counter = 0
                         yield ": heartbeat\n\n"
                 await asyncio.sleep(0.2)
-            yield _sse(
-                {
-                    "type": "done",
-                    "analysis_id": analysis_id,
-                    "session_id": session_id,
-                    "duration_ms": int((time.time() - start_time) * 1000),
-                    "timestamp": _now(),
-                }
-            )
+            # 跳出后兜底排空：覆盖 get_events 与 done 置位之间的竞态窗口
+            for event in PipelineRunner.get_events(session_id):
+                yield event
+            # 管线失败时给在线客户端发 error（对齐 _run_graph_streaming 的 error 结构），否则发 done
+            session = get_session(session_id) or {}
+            if session.get("status") == "failed":
+                yield _sse(
+                    {
+                        "type": "error",
+                        "session_id": session_id,
+                        "message": "管线执行失败，请查看会话详情或重试",
+                        "timestamp": _now(),
+                    }
+                )
+            else:
+                yield _sse(
+                    {
+                        "type": "done",
+                        "analysis_id": analysis_id,
+                        "session_id": session_id,
+                        "duration_ms": int((time.time() - start_time) * 1000),
+                        "timestamp": _now(),
+                    }
+                )
             return
 
         # ── 走 harness ReAct Agent ──

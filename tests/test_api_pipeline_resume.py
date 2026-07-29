@@ -21,22 +21,25 @@ def _sse(d: dict) -> str:
 
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
-    """隔离的 session DB，并清扫模块导入时 mark_swept_failed 造成的误伤。"""
+    """隔离的 session DB（指向 tmp_path，避免测试污染开发库）。"""
     monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
     session_store.init_db()
     return tmp_path / "t.db"
 
 
 def test_session_detail_includes_pipeline_snapshot(isolated_db):
-    """GET /api/sessions/{id} 返回体自动带出 pipeline_snapshot 字段。"""
-    sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
-    session_store.update_pipeline_snapshot(
-        sid,
-        {"layerTree": [], "currentNodeId": "x", "progress": 0.1, "updatedAt": 1},
-    )
+    """GET /api/sessions/{id} 返回体自动带出 pipeline_snapshot 字段。
 
-    client = TestClient(app)
-    resp = client.get(f"/api/sessions/{sid}")
+    注意：startup 钩子会清扫 running 会话，因此需先进入 TestClient 再建会话。
+    """
+    with TestClient(app) as client:
+        sid = session_store.create_session(stock_code="600519", stock_name="茅台", status="running")
+        session_store.update_pipeline_snapshot(
+            sid,
+            {"layerTree": [], "currentNodeId": "x", "progress": 0.1, "updatedAt": 1},
+        )
+
+        resp = client.get(f"/api/sessions/{sid}")
     assert resp.status_code == 200
     data = resp.json()
     assert "pipeline_snapshot" in data
