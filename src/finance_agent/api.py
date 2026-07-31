@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
@@ -28,11 +28,13 @@ from finance_agent.react_agent import (  # noqa: E402
 )
 from finance_agent.session_store import (  # noqa: E402
     append_chat,
+    append_session_event,
     create_chat_session,
     create_session,
     delete_session,
     get_session,
     init_db,
+    list_session_events,
     list_sessions,
     rename_session,
     update_pipeline_snapshot,
@@ -41,6 +43,7 @@ from finance_agent.session_store import (  # noqa: E402
     update_session_report,
     update_session_status,
 )
+from finance_agent.stream_registry import registry as stream_registry  # noqa: E402
 from finance_agent.timeline_builder import apply_chat_event  # noqa: E402
 
 
@@ -166,8 +169,14 @@ class RenameRequest(BaseModel):
 
 
 def _sse(data: dict) -> str:
-    """Format a SSE data line."""
-    return f"data: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+    """Format a SSE data line.
+
+    当 data 含 seq 字段时，在 data: 行前添加 id: 行，
+    使原生 EventSource 的自动 Last-Event-ID 机制生效。
+    """
+    seq = data.get("seq")
+    idLine = f"id: {seq}\n" if seq is not None else ""
+    return f"{idLine}data: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
 async def _stream_from_sync(gen):
@@ -573,9 +582,67 @@ async def rename_session_api(session_id: str, req: RenameRequest):
 
 @app.delete("/api/sessions/{session_id}")
 async def delete_session_api(session_id: str):
-    """Delete a session."""
+    """Delete a session. 先取消活跃生成任务，再删除（delta spec Task 4.3）。"""
+    await stream_registry.cancel(session_id)
     if not delete_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True}
+
+
+@app.get("/api/sessions/{session_id}/stream")
+async def stream_session(
+    session_id: str,
+    after_seq: int = 0,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+):
+    """恢复会话事件流：先重放 journal（seq > after_seq），再接续实时事件。
+
+    对应 delta spec Task 4.1。Last-Event-ID 头优先于 after_seq 查询参数。
+    每 10s 发心跳注释行防代理断连。
+    """
+    # Last-Event-ID 头优先
+    if last_event_id:
+        try:
+            after_seq = int(last_event_id)
+        except ValueError:
+            pass
+
+    # 校验 session 存在
+    if not get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    async def sse_stream() -> AsyncGenerator[str, None]:
+        gen = stream_registry.subscribe(session_id, after_seq=after_seq)
+        while True:
+            try:
+                # 10s 超时发心跳，防代理断连
+                event = await asyncio.wait_for(gen.__anext__(), timeout=10.0)
+                yield _sse(event)
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+            except StopAsyncIteration:
+                break
+
+    return StreamingResponse(
+        sse_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str):
+    """取消会话的活跃生成任务。无活跃任务返回 404。
+
+    对应 delta spec Task 4.2。
+    """
+    result = await stream_registry.cancel(session_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="No active task for this session")
     return {"ok": True}
 
 
@@ -914,45 +981,273 @@ def _persist_collector(session_id: str, collector: _ChatCollector) -> None:
     )
 
 
+def _persist_collector_interrupted(session_id: str, collector: _ChatCollector) -> None:
+    """中断时持久化 collector：内容末尾标注 [输出中断]，status 置为 interrupted。
+
+    对应 delta spec Task 3.3。确保 chat_history 中不出现无 assistant 回复的悬空 user 消息。
+    """
+    response = collector.response.strip()
+    thinking = collector.thinking.strip() or None
+    tool_calls = collector.tool_calls or None
+    agent_timeline = collector.agent_timeline or None
+    if not (response or thinking or tool_calls or agent_timeline):
+        # 即使没有内容，也追加一条标注中断的 assistant 消息，避免悬空 user 消息
+        append_chat(session_id, "assistant", "[输出中断]")
+    else:
+        if response:
+            response = f"{response}\n\n[输出中断]"
+        else:
+            response = "[输出中断]"
+        append_chat(
+            session_id,
+            "assistant",
+            response,
+            thinking=thinking,
+            tool_calls=tool_calls,
+            agent_timeline=agent_timeline,
+        )
+    update_session_status(session_id, "interrupted")
+
+
+async def _run_react_analysis(
+    session_id: str,
+    req: AnalyzeRequest,
+    api_key: str | None,
+    analysis_id: str,
+    start_time: float,
+) -> None:
+    """后台 ReAct 深度分析生成任务。事件经 stream_registry.publish 下发。
+
+    对应 delta spec Task 3.1。客户端断开不中断任务。
+    """
+    from finance_agent.agent_factory import build_agent, stream_agent_to_sse
+
+    # 发 session_created 事件（新会话时）
+    if not req.session_id:
+        await stream_registry.publish(
+            session_id,
+            {
+                "type": "session_created",
+                "session_id": session_id,
+                "display_name": req.query.strip()[:30] or "深度分析",
+                "timestamp": _now(),
+            },
+        )
+
+    # 从 session 恢复 focus，与用户输入合并
+    session = get_session(session_id) or {}
+    accumulated_focus = (session.get("focus") or "").strip()
+    current_focus = (req.focus or "").strip()
+    if current_focus:
+        accumulated_focus = f"{accumulated_focus}\n{current_focus}".strip()
+
+    # 构建 deep 模式 Agent
+    agent = build_agent(
+        mode="deep",
+        api_key=api_key,
+        analysis_type=req.analysis_type,
+        peer_codes=req.peer_codes.split(",") if req.peer_codes else None,
+        enable_web_search=req.enable_web_search,
+        session_id=session_id,
+    )
+
+    collected_metadata: dict = {}
+    analysis_executed = False
+    collector = _ChatCollector()
+
+    def on_metadata(metadata: dict):
+        collected_metadata.update(metadata)
+
+    def on_resolved(sc: str, sn: str):
+        update_session_for_clarify(
+            session_id, stock_code=sc, stock_name=sn, display_name=f"{sn}({sc})"
+        )
+
+    # 对时效性查询，预调 web_search 并将结果注入用户消息
+    _time_sensitive_keywords = _TIME_SENSITIVE_KEYWORDS_REACT
+    _has_stock_code = bool(re.search(r"\d{6}", req.query))
+    user_query = req.query
+
+    if not _has_stock_code and any(kw in req.query for kw in _time_sensitive_keywords):
+        from finance_agent.agent_factory import _web_search
+
+        search_query = f"{req.query} A股 热点 推荐 最新"
+
+        _pre_thinking = {
+            "type": "thinking_token",
+            "token": "用户询问包含时效性关键词，我先搜索最新市场信息。\n",
+            "timestamp": _now(),
+        }
+        collector.feed(_pre_thinking)
+        await stream_registry.publish(session_id, _pre_thinking)
+
+        _pre_tool_call = {
+            "type": "tool_call",
+            "name": "web_search",
+            "args": {"query": search_query},
+            "timestamp": _now(),
+        }
+        collector.feed(_pre_tool_call)
+        await stream_registry.publish(session_id, _pre_tool_call)
+        await stream_registry.publish(
+            session_id, {"type": "search_start", "query": search_query, "timestamp": _now()}
+        )
+
+        search_result = ""
+        try:
+            search_result = await _web_search(search_query)
+        except Exception as e:
+            search_result = f"搜索失败: {e}"
+
+        search_summary = search_result[:2000] if len(search_result) > 2000 else search_result
+        _pre_tool_result = {
+            "type": "tool_result",
+            "name": "web_search",
+            "result": search_summary,
+            "timestamp": _now(),
+        }
+        collector.feed(_pre_tool_result)
+        await stream_registry.publish(session_id, _pre_tool_result)
+
+        from finance_agent.web_search import parse_search_output
+
+        _pre_results = parse_search_output(search_result)
+        await stream_registry.publish(
+            session_id,
+            {
+                "type": "search_result",
+                "query": search_query,
+                "results": [
+                    {"title": r.title, "url": r.url, "content": r.content} for r in _pre_results
+                ],
+                "count": len(_pre_results),
+                "timestamp": _now(),
+            },
+        )
+        user_query = (
+            f"{req.query}\n\n"
+            f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
+            f"然后调用 search_stock 获取股票代码，再调用 run_deep_analysis：]\n"
+            f"{search_summary}"
+        )
+
+    # 如果 session 已有 focus，注入用户消息上下文
+    if accumulated_focus:
+        user_query = f"{user_query}\n\n[已收集的用户关注点/澄清回答：\n{accumulated_focus}]"
+
+    # 流式输出 Agent 事件
+    stream_error = False
+    try:
+        async for sse_str in stream_agent_to_sse(
+            agent,
+            user_query,
+            on_metadata=on_metadata,
+            on_resolved=on_resolved,
+            extra_events={
+                "analysis_id": analysis_id,
+                "session_id": session_id,
+                "duration_ms": 0,
+            },
+            session_id=session_id,
+            user_id=req.user_id,
+        ):
+            data = _parse_sse_data(sse_str)
+            if data is not None:
+                collector.feed(data)
+                if data.get("type") == "report_ready":
+                    analysis_executed = True
+                    data["session_id"] = session_id
+                    data["duration_ms"] = int((time.time() - start_time) * 1000)
+                await stream_registry.publish(session_id, data)
+        # 正常完成：持久化
+        _persist_collector(session_id, collector)
+    except asyncio.CancelledError:
+        # 中断：持久化标注中断
+        _persist_collector_interrupted(session_id, collector)
+        raise
+    except Exception as exc:
+        import logging as _api_lg
+
+        _api_lg.getLogger("finance_agent.api").exception("深度分析流式输出异常")
+        stream_error = True
+        _persist_collector(session_id, collector)
+        await stream_registry.publish(
+            session_id,
+            {"type": "error", "message": f"分析过程出错: {exc}", "timestamp": _now()},
+        )
+
+    # 如果 Agent 调用了 run_deep_analysis，说明已进入分析阶段
+    if collected_metadata.get("report_markdown") or collected_metadata.get("stock_code"):
+        analysis_executed = True
+
+    # 如果分析未执行（且未发生异常），说明 Agent 仍在澄清阶段
+    if not analysis_executed and not stream_error:
+        if current_focus:
+            update_session_for_clarify(session_id, focus=accumulated_focus, status="clarifying")
+        else:
+            update_session_for_clarify(session_id, status="clarifying")
+        await stream_registry.publish(
+            session_id,
+            {
+                "type": "awaiting_input",
+                "session_id": session_id,
+                "pending_intent": "awaiting_focus",
+                "timestamp": _now(),
+            },
+        )
+
+
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
     """深度分析 -- 通过 harness ReAct Agent 编排工具调用。
 
-    走 ADR-0014 的 mini_harness 统一编排层：
-    - build_agent(mode="deep") 构建 Agent（含 ContextManager、ToolManager）
-    - stream_agent_to_sse 将 StreamEvent 映射为前端 SSE
-    - 上下文管理（token 预算、渐进压缩）由 ContextManager 自动处理
+    改造后（delta spec Task 3.2）：端点层做 session 创建/校验 + single-flight + user 消息落库。
+    Fast path 保持 PipelineRunner 后台执行；ReAct 路径经 stream_registry 后台任务。
     """
+    if not req.query:
+        return JSONResponse({"error": "请输入股票代码或名称"}, status_code=400)
 
-    async def event_stream() -> AsyncGenerator[str, None]:
-        analysis_id = str(uuid.uuid4())[:8]
-        start_time = time.time()
+    analysis_id = str(uuid.uuid4())[:8]
+    start_time = time.time()
 
-        if not req.query:
-            yield _sse({"type": "error", "message": "请输入股票代码或名称", "timestamp": _now()})
-            yield _sse({"type": "done", "timestamp": _now()})
-            return
+    # API key: 优先用请求中的，无效则回退到环境变量
+    api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
 
-        # API key: 优先用请求中的，无效则回退到环境变量
-        api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+    # ── Session 生命周期：从首次输入开始 ──
+    session_id = req.session_id
+    if session_id:
+        session = get_session(session_id)
+        if not session:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
+    else:
+        display_name = req.query.strip()[:30] or "深度分析"
+        session_id = create_session(
+            stock_code="",
+            stock_name="",
+            display_name=display_name,
+            status="clarifying",
+            session_type="analysis",
+        )
 
-        # ── Session 生命周期：从首次输入开始 ──
-        session_id = req.session_id
-        if session_id:
-            session = get_session(session_id)
-            if not session:
-                yield _sse({"type": "error", "message": "Session not found", "timestamp": _now()})
-                yield _sse({"type": "done", "timestamp": _now()})
-                return
-        else:
-            display_name = req.query.strip()[:30] or "深度分析"
-            session_id = create_session(
-                stock_code="",
-                stock_name="",
-                display_name=display_name,
-                status="clarifying",
-                session_type="analysis",
-            )
+    # Single-flight 校验：运行中拒绝新消息（delta spec Task 3.5）
+    if stream_registry.is_active(session_id) or PipelineRunner.is_running(session_id):
+        return JSONResponse(
+            {"error": "session_busy", "message": "该会话正在生成中，可停止后再发"},
+            status_code=409,
+        )
+
+    # user 消息落库（在 single-flight 校验通过后，避免 409 时追加悬空 user 消息）
+    append_chat(session_id, "user", req.query)
+
+    stock_code = req.stock_code.strip()
+    stock_name = req.stock_name or ""
+
+    # ── Fast path: stock_code 已知，直接走管线 ──
+    # 新会话（未传 session_id）且已解析出股票代码时走 fast path；
+    # 追问/复用旧会话时走 ReAct 路径
+    if stock_code and not req.session_id:
+        async def event_stream() -> AsyncGenerator[str, None]:
+            # 发 session_created 事件（新会话时）
             yield _sse(
                 {
                     "type": "session_created",
@@ -961,17 +1256,6 @@ async def analyze(req: AnalyzeRequest):
                     "timestamp": _now(),
                 }
             )
-
-        # 追加用户输入到 chat_history
-        append_chat(session_id, "user", req.query)
-
-        stock_code = req.stock_code.strip()
-        stock_name = req.stock_name or ""
-
-        # ── Fast path: stock_code 已知，直接走管线 ──
-        # 新会话（未传 session_id）且已解析出股票代码时走 fast path；
-        # 追问/复用旧会话时走 ReAct 路径
-        if stock_code and not req.session_id:
             update_session_for_clarify(
                 session_id, stock_code=stock_code, stock_name=stock_name, status="running"
             )
@@ -1031,203 +1315,34 @@ async def analyze(req: AnalyzeRequest):
                 )
             return
 
-        # ── 走 harness ReAct Agent ──
-        from finance_agent.agent_factory import build_agent, stream_agent_to_sse
-
-        # 从 session 恢复 focus，与用户输入合并
-        session = get_session(session_id) or {}
-        accumulated_focus = (session.get("focus") or "").strip()
-        current_focus = (req.focus or "").strip()
-        if current_focus:
-            accumulated_focus = f"{accumulated_focus}\n{current_focus}".strip()
-
-        # 构建 deep 模式 Agent，注入 session_id 以恢复历史对话
-        agent = build_agent(
-            mode="deep",
-            api_key=api_key,
-            analysis_type=req.analysis_type,
-            peer_codes=req.peer_codes.split(",") if req.peer_codes else None,
-            enable_web_search=req.enable_web_search,
-            session_id=session_id,
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
-        collected_metadata: dict = {}
-        analysis_executed = False
-        collector = _ChatCollector()
-
-        def on_metadata(metadata: dict):
-            """收集 TOOL_METADATA（chart_data、analyst_reports 等）用于 session 持久化。"""
-            collected_metadata.update(metadata)
-
-        def on_resolved(sc: str, sn: str):
-            """股票代码解析完成回调 -- 更新 session。"""
-            update_session_for_clarify(
-                session_id,
-                stock_code=sc,
-                stock_name=sn,
-                display_name=f"{sn}({sc})",
-            )
-
-        # 对时效性查询，预调 web_search 并将结果注入用户消息
-        _time_sensitive_keywords = _TIME_SENSITIVE_KEYWORDS_REACT
-        _has_stock_code = bool(re.search(r"\d{6}", req.query))
-        user_query = req.query
-
-        if not _has_stock_code and any(kw in req.query for kw in _time_sensitive_keywords):
-            # 预调 web_search
-            from finance_agent.agent_factory import _web_search
-
-            search_query = f"{req.query} A股 热点 推荐 最新"
-
-            _pre_thinking = {
-                "type": "thinking_token",
-                "token": "用户询问包含时效性关键词，我先搜索最新市场信息。\n",
-                "timestamp": _now(),
-            }
-            collector.feed(_pre_thinking)
-            yield _sse(_pre_thinking)
-            _pre_tool_call = {
-                "type": "tool_call",
-                "name": "web_search",
-                "args": {"query": search_query},
-                "timestamp": _now(),
-            }
-            collector.feed(_pre_tool_call)
-            yield _sse(_pre_tool_call)
-            # 补发 search_start：前端 tool_call 对 web_search 因 isSearchToolName 被跳过，
-            # 搜索横幅由 search_start/search_result 驱动——预搜索此前漏发致无搜索横幅。
-            yield _sse({"type": "search_start", "query": search_query, "timestamp": _now()})
-
-            search_result = ""
-            try:
-                search_result = await _web_search(search_query)
-            except Exception as e:
-                search_result = f"搜索失败: {e}"
-
-            search_summary = search_result[:2000] if len(search_result) > 2000 else search_result
-            _pre_tool_result = {
-                "type": "tool_result",
-                "name": "web_search",
-                "result": search_summary,
-                "timestamp": _now(),
-            }
-            collector.feed(_pre_tool_result)
-            yield _sse(_pre_tool_result)
-            # 补发 search_result（结构化来源），驱动前端搜索横幅从"搜索中"转"已搜索 N 个网页"
-            from finance_agent.web_search import parse_search_output
-
-            _pre_results = parse_search_output(search_result)
-            yield _sse(
-                {
-                    "type": "search_result",
-                    "query": search_query,
-                    "results": [
-                        {"title": r.title, "url": r.url, "content": r.content} for r in _pre_results
-                    ],
-                    "count": len(_pre_results),
-                    "timestamp": _now(),
-                }
-            )
-            user_query = (
-                f"{req.query}\n\n"
-                f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
-                f"然后调用 search_stock 获取股票代码，再调用 run_deep_analysis：]\n"
-                f"{search_summary}"
-            )
-
-        # 如果 session 已有 focus，注入用户消息上下文
-        if accumulated_focus:
-            user_query = f"{user_query}\n\n[已收集的用户关注点/澄清回答：\n{accumulated_focus}]"
-
-        # 流式输出 Agent 事件
-        stream_error = False
-        try:
-            async for sse_str in stream_agent_to_sse(
-                agent,
-                user_query,
-                on_metadata=on_metadata,
-                on_resolved=on_resolved,
-                extra_events={
-                    "analysis_id": analysis_id,
-                    "session_id": session_id,
-                    "duration_ms": 0,
-                },
-                session_id=session_id,
-                user_id=req.user_id,
-            ):
-                # 记录 Assistant 文本回复 / 思考 / 工具调用，用于后续保存到 chat_history
-                data = _parse_sse_data(sse_str)
-                if data is not None:
-                    collector.feed(data)
-                    if data.get("type") == "report_ready":
-                        analysis_executed = True
-
-                # 在 report_ready 事件中注入 session_id 和 duration_ms
-                if data is not None and data.get("type") == "report_ready" and session_id:
-                    data["session_id"] = session_id
-                    data["duration_ms"] = int((time.time() - start_time) * 1000)
-                    yield _sse(data)
-                    continue
-                yield sse_str
-        except Exception as exc:
-            # 流式输出本身异常（如 Langfuse 上下文/回调抛错）时，向前端发送 error + done，
-            # 避免连接被静默关闭、前端无限等待（"深度模式无响应"）。
-            import logging as _api_lg
-
-            _api_lg.getLogger("finance_agent.api").exception("深度分析流式输出异常")
-            stream_error = True
-            yield _sse(
-                {
-                    "type": "error",
-                    "message": f"分析过程出错: {exc}",
-                    "timestamp": _now(),
-                }
-            )
-        finally:
-            # 保存 Assistant 回复到 chat_history（含思考过程与工具调用，便于历史会话回显）
-            # 持久化条件放宽：思考阶段（仅有 thinking/agent_timeline，无 response）也要持久化，
-            # 否则用户中途切走/中断后返回会话时思考内容丢失。
-            # finally 兜底：客户端断开（abort）导致 async for 中断时也执行持久化。
-            _persist_collector(session_id, collector)
-
-        # 如果 Agent 调用了 run_deep_analysis，说明已进入分析阶段
-        if collected_metadata.get("report_markdown") or collected_metadata.get("stock_code"):
-            analysis_executed = True
-
-        # 如果分析未执行（且未发生异常），说明 Agent 仍在澄清阶段，保存状态
-        if not analysis_executed and not stream_error:
-            # 更新 focus：如果 Assistant 的回复包含澄清问题，则 focus 保持当前累积；
-            # 否则追加到 focus（用户可能直接在回答中补充了关注点）
-            # 这里简化处理：将当前 req.focus 合并到 session focus
-            if current_focus:
-                update_session_for_clarify(session_id, focus=accumulated_focus, status="clarifying")
-            else:
-                update_session_for_clarify(session_id, status="clarifying")
-            yield _sse(
-                {
-                    "type": "awaiting_input",
-                    "session_id": session_id,
-                    "pending_intent": "awaiting_focus",
-                    "timestamp": _now(),
-                }
-            )
-        else:
-            # 分析已完成，session 状态已被 _run_graph_streaming 更新为 completed
-            pass
-
-        # done 事件最后发送
-        yield _sse(
-            {
-                "type": "done",
-                "analysis_id": analysis_id,
-                "session_id": session_id,
-                "duration_ms": int((time.time() - start_time) * 1000),
-                "timestamp": _now(),
-            }
+    # ── ReAct 路径：经 stream_registry 后台任务（delta spec Task 3.2）──
+    started = await stream_registry.start(
+        session_id,
+        _run_react_analysis(session_id, req, api_key, analysis_id, start_time),
+    )
+    if not started:
+        return JSONResponse(
+            {"error": "session_busy", "message": "该会话正在生成中，可停止后再发"},
+            status_code=409,
         )
+
+    # 返回订阅转发流：SSE 端点仅订阅 registry 事件流，断开仅退订
+    async def sse_forward() -> AsyncGenerator[str, None]:
+        async for event in stream_registry.subscribe(session_id, after_seq=0):
+            yield _sse(event)
 
     return StreamingResponse(
-        event_stream(),
+        sse_forward(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1240,79 +1355,114 @@ async def analyze(req: AnalyzeRequest):
 # ── Streaming Chat ──
 
 
+async def _run_chat_task(
+    session_id: str,
+    req: ChatRequest,
+    api_key: str | None,
+    mode: str,
+    display_name: str,
+) -> None:
+    """后台快速对话生成任务。事件经 stream_registry.publish 下发。
+
+    对应 delta spec Task 3.1。客户端断开不中断任务。
+    """
+    from finance_agent.agent_factory import build_agent, stream_agent_to_sse
+
+    # 新对话时发 session_created 事件（前端需要尽早知道 session_id）
+    if not req.session_id:
+        await stream_registry.publish(
+            session_id,
+            {
+                "type": "session_created",
+                "session_id": session_id,
+                "display_name": display_name,
+                "timestamp": _now(),
+            },
+        )
+
+    agent = build_agent(mode=mode, api_key=api_key, session_id=session_id)
+    collector = _ChatCollector()
+
+    try:
+        async for sse_str in stream_agent_to_sse(
+            agent, req.message, session_id=session_id, user_id=req.user_id
+        ):
+            data = _parse_sse_data(sse_str)
+            if data is not None:
+                collector.feed(data)
+                await stream_registry.publish(session_id, data)
+        # 正常完成：持久化
+        _persist_collector(session_id, collector)
+    except asyncio.CancelledError:
+        # 中断：持久化标注中断
+        _persist_collector_interrupted(session_id, collector)
+        raise
+    except Exception as e:
+        # 异常：持久化 + 发 error 事件
+        _persist_collector(session_id, collector)
+        await stream_registry.publish(
+            session_id, {"type": "error", "message": str(e), "timestamp": _now()}
+        )
+
+
 @app.post("/api/chat")
 async def quick_chat(req: ChatRequest):
-    """Quick mode / Follow-up mode - ReAct Agent with web_search tool."""
+    """Quick mode / Follow-up mode - ReAct Agent with web_search tool.
 
-    async def chat_stream() -> AsyncGenerator[str, None]:
-        try:
-            from finance_agent.agent_factory import build_agent, stream_agent_to_sse
+    改造后（delta spec Task 3.2）：端点仅做 session 创建/校验 + single-flight + 启动后台任务 + 返回订阅转发流。
+    生成逻辑在后台任务中运行，客户端断开不中断。
+    """
+    # 模式推断：有 session_id 时检查 session 类型
+    if req.session_id:
+        from finance_agent.session_store import get_session as _get_session
 
-            # 模式推断：有 session_id 时检查 session 类型
-            # - analysis 类型 -> follow-up（报告追问）
-            # - chat 类型 -> quick（快速聊天追问，附带历史上下文）
-            if req.session_id:
-                from finance_agent.session_store import get_session as _get_session
+        _session = _get_session(req.session_id)
+        if _session and _session.get("session_type") == "analysis":
+            mode = "follow-up"
+        else:
+            mode = "quick"
+    else:
+        mode = "quick"
 
-                _session = _get_session(req.session_id)
-                if _session and _session.get("session_type") == "analysis":
-                    mode = "follow-up"
-                else:
-                    mode = "quick"
-            else:
-                mode = "quick"
+    # API key: 优先用请求中的，无效则回退到环境变量
+    api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
 
-            # API key: 优先用请求中的，无效则回退到环境变量
-            api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+    # Session 创建（ADR-0015：session_id 须在 agent 运行前确定）
+    if not req.session_id:
+        display_name = req.message.strip()[:30] or "快速问答"
+        req_session_id = create_chat_session(display_name)
+    else:
+        display_name = ""
+        req_session_id = req.session_id
 
-            # ADR-0015：新对话时先创建 session，使 Langfuse session 聚合可用
-            # （session_id 须在 agent 运行前确定，否则 propagate_attributes 拿不到）
-            if not req.session_id:
-                _display_name = req.message.strip()[:30] or "快速问答"
-                req_session_id = create_chat_session(_display_name)
-                append_chat(req_session_id, "user", req.message)
-            else:
-                req_session_id = req.session_id
-                append_chat(req_session_id, "user", req.message)
+    # Single-flight 校验：运行中拒绝新消息（delta spec Task 3.5）
+    if stream_registry.is_active(req_session_id):
+        return JSONResponse(
+            {"error": "session_busy", "message": "该会话正在生成中，可停止后再发"},
+            status_code=409,
+        )
 
-            agent = build_agent(
-                mode=mode,
-                api_key=api_key,
-                session_id=req_session_id,
-            )
+    # user 消息落库（在 single-flight 校验通过后，避免 409 时追加悬空 user 消息）
+    append_chat(req_session_id, "user", req.message)
 
-            # 流式输出 Agent 事件，同时收集回复 / 思考 / 工具调用用于持久化
-            collector = _ChatCollector()
-            async for sse_str in stream_agent_to_sse(
-                agent, req.message, session_id=req_session_id, user_id=req.user_id
-            ):
-                data = _parse_sse_data(sse_str)
-                if data is not None:
-                    collector.feed(data)
-                yield sse_str
+    # 启动后台生成任务
+    started = await stream_registry.start(
+        req_session_id,
+        _run_chat_task(req_session_id, req, api_key, mode, display_name),
+    )
+    if not started:
+        return JSONResponse(
+            {"error": "session_busy", "message": "该会话正在生成中，可停止后再发"},
+            status_code=409,
+        )
 
-            # 持久化对话到 session（含思考过程与工具调用，便于历史会话回显）
-            # 条件放宽：思考阶段（仅有 thinking/agent_timeline，无 response）也要持久化
-            _persist_collector(req_session_id, collector)
-            if collector.response and not req.session_id:
-                # 新对话：通知前端 session_id
-                yield _sse(
-                    {
-                        "type": "session_created",
-                        "session_id": req_session_id,
-                        "display_name": _display_name,
-                        "timestamp": _now(),
-                    }
-                )
-
-        except Exception as e:
-            yield _sse({"type": "error", "message": str(e), "timestamp": _now()})
-
-        # done 事件最后发送
-        yield _sse({"type": "done", "timestamp": _now()})
+    # 返回订阅转发流：SSE 端点仅订阅 registry 事件流，断开仅退订
+    async def sse_forward() -> AsyncGenerator[str, None]:
+        async for event in stream_registry.subscribe(req_session_id, after_seq=0):
+            yield _sse(event)
 
     return StreamingResponse(
-        chat_stream(),
+        sse_forward(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
