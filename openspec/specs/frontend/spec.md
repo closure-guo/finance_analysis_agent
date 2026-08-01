@@ -178,17 +178,40 @@
 
 ### Requirement: Session Selection
 
-系统 SHALL 在用户选择已有会话时中断进行中的 SSE 流，加载该会话的完整历史并切换到报告视图。
+系统 SHALL 在用户选择已有会话时加载该会话的完整历史并切换到报告视图。选择会话 SHALL NOT 中断该会话或其他会话的后台生成任务；若目标会话正在运行，前端 SHALL 经恢复端点重连其事件流，使输出内容继续增长。切出当前会话时仅断开本地订阅连接，保留按 sessionId 累积的流状态以便切回时快速恢复。
 
 #### Scenario: 选择会话加载历史
 
 - **GIVEN** 侧边栏会话列表中有一个会话
 - **WHEN** 用户点击该会话
-- **THEN** 中断当前进行中的 SSE 流（若有）
+- **THEN** 断开当前会话的本地 SSE 订阅连接（不调用后端取消，不影响后台任务）
 - **AND** 向 GET /api/sessions/{sessionId} 发起请求获取会话详情
-- **AND** 重置消息列表、streamingReportRef、pipelineMsgRef
+- **AND** 保留 streamRegistry 中按 sessionId 累积的流状态，仅重置当前视图的消息列表
 - **AND** 设置 currentSessionId 并将 appState 切换为 'report'
 - **AND** 按 session_type 锁定模式
+
+#### Scenario: 切换会话不中断生成
+
+- **GIVEN** 会话 A 的深度分析或快速对话正在流式输出
+- **WHEN** 用户点击切换到会话 B
+- **THEN** 会话 A 的后台生成任务继续运行
+- **AND** 侧边栏会话 A 保持"生成中"指示
+- **AND** 不向会话 A 发送任何取消/中断请求
+
+#### Scenario: 切回运行中的会话并续传
+
+- **GIVEN** 用户从正在流式输出的会话 A 切出，期间任务继续产出事件
+- **WHEN** 用户再次点击会话 A
+- **THEN** 加载会话快照后，经 GET /api/sessions/A/stream（携带最后已消费的 seq）重连事件流
+- **AND** 重放事件与实时事件经同一处理函数消费，UI 幂等重建
+- **AND** 输出内容从切出时的位置继续增长，不重复、不遗漏
+
+#### Scenario: 切回已中断的会话
+
+- **GIVEN** 会话 A 的生成被显式取消或服务重启导致中断
+- **WHEN** 用户点击会话 A
+- **THEN** 展示已落库的半截回复及"输出已中断，可追问继续"标记
+- **AND** 不显示无限转圈的 streaming 状态
 
 #### Scenario: 恢复会话对话历史
 
@@ -275,6 +298,29 @@
 - **WHEN** 用户点击窄条上的菜单按钮
 - **THEN** 侧边栏展开恢复完整宽度
 - **AND** 主内容区域左边距相应调整
+
+### Requirement: Session Running Indicator
+
+系统 SHALL 在侧边栏为正在运行生成任务的会话展示"生成中"指示（如呼吸灯/旋转图标），任务结束（完成、中断、出错）后移除。指示状态 SHALL 由 session 的 status 与实时事件流共同驱动，切换页面视图不影响其准确性。
+
+#### Scenario: 运行中的会话显示指示
+
+- **GIVEN** 会话 A 的生成任务正在运行
+- **WHEN** 渲染侧边栏会话列表
+- **THEN** 会话 A 条目显示"生成中"指示，无论其是否为当前选中会话
+
+#### Scenario: 任务结束后移除指示
+
+- **GIVEN** 会话 A 显示"生成中"指示
+- **WHEN** 收到 done / interrupted / error 终态事件，或会话快照 status 非 running
+- **THEN** 移除该会话的"生成中"指示
+
+#### Scenario: 运行中会话拒绝输入并提示
+
+- **GIVEN** 当前选中会话正在运行生成任务
+- **WHEN** 用户在输入框提交新消息
+- **THEN** 展示"该会话正在生成中，可停止后再发"提示
+- **AND** 不发送请求（后端 409 为兜底，前端应先拦截）
 
 ---
 
@@ -646,39 +692,46 @@
 
 ### Requirement: SSE Stream Abort Control
 
-系统 SHALL 使用 AbortController 管理 SSE 流的生命周期，在切换会话、新建分析或删除当前会话时主动中断进行中的流。
+系统 SHALL 使用 AbortController 管理前端 SSE 订阅连接的生命周期。AbortController 仅控制本地订阅的断开，SHALL NOT 作为终止后端生成任务的手段；终止生成 SHALL 通过显式取消操作调用 `POST /api/sessions/{id}/cancel`。切换会话、新建分析不再触发对生成任务的中断语义。
 
-#### Scenario: 切换会话时中断流
+#### Scenario: 显式停止生成
+
+- **GIVEN** 某会话的生成任务正在运行
+- **WHEN** 用户点击"停止"按钮
+- **THEN** 调用 POST /api/sessions/{id}/cancel 取消后台任务
+- **AND** 收到 interrupted 终态事件后结束本地流式状态
+- **AND** 半截回复保留展示并带中断标记
+
+#### Scenario: 切换会话仅断开本地订阅
 
 - **GIVEN** 深度分析或快速对话 SSE 流正在进行
-- **WHEN** 用户选择另一个会话
-- **THEN** 调用 abortStreaming() 中断当前 AbortController
-- **AND** 中断后不显示错误消息（AbortError 静默退出）
+- **WHEN** 用户选择另一个会话或新建分析
+- **THEN** 调用本地 abort 断开当前订阅连接（AbortError 静默退出）
+- **AND** SHALL NOT 调用后端取消端点
+- **AND** 后台生成任务不受影响
 
-#### Scenario: 新建分析时中断流
-
-- **GIVEN** SSE 流正在进行
-- **WHEN** 用户点击"新建分析"
-- **THEN** 中断当前 SSE 流（静默退出）
-
-#### Scenario: 删除当前会话时中断流
+#### Scenario: 删除当前会话时取消生成
 
 - **GIVEN** SSE 流正在进行，用户删除当前活动会话
 - **WHEN** 删除操作执行
-- **THEN** 中断当前 SSE 流（静默退出）
+- **THEN** 断开本地订阅连接
+- **AND** 该会话的后台任务随会话删除而终止（后端删除会话时取消其活跃任务）
+- **AND** 重置 currentSessionId 为 null、清空消息列表、appState 切换为 'empty'
 
-#### Scenario: 每轮请求新建 Controller
+#### Scenario: 每会话独立的订阅连接
 
-- **GIVEN** 上一轮 SSE 流已被中断或完成
-- **WHEN** 发起新的 startAnalysis 或 quickChat 请求
-- **THEN** 创建新的 AbortController 用于本轮流
+- **GIVEN** 上一轮 SSE 订阅已断开或完成
+- **WHEN** 发起新的 startAnalysis、quickChat 或恢复端点订阅
+- **THEN** 在该会话的 streamRegistry 条目中创建新的 AbortController
+- **AND** 不同会话的 AbortController 互不影响
 
 #### Scenario: 非中断的连接错误显示错误消息
 
-- **GIVEN** SSE 流正在进行
+- **GIVEN** SSE 订阅连接进行中
 - **WHEN** 发生非 AbortError 的连接错误
 - **THEN** 深度模式下添加 error 类型消息显示"连接错误: {message}"
 - **AND** 快速模式下将助手消息更新为 error 类型
+- **AND** 错误消息注明可按 after_seq 重连恢复（若该会话任务仍在运行）
 
 ### Requirement: Deep Mode Error Handling
 
@@ -985,16 +1038,22 @@
 
 ### Requirement: Chat History Restore With Tool Calls
 
-系统 SHALL 在加载已有会话时，从 `chat_history` 恢复助手消息的 `agentTimeline`（重建思考与工具调用的时序）。
+系统 SHALL 在加载已有会话时恢复助手消息的 `agentTimeline`：**优先**使用 `chat_history` 条目中持久化的 `agentTimeline` 字段（结构化 TimelineItem 数组，含思考/搜索/工具调用的真实交错时序）原样重建；仅当该字段缺失（旧会话）时回退 `buildTimelineFromHistory` 的「思考在前、工具调用在后」近似恢复。
 
-#### Scenario: 恢复 agentTimeline
+#### Scenario: 优先用持久化 agentTimeline 原样恢复
 
-- **GIVEN** 加载的会话 `chat_history` 中某条助手消息包含 `thinking` 和 `tool_calls`
+- **GIVEN** 加载的会话 `chat_history` 中某条助手消息包含 `agentTimeline` 字段
 - **WHEN** 构建助手消息
-- **THEN** 从 `thinking`（合并字符串）构建 `{type:'thinking', content}` item
-- **AND** 从 `tool_calls`（数组）按序构建 `{type:'tool_call', name, args, result, done}` items
-- **AND** 按"思考在前、工具调用在后"的顺序排列到 `agentTimeline`
-- **AND** 每个 thinking item 用 `extractThinkingTitle` 提取标题写入 `title`
+- **THEN** 系统 SHALL 将 `agentTimeline` 反序列化后直接作为消息的 agentTimeline（保留 thinking/search/tool_call 的真实交错顺序）
+- **AND** 搜索记录（type='search'）按其真实时序位置恢复为搜索横幅
+- **AND** SHALL NOT 再走"思考在前、工具调用在后"的拍平近似
+
+#### Scenario: 旧数据回退近似恢复
+
+- **GIVEN** 加载的会话 `chat_history` 中某条助手消息仅有 `thinking`/`tool_calls`，无 `agentTimeline`
+- **WHEN** 构建助手消息
+- **THEN** 系统 SHALL 回退 buildTimelineFromHistory：从 thinking（合并字符串）构建 thinking item、从 tool_calls 按序构建 tool_call items
+- **AND** 恢复过程不报错、消息正常显示
 
 #### Scenario: 恢复搜索记录
 
@@ -1002,3 +1061,56 @@
 - **WHEN** 构建助手消息
 - **THEN** 构建 `{type:'search', query, results, status:'done'}` item 插入 `agentTimeline` 对应位置
 - **AND** 若后端未存储搜索时序，按"思考 -> 搜索 -> 工具调用"的近似顺序排列
+
+### Requirement: 管线时序恢复
+
+系统 SHALL 在加载已有会话时，从会话详情的 `pipeline_timelines`（JSON：`{node: [TimelineItem]}`）恢复深度分析管线消息的 `nodeTimelines`，使各节点的思考/工具调用记录切换会话后完整可见。
+
+#### Scenario: 切回会话恢复管线节点时序
+
+- **GIVEN** 某深度分析会话的 pipeline_timelines 已持久化（含各节点思考/工具时序）
+- **WHEN** 用户切换到该会话（运行中或已完成）
+- **THEN** 前端 SHALL 反序列化 pipeline_timelines 为管线消息的 nodeTimelines
+- **AND** 各节点的思考内容、网络搜索、工具调用记录按原时序展示
+- **AND** 非法/缺失的 pipeline_timelines 回退为空（时间轴树仍由 pipeline_snapshot 恢复）
+
+### Requirement: 跨会话恢复管线 UI
+
+系统 SHALL 在用户切换会话时恢复目标会话的管线 UI 状态：运行中的管线恢复实时分层时间轴，已完成的管线恢复报告与静态分层时间轴。切换离开运行中的深度管线会话时 SHALL NOT 中断该管线（由后端后台续跑）。
+
+#### Scenario: 切回运行中的管线会话恢复实时时间轴
+
+- **GIVEN** 某深度分析会话的管线正在后台运行（status=running 且有 pipeline_snapshot）
+- **WHEN** 用户切换到该会话
+- **THEN** 前端 SHALL 从 pipeline_snapshot 重建分层时间轴（各节点 status/耗时）
+- **AND** 当前运行节点 SHALL 正确高亮，其已运行时长基于 server_start_ts 实时递增
+- **AND** 前端 SHALL 轮询会话快照以更新节点完成进度，直至 status 变 completed
+
+#### Scenario: 切回已完成的管线会话恢复报告与静态时间轴
+
+- **GIVEN** 某会话的管线已完成（status=completed）
+- **WHEN** 用户切换到该会话
+- **THEN** 前端 SHALL 显示报告消息（report）与已完成的静态分层时间轴
+- **AND** 静态时间轴各节点 SHALL 显示真实耗时与摘要（供回看）
+- **AND** 前端 SHALL NOT 继续轮询该会话快照
+
+#### Scenario: 切换离开运行中的深度管线不中断
+
+- **GIVEN** 某深度分析会话的管线正在运行
+- **WHEN** 用户切换到其他会话
+- **THEN** 前端 abortStreaming 仅断开 SSE 订阅，SHALL NOT 中断后端管线执行
+- **AND** 管线在后台继续，切回时可恢复
+
+#### Scenario: 切回失败的管线会话显示失败状态
+
+- **GIVEN** 某会话的管线已失败（status=failed，含后端重启悬挂的 running 被标记）
+- **WHEN** 用户切换到该会话
+- **THEN** 前端 SHALL 显示分析失败状态而非误认为仍在运行
+
+> **MVP 决策**：MVP 阶段 failed 分支不专门处理 UI（回退到现有 report/chat_history 恢复逻辑），失败态 UI 为后续改进。
+
+#### Scenario: 快速模式会话切换行为不变
+
+- **GIVEN** 用户从快速模式（chat）会话切换离开
+- **WHEN** 该会话无深度管线
+- **THEN** 前端维持现有 abortStreaming 行为（快速模式流无恢复价值）

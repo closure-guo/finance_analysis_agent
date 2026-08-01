@@ -61,9 +61,9 @@ export function TimelineRenderer({
       {timeline.map((item, i) => {
         const isLast = i === timeline.length - 1
         if (item.type === 'thinking') {
-          // 仅当消息流式中且该 thinking item 在 timeline 末尾（agent 正在思考）时显示"思考中"；
-          // agent 转去执行搜索/工具调用后（末尾变为 search/tool_call item），该横幅不再显示"思考中"
-          const thinkingStreaming = streaming && isLast
+          // 活动态判定：显式完成态（done=true）优先——已收口的横幅不再显示"思考中"；
+          // 否则仅当消息流式中且该 thinking item 在 timeline 末尾（agent 正在思考）时显示"思考中"。
+          const thinkingStreaming = item.done === true ? false : streaming && isLast
           return (
             <div key={i} data-timeline-index={i}>
               <TimelineEntry isLast={isLast}>

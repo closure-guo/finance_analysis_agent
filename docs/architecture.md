@@ -15,7 +15,7 @@
 | L1 前端  | React 18 + Vite               | 表单输入（股票搜索+分析类型+对标股）+ 报告展示 + 文件下载           |
 | L2 Agent | LangGraph                     | 5 层架构: 4 分析师并行 + Bull/Bear 辩论 + Trader + Risk Management 辩论 + Fund Manager |
 | L3 数据  | pandas + SQLite               | AKShare 数据拉取 + 全部计算 + SQLite 缓存（v2.0 计划 Chroma）       |
-| L4 LLM   | DeepSeek (deepseek-chat)      | LiteLLM 路由                                                        |
+| L4 LLM   | DeepSeek (deepseek-v4-pro 深度 / deepseek-chat 快速) | LiteLLM 路由                                              |
 
 ### 1.2 核心原则
 
@@ -194,12 +194,14 @@ START → check_cache → [fetch_data →] validate → compute_metrics
 | **缓存**   | 行业 PE            | SQLite（TTL 1 天）       | 每天变动                                 |
 | **不存储** | L3 衍生计算        | 每次重算                 | 纯 pandas，无 API，毫秒级                |
 
-### 4.2 自动追踪（v2.0 计划）
+### 4.2 可观测性
 
 | 用途                                         | 方式        | 备注                    |
 | -------------------------------------------- | ----------- | ----------------------- |
-| 断点恢复                                     | SqliteSaver | 本地，不跨会话（未接入）|
-| 历史观测（每节点 I/O + 耗时 + token + 异常） | LangSmith   | 云端，30 天保留，零代码（未接入）|
+| LLM 调用链路追踪（每节点 I/O + 耗时 + token + 异常） | Langfuse    | 已接入（ADR-0015），自托管或云端 |
+| Prompt 版本管理                              | Langfuse    | 已接入（ADR-0016），本地 .md 兜底 |
+| 引用校验评分                                 | Langfuse Score | citation_pass 上报 trace 级 |
+| 断点恢复                                     | SqliteSaver | 本地，不跨会话（v2.0 计划）|
 
 ### 4.3 缓存状态机
 
@@ -419,7 +421,7 @@ def after_fund_manager(state):
 | --------- | ----------------- | --------------- | ------------------------------- |
 | 前端      | React 18 + Vite   | Gradio          | 组件生态 + 状态管理(zustand) + ECharts 图表   |
 | Agent     | LangGraph         | CrewAI          | Supervisor + Sub-graph 原生支持 |
-| LLM(开发) | deepseek-chat    | Qwen2.5         | 成本 4元/M tokens，中文财务更优 |
+| LLM(开发) | deepseek-v4-pro / deepseek-chat | Qwen2.5         | 成本 4元/M tokens，中文财务更优；深度模式用 v4-pro，快速模式用 chat |
 | LLM 路由  | LiteLLM           | 自定义          | 100+ 模型统一接口               |
 | PDF       | pdfplumber        | Unstructured.io | 表格准确率 98.3%，速度快 6x     |
 | 数据      | AKShare           | Tushare         | 免费无 API Key                  |

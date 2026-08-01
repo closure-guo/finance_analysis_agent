@@ -11,7 +11,9 @@ LLM 调用细节改由 start_as_current_observation 在 call_llm 三入口包裹
 
 from __future__ import annotations
 
+import logging
 import os
+from contextlib import contextmanager
 
 _langfuse_client = None
 _langfuse_checked = False
@@ -41,8 +43,6 @@ def get_langfuse():
         )
         _langfuse_checked = True
     except Exception:
-        import logging
-
         logging.getLogger("finance_agent.langfuse").warning(
             "Langfuse 初始化失败，将在下次调用重试", exc_info=True
         )
@@ -63,9 +63,46 @@ def get_callback_handler():
 
         return CallbackHandler()
     except Exception:
-        import logging
-
         logging.getLogger("finance_agent.langfuse").warning(
             "Langfuse CallbackHandler 创建失败", exc_info=True
         )
         return None
+
+
+_span_logger = logging.getLogger("finance_agent.langfuse")
+
+
+@contextmanager
+def open_span(name: str, input: dict | None = None):
+    """创建 Langfuse span 上下文管理器；未配置或异常时优雅降级。
+
+    用于工具调用、网络搜索等非 LLM 操作的可观测性追踪。复用
+    get_langfuse() 单例，已配置时调用 start_as_current_observation
+    建立 span（as_type=span），未配置或异常时降级为 yield None（零开销，
+    业务无感知）。调用方可用 obs.update(output=...) 记录 output。
+
+    Args:
+        name: span 名称（如 "tool:web_search"、"search_api_call"）
+        input: span 的 input 字段（dict）
+
+    Yields:
+        observation 对象（已配置时）或 None（降级时）
+    """
+    client = get_langfuse()
+    if client is None:
+        yield None
+        return
+    try:
+        cm = client.start_as_current_observation(name=name, as_type="span", input=input or {})
+    except Exception:
+        _span_logger.warning("Langfuse span 创建失败: %s", name, exc_info=True)
+        yield None
+        return
+    obs = cm.__enter__()
+    try:
+        yield obs
+    finally:
+        try:
+            cm.__exit__(None, None, None)
+        except Exception:
+            _span_logger.warning("Langfuse span 退出失败: %s", name, exc_info=True)

@@ -53,11 +53,12 @@ select = [
     "SIM", # flake8-simplify
     "S",   # flake8-bandit (security)
 ]
-ignore = ["E501"]  # line-too-long (handled by formatter)
+ignore = ["E501", "N806"]  # line-too-long (handled by formatter); N806: camelCase 命名规则（用户红线）
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S310"]  # pytest uses assert; test scripts use urllib
 "tests/e2e/**/*.py" = ["S101", "S310", "S602", "S603", "S607", "E402", "F841", "SIM102", "SIM105"]  # E2E 脚本用 subprocess 管理服务，预存 lint 问题不修
+"tests/scripts/**/*.py" = ["S101", "S310", "S608", "E402", "N", "B007", "S110", "F841"]  # 调试/验证脚本，命名规范放宽
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

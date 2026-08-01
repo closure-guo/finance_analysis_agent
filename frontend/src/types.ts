@@ -15,6 +15,8 @@ export interface NodeStartEvent {
   desc: string
   icon: string
   timestamp: string
+  // 后端真实入口时间戳（fix-node-timer-real-lifecycle）
+  server_start_ts?: number
 }
 
 export interface NodeCompleteEvent {
@@ -25,6 +27,16 @@ export interface NodeCompleteEvent {
   completed: string[]
   progress: number
   output: Record<string, any>
+  timestamp: string
+}
+
+// 节点真实耗时（node_end 到达时下发，覆盖 updates 近似值）
+export interface NodeTimingEvent {
+  type: 'node_timing'
+  node_id: string
+  server_start_ts?: number
+  server_end_ts?: number
+  server_duration_ms?: number
   timestamp: string
 }
 
@@ -206,11 +218,18 @@ export interface AwaitingInputEvent {
   timestamp: string
 }
 
+// 中断终态事件：生成任务被取消或异常中断时下发
+export interface InterruptedEvent {
+  type: 'interrupted'
+  timestamp?: string
+}
+
 // ── Session types ──
 export type SSEEvent =
   | AnalysisStartEvent
   | NodeStartEvent
   | NodeCompleteEvent
+  | NodeTimingEvent
   | ReportReadyEvent
   | ParsingEvent
   | ResolvedEvent
@@ -230,6 +249,7 @@ export type SSEEvent =
   | DoneEvent
   | SessionCreatedEvent
   | AwaitingInputEvent
+  | InterruptedEvent
 
 // ── Session types ──
 
@@ -243,6 +263,7 @@ export interface SessionMeta {
   duration_ms: number
   report_len?: number
   session_type?: string
+  failure_reason?: string | null
 }
 
 export interface ChatHistoryEntry {
@@ -251,6 +272,16 @@ export interface ChatHistoryEntry {
   ts: string
   thinking?: string
   tool_calls?: Array<{ name: string; args?: Record<string, any>; result_text?: string; done?: boolean }>
+  // 结构化 agent 时序（persist-full-session-timeline）：存在时优先于 thinking/tool_calls 拍平恢复
+  agentTimeline?: TimelineItem[]
+}
+
+// 管线进度快照（后端 sessions.pipeline_snapshot，JSON 字符串；layerTree 为内嵌的序列化 JSON 字符串）
+export interface PipelineSnapshot {
+  layerTree: string
+  currentNodeId: string
+  progress: number
+  updatedAt: number
 }
 
 export interface SessionDetail extends SessionMeta {
@@ -260,6 +291,12 @@ export interface SessionDetail extends SessionMeta {
   agent_process: Record<string, any>
   analyst_summaries: Record<string, any>
   chat_history: ChatHistoryEntry[]
+  // 管线进度快照（running/completed 会话切回时恢复分层时间轴；无快照为 null）
+  pipeline_snapshot: string | null
+  // 管线各节点的结构化时序（persist-full-session-timeline；后端已反序列化为 dict，可能为 null/缺失）
+  pipeline_timelines?: Record<string, TimelineItem[]> | null
+  // 事件 journal 最大 seq，供前端断点续传使用
+  last_seq?: number
 }
 
 // Pipeline step definition
@@ -288,7 +325,7 @@ export interface ToolCallEntry {
 // - search：搜索（web_search / batch_web_search 由 search_* 事件驱动，不生成 tool_call 条目）
 // - tool_call：其他工具调用（每次调用一个独立条目）
 export type TimelineItem =
-  | { type: 'thinking'; content: string; title?: string }
+  | { type: 'thinking'; content: string; title?: string; done?: boolean }
   | {
       type: 'search'
       query: string
@@ -306,6 +343,10 @@ export interface UIMessage {
   currentNode?: string
   nodeOutputs?: Record<string, any>
   progress?: number
+  // 管线启动时间戳（ms epoch），用于 ETA 已用时长计算
+  startedAt?: number
+  // 分层时间轴状态树（redesign delta）：node_start/node_complete 驱动的 6 层→子节点状态
+  layerTree?: import('./pipelineTree').LayerNode[]
   // Report-specific
   reportMarkdown?: string
   chartData?: ChartData

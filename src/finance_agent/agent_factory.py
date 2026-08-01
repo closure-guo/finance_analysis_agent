@@ -8,6 +8,9 @@
 - follow-up: 工具=[web_search], max_iterations=3, 注入 session 上下文
 """
 
+# 项目规范使用 camelCase 变量名（如 _nodeTimelines），与 pep8-naming 冲突，统一豁免
+# ruff: noqa: N806
+
 from __future__ import annotations
 
 import asyncio
@@ -52,7 +55,8 @@ async def _web_search(query: str) -> str:
 
     if not has_tavily_key():
         return "[错误] 未配置 TAVILY_API_KEY，无法执行搜索。"
-    response = tavily_search(query)
+    # 用 to_thread 避免同步调用阻塞事件循环，30 秒超时保护
+    response = await asyncio.wait_for(asyncio.to_thread(tavily_search, query), timeout=30.0)
     return format_search_for_llm(response)
 
 
@@ -102,7 +106,8 @@ def _make_web_search_with_collector(collector: list[dict]):
             return "[错误] 未配置 TAVILY_API_KEY，无法执行搜索。"
         if query in _web_search_cache:
             return _web_search_cache[query]
-        response = tavily_search(query)
+        # 用 to_thread 避免同步调用阻塞事件循环，30 秒超时保护
+        response = await asyncio.wait_for(asyncio.to_thread(tavily_search, query), timeout=30.0)
         result_text = format_search_for_llm(response)
         _web_search_cache[query] = result_text
         if len(collector) < MAX_WEB_SOURCES:
@@ -147,7 +152,10 @@ def _make_batch_web_search(collector: list[dict]):
         uncached = [q for q in queries if q not in _web_search_cache]
         cached_responses_text = [_web_search_cache[q] for q in queries if q in _web_search_cache]
         if uncached:
-            responses = batch_tavily_search(uncached)
+            # 用 to_thread 避免同步调用阻塞事件循环，60 秒超时保护（批量搜索更慢）
+            responses = await asyncio.wait_for(
+                asyncio.to_thread(batch_tavily_search, uncached), timeout=60.0
+            )
             new_text = format_batch_for_llm(responses)
             for resp in responses:
                 _web_search_cache[resp.query] = format_batch_for_llm([resp])
@@ -238,6 +246,10 @@ def _parse_stock_result_text(text: str) -> dict | None:
     return None
 
 
+# 后台管线任务注册表：session_id -> asyncio.Task，用于测试等待和调试
+_background_tasks: dict[str, asyncio.Task] = {}
+
+
 def _make_run_deep_analysis(
     api_key: str | None = None,
     analysis_type: str = "comprehensive",
@@ -260,6 +272,11 @@ def _make_run_deep_analysis(
             stock_code: A 股股票代码，如 "600519"
             stock_name: 股票名称，如 "贵州茅台"
         """
+        # ReAct 主链路快照与状态兜底（design.md §8 第 1 层）：
+        # 工具自带 executor 线程不经 PipelineRunner，故在工具内维护
+        # pipeline_snapshot 与会话 status，使「切换会话恢复」对真实主链路生效。
+        # 事件流（StreamEvent yield 序列、metadata 结构、chunk_queue）保持不变。
+        from finance_agent import session_store as _session_store
         from finance_agent.api import (
             _ALL_NODES,
             LAYER_STEPS,
@@ -267,6 +284,43 @@ def _make_run_deep_analysis(
             _merge_update,
         )
         from finance_agent.harness import ActionType, StreamEvent, ToolResult
+        from finance_agent.pipeline_runner import (
+            _current_node,
+            _progress,
+            apply_node_event,
+            build_layer_tree,
+        )
+        from finance_agent.timeline_builder import (
+            apply_pipeline_node_complete,
+            apply_pipeline_thinking_token,
+        )
+
+        # session_id 非空时才写快照/状态（理论空路径保持现状行为）
+        _track_snapshot = bool(session_id)
+        # 管线全局超时（环境变量可配置，默认 600 秒）
+        pipeline_timeout = float(os.environ.get("PIPELINE_TIMEOUT_SECONDS", "600"))
+        _tree: list[dict] = build_layer_tree() if _track_snapshot else []
+        # 管线节点时序（persist-full-session-timeline）：thinking chunk 按 node 分组
+        # 持久化到 sessions.pipeline_timelines，写入节奏与 _persist_snapshot 一致
+        _nodeTimelines: dict[str, list[dict]] = {}
+
+        def _now_ms() -> int:
+            import time as _time
+
+            return int(_time.time() * 1000)
+
+        def _persist_snapshot(tree: list[dict], now_ms: int) -> None:
+            """把当前 layerTree 组装成快照并落库（与 PipelineRunner._run 同契约）。"""
+            _session_store.update_pipeline_snapshot(
+                session_id,
+                {
+                    # layerTree 序列化为内嵌 JSON 字符串，对齐前端 deserializeLayerTree 契约
+                    "layerTree": json.dumps(tree, ensure_ascii=False),
+                    "currentNodeId": _current_node(tree),
+                    "progress": _progress(tree),
+                    "updatedAt": now_ms,
+                },
+            )
 
         initial_state = {
             "stock_code": stock_code,
@@ -280,6 +334,11 @@ def _make_run_deep_analysis(
 
         accumulated: dict = dict(initial_state)
         completed: set[str] = set()
+        started_nodes: set[str] = set()  # 已发 node_start 的节点（去重）
+
+        # 状态兜底：工具入口置 running（管线本体已在 executor 线程运行）
+        if _track_snapshot:
+            _session_store.update_session_status(session_id, "running")
 
         # 在线程中运行同步 graph.stream，避免阻塞事件循环
         # ADR-0015：CallbackHandler 通过 langchain callback 机制工作（不依赖 OTel
@@ -298,87 +357,259 @@ def _make_run_deep_analysis(
 
         loop.run_in_executor(None, _run_graph)
 
+        # event_queue：后台 Task -> SSE 转发层，maxsize 防止消费者断开后无限增长
+        event_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+
+        async def _background_consume():
+            nonlocal _tree, _nodeTimelines
+            # 节点真实生命周期时间戳（custom 流的 node_start/node_end），
+            # 用于给 updates 流的 node_complete 附加 server_*（修复快速节点计时恒 0）。
+            node_lifecycle: dict[str, dict] = {}
+
+            def _put_event(evt):
+                with contextlib.suppress(asyncio.QueueFull):
+                    event_queue.put_nowait(evt)
+
+            try:
+                while True:
+                    item = await asyncio.wait_for(chunk_queue.get(), timeout=pipeline_timeout)
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+
+                    mode, chunk = item
+
+                    # Custom mode: forward thinking tokens + 节点生命周期时间戳
+                    # 局限说明（persist-full-session-timeline）：管线节点的 search/tool
+                    # 事件不会出现在本工具的 custom/updates 流内——custom 流仅含
+                    # thinking/node_start/node_end（nodes/_llm_utils.py 与 nodes/_timing.py
+                    # 的 writer），updates 流仅含节点状态 dict；search_start/tool_call 等
+                    # 事件是 Agent 层工具（web_search 等）经 stream_agent_to_sse 发出的
+                    # 对话流事件，与管线节点无映射。故 ReAct 路径下管线 search/tool 归属
+                    # 不可达，仅 fast path（PipelineRunner._run）生效；此处不维护 currentNode。
+                    if mode == "custom":
+                        if isinstance(chunk, dict):
+                            ctype = chunk.get("type")
+                            if ctype == "thinking":
+                                # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
+                                # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
+                                node = chunk.get("node", "")
+                                # 管线时序持久化：thinking chunk 按 node 累积（仅跟踪快照时）
+                                if _track_snapshot:
+                                    _nodeTimelines = apply_pipeline_thinking_token(
+                                        _nodeTimelines, node, chunk.get("token", "")
+                                    )
+                                    _session_store.update_pipeline_timelines(
+                                        session_id, _nodeTimelines
+                                    )
+                                _put_event(
+                                    StreamEvent.think(
+                                        chunk.get("token", ""),
+                                        metadata={"node": node} if node else None,
+                                    )
+                                )
+                            elif ctype == "node_start":
+                                # 节点真实入口时间戳（timed_node 装饰器发出）
+                                node_lifecycle.setdefault(chunk["node"], {})["start_ts"] = chunk[
+                                    "ts"
+                                ]
+                            elif ctype == "node_end":
+                                # 节点真实出口时间戳与耗时；记录并立即下发 node_timing 事件
+                                # （node_complete 由 updates chunk 驱动、可能已先于 node_end 发出，
+                                #  故真实耗时经独立 node_timing 下发，前端据此覆盖近似值）。
+                                node_name = chunk["node"]
+                                lc = node_lifecycle.setdefault(node_name, {})
+                                lc["end_ts"] = chunk["ts"]
+                                lc["duration_ms"] = chunk.get("duration_ms")
+                                if _track_snapshot:
+                                    _now = _now_ms()
+                                    _tree = apply_node_event(
+                                        _tree,
+                                        {
+                                            "type": "node_timing",
+                                            "node_id": node_name,
+                                            "server_start_ts": lc.get("start_ts"),
+                                            "server_end_ts": lc.get("end_ts"),
+                                            "server_duration_ms": lc.get("duration_ms"),
+                                        },
+                                        _now,
+                                    )
+                                    _persist_snapshot(_tree, _now)
+                                _put_event(
+                                    StreamEvent.progress(
+                                        content=f"{node_name} timing",
+                                        metadata={
+                                            "node": node_name,
+                                            "sse_type": "node_timing",
+                                            "node_id": node_name,
+                                            "server_start_ts": lc.get("start_ts"),
+                                            "server_end_ts": lc.get("end_ts"),
+                                            "server_duration_ms": lc.get("duration_ms"),
+                                        },
+                                    )
+                                )
+                        continue
+
+                    # Updates mode: existing node progress logic
+                    for node_name, update in chunk.items():
+                        if node_name not in _ALL_NODES:
+                            continue
+
+                        if isinstance(update, dict) and update:
+                            _merge_update(accumulated, node_name, update)
+
+                        idx = _ALL_NODES.index(node_name)
+                        for i in range(idx + 1):
+                            completed.add(_ALL_NODES[i])
+
+                        step_info = {s["node"]: s for s in LAYER_STEPS}.get(node_name, {})
+
+                        # 节点首次出现：先发 node_start（与 fast path 事件序列对齐）
+                        if node_name not in started_nodes:
+                            started_nodes.add(node_name)
+                            start_meta = {
+                                "node": node_name,
+                                "sse_type": "node_start",
+                                "node_id": node_name,
+                                "layer": step_info.get("layer", ""),
+                                "desc": step_info.get("desc", node_name),
+                            }
+                            # 附加后端真实入口时间戳（custom 流 node_start 已先行到达）
+                            _lc = node_lifecycle.get(node_name, {})
+                            if "start_ts" in _lc:
+                                start_meta["server_start_ts"] = _lc["start_ts"]
+                            if _track_snapshot:
+                                _now = _now_ms()
+                                _tree = apply_node_event(
+                                    _tree,
+                                    {
+                                        "type": "node_start",
+                                        "node_id": node_name,
+                                        **(
+                                            {"server_start_ts": start_meta["server_start_ts"]}
+                                            if "server_start_ts" in start_meta
+                                            else {}
+                                        ),
+                                    },
+                                    _now,
+                                )
+                                _persist_snapshot(_tree, _now)
+                            _put_event(
+                                StreamEvent.progress(
+                                    content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
+                                    metadata=start_meta,
+                                )
+                            )
+
+                        output = _extract_output(
+                            node_name, update if isinstance(update, dict) else {}, accumulated
+                        )
+
+                        # yield PROGRESS with detailed metadata -> stream_agent_to_sse 映射为 node_complete
+                        # 注：真实耗时经独立 node_timing 事件下发（node_end 到达时），此处不附加，
+                        # 因 node_end 时序上晚于本 updates chunk，duration 此刻尚不可得。
+                        if _track_snapshot:
+                            _now = _now_ms()
+                            _tree = apply_node_event(
+                                _tree,
+                                {"type": "node_complete", "node_id": node_name, "output": output},
+                                _now,
+                            )
+                            _persist_snapshot(_tree, _now)
+                            # 管线时序收口：node_complete 将该节点末尾未完成 thinking 置 done
+                            _nodeTimelines = apply_pipeline_node_complete(_nodeTimelines, node_name)
+                            _session_store.update_pipeline_timelines(session_id, _nodeTimelines)
+                        _put_event(
+                            StreamEvent.progress(
+                                content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
+                                metadata={
+                                    "node": node_name,
+                                    "sse_type": "node_complete",
+                                    "node_id": node_name,
+                                    "layer": step_info.get("layer", ""),
+                                    "desc": step_info.get("desc", node_name),
+                                    "completed": sorted(completed),
+                                    "progress": len(completed) / len(LAYER_STEPS),
+                                    "output": output,
+                                },
+                            )
+                        )
+            except TimeoutError:
+                # 管线全局超时：置 failed + failure_reason
+                if _track_snapshot:
+                    _session_store.update_session_status(
+                        session_id, "failed", failure_reason="管线执行超时"
+                    )
+                _put_event(
+                    StreamEvent.progress(
+                        content="分析失败：管线执行超时",
+                    )
+                )
+            except Exception as e:
+                # 异常兜底：置 failed + failure_reason（后台 Task 独立处理异常，不再 re-raise）
+                if _track_snapshot:
+                    _session_store.update_session_status(
+                        session_id, "failed", failure_reason=f"{type(e).__name__}: {e}"
+                    )
+                # 下发错误事件，使 SSE 转发层能感知异常（不 re-raise，仅通知）
+                _put_event(
+                    StreamEvent.progress(
+                        content=f"分析失败：{type(e).__name__}: {e}",
+                    )
+                )
+            else:
+                # 正常结束：写最终快照并置 completed（组装 report metadata 前）
+                if _track_snapshot:
+                    _persist_snapshot(_tree, _now_ms())
+                    _session_store.update_session_status(session_id, "completed")
+
+                report_md = accumulated.get("final_report", "")
+                metadata = {
+                    "chart_data": accumulated.get("chart_data") or {},
+                    "analyst_reports": accumulated.get("analyst_reports") or {},
+                    "stock_code": stock_code,
+                    "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
+                    "report_markdown": report_md,
+                    "web_sources": web_sources or [],
+                    "sse_type": "report_ready",
+                }
+
+                # LLM 上下文只放摘要
+                llm_output = f"深度分析完成。股票：{metadata['stock_name']}({stock_code})。\n"
+                llm_output += f"报告已生成，共 {len(report_md)} 字符。\n"
+                if len(report_md) > 2000:
+                    llm_output += f"报告摘要：\n{report_md[:2000]}...\n"
+                else:
+                    llm_output += f"报告内容：\n{report_md}"
+
+                _put_event(
+                    StreamEvent(
+                        event_type=ActionType.TOOL_RESULT,
+                        content=llm_output,
+                        tool_result=ToolResult(
+                            tool_call_id="",
+                            name="run_deep_analysis",
+                            output=llm_output,
+                            metadata=metadata,
+                        ),
+                    )
+                )
+            finally:
+                _put_event(None)
+                if session_id:
+                    _background_tasks.pop(session_id, None)
+
+        bg_task = asyncio.create_task(_background_consume())
+        if session_id:
+            _background_tasks[session_id] = bg_task
+
+        # SSE 转发层：从 event_queue 读取并 yield
         while True:
-            item = await chunk_queue.get()
+            item = await event_queue.get()
             if item is None:
                 break
-            if isinstance(item, Exception):
-                raise item
-
-            mode, chunk = item
-
-            # Custom mode: forward thinking tokens
-            if mode == "custom":
-                if isinstance(chunk, dict) and chunk.get("type") == "thinking":
-                    # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
-                    # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
-                    node = chunk.get("node", "")
-                    yield StreamEvent.think(
-                        chunk.get("token", ""), metadata={"node": node} if node else None
-                    )
-                continue
-
-            # Updates mode: existing node progress logic
-            for node_name, update in chunk.items():
-                if node_name not in _ALL_NODES:
-                    continue
-
-                if isinstance(update, dict) and update:
-                    _merge_update(accumulated, node_name, update)
-
-                idx = _ALL_NODES.index(node_name)
-                for i in range(idx + 1):
-                    completed.add(_ALL_NODES[i])
-
-                step_info = {s["node"]: s for s in LAYER_STEPS}.get(node_name, {})
-                output = _extract_output(
-                    node_name, update if isinstance(update, dict) else {}, accumulated
-                )
-
-                # yield PROGRESS with detailed metadata -> stream_agent_to_sse 映射为 node_complete
-                yield StreamEvent.progress(
-                    content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
-                    metadata={
-                        "node": node_name,
-                        "sse_type": "node_complete",
-                        "node_id": node_name,
-                        "layer": step_info.get("layer", ""),
-                        "desc": step_info.get("desc", node_name),
-                        "completed": sorted(completed),
-                        "progress": len(completed) / len(LAYER_STEPS),
-                        "output": output,
-                    },
-                )
-
-        report_md = accumulated.get("final_report", "")
-        metadata = {
-            "chart_data": accumulated.get("chart_data") or {},
-            "analyst_reports": accumulated.get("analyst_reports") or {},
-            "stock_code": stock_code,
-            "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
-            "report_markdown": report_md,
-            "web_sources": web_sources or [],
-            "sse_type": "report_ready",
-        }
-
-        # LLM 上下文只放摘要
-        llm_output = f"深度分析完成。股票：{metadata['stock_name']}({stock_code})。\n"
-        llm_output += f"报告已生成，共 {len(report_md)} 字符。\n"
-        if len(report_md) > 2000:
-            llm_output += f"报告摘要：\n{report_md[:2000]}...\n"
-        else:
-            llm_output += f"报告内容：\n{report_md}"
-
-        yield StreamEvent(
-            event_type=ActionType.TOOL_RESULT,
-            content=llm_output,
-            tool_result=ToolResult(
-                tool_call_id="",
-                name="run_deep_analysis",
-                output=llm_output,
-                metadata=metadata,
-            ),
-        )
+            yield item
 
     return run_deep_analysis
 
@@ -648,6 +879,7 @@ async def stream_agent_to_sse(
     force_tool: bool = False,
     session_id: str | None = None,
     user_id: str | None = None,
+    heartbeat_interval: float = 10.0,
 ):
     """运行 Agent 并将 StreamEvent 映射为前端 SSE 格式。
 
@@ -660,6 +892,7 @@ async def stream_agent_to_sse(
         session_id: Langfuse session 聚合 ID（ADR-0015）。设置后用 react_loop span
             包裹 ReAct 执行并 propagate_attributes(session_id)。
         user_id: Langfuse user 聚合 ID（ADR-0015）。设置后 propagate_attributes(user_id)。
+        heartbeat_interval: SSE 空闲心跳间隔（秒），默认 10s，与设计文档"5~10 秒"对齐。
 
     Yields:
         SSE 格式的字符串: "data: {...}\\n\\n"
@@ -692,186 +925,240 @@ async def stream_agent_to_sse(
                 pass
     _react_cm.__enter__()
     _propagate_cm.__enter__()
-    async for event in agent.run(user_input, force_tool=force_tool):
-        ts = _now()
-
-        if event.event_type == ActionType.ANSWER:
-            yield _sse({"type": "chat_token", "token": event.content, "timestamp": ts})
-
-        elif event.event_type == ActionType.THINK:
-            # 原生思考增量（DeepSeek reasoning_content），与回答（chat_token）分离。
-            # 管线运行期间的思考带 node metadata（管线节点名），透传给前端按 agent 阶段分组。
-            meta = event.metadata or {}
-            payload: dict = {"type": "thinking_token", "token": event.content, "timestamp": ts}
-            if meta.get("node"):
-                payload["node"] = meta["node"]
-            yield _sse(payload)
-
-        elif event.event_type == ActionType.TOOL_CALL:
-            tc = event.tool_call
-            # 跳过 permission_required 事件（tool_call 为 None，只有 permission_request）
-            if not tc:
+    agentGen = agent.run(user_input, force_tool=force_tool)
+    nextTask = asyncio.create_task(agentGen.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({nextTask}, timeout=heartbeat_interval)
+            if not done:
+                # 空闲超时：发送心跳注释，不取消正在等待的 nextTask
+                yield ": heartbeat\n\n"
                 continue
-            name = tc.name or ""
-            args = tc.arguments if tc else {}
-            if name == "web_search":
-                last_web_search_query = str(args.get("query", ""))
-                yield _sse(
-                    {"type": "search_start", "query": last_web_search_query, "timestamp": ts}
-                )
-            yield _sse(
-                {
-                    "type": "tool_call",
-                    "name": name,
-                    "args": args,
-                    "timestamp": ts,
-                }
-            )
+            try:
+                event = nextTask.result()
+            except StopAsyncIteration:
+                break
+            ts = _now()
 
-        elif event.event_type == ActionType.PROGRESS:
-            # 映射为前端期望的 node_complete 事件
-            meta = event.metadata or {}
-            sse_type = meta.get("sse_type", "node_complete")
-            if sse_type == "node_complete":
-                yield _sse(
-                    {
-                        "type": "node_complete",
-                        "node_id": meta.get("node_id", ""),
-                        "layer": meta.get("layer", ""),
-                        "desc": meta.get("desc", ""),
-                        "completed": meta.get("completed", []),
-                        "progress": meta.get("progress", 0),
-                        "output": meta.get("output", {}),
-                        "timestamp": ts,
-                    }
-                )
-            else:
-                yield _sse(
-                    {
-                        "type": "pipeline_progress",
-                        "content": event.content,
-                        "metadata": meta,
-                        "timestamp": ts,
-                    }
-                )
+            if event.event_type == ActionType.ANSWER:
+                yield _sse({"type": "chat_token", "token": event.content, "timestamp": ts})
 
-        elif event.event_type == ActionType.TOOL_METADATA:
-            if on_metadata and event.metadata:
-                on_metadata(event.metadata)
-            yield _sse(
-                {
-                    "type": "pipeline_update",
-                    "metadata": event.metadata or {},
-                    "timestamp": ts,
-                }
-            )
+            elif event.event_type == ActionType.THINK:
+                # 原生思考增量（DeepSeek reasoning_content），与回答（chat_token）分离。
+                # 管线运行期间的思考带 node metadata（管线节点名），透传给前端按 agent 阶段分组。
+                meta = event.metadata or {}
+                payload: dict = {"type": "thinking_token", "token": event.content, "timestamp": ts}
+                if meta.get("node"):
+                    payload["node"] = meta["node"]
+                yield _sse(payload)
 
-        elif event.event_type == ActionType.TOOL_RESULT:
-            tr = event.tool_result
-            if tr:
-                # 处理 metadata（chart_data、analyst_reports 等）
-                if tr.metadata:
-                    if on_metadata:
-                        on_metadata(tr.metadata)
-
-                    sse_type = tr.metadata.get("sse_type", "")
-
-                    # run_deep_analysis 的最终结果：发送 report_ready
-                    if sse_type == "report_ready" or tr.name == "run_deep_analysis":
-                        stock_code = tr.metadata.get("stock_code", "")
-                        stock_name = tr.metadata.get("stock_name", "")
-                        if on_resolved:
-                            on_resolved(stock_code, stock_name)
+            elif event.event_type == ActionType.TOOL_CALL:
+                tc = event.tool_call
+                # permission_required 事件（tool_call 为 None）不下发 SSE，但必须继续
+                # 走完循环末尾的 nextTask 重建——不得用 continue，否则下一轮 wait 等待
+                # 已完成的旧 task，无限空转死锁（快速模式"卡在搜索中"的根因）
+                if tc:
+                    name = tc.name or ""
+                    args = tc.arguments if tc else {}
+                    if name == "web_search":
+                        last_web_search_query = str(args.get("query", ""))
                         yield _sse(
                             {
-                                "type": "resolved",
-                                "stock_code": stock_code,
-                                "stock_name": stock_name,
+                                "type": "search_start",
+                                "query": last_web_search_query,
                                 "timestamp": ts,
                             }
                         )
-                        yield _sse(
-                            {
-                                "type": "report_ready",
-                                "report_markdown": tr.metadata.get("report_markdown", ""),
-                                "chart_data": tr.metadata.get("chart_data", {}),
-                                "stock_name": stock_name,
-                                "web_sources": tr.metadata.get("web_sources", []),
-                                "timestamp": ts,
-                            }
-                        )
-                    else:
-                        yield _sse(
-                            {
-                                "type": "pipeline_update",
-                                "metadata": tr.metadata,
-                                "timestamp": ts,
-                            }
-                        )
-                else:
-                    # 普通工具结果
-                    result_data = tr.output
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        result_data = json.loads(tr.output)
-
-                    # web_search: 解析纯文本结果，发送结构化搜索来源
-                    if tr.name == "web_search" and isinstance(result_data, str):
-                        from finance_agent.web_search import parse_search_output
-
-                        search_results = parse_search_output(result_data)
-                        if search_results:
-                            yield _sse(
-                                {
-                                    "type": "search_result",
-                                    "query": last_web_search_query,
-                                    "results": [
-                                        {"title": r.title, "url": r.url, "content": r.content}
-                                        for r in search_results
-                                    ],
-                                    "count": len(search_results),
-                                    "timestamp": ts,
-                                }
-                            )
-
-                    # search_stock: 解析纯文本结果，发送结构化股票信息
-                    if tr.name == "search_stock" and isinstance(result_data, str):
-                        stock_info = _parse_stock_result_text(result_data)
-                        if stock_info:
-                            # 通过 on_metadata 回调通知调用方（用于 fallback）
-                            if on_metadata:
-                                on_metadata(
-                                    {
-                                        "search_stock_code": stock_info["code"],
-                                        "search_stock_name": stock_info["name"],
-                                    }
-                                )
-                            yield _sse(
-                                {
-                                    "type": "stock_resolved",
-                                    "stock_code": stock_info["code"],
-                                    "stock_name": stock_info["name"],
-                                    "timestamp": ts,
-                                }
-                            )
-
                     yield _sse(
                         {
-                            "type": "tool_result",
-                            "name": tr.name,
-                            "result": result_data,
+                            "type": "tool_call",
+                            "name": name,
+                            "args": args,
                             "timestamp": ts,
                         }
                     )
 
-        elif event.event_type == ActionType.ERROR:
-            yield _sse({"type": "error", "message": event.content, "timestamp": ts})
+            elif event.event_type == ActionType.PROGRESS:
+                # 映射为前端期望的 node_start / node_complete 事件
+                meta = event.metadata or {}
+                sse_type = meta.get("sse_type", "node_complete")
+                if sse_type == "node_timing":
+                    # 节点真实耗时（node_end 到达时下发），前端据此覆盖 updates 近似值
+                    yield _sse(
+                        {
+                            "type": "node_timing",
+                            "node_id": meta.get("node_id", ""),
+                            "server_start_ts": meta.get("server_start_ts"),
+                            "server_end_ts": meta.get("server_end_ts"),
+                            "server_duration_ms": meta.get("server_duration_ms"),
+                            "timestamp": ts,
+                        }
+                    )
+                elif sse_type == "node_start":
+                    payload = {
+                        "type": "node_start",
+                        "node_id": meta.get("node_id", ""),
+                        "layer": meta.get("layer", ""),
+                        "desc": meta.get("desc", ""),
+                        "timestamp": ts,
+                    }
+                    # 透传后端真实入口时间戳（当前运行节点实时已运行时长基于此）
+                    if "server_start_ts" in meta:
+                        payload["server_start_ts"] = meta["server_start_ts"]
+                    yield _sse(payload)
+                elif sse_type == "node_complete":
+                    yield _sse(
+                        {
+                            "type": "node_complete",
+                            "node_id": meta.get("node_id", ""),
+                            "layer": meta.get("layer", ""),
+                            "desc": meta.get("desc", ""),
+                            "completed": meta.get("completed", []),
+                            "progress": meta.get("progress", 0),
+                            "output": meta.get("output", {}),
+                            "timestamp": ts,
+                        }
+                    )
+                else:
+                    yield _sse(
+                        {
+                            "type": "pipeline_progress",
+                            "content": event.content,
+                            "metadata": meta,
+                            "timestamp": ts,
+                        }
+                    )
 
-    # ADR-0015: 退出 react_loop span 与 session 聚合上下文
-    _propagate_cm.__exit__(None, None, None)
-    _react_cm.__exit__(None, None, None)
+            elif event.event_type == ActionType.TOOL_METADATA:
+                if on_metadata and event.metadata:
+                    on_metadata(event.metadata)
+                yield _sse(
+                    {
+                        "type": "pipeline_update",
+                        "metadata": event.metadata or {},
+                        "timestamp": ts,
+                    }
+                )
 
-    yield _sse({"type": "chat_done", "timestamp": _now()})
-    # NOTE: done 事件由调用方发送（确保 session_created 等事件先发完）
+            elif event.event_type == ActionType.TOOL_RESULT:
+                tr = event.tool_result
+                if tr:
+                    # 处理 metadata（chart_data、analyst_reports 等）
+                    if tr.metadata:
+                        if on_metadata:
+                            on_metadata(tr.metadata)
+
+                        sse_type = tr.metadata.get("sse_type", "")
+
+                        # run_deep_analysis 的最终结果：发送 report_ready
+                        if sse_type == "report_ready" or tr.name == "run_deep_analysis":
+                            stock_code = tr.metadata.get("stock_code", "")
+                            stock_name = tr.metadata.get("stock_name", "")
+                            if on_resolved:
+                                on_resolved(stock_code, stock_name)
+                            yield _sse(
+                                {
+                                    "type": "resolved",
+                                    "stock_code": stock_code,
+                                    "stock_name": stock_name,
+                                    "timestamp": ts,
+                                }
+                            )
+                            yield _sse(
+                                {
+                                    "type": "report_ready",
+                                    "report_markdown": tr.metadata.get("report_markdown", ""),
+                                    "chart_data": tr.metadata.get("chart_data", {}),
+                                    "stock_name": stock_name,
+                                    "web_sources": tr.metadata.get("web_sources", []),
+                                    "timestamp": ts,
+                                }
+                            )
+                        else:
+                            yield _sse(
+                                {
+                                    "type": "pipeline_update",
+                                    "metadata": tr.metadata,
+                                    "timestamp": ts,
+                                }
+                            )
+                    else:
+                        # 普通工具结果
+                        result_data = tr.output
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            result_data = json.loads(tr.output)
+
+                        # web_search: 解析纯文本结果，发送结构化搜索来源
+                        if tr.name == "web_search" and isinstance(result_data, str):
+                            from finance_agent.web_search import parse_search_output
+
+                            search_results = parse_search_output(result_data)
+                            if search_results:
+                                yield _sse(
+                                    {
+                                        "type": "search_result",
+                                        "query": last_web_search_query,
+                                        "results": [
+                                            {"title": r.title, "url": r.url, "content": r.content}
+                                            for r in search_results
+                                        ],
+                                        "count": len(search_results),
+                                        "timestamp": ts,
+                                    }
+                                )
+
+                        # search_stock: 解析纯文本结果，发送结构化股票信息
+                        if tr.name == "search_stock" and isinstance(result_data, str):
+                            stock_info = _parse_stock_result_text(result_data)
+                            if stock_info:
+                                # 通过 on_metadata 回调通知调用方（用于 fallback）
+                                if on_metadata:
+                                    on_metadata(
+                                        {
+                                            "search_stock_code": stock_info["code"],
+                                            "search_stock_name": stock_info["name"],
+                                        }
+                                    )
+                                yield _sse(
+                                    {
+                                        "type": "stock_resolved",
+                                        "stock_code": stock_info["code"],
+                                        "stock_name": stock_info["name"],
+                                        "timestamp": ts,
+                                    }
+                                )
+
+                        yield _sse(
+                            {
+                                "type": "tool_result",
+                                "name": tr.name,
+                                "result": result_data,
+                                "timestamp": ts,
+                            }
+                        )
+
+            elif event.event_type == ActionType.ERROR:
+                yield _sse({"type": "error", "message": event.content, "timestamp": ts})
+
+            # 准备下一次迭代
+            nextTask = asyncio.create_task(agentGen.__anext__())
+
+        # ADR-0015: 退出 react_loop span 与 session 聚合上下文
+        _propagate_cm.__exit__(None, None, None)
+        _react_cm.__exit__(None, None, None)
+
+        yield _sse({"type": "chat_done", "timestamp": _now()})
+        # NOTE: done 事件由调用方发送（确保 session_created 等事件先发完）
+
+    finally:
+        # GeneratorExit 清理：取消 pending task，关闭 agentGen，退出 Langfuse 上下文
+        if not nextTask.done():
+            nextTask.cancel()
+        with contextlib.suppress(Exception):
+            await agentGen.aclose()
+        with contextlib.suppress(Exception):
+            _propagate_cm.__exit__(None, None, None)
+            _react_cm.__exit__(None, None, None)
 
 
 def _sse(data: dict) -> str:

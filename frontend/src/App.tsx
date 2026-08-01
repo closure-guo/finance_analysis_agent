@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry } from './types'
+import type { SSEEvent, PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
 import { ChartsSection } from './Charts'
 import { SearchBanner } from './SearchBanner'
-import { applyChatStreamEvent, applyPipelineThinkingToken, buildTimelineFromHistory, nodeDisplayName } from './timeline'
+import { applyChatStreamEvent, applyPipelineThinkingToken, applyPipelineNodeComplete, buildTimelineFromHistory, deserializeTimeline, deserializeNodeTimelines, nodeDisplayName } from './timeline'
+import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations, recordDuration } from './eta'
+import { buildLayerTree, applyNodeEvent, deserializeLayerTree } from './pipelineTree'
+import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 
 // 搜索类工具集合：这类工具的状态与结果由独立搜索横幅（SearchBanner）承载，
@@ -26,21 +29,14 @@ export function extractThinkingTitle(content: string): string | undefined {
   return match ? match[1] : undefined
 }
 
-// ── Pipeline steps (mirrors backend LAYER_STEPS) ──
-const PIPELINE_STEPS: PipelineStep[] = [
-  { node: 'check_cache', layer: 'PREP', desc: 'PREP', icon: 'database' },
-  { node: 'technical_analyst', layer: 'Layer I', desc: 'Layer I', icon: 'users' },
-  { node: 'bull_r1', layer: 'Layer II', desc: 'Layer II', icon: 'comments' },
-  { node: 'trader', layer: 'Layer III', desc: 'Trader', icon: 'hand-holding-usd' },
-  { node: 'aggressive_r1', layer: 'Layer IV', desc: 'Risk', icon: 'shield-alt' },
-  { node: 'fund_manager', layer: 'Layer V', desc: 'Fund', icon: 'user-tie' },
-]
-
-// 6-stage pipeline display nodes (one per layer)
-const STAGE_NODES = ['check_cache', 'technical_analyst', 'bull_r1', 'trader', 'aggressive_r1', 'fund_manager']
+// ── Pipeline steps 定义已迁移至 pipelineTree.LAYER_TREE_CONFIG（分层时间轴）──
 
 let msgIdCounter = 0
 const genId = () => `msg-${++msgIdCounter}`
+
+// 轮询超时上限（Final Review Fix 2）：ReAct 路径切走后 status 可能永久 running，
+// 轮询无限进行会泄漏资源。超过该时长后停止轮询并提示用户刷新或重新发起。
+const MAX_POLLING_MS = 5 * 60 * 1000 // 5 分钟（150 次 × 2s）
 
 // TimelineRenderer 注入的横幅组件集合（ThinkingBanner/ToolCallBanner 为函数声明，提升后可用）
 const timelineBannerComponents: TimelineBannerComponents = {
@@ -82,22 +78,120 @@ export default function App() {
   const setApiKey = saveApiKey
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
   const pipelineMsgRef = useRef<UIMessage | null>(null)
+  // 轮询起始时间（超时保护基准，cleanup 时重置）
+  const pollStartRef = useRef<number | null>(null)
 
   // Session state
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  // ref 镜像：SSE 事件处理闭包中读取最新 currentSessionId，判断事件是否属于当前视图
+  const currentSessionIdRef = useRef<string | null>(null)
+  // SSE 流绑定的会话 ID：用于事件处理闭包中判断事件是否属于当前视图
+  const streamingSessionIdRef = useRef<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const streamingReportRef = useRef<UIMessage | null>(null)
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
-  // 中断进行中的 SSE 流：切换会话/新建分析/删除当前会话时调用，
-  // 防止残留的 node_start/report_chunk 等事件继续 setMessages 把 pipeline UI 推回来。
+  // SSE 消息 ID ref：用于在会话切换时重置，确保切回后新事件能正确更新重建的消息
+  const assistantMsgIdRef = useRef<string | null>(null)
+  const pipelineMsgIdRef = useRef<string | null>(null)
+  // 当前活跃订阅的 AbortController：切换会话/新建分析时 abort 仅断开本地订阅连接，
+  // 不终止后端 stream_registry 后台任务（delta spec Task 5.2）
   const abortRef = useRef<AbortController | null>(null)
-  const abortStreaming = useCallback(() => {
+  // messages ref 镜像：会话切换时读取最新 messages 存入快照
+  const messagesRef = useRef<UIMessage[]>([])
+
+  // ── per-session 流状态（delta spec Task 5.1）──
+  // 每个 session 独立跟踪 abort/pipelineMsg/streamingReport/lastSeq，
+  // 切换会话时保留状态，切回时恢复并经恢复端点续传事件流。
+  // 在 sessionCacheRef / bufferedSseEventsRef 之上作为补充层。
+  type StreamState = {
+    abort: AbortController | null
+    pipelineMsg: UIMessage | null
+    streamingReport: UIMessage | null
+    assistantMsgId: string | null
+    pipelineMsgId: string | null
+    lastSeq: number
+    // 消息快照：切换会话时保存当前 messages，切回 running/clarifying 会话时恢复，
+    // 避免后端 chat_history 未持久化 agent 在途内容导致切换后内容消失
+    messages: UIMessage[]
+  }
+  const streamRegistryRef = useRef<Map<string, StreamState>>(new Map())
+
+  // 获取或创建会话的流状态
+  const getStreamState = useCallback((sessionId: string): StreamState => {
+    let state = streamRegistryRef.current.get(sessionId)
+    if (!state) {
+      state = {
+        abort: null, pipelineMsg: null, streamingReport: null,
+        assistantMsgId: null, pipelineMsgId: null, lastSeq: 0,
+        messages: [],
+      }
+      streamRegistryRef.current.set(sessionId, state)
+    }
+    return state
+  }, [])
+
+  // 保存当前视图状态到 streamRegistry（切换会话前调用）
+  const saveCurrentStreamState = useCallback(() => {
+    const curId = currentSessionIdRef.current
+    if (!curId) return
+    const state = getStreamState(curId)
+    state.pipelineMsg = pipelineMsgRef.current
+    state.streamingReport = streamingReportRef.current
+    state.assistantMsgId = assistantMsgIdRef.current
+    state.pipelineMsgId = pipelineMsgIdRef.current
+    state.abort = abortRef.current
+    state.messages = messagesRef.current
+  }, [getStreamState])
+
+  // 从 streamRegistry 恢复目标会话状态到当前视图 ref
+  const restoreStreamState = useCallback((sessionId: string) => {
+    const state = streamRegistryRef.current.get(sessionId)
+    pipelineMsgRef.current = state?.pipelineMsg ?? null
+    streamingReportRef.current = state?.streamingReport ?? null
+    assistantMsgIdRef.current = state?.assistantMsgId ?? null
+    pipelineMsgIdRef.current = state?.pipelineMsgId ?? null
+  }, [])
+
+  // 断开当前会话的本地 SSE 订阅连接（不取消后端任务）
+  const disconnectSubscription = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
     }
+    streamingSessionIdRef.current = null
   }, [])
+
+  // ── 消息快照缓存（保留机制）──
+  // 切换会话时保存当前 messages 快照，切回 running/clarifying 会话时恢复，
+  // 避免后端 chat_history 未持久化 agent 在途内容导致切换后内容消失
+  const sessionCacheRef = useRef<Map<string, {
+    messages: UIMessage[]
+    assistantMsgId: string | null
+    pipelineMsgId: string | null
+    pipelineMsg: UIMessage | null
+    streamingReport: UIMessage | null
+  }>>(new Map())
+
+  // ── SSE 事件缓冲区（保留机制）──
+  // 会话切换期间被跳过的事件存入缓冲区，切回时 replayBufferedEvents() 回放
+  const bufferedSseEventsRef = useRef<SSEEvent[]>([])
+
+  // 断开当前 SSE 订阅（仅本地 abort，不调后端 cancel）
+  // 保留给 startAnalysis/deleteSession 等历史调用点使用
+  const abortStreaming = useCallback(() => {
+    disconnectSubscription()
+  }, [disconnectSubscription])
+
+  // 同步 currentSessionId 到 ref（SSE 闭包中读取最新值）
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId
+  }, [currentSessionId])
+
+  // 同步 messages 到 ref（会话切换时读取最新 messages 存入快照）
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -125,24 +219,157 @@ export default function App() {
     loadSessions()
   }, [loadSessions])
 
+  // ── Task 6: 运行指示与显式停止 ──
+
+  // 临时警告提示（如"该会话正在生成中"）
+  const [warningMessage, setWarningMessage] = useState<string | null>(null)
+
+  // 判断指定会话是否正在运行生成任务
+  // 条件：session status 为 running，或 streamRegistryRef 中有未中断的 abort controller
+  const isSessionRunning = (sessionId: string | null): boolean => {
+    if (!sessionId) return false
+    const session = sessions.find(s => s.session_id === sessionId)
+    if (session?.status === 'running') return true
+    const state = streamRegistryRef.current.get(sessionId)
+    return !!state?.abort && !state.abort.signal.aborted
+  }
+
+  // 终态事件后清理：清除活跃流标记并刷新会话列表（移除侧边栏运行指示）
+  const handleStreamTerminal = useCallback((sessionId: string | null) => {
+    if (sessionId) {
+      const state = streamRegistryRef.current.get(sessionId)
+      if (state) state.abort = null
+    }
+    loadSessions()
+  }, [loadSessions])
+
+  // 停止当前会话的生成任务（调用后端 cancel 端点）
+  const stopGeneration = async () => {
+    if (!currentSessionId) return
+    try {
+      await fetch(`/api/sessions/${currentSessionId}/cancel`, { method: 'POST' })
+    } catch (e) {
+      console.error('Failed to stop:', e)
+    }
+  }
+
+  // 页面卸载时断开所有本地 SSE 订阅（仅退订，不调后端 cancel）
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      streamRegistryRef.current.forEach(state => {
+        state.abort?.abort()
+      })
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [])
+
   const selectSession = async (sessionId: string) => {
-    // 中断进行中的 SSE 流，避免残留事件把 pipeline UI 推回到新载入的会话视图
-    abortStreaming()
+    // 断开当前会话的本地 SSE 订阅连接（不调用后端 cancel，不影响后台任务）
+    // delta spec Task 5.2：切换会话仅断开本地订阅
+    disconnectSubscription()
+
+    // 保存当前会话的 messages 快照：切回时若 agent 仍在生成则从快照恢复，
+    // 避免后端 chat_history 未持久化 agent 内容导致内容丢失
+    const curId = currentSessionIdRef.current
+    if (curId && curId !== sessionId && messagesRef.current.length > 0) {
+      sessionCacheRef.current.set(curId, {
+        messages: messagesRef.current,
+        assistantMsgId: assistantMsgIdRef.current,
+        pipelineMsgId: pipelineMsgIdRef.current,
+        pipelineMsg: pipelineMsgRef.current,
+        streamingReport: streamingReportRef.current,
+      })
+    }
+
+    setCurrentSessionId(sessionId)
     try {
       const resp = await fetch(`/api/sessions/${sessionId}`)
       if (!resp.ok) throw new Error('Failed to load session')
       const data: SessionDetail = await resp.json()
-      
+
+      // 若 agent 仍在生成（clarifying/running）且前端有该会话的消息快照，
+      // 优先从快照恢复：后端 chat_history 此时未持久化 agent 的思考/工具调用内容
+      const cached = sessionCacheRef.current.get(sessionId)
+      if (cached && (data.status === 'clarifying' || data.status === 'running')) {
+        setMessages(cached.messages)
+        setMode(data.session_type === 'chat' ? 'quick' : 'deep')
+        streamingReportRef.current = cached.streamingReport
+        pipelineMsgRef.current = cached.pipelineMsg
+        assistantMsgIdRef.current = cached.assistantMsgId
+        pipelineMsgIdRef.current = cached.pipelineMsgId
+        setAppState(data.status === 'running' ? 'analyzing' : 'clarifying')
+        // 清空缓冲区：快照已包含切换前的全部内容，缓冲事件会与之重叠导致叠加
+        bufferedSseEventsRef.current = []
+        // running 和 clarifying 会话都恢复实时事件流（只订阅新事件，不重放历史）
+        // ReAct 路径中 session status 为 clarifying（非 running），但后端任务可能仍在运行
+        // 不覆盖 lastSeq：保持切换前的值，后端通过 after_seq 只发送新事件
+        if (data.status === 'running' || data.status === 'clarifying') {
+          resumeStream(sessionId, false)
+        }
+        return
+      }
+      // agent 已完成或无快照：从后端 chat_history 重建
+
+      // 管线进度快照（snapshot.layerTree 为内嵌的序列化 JSON 字符串，需二次解析）
+      let snapshot: PipelineSnapshot | null = null
+      if (data.pipeline_snapshot) {
+        try {
+          snapshot = JSON.parse(data.pipeline_snapshot)
+        } catch {
+          snapshot = null // 非法快照按无快照处理，走现有恢复逻辑
+        }
+      }
+
       // 先完全重置所有状态
       setMessages([])
-      setCurrentSessionId(sessionId)
       setAppState('report')
       // 按会话类型锁定模式：chat -> quick，analysis -> deep
       setMode(data.session_type === 'chat' ? 'quick' : 'deep')
       streamingReportRef.current = null
       pipelineMsgRef.current = null
 
-      const reportMsg: UIMessage | null = data.session_type !== 'chat'
+      // 运行中会话：恢复快照分层时间轴并进入 analyzing（轮询 hook 接手进度更新）
+      // nodeTimelines：pipeline_timelines 存在时恢复各节点结构化时序（后端已反序列化为 dict）
+      const restoredNodeTimelines = data.pipeline_timelines
+        ? deserializeNodeTimelines(data.pipeline_timelines)
+        : undefined
+      const runningPipelineMsg: UIMessage | null =
+        data.status === 'running' && snapshot
+          ? {
+              id: genId(),
+              type: 'pipeline',
+              content: '',
+              completedNodes: [],
+              currentNode: snapshot.currentNodeId,
+              nodeOutputs: {},
+              progress: snapshot.progress,
+              startedAt: Date.now(),
+              layerTree: deserializeLayerTree(snapshot.layerTree),
+              ...(restoredNodeTimelines ? { nodeTimelines: restoredNodeTimelines } : {}),
+            }
+          : null
+      if (runningPipelineMsg) {
+        pipelineMsgRef.current = runningPipelineMsg
+      }
+
+      // 已完成会话（有快照）：报告消息 + 静态完成时间轴（时间轴插在报告消息之前）
+      const pipelineDoneMsg: UIMessage | null =
+        data.status === 'completed' && snapshot && data.session_type !== 'chat'
+          ? {
+              id: genId(),
+              type: 'pipeline',
+              content: '',
+              completedNodes: [],
+              currentNode: '',
+              nodeOutputs: {},
+              progress: 1,
+              layerTree: deserializeLayerTree(snapshot.layerTree),
+              ...(restoredNodeTimelines ? { nodeTimelines: restoredNodeTimelines } : {}),
+            }
+          : null
+
+      const reportMsg: UIMessage | null = (data.status === 'completed' || data.status === 'failed') && data.session_type !== 'chat'
         ? {
             id: genId(),
             type: 'report',
@@ -162,6 +389,7 @@ export default function App() {
         if (h.role === 'user') {
           newMessages.push({ id: genId(), type: 'user', content: h.content })
           if (reportMsg && !reportInserted) {
+            if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
             newMessages.push(reportMsg)
             reportInserted = true
           }
@@ -171,16 +399,72 @@ export default function App() {
             type: 'chat',
             content: '',
             chatResponse: h.content,
-            // 历史恢复：从 chat_history.thinking + tool_calls 重建 agentTimeline
-            // （思考在前、工具调用在后近似还原；搜索类工具不还原为 tool_call item）
-            agentTimeline: buildTimelineFromHistory(h.thinking, h.tool_calls),
+            // 历史恢复：优先结构化 agentTimeline（防御式反序列化）；
+            // 旧数据无该字段时回退 thinking + tool_calls 拍平近似还原
+            // （思考在前、工具调用在后；搜索类工具不还原为 tool_call item）
+            agentTimeline: Array.isArray(h.agentTimeline)
+              ? deserializeTimeline(h.agentTimeline)
+              : buildTimelineFromHistory(h.thinking, h.tool_calls),
           })
         }
       }
       if (reportMsg && !reportInserted) {
+        if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
         newMessages.push(reportMsg)
+      } else if (!reportMsg && pipelineDoneMsg) {
+        newMessages.push(pipelineDoneMsg)
       }
-      setMessages(newMessages)
+      // 运行中管线消息追加在 chat_history 之后（管线正在跑，无报告）
+      if (runningPipelineMsg) {
+        newMessages.push(runningPipelineMsg)
+        setAppState('analyzing')
+      } else if (data.status === 'clarifying') {
+        // 澄清阶段：显示聊天界面，允许用户继续对话
+        setAppState('clarifying')
+      } else if (data.status === 'interrupted') {
+        // 中断态：展示已落库的半截回复，进入可追问状态（delta spec Task 5.5）
+        setAppState('clarifying')
+        // 清除最后一条助手消息的 streaming 状态（避免无限转圈）
+        const lastChat = [...newMessages].reverse().find(m => m.type === 'chat')
+        if (lastChat) {
+          lastChat.streaming = false
+        }
+      }
+      // 重置 SSE 消息 ID ref：让后台 SSE 闭包检测到 ID 失效，
+    // 为新重建的消息分配新 ID，确保后续事件能正确渲染
+    assistantMsgIdRef.current = null
+    pipelineMsgIdRef.current = null
+    // 如果有恢复的运行中管线，设置 pipelineMsgIdRef 以便 SSE 事件能正确更新
+    if (runningPipelineMsg) {
+      pipelineMsgIdRef.current = runningPipelineMsg.id
+      pipelineMsgRef.current = runningPipelineMsg
+    }
+    // 从重建的消息列表中找到最后一条 chat 消息的 ID，
+    // 让后台 SSE 的 thinking/tool_call 事件能更新到这条已有消息，而不是创建新消息
+    const lastChatMsg = [...newMessages].reverse().find(m => m.type === 'chat')
+    if (lastChatMsg) {
+      assistantMsgIdRef.current = lastChatMsg.id
+    }
+    // 如果重建的消息列表中有 pipeline 类型的消息（已完成管线快照），同步 ref
+    if (pipelineDoneMsg && !runningPipelineMsg) {
+      pipelineMsgIdRef.current = pipelineDoneMsg.id
+      pipelineMsgRef.current = pipelineDoneMsg
+    }
+    setMessages(newMessages)
+    // 清空缓冲区：消息已从 chat_history 重建，缓冲事件会与之重叠导致叠加
+    bufferedSseEventsRef.current = []
+
+    // 恢复事件流（delta spec Task 5.2/5.4）
+    // 消息已从 chat_history 重建，恢复流时用后端 last_seq 跳过历史重放，
+    // 只订阅实时事件。避免重放历史事件与重建消息重叠导致重复叠加。
+    // running 和 clarifying 都恢复：ReAct 路径 status 为 clarifying 但任务可能仍在运行
+    if (data.status === 'running' || data.status === 'clarifying') {
+      const streamState = getStreamState(sessionId)
+      // 用后端返回的 last_seq 作为 after_seq，只接收新事件
+      streamState.lastSeq = data.last_seq ?? 0
+      resumeStream(sessionId, false)
+    }
+    // interrupted/completed/failed 不恢复流（无活跃任务或已终态）
     } catch (e) {
       console.error('Failed to load session:', e)
     }
@@ -188,12 +472,30 @@ export default function App() {
 
   const deleteSession = async (sessionId: string) => {
     try {
+      // 先取消后端活跃任务（delta spec Task 5.3：删除会话时取消生成任务）
+      // 后端 DELETE 端点也会 cancel，但显式调用确保取消
+      try {
+        await fetch(`/api/sessions/${sessionId}/cancel`, { method: 'POST' })
+      } catch {
+        // 忽略取消失败（可能无活跃任务），继续删除
+      }
+      // 断开本地 SSE 订阅并清理 streamRegistry（delta spec Task 5.3）
+      const state = streamRegistryRef.current.get(sessionId)
+      if (state?.abort) {
+        state.abort.abort()
+      }
+      streamRegistryRef.current.delete(sessionId)
+      sessionCacheRef.current.delete(sessionId)
       await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
       setSessions(prev => prev.filter(s => s.session_id !== sessionId))
       if (currentSessionId === sessionId) {
-        abortStreaming()
+        disconnectSubscription()
         setCurrentSessionId(null)
         streamingReportRef.current = null
+        pipelineMsgRef.current = null
+        assistantMsgIdRef.current = null
+        pipelineMsgIdRef.current = null
+        bufferedSseEventsRef.current = []
         setMessages([])
         setAppState('empty')
       }
@@ -216,10 +518,29 @@ export default function App() {
   }
 
   const newAnalysis = () => {
-    abortStreaming()
+    // 断开当前会话的本地 SSE 订阅（不调后端 cancel，保留 streamStates）
+    // delta spec Task 5.3：新建分析仅断开本地订阅，后台任务继续运行
+    disconnectSubscription()
+
+    // 保存当前会话的 messages 快照：切回时若 agent 仍在生成则从快照恢复
+    const curId = currentSessionIdRef.current
+    if (curId && messagesRef.current.length > 0) {
+      sessionCacheRef.current.set(curId, {
+        messages: messagesRef.current,
+        assistantMsgId: assistantMsgIdRef.current,
+        pipelineMsgId: pipelineMsgIdRef.current,
+        pipelineMsg: pipelineMsgRef.current,
+        streamingReport: streamingReportRef.current,
+      })
+    }
+
     setCurrentSessionId(null)
     streamingReportRef.current = null
     pipelineMsgRef.current = null
+    assistantMsgIdRef.current = null
+    pipelineMsgIdRef.current = null
+    // 清空缓冲区，避免旧会话的缓冲事件污染新分析
+    bufferedSseEventsRef.current = []
     setMessages([])
     setAppState('empty')
   }
@@ -236,6 +557,16 @@ export default function App() {
       setShowApiKeyInput(true)
       return
     }
+
+    // 拦截：当前会话正在运行时不允许提交新消息（delta spec Task 6.2）
+    if (sessionId && isSessionRunning(sessionId)) {
+      setWarningMessage('该会话正在生成中，可停止后再发')
+      setTimeout(() => setWarningMessage(null), 3000)
+      return
+    }
+
+    // 开始新分析前中断旧 SSE 流，防止资源泄漏
+    abortStreaming()
 
     // 首次进入聊天模式
     if (appState === 'empty') {
@@ -257,8 +588,9 @@ export default function App() {
     setMessages(prev => [...prev, userMsg])
 
     // 流式处理 SSE 事件
-    let assistantMsgId: string | null = null
-    let pipelineMsgId: string | null = null
+    // 每轮重置消息 ID ref，确保会话切换后新事件能正确更新重建的消息
+    assistantMsgIdRef.current = null
+    pipelineMsgIdRef.current = null
     // 每轮重置 pipeline ref，避免上一轮分析 pipeline 消息污染本轮澄清对话
     pipelineMsgRef.current = null
 
@@ -272,8 +604,9 @@ export default function App() {
         currentNode: '',
         nodeOutputs: {},
         progress: 0,
+        startedAt: Date.now(),
       }
-      pipelineMsgId = pm.id
+      pipelineMsgIdRef.current = pm.id
       pipelineMsgRef.current = pm
       setMessages(prev => [...prev, pm])
       setAppState('analyzing')
@@ -284,9 +617,9 @@ export default function App() {
     // 澄清/解析阶段（search_stock / web_search / thinking）走对话流，不触发管线 UI；
     // 仅 run_deep_analysis 才调用 ensurePipelineMsg 进入管线 UI（ADR-0017）。
     const ensureAssistantMsg = (): string => {
-      if (assistantMsgId) return assistantMsgId
+      if (assistantMsgIdRef.current) return assistantMsgIdRef.current
       const newId = genId()
-      assistantMsgId = newId
+      assistantMsgIdRef.current = newId
       setMessages(prev => [...prev, {
         id: newId,
         type: 'chat',
@@ -316,6 +649,20 @@ export default function App() {
         signal: abortRef.current.signal,
       })
 
+      // 409 session_busy：后端检测到该会话已有活跃任务（delta spec Task 6.2）
+      if (!resp.ok) {
+        if (resp.status === 409) {
+          try {
+            const errData = await resp.json()
+            setWarningMessage(errData.message || '该会话正在生成中，可停止后再发')
+          } catch {
+            setWarningMessage('该会话正在生成中，可停止后再发')
+          }
+          setTimeout(() => setWarningMessage(null), 3000)
+        }
+        return
+      }
+
       const reader = resp.body?.getReader()
       if (!reader) return
 
@@ -335,9 +682,34 @@ export default function App() {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
 
+            // seq 去重：跳过 seq <= lastSeq 的旧事件
+            if (streamingSessionIdRef.current) {
+              const seq = (event as SSEEvent & { seq?: number }).seq
+              if (seq !== undefined) {
+                const ss = getStreamState(streamingSessionIdRef.current)
+                if (seq <= ss.lastSeq) continue
+                ss.lastSeq = seq
+              }
+            }
+
             if (event.type === 'session_created') {
+              streamingSessionIdRef.current = event.session_id
               setCurrentSessionId(event.session_id)
+              // 将 abort controller 存入 per-session 流状态（delta spec Task 5.4）
+              const streamState = getStreamState(event.session_id)
+              streamState.abort = abortRef.current
               loadSessions()
+              continue
+            }
+
+            // 会话隔离：如果当前视图不是 SSE 流的会话，事件存入缓冲区
+            // 切回原会话时 replayBufferedEvents() 回放，确保状态转换（搜索结果、管线创建等）不丢失。
+            // 纯增量内容事件（chat_token, thinking_token, report_chunk）不缓冲——这些在切回时从后端重建。
+            if (streamingSessionIdRef.current && streamingSessionIdRef.current !== currentSessionIdRef.current) {
+              const skipTypes = new Set(['chat_token', 'thinking_token', 'report_chunk', 'report_ready'])
+              if (!skipTypes.has(event.type)) {
+                bufferedSseEventsRef.current.push(event)
+              }
               continue
             }
 
@@ -352,7 +724,7 @@ export default function App() {
                 nodeOutputs: {},
                 progress: 0,
               }
-              pipelineMsgId = pipelineMsg.id
+              pipelineMsgIdRef.current = pipelineMsg.id
               pipelineMsgRef.current = pipelineMsg
               setMessages(prev => [...prev, pipelineMsg])
               continue
@@ -360,9 +732,9 @@ export default function App() {
 
             if (event.type === 'chat_token') {
               // Agent 的文本回复（澄清/追问）
-              if (!assistantMsgId) {
+              if (!assistantMsgIdRef.current) {
                 const newAssistantId = genId()
-                assistantMsgId = newAssistantId
+                assistantMsgIdRef.current = newAssistantId
                 setMessages(prev => [...prev, {
                   id: newAssistantId,
                   type: 'chat',
@@ -371,10 +743,10 @@ export default function App() {
                   streaming: true,
                 }])
               } else {
+                // 复用 applyChatStreamEvent：累加 chatResponse 同时收口末尾 thinking item，
+                // 避免思考横幅在 agent 回复期间持续显示"思考中"（与 quickChat 路径行为一致）
                 setMessages(prev => prev.map(m =>
-                  m.id === assistantMsgId
-                    ? { ...m, chatResponse: (m.chatResponse || '') + event.token }
-                    : m
+                  m.id === assistantMsgIdRef.current ? applyChatStreamEvent(m, event) : m
                 ))
               }
               continue
@@ -382,9 +754,9 @@ export default function App() {
 
             if (event.type === 'awaiting_input') {
               setAppState('clarifying')
-              if (assistantMsgId) {
+              if (assistantMsgIdRef.current) {
                 setMessages(prev => prev.map(m =>
-                  m.id === assistantMsgId ? { ...m, streaming: false } : m
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
               continue
@@ -457,6 +829,7 @@ export default function App() {
             if (event.type === 'parsing' ||
                 event.type === 'resolved' ||
                 event.type === 'node_start' ||
+                event.type === 'node_timing' ||
                 event.type === 'node_complete') {
               const pm = ensurePipelineMsg('深度分析进行中...')
               handleSSEEvent(event, pm)
@@ -468,11 +841,41 @@ export default function App() {
               continue
             }
 
-            if (event.type === 'done') {
-              // 流正常结束
-              if (assistantMsgId) {
+            if (event.type === 'interrupted') {
+              // 中断终态事件：清除 streaming 状态，回到可追问态（delta spec Task 5.5）
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              setAppState('clarifying')
+              if (assistantMsgIdRef.current) {
                 setMessages(prev => prev.map(m =>
-                  m.id === assistantMsgId ? { ...m, streaming: false } : m
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+                ))
+              }
+              if (pipelineMsgRef.current) {
+                updateMessage(pipelineMsgIdRef.current || pipelineMsgRef.current.id, { content: '输出已中断，可追问继续' })
+              }
+              continue
+            }
+
+            if (event.type === 'done') {
+              // 流正常结束：清理 SSE 会话标记
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              // agent 已完成，数据已持久化到后端，清除前端快照缓存
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              // 流正常结束
+              if (assistantMsgIdRef.current) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
               continue
@@ -495,9 +898,21 @@ export default function App() {
           }
         }
       }
+      // 流结束但未收到终态事件：清理本地状态（防御性，避免 isSessionRunning 误判）
+      if (streamingSessionIdRef.current) {
+        const finishedSessionId = streamingSessionIdRef.current
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+        handleStreamTerminal(finishedSessionId)
+      }
     } catch (e) {
+      // 清理 SSE 会话标记
+      const failedSessionId = streamingSessionIdRef.current
+      streamingSessionIdRef.current = null
+      abortRef.current = null
       // 切换会话/新建分析主动中断，不是错误，静默退出
       if (e instanceof Error && e.name === 'AbortError') return
+      handleStreamTerminal(failedSessionId)
       console.error('SSE error:', e)
       setMessages(prev => [...prev, {
         id: genId(),
@@ -531,11 +946,20 @@ export default function App() {
         updateMessage(pipelineMsg.id, {
           currentNode: event.node_id,
           content: `${event.layer}: ${event.desc}...`,
+          layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
+        })
+        break
+
+      case 'node_timing':
+        // 节点真实耗时（node_end 到达时下发），覆盖 updates 到达时刻的近似值
+        updateMessage(pipelineMsg.id, {
+          layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
         })
         break
 
       case 'node_complete':
         updateMessage(pipelineMsg.id, {
+          ...applyPipelineNodeComplete(pipelineMsg, event.node_id),
           completedNodes: event.completed,
           currentNode: '',
           progress: event.progress,
@@ -543,6 +967,7 @@ export default function App() {
             ...(pipelineMsg.nodeOutputs || {}),
             [event.node_id]: event.output,
           },
+          layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
           content: `${event.layer}: ${event.desc} ✓`,
         })
         break
@@ -574,6 +999,8 @@ export default function App() {
       }
 
       case 'report_ready': {
+        // 管线完成：记录本次总耗时用于 ETA 历史中位数预估
+        if (event.duration_ms > 0) recordDuration(event.duration_ms)
         const webSources = event.web_sources || []
         if (streamingReportRef.current) {
           updateMessage(streamingReportRef.current.id, {
@@ -674,8 +1101,650 @@ export default function App() {
     }))
   }
 
+  // 回放缓冲的 SSE 事件：会话切换期间被跳过的事件存入缓冲区，
+  // 切回时逐条回放，确保状态转换（搜索结果、管线创建、节点完成等）不丢失。
+  const replayBufferedEvents = useCallback(() => {
+    const events = bufferedSseEventsRef.current
+    if (!events.length) return
+
+    for (const event of events) {
+      // 跳过已处理的事件类型
+      if (event.type === 'session_created') continue
+
+      // 管线创建/状态事件
+      if (event.type === 'analysis_start') {
+        setAppState('analyzing')
+        if (!pipelineMsgRef.current) {
+          const pm: UIMessage = {
+            id: genId(),
+            type: 'pipeline',
+            content: `开始分析 ${event.stock_name} (${event.stock_code})`,
+            completedNodes: [],
+            currentNode: '',
+            nodeOutputs: {},
+            progress: 0,
+            startedAt: Date.now(),
+          }
+          pipelineMsgIdRef.current = pm.id
+          pipelineMsgRef.current = pm
+          setMessages(prev => [...prev, pm])
+        } else {
+          handleSSEEvent(event, pipelineMsgRef.current)
+        }
+        continue
+      }
+
+      // 管线节点/进度事件
+      if (event.type === 'parsing' || event.type === 'resolved' ||
+          event.type === 'node_start' || event.type === 'node_timing' || event.type === 'node_complete') {
+        if (!pipelineMsgRef.current) {
+          const pm: UIMessage = {
+            id: genId(),
+            type: 'pipeline',
+            content: '深度分析进行中...',
+            completedNodes: [],
+            currentNode: '',
+            nodeOutputs: {},
+            progress: 0,
+            startedAt: Date.now(),
+          }
+          pipelineMsgIdRef.current = pm.id
+          pipelineMsgRef.current = pm
+          setMessages(prev => [...prev, pm])
+        }
+        handleSSEEvent(event, pipelineMsgRef.current)
+        continue
+      }
+
+      // 报告流事件
+      if (event.type === 'report_chunk' || event.type === 'report_ready') {
+        if (!pipelineMsgRef.current) {
+          const pm: UIMessage = {
+            id: genId(),
+            type: 'pipeline',
+            content: '',
+            completedNodes: [],
+            currentNode: '',
+            nodeOutputs: {},
+            progress: 0,
+            startedAt: Date.now(),
+          }
+          pipelineMsgIdRef.current = pm.id
+          pipelineMsgRef.current = pm
+          setMessages(prev => [...prev, pm])
+        }
+        handleSSEEvent(event, pipelineMsgRef.current)
+        continue
+      }
+
+      // 对话流事件：tool_call/tool_result/search_start/search_result 等
+      if (event.type === 'tool_call') {
+        if (event.name === 'run_deep_analysis') {
+          // 触发管线创建
+          if (!pipelineMsgRef.current) {
+            const pm: UIMessage = {
+              id: genId(),
+              type: 'pipeline',
+              content: '开始深度分析...',
+              completedNodes: [],
+              currentNode: '',
+              nodeOutputs: {},
+              progress: 0,
+              startedAt: Date.now(),
+            }
+            pipelineMsgIdRef.current = pm.id
+            pipelineMsgRef.current = pm
+            setMessages(prev => [...prev, pm])
+          }
+        } else {
+          // 搜索类工具调用 → 对话流
+          if (!assistantMsgIdRef.current) {
+            const newId = genId()
+            assistantMsgIdRef.current = newId
+            setMessages(prev => [...prev, {
+              id: newId,
+              type: 'chat',
+              content: '',
+              chatResponse: '',
+              streaming: true,
+            }])
+          }
+          handleChatStreamEvent(event, assistantMsgIdRef.current)
+        }
+        continue
+      }
+
+      if (event.type === 'tool_result') {
+        if (event.name === 'run_deep_analysis') {
+          // 忽略：管线已创建
+        } else {
+          if (!assistantMsgIdRef.current) {
+            const newId = genId()
+            assistantMsgIdRef.current = newId
+            setMessages(prev => [...prev, {
+              id: newId,
+              type: 'chat',
+              content: '',
+              chatResponse: '',
+              streaming: true,
+            }])
+          }
+          handleChatStreamEvent(event, assistantMsgIdRef.current)
+        }
+        continue
+      }
+
+      if (event.type === 'search_start' || event.type === 'search_result' || event.type === 'search_error') {
+        if (!assistantMsgIdRef.current) {
+          const newId = genId()
+          assistantMsgIdRef.current = newId
+          setMessages(prev => [...prev, {
+            id: newId,
+            type: 'chat',
+            content: '',
+            chatResponse: '',
+            streaming: true,
+          }])
+        }
+        handleChatStreamEvent(event, assistantMsgIdRef.current)
+        continue
+      }
+
+      if (event.type === 'stock_resolved') {
+        if (pipelineMsgRef.current) {
+          updateMessage(pipelineMsgRef.current.id, { content: `已识别：${event.stock_name} (${event.stock_code})` })
+        } else if (assistantMsgIdRef.current) {
+          handleChatStreamEvent(
+            { type: 'tool_result', name: 'search_stock', result: `已识别：${event.stock_name} (${event.stock_code})`, timestamp: '' } as SSEEvent,
+            assistantMsgIdRef.current,
+          )
+        }
+        continue
+      }
+
+      if (event.type === 'awaiting_input') {
+        setAppState('clarifying')
+        if (assistantMsgIdRef.current) {
+          setMessages(prev => prev.map(m =>
+            m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+          ))
+        }
+        continue
+      }
+
+      if (event.type === 'interrupted') {
+        // 中断终态事件：清除 streaming 状态（delta spec Task 5.5）
+        const finishedSessionId = streamingSessionIdRef.current
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+        if (finishedSessionId) {
+          sessionCacheRef.current.delete(finishedSessionId)
+        }
+        handleStreamTerminal(finishedSessionId)
+        setAppState('clarifying')
+        if (assistantMsgIdRef.current) {
+          setMessages(prev => prev.map(m =>
+            m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+          ))
+        }
+        if (pipelineMsgRef.current) {
+          updateMessage(pipelineMsgRef.current.id, { content: '输出已中断，可追问继续' })
+        }
+        continue
+      }
+
+      if (event.type === 'done') {
+        const finishedSessionId = streamingSessionIdRef.current
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+        // agent 已完成，数据已持久化到后端，清除前端快照缓存
+        if (finishedSessionId) {
+          sessionCacheRef.current.delete(finishedSessionId)
+        }
+        handleStreamTerminal(finishedSessionId)
+        if (assistantMsgIdRef.current) {
+          setMessages(prev => prev.map(m =>
+            m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+          ))
+        }
+        continue
+      }
+
+      if (event.type === 'error') {
+        if (pipelineMsgRef.current) {
+          handleSSEEvent(event, pipelineMsgRef.current)
+        } else {
+          setMessages(prev => [...prev, {
+            id: genId(),
+            type: 'error',
+            content: `错误: ${event.message}`,
+          }])
+        }
+        continue
+      }
+
+      // thinking_token / thinking_replace / thinking_to_answer / chat_token 等
+      // 纯增量内容事件已在缓冲区过滤（skipTypes），此处无需处理
+    }
+
+    // 清空缓冲区
+    bufferedSseEventsRef.current = []
+  }, [handleStreamTerminal])
+
+  // ── 恢复事件流（delta spec Task 5.2）──
+  // 切回 running/clarifying 会话时经 GET /api/sessions/{id}/stream 恢复事件流。
+  // 重放事件与实时事件经同一 handleSSEEvent/handleChatStreamEvent 路径消费，
+  // session_created/analysis_start 等做幂等处理。
+  // skipIncremental=true 时跳过增量内容事件（chat_token/thinking_token 等），
+  // 用于已从缓存恢复内容的场景，避免重放导致重复。
+  const resumeStream = async (sessionId: string, skipIncremental: boolean) => {
+    const state = getStreamState(sessionId)
+    const abortCtrl = new AbortController()
+    abortRef.current = abortCtrl
+    state.abort = abortCtrl
+    streamingSessionIdRef.current = sessionId
+
+    // 幂等创建管线消息（已存在则复用）
+    const ensurePipelineMsg = (content: string): UIMessage => {
+      if (pipelineMsgRef.current) return pipelineMsgRef.current
+      const pm: UIMessage = {
+        id: genId(),
+        type: 'pipeline',
+        content,
+        completedNodes: [],
+        currentNode: '',
+        nodeOutputs: {},
+        progress: 0,
+        startedAt: Date.now(),
+      }
+      pipelineMsgIdRef.current = pm.id
+      pipelineMsgRef.current = pm
+      setMessages(prev => [...prev, pm])
+      setAppState('analyzing')
+      return pm
+    }
+
+    // 幂等创建助手消息（已存在则复用）
+    const ensureAssistantMsg = (): string => {
+      if (assistantMsgIdRef.current) return assistantMsgIdRef.current
+      const newId = genId()
+      assistantMsgIdRef.current = newId
+      setMessages(prev => [...prev, {
+        id: newId,
+        type: 'chat',
+        content: '',
+        chatResponse: '',
+        streaming: true,
+      }])
+      return newId
+    }
+
+    try {
+      const resp = await fetch(`/api/sessions/${sessionId}/stream?after_seq=${state.lastSeq}`, {
+        signal: abortCtrl.signal,
+      })
+      if (!resp.ok) return
+      const reader = resp.body?.getReader()
+      if (!reader) return
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const event: SSEEvent = JSON.parse(line.slice(6))
+
+            // seq 去重：跳过 seq <= lastSeq 的旧事件
+            const seq = (event as SSEEvent & { seq?: number }).seq
+            if (seq !== undefined) {
+              if (seq <= state.lastSeq) continue
+              state.lastSeq = seq
+            }
+
+            // 幂等：session_created 对已激活会话为 no-op
+            if (event.type === 'session_created') continue
+
+            // 中断终态事件：清除 streaming 状态，回到可操作态
+            if (event.type === 'interrupted') {
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              handleStreamTerminal(sessionId)
+              setAppState('clarifying')
+              if (assistantMsgIdRef.current) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+                ))
+              }
+              if (pipelineMsgRef.current) {
+                updateMessage(pipelineMsgRef.current.id, { content: '输出已中断，可追问继续' })
+              }
+              continue
+            }
+
+            // 会话隔离：非当前视图事件存入缓冲区
+            if (streamingSessionIdRef.current && streamingSessionIdRef.current !== currentSessionIdRef.current) {
+              const skipTypes = new Set(['chat_token', 'thinking_token', 'report_chunk', 'report_ready'])
+              if (!skipTypes.has(event.type)) {
+                bufferedSseEventsRef.current.push(event)
+              }
+              continue
+            }
+
+            // 跳过增量内容事件（已从缓存恢复，避免重放重复）
+            if (skipIncremental) {
+              const incrementalTypes = new Set(['chat_token', 'thinking_token', 'thinking_replace', 'thinking_to_answer', 'report_chunk'])
+              if (incrementalTypes.has(event.type)) continue
+            }
+
+            // 以下事件路由与 startAnalysis 保持一致
+
+            if (event.type === 'analysis_start') {
+              setAppState('analyzing')
+              // 幂等：已存在管线消息则不重复创建
+              if (!pipelineMsgRef.current) {
+                const pm: UIMessage = {
+                  id: genId(),
+                  type: 'pipeline',
+                  content: `开始分析 ${event.stock_name} (${event.stock_code})`,
+                  completedNodes: [],
+                  currentNode: '',
+                  nodeOutputs: {},
+                  progress: 0,
+                }
+                pipelineMsgIdRef.current = pm.id
+                pipelineMsgRef.current = pm
+                setMessages(prev => [...prev, pm])
+              }
+              continue
+            }
+
+            if (event.type === 'chat_token') {
+              if (!assistantMsgIdRef.current) {
+                const newAssistantId = genId()
+                assistantMsgIdRef.current = newAssistantId
+                setMessages(prev => [...prev, {
+                  id: newAssistantId,
+                  type: 'chat',
+                  content: '',
+                  chatResponse: event.token,
+                  streaming: true,
+                }])
+              } else {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? applyChatStreamEvent(m, event) : m
+                ))
+              }
+              continue
+            }
+
+            if (event.type === 'awaiting_input') {
+              setAppState('clarifying')
+              if (assistantMsgIdRef.current) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+                ))
+              }
+              continue
+            }
+
+            if (event.type === 'tool_call') {
+              if (event.name === 'run_deep_analysis') {
+                ensurePipelineMsg('开始深度分析...')
+              } else {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'search_start' || event.type === 'search_result' || event.type === 'search_error') {
+              handleChatStreamEvent(event, ensureAssistantMsg())
+              continue
+            }
+
+            if (event.type === 'tool_result') {
+              if (event.name !== 'run_deep_analysis') {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'stock_resolved') {
+              if (pipelineMsgRef.current) {
+                updateMessage(pipelineMsgRef.current.id, { content: `已识别：${event.stock_name} (${event.stock_code})` })
+              } else {
+                handleChatStreamEvent(
+                  { type: 'tool_result', name: 'search_stock', result: `已识别：${event.stock_name} (${event.stock_code})`, timestamp: '' } as SSEEvent,
+                  ensureAssistantMsg(),
+                )
+              }
+              continue
+            }
+
+            if (event.type === 'thinking_token') {
+              if (pipelineMsgRef.current) {
+                handleSSEEvent(event, pipelineMsgRef.current)
+              } else {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'thinking_replace') {
+              if (!pipelineMsgRef.current) {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'thinking_to_answer') {
+              if (!pipelineMsgRef.current) {
+                handleChatStreamEvent(event, ensureAssistantMsg())
+              }
+              continue
+            }
+
+            if (event.type === 'parsing' ||
+                event.type === 'resolved' ||
+                event.type === 'node_start' ||
+                event.type === 'node_timing' ||
+                event.type === 'node_complete') {
+              const pm = ensurePipelineMsg('深度分析进行中...')
+              handleSSEEvent(event, pm)
+              continue
+            }
+
+            if (event.type === 'report_chunk' || event.type === 'report_ready') {
+              handleSSEEvent(event, pipelineMsgRef.current || { id: genId(), type: 'pipeline', content: '' } as UIMessage)
+              continue
+            }
+
+            if (event.type === 'done') {
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              if (assistantMsgIdRef.current) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+                ))
+              }
+              continue
+            }
+
+            if (event.type === 'error') {
+              if (pipelineMsgRef.current) {
+                handleSSEEvent(event, pipelineMsgRef.current)
+              } else {
+                setMessages(prev => [...prev, {
+                  id: genId(),
+                  type: 'error',
+                  content: `错误: ${event.message}`,
+                }])
+              }
+              continue
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
+      // 流结束但未收到终态事件：清理本地状态（防御性，避免 isSessionRunning 误判）
+      if (streamingSessionIdRef.current) {
+        const finishedSessionId = streamingSessionIdRef.current
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+        handleStreamTerminal(finishedSessionId)
+      }
+    } catch (e) {
+      const failedSessionId = streamingSessionIdRef.current
+      streamingSessionIdRef.current = null
+      abortRef.current = null
+      if (e instanceof Error && e.name === 'AbortError') return
+      handleStreamTerminal(failedSessionId)
+      console.error('Resume stream error:', e)
+    }
+  }
+
+  // 运行中会话快照轮询（resume-pipeline-across-sessions Task 5）：
+  // 切回 running 会话进入 analyzing 且无活跃 SSE（abortRef 为空=仅恢复态、非实时订阅）时，
+  // 每 2s 拉取会话详情刷新分层时间轴；completed 则走 selectSession 完整恢复报告并自然停止；
+  // failed 仅停止轮询（MVP 不展示失败态）。
+  // 超时保护（Final Review Fix 2）：超过 MAX_POLLING_MS（5 分钟）后停止轮询并提示
+  // 「管线可能已中断」，避免 ReAct 路径 status 永久 running 时轮询无限泄漏。
+  // 前提不变量：abortRef 作为「SSE 在线」信号，依赖「analyzing 态必然发生在 SSE 存活期间」；
+  // 用户在恢复态发起新分析时 startAnalysis 会设置 abortRef，但可能无 setState 触发 effect 重跑，
+  // 因此 interval 回调内必须复查 abortRef，避免 SSE 与轮询双写消息、以及轮询误调 selectSession 掐断新 SSE。
+  useEffect(() => {
+    if (appState !== 'analyzing' || !currentSessionId) return
+    if (abortRef.current) return // 有活跃 SSE 订阅，进度由事件流驱动，无需轮询
+    pollStartRef.current = Date.now() // 记录轮询起始时间（超时保护基准）
+    const timer = setInterval(async () => {
+      // 复查 SSE 在线信号：用户在恢复态发起新分析（startAnalysis 已设置 abortRef）时轮询立即让位，
+      // 等 effect 因状态变化重跑后 interval 自然清理
+      if (abortRef.current) return
+      // 超时保护：超过 MAX_POLLING_MS 则停止轮询并提示（ReAct 路径 status 可能永久 running）
+      if (pollStartRef.current && Date.now() - pollStartRef.current >= MAX_POLLING_MS) {
+        clearInterval(timer)
+        const pm = pipelineMsgRef.current
+        if (pm) {
+          // 尝试最后一次获取会话状态，检查是否有 failure_reason
+          try {
+            const finalResp = await fetch(`/api/sessions/${currentSessionId}`)
+            if (finalResp.ok) {
+              const finalData: SessionDetail = await finalResp.json()
+              if (finalData.failure_reason) {
+                updateMessage(pm.id, { content: `分析失败：${finalData.failure_reason}` })
+                setAppState('clarifying')
+                return
+              }
+            }
+          } catch {
+            // 忽略，回退到默认提示
+          }
+          updateMessage(pm.id, { content: '管线可能已中断，请刷新或重新发起' })
+        }
+        return
+      }
+      try {
+        const resp = await fetch(`/api/sessions/${currentSessionId}`)
+        if (!resp.ok) return
+        const data: SessionDetail = await resp.json()
+        if (data.status === 'running' && data.pipeline_snapshot) {
+          let snap: PipelineSnapshot | null = null
+          try {
+            snap = JSON.parse(data.pipeline_snapshot)
+          } catch {
+            snap = null
+          }
+          const pm = pipelineMsgRef.current
+          if (snap && pm) {
+            const updated: UIMessage = {
+              ...pm,
+              layerTree: deserializeLayerTree(snap.layerTree),
+              currentNode: snap.currentNodeId,
+              progress: snap.progress,
+            }
+            pipelineMsgRef.current = updated
+            updateMessage(pm.id, updated)
+          }
+          // running 但无快照（或快照解析失败）：本周期静默忽略，等下个周期重试
+        } else if (data.status === 'completed') {
+          // 后台管线完成：直接恢复报告 + 最终静态时间轴，不调 selectSession
+          // （避免递归切换 + 切换 async 窗口期旧 timer 残留导致强制跳转）
+          const pm = pipelineMsgRef.current
+          const finalSnap: PipelineSnapshot | null = data.pipeline_snapshot
+            ? (() => {
+                try { return JSON.parse(data.pipeline_snapshot) } catch { return null }
+              })()
+            : null
+          if (pm) {
+            const updated: UIMessage = {
+              ...pm,
+              layerTree: finalSnap ? deserializeLayerTree(finalSnap.layerTree) : pm.layerTree,
+              currentNode: '',
+              progress: 1,
+            }
+            pipelineMsgRef.current = updated
+            updateMessage(pm.id, updated)
+          }
+          // 报告消息追加（若后端有 report_markdown）
+          if (data.report_markdown) {
+            const reportMsg: UIMessage = {
+              id: genId(),
+              type: 'report',
+              content: '',
+              reportMarkdown: data.report_markdown,
+              chartData: data.chart_data || {},
+              stockName: data.stock_name,
+              durationMs: data.duration_ms,
+              sessionId: currentSessionId,
+            }
+            setMessages(prev => [...prev, reportMsg])
+          }
+          setAppState('report') // 切 report 后轮询 effect cleanup 自然停止
+          loadSessions()
+        } else if (data.status === 'failed') {
+          // 管线失败：展示中断原因，停止轮询
+          clearInterval(timer)
+          const pm = pipelineMsgRef.current
+          if (pm) {
+            const reason = data.failure_reason || '管线执行失败'
+            updateMessage(pm.id, { content: `分析失败：${reason}` })
+          }
+          setAppState('clarifying') // 回到可操作状态
+        }
+      } catch {
+        // 轮询失败静默，下个周期重试
+      }
+    }, 2000)
+    return () => {
+      clearInterval(timer)
+      pollStartRef.current = null // cleanup 重置，下次轮询重新计时
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appState, currentSessionId])
+
   // ── Streaming chat ──
   const quickChat = async (message: string) => {
+    // 拦截：当前会话正在运行时不允许提交新消息（delta spec Task 6.2）
+    if (currentSessionId && isSessionRunning(currentSessionId)) {
+      setWarningMessage('该会话正在生成中，可停止后再发')
+      setTimeout(() => setWarningMessage(null), 3000)
+      return
+    }
+
     // 首次从首页进入对话：切换到对话视图（与 startAnalysis 保持一致）
     if (appState === 'empty') {
       setAppState('clarifying')
@@ -713,6 +1782,20 @@ export default function App() {
         signal: abortRef.current.signal,
       })
 
+      // 409 session_busy：后端检测到该会话已有活跃任务（delta spec Task 6.2）
+      if (!resp.ok) {
+        if (resp.status === 409) {
+          try {
+            const errData = await resp.json()
+            setWarningMessage(errData.message || '该会话正在生成中，可停止后再发')
+          } catch {
+            setWarningMessage('该会话正在生成中，可停止后再发')
+          }
+          setTimeout(() => setWarningMessage(null), 3000)
+        }
+        return
+      }
+
       const reader = resp.body?.getReader()
       if (!reader) return
 
@@ -731,22 +1814,80 @@ export default function App() {
           if (!line.startsWith('data: ')) continue
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
+
+            // seq 去重：跳过 seq <= lastSeq 的旧事件
+            if (streamingSessionIdRef.current) {
+              const seq = (event as SSEEvent & { seq?: number }).seq
+              if (seq !== undefined) {
+                const ss = getStreamState(streamingSessionIdRef.current)
+                if (seq <= ss.lastSeq) continue
+                ss.lastSeq = seq
+              }
+            }
+
             // 对话流公共事件（thinking/tool/chat/error）统一走共享处理
             if (handleChatStreamEvent(event, chatId)) {
               continue
             }
-            // search_* 已由共享分支处理；此处仅处理 session_created
+            // search_* 已由共享分支处理；此处处理 session_created/terminal 事件
             if (event.type === 'session_created') {
+              streamingSessionIdRef.current = event.session_id
               setCurrentSessionId(event.session_id)
+              // 将 abort controller 存入 per-session 流状态（delta spec Task 5.4）
+              const streamState = getStreamState(event.session_id)
+              streamState.abort = abortRef.current
               loadSessions()
+              continue
+            }
+
+            // 中断终态事件：清除 streaming 状态（delta spec Task 5.5）
+            if (event.type === 'interrupted') {
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              setAppState('clarifying')
+              setMessages(prev => prev.map(m =>
+                m.id === chatId ? { ...m, streaming: false } : m
+              ))
+              continue
+            }
+
+            // 流正常结束：清理 SSE 会话标记
+            if (event.type === 'done') {
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              setMessages(prev => prev.map(m =>
+                m.id === chatId ? { ...m, streaming: false } : m
+              ))
+              continue
             }
           } catch {
             // Skip malformed lines
           }
         }
       }
+      // 流结束但未收到终态事件：清理本地状态（防御性，避免 isSessionRunning 误判）
+      if (streamingSessionIdRef.current) {
+        const finishedSessionId = streamingSessionIdRef.current
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+        handleStreamTerminal(finishedSessionId)
+      }
     } catch (e) {
+      const failedSessionId = streamingSessionIdRef.current
+      streamingSessionIdRef.current = null
+      abortRef.current = null
       if (e instanceof Error && e.name === 'AbortError') return
+      handleStreamTerminal(failedSessionId)
       setMessages(prev => prev.map(m =>
         m.id === chatId
           ? { ...m, type: 'error', content: `错误: ${e instanceof Error ? e.message : 'Unknown'}`, streaming: false }
@@ -781,6 +1922,17 @@ export default function App() {
   // ── Render ──
   const leftInset = sidebarOpen ? 256 : 48
 
+  // 计算正在运行的会话 ID 集合（status=running 或本地有活跃 abort controller）
+  const runningSessionIds = new Set<string>()
+  for (const s of sessions) {
+    if (s.status === 'running') runningSessionIds.add(s.session_id)
+  }
+  streamRegistryRef.current.forEach((state, sessionId) => {
+    if (state.abort && !state.abort.signal.aborted) {
+      runningSessionIds.add(sessionId)
+    }
+  })
+
   return (
     <>
       <Sidebar
@@ -792,6 +1944,7 @@ export default function App() {
         onNew={newAnalysis}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
+        runningSessionIds={runningSessionIds}
       />
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
         {appState === 'empty' ? (
@@ -827,9 +1980,11 @@ export default function App() {
             <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
               {messages
                 .filter(msg => {
-                  // 只有在实际分析过程中才显示 pipeline 消息
+                  // pipeline 消息渲染时机：运行中（analyzing）始终显示；
+                  // completed 会话恢复的静态完成时间轴（progress===1）随报告一并展示；
+                  // 其他情况（如历史会话无快照回退的空树）不显示
                   if (msg.type === 'pipeline') {
-                    return appState === 'analyzing';
+                    return appState === 'analyzing' || msg.progress === 1;
                   }
                   return true;
                 })
@@ -837,6 +1992,34 @@ export default function App() {
                   <MessageRenderer key={msg.id} msg={msg} />
                 ))}
             </div>
+
+            {/* 停止按钮 + 警告提示（流式输出时显示，delta spec Task 6.2/6.3） */}
+            {(appState === 'analyzing' || messages.some(m => m.streaming) || warningMessage) && (
+              <div
+                className="fixed right-0 z-40 flex flex-col items-center gap-2 px-4"
+                style={{ left: leftInset, bottom: '90px' }}
+              >
+                {warningMessage && (
+                  <div
+                    className="px-4 py-2 rounded-lg text-xs flex items-center gap-2"
+                    style={{ background: 'var(--status-warning-default)', color: 'white' }}
+                  >
+                    <i className="fas fa-exclamation-triangle"></i>
+                    {warningMessage}
+                  </div>
+                )}
+                {(appState === 'analyzing' || messages.some(m => m.streaming)) && currentSessionId && (
+                  <button
+                    onClick={stopGeneration}
+                    className="px-4 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-80"
+                    style={{ background: 'var(--status-error-default)', color: 'white' }}
+                  >
+                    <i className="fas fa-stop text-[10px]"></i>
+                    停止生成
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Fixed input at bottom */}
             <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} onNewAnalysis={newAnalysis} />
@@ -857,7 +2040,7 @@ export default function App() {
 }
 
 // ── Sidebar ──
-function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle }: {
+function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, runningSessionIds }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
@@ -866,6 +2049,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   onNew: () => void
   isOpen: boolean
   onToggle: () => void
+  runningSessionIds: Set<string>
 }) {
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -961,7 +2145,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
               ) : (
                 <>
                   <div
-                    className="text-sm truncate"
+                    className="text-sm truncate flex items-center gap-1.5"
                     style={{ color: 'var(--text-default)' }}
                     onDoubleClick={e => {
                       e.stopPropagation()
@@ -969,6 +2153,9 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                       setEditText(s.display_name)
                     }}
                   >
+                    {runningSessionIds.has(s.session_id) && (
+                      <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
+                    )}
                     {s.display_name}
                   </div>
                   <div className="text-[10px] flex items-center gap-2" style={{ color: 'var(--text-tertiary)' }}>
@@ -1358,7 +2545,10 @@ export function ToolCallBanner({ toolCalls, streaming, embedded = false }: { too
   const prevStreamingRef = useRef(streaming)
 
   useEffect(() => {
-    if (streaming) setExpanded(true)
+    // 与 ThinkingBanner 对称：流式（有 pending 工具）时展开实时看调用过程，
+    // 完成后自动折叠（深度模式 run_deep_analysis 使工具停留末尾 streaming 滞留 true，
+    // 但 done=true 无 pending 时 streaming 已转 false，此处随 streaming 变 false 折叠）
+    setExpanded(streaming)
     prevStreamingRef.current = streaming
   }, [streaming])
 
@@ -1448,48 +2638,32 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
   const progress = msg.progress || 0
   const outputs = msg.nodeOutputs || {}
 
-  // Determine stage status
-  const getStageStatus = (node: string) => {
-    // Check if this stage or any node in the same layer is completed
-    const layerMap: Record<string, string[]> = {
-      'check_cache': ['check_cache', 'fetch_data', 'validate_financials', 'compute_metrics'],
-      'technical_analyst': ['technical_analyst', 'verify_citations'],
-      'bull_r1': ['bull_r1', 'bear_r1', 'bull_r2', 'bear_r2', 'research_manager'],
-      'trader': ['trader'],
-      'aggressive_r1': ['aggressive_r1', 'conservative_r1', 'neutral_r1', 'aggressive_r2', 'conservative_r2', 'neutral_r2', 'risk_judge'],
-      'fund_manager': ['fund_manager', 'generate_report', 'generate_file'],
-    }
-    const layerNodes = layerMap[node] || [node]
-    const allDone = layerNodes.every(n => completed.includes(n))
-    const anyRunning = layerNodes.some(n => n === current)
-    if (allDone) return 'completed'
-    if (anyRunning) return 'running'
-    // Check if any earlier stage is still running
-    const stageIdx = STAGE_NODES.indexOf(node)
-    if (stageIdx > 0) {
-      const prevStatus = getStageStatus(STAGE_NODES[stageIdx - 1])
-      if (prevStatus === 'completed') return 'running'  // Next stage should be running
-    }
-    return 'pending'
-  }
+  // ETA 每秒刷新（仅管线运行中；完成后停止计时）
+  const pipelineDone = completed.includes('generate_file') || completed.includes('fund_manager')
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (pipelineDone) return
+    const timer = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [pipelineDone])
 
-  // Get analyst cards from outputs
-  const analystOutput = outputs['technical_analyst']
-  const analystCards = [
-    { name: 'Fundamental', nameZh: '基本面', summary: '分析中...', status: 'pending', color: 'green' as const },
-    { name: 'Technical', nameZh: '技术面', summary: '分析中...', status: 'pending', color: 'yellow' as const },
-    { name: 'Macro', nameZh: '宏观', summary: '分析中...', status: 'pending', color: 'green' as const },
-    { name: 'Sentiment', nameZh: '舆情', summary: '等待中...', status: 'pending', color: 'neutral' as const },
-  ]
+  const elapsedMs = msg.startedAt ? Math.max(0, nowMs - msg.startedAt) : 0
+  const estimatedTotalMs = estimateTotalMs(loadDurations())
+  const remainingMs = estimateRemainingMs(elapsedMs, progress, estimatedTotalMs)
+  const etaText = pipelineDone
+    ? `总耗时 ${formatDurationMs(elapsedMs)}`
+    : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
 
-  // Update analyst cards based on completed nodes
-  if (completed.includes('technical_analyst')) {
-    analystCards[0] = { name: 'Fundamental', nameZh: '基本面', summary: analystOutput?.summary || '基本面分析完成', status: 'completed', color: 'green' }
-    analystCards[1] = { name: 'Technical', nameZh: '技术面', summary: analystOutput?.summary || '技术面分析完成', status: 'completed', color: 'yellow' }
-    analystCards[2] = { name: 'Macro', nameZh: '宏观', summary: '宏观分析完成', status: 'completed', color: 'green' }
-    analystCards[3] = { name: 'Sentiment', nameZh: '舆情', summary: '舆情分析完成', status: 'completed', color: 'green' }
-  } else if (current === 'technical_analyst') {
-    analystCards.forEach(c => { c.status = 'running'; c.summary = '分析中...' })
+  // 分层时间轴状态树（无事件数据的历史会话回退为空树，PipelineTimeline 空渲染）
+  const layerTree = msg.layerTree ?? buildLayerTree()
+
+  // 当前运行节点的实时思考单行预览（从 nodeTimelines 提取末尾 thinking 内容尾 80 字符）
+  const thinkingPreviewFor = (nodeId: string): string | undefined => {
+    const items = msg.nodeTimelines?.[nodeId]
+    if (!items || items.length === 0) return undefined
+    const last = items[items.length - 1]
+    if (last.type !== 'thinking' || !last.content) return undefined
+    return last.content.slice(-80)
   }
 
   return (
@@ -1507,9 +2681,9 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                   <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>分析进度</span>
                   <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{msg.content || '准备中...'}</span>
                 </div>
-                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>~90s</span>
+                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
               </div>
-              <div className="flex items-center gap-1 mb-4">
+              <div className="flex items-center gap-1 mb-2">
                 <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-overlay-l1)' }}>
                   <div
                     className="h-full rounded-full transition-all duration-1000"
@@ -1517,28 +2691,8 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                   />
                 </div>
               </div>
-              {/* Pipeline Nodes */}
-              <div className="flex justify-between px-1">
-                {PIPELINE_STEPS.map((step, i) => {
-                  const status = getStageStatus(step.node)
-                  return (
-                    <div key={step.node} className="flex items-center" style={{ flex: i < PIPELINE_STEPS.length - 1 ? '1' : 'none' }}>
-                      <div className="flex flex-col items-center gap-1">
-                        <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center node-${status} ${status === 'running' ? 'pulse-ring' : ''}`}
-                          style={status === 'running' ? { borderColor: 'var(--status-primary-default)', background: 'var(--bg-brand-popup)' } : status === 'completed' ? { borderColor: 'var(--status-success-default)', background: 'rgba(16, 185, 129, 0.15)' } : { borderColor: 'var(--border-neutral-l2)' }}>
-                          <i className={`fas fa-${step.icon} text-xs`}></i>
-                        </div>
-                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{step.desc}</span>
-                      </div>
-                      {i < PIPELINE_STEPS.length - 1 && (
-                        <div className="flex-1 flex items-center justify-center pt-2 px-1">
-                          <div className={`w-full h-px ${status === 'completed' ? '' : ''}`} style={{ background: status === 'completed' ? 'rgba(16,185,129,0.5)' : 'var(--bg-overlay-l2)' }}></div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+              {/* 分层时间轴：6 层 layer + 可展开子节点（替换原 6 阶段圆点） */}
+              <PipelineTimeline tree={layerTree} nowMs={nowMs} thinkingPreviewFor={thinkingPreviewFor} />
             </div>
 
             {/* 各 agent 阶段的思考/工具调用时序：按 node 分组，阶段间用角色名标题分隔（非折叠框）。
@@ -1559,23 +2713,6 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                     />
                   </div>
                 ))}
-              </div>
-            )}
-
-            {/* Layer I: Analyst Cards */}
-            {(completed.includes('check_cache') || current === 'technical_analyst' || completed.includes('technical_analyst')) && (
-              <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Layer I - 并行分析师</span>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {completed.includes('technical_analyst') ? '4/4 完成' : '0/4 完成'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 pipeline-grid">
-                  {analystCards.map(card => (
-                    <AnalystCard key={card.name} {...card} />
-                  ))}
-                </div>
               </div>
             )}
 
@@ -1624,42 +2761,6 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-// ── Analyst Card ──
-function AnalystCard({ name, nameZh, summary, status, color }: {
-  name: string
-  nameZh: string
-  summary: string
-  status: string
-  color: 'green' | 'yellow' | 'red' | 'neutral'
-}) {
-  const colors = {
-    green: { border: 'rgba(16,185,129,0.3)', bg: 'rgba(16,185,129,0.08)', text: 'var(--status-success-default)' },
-    yellow: { border: 'rgba(245,158,11,0.3)', bg: 'rgba(245,158,11,0.08)', text: 'var(--status-warning-default)' },
-    red: { border: 'rgba(239,68,68,0.3)', bg: 'rgba(239,68,68,0.08)', text: 'var(--status-error-default)' },
-    neutral: { border: 'rgba(75,63,227,0.3)', bg: 'var(--bg-brand-popup)', text: 'var(--text-brand)' },
-  }
-  const c = colors[color]
-
-  const statusIcon = status === 'completed'
-    ? <i className="fas fa-check-circle" style={{ color: 'var(--status-success-default)' }}></i>
-    : status === 'running'
-    ? <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-    : <div className="w-2 h-2 rounded-full" style={{ background: 'var(--text-tertiary)' }}></div>
-
-  return (
-    <div className="border rounded-xl p-3 cursor-pointer hover:border-opacity-60 transition-all" style={{ borderColor: c.border, background: c.bg }}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium" style={{ color: c.text }}>{name}</span>
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{nameZh}</span>
-        </div>
-        {statusIcon}
-      </div>
-      <div className="text-[11px] leading-snug" style={{ color: 'var(--text-secondary)' }}>{summary}</div>
     </div>
   )
 }

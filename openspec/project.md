@@ -6,10 +6,10 @@
 
 ## Architecture Summary
 
-- **L1 前端**：React 18 + Vite（表单输入 + SSE 流式渲染 + 报告展示 + 文件下载）
+- **L1 前端**：React 18 + Vite（自然语言输入 + SSE 流式渲染 + 报告展示 + 文件下载 + 会话管理）
 - **L2 Agent**：LangGraph（5 层架构 + 多 Agent 辩论 + Send 并行派发），由 ReAct Agent Harness 统一编排
 - **L3 数据**：pandas + SQLite（AKShare 拉取 + 指标计算 + 报表持久化 + 行情缓存）
-- **L4 LLM**：DeepSeek（LiteLLM 路由）
+- **L4 LLM**：DeepSeek（LiteLLM 路由，deepseek-v4-pro 深度 / deepseek-chat 快速）
 - **可观测性**：Langfuse 追踪 LLM 调用链路
 
 ## Key Documents
@@ -27,13 +27,15 @@
 
 | 领域 | 状态 | 来源 | 说明 |
 |------|------|------|------|
-| `frontend/` | ✅ 首轮 | incident 010, ADR-0012/0017 | React chat UI 交互行为（事故高发区） |
+| `frontend/` | ✅ 已建 | incident 010, ADR-0012/0017 | React chat UI 交互行为（事故高发区） |
+| `pipeline-events/` | ✅ 已建 | ADR-0012 | 管线事件流式推送、节点生命周期 |
+| `session-persistence/` | ✅ 已建 | ADR-0004/0012 | 会话持久化、跨会话恢复 |
+| `e2e-infrastructure/` | ✅ 已建 | incident 010 | E2E 测试基础设施（Playwright + stub） |
+| `e2e-core-specs/` | ✅ 已建 | incident 010 | E2E 核心交互场景覆盖 |
 | `scoring/` | 待建 | ADR-0003, incident 005 | 双阈值评分、GARP/杜邦口径 |
 | `data-pipeline/` | 待建 | ADR-0001 | 数据准备节点、AKShare 数据源约定 |
 | `agents/` | 待建 | ADR-0002, ADR-0010 | pure-LLM agents、tool-use 重构 |
 | `report/` | 待建 | ADR-0007 | 综合报告结构 |
-| `api-streaming/` | 待建 | ADR-0012 | session 流式与自然输入 |
-| `persistence/` | 待建 | ADR-0004 | 分层持久化 |
 | `mcp-server/` | 待建 | ADR-0008 | MCP 服务器 |
 | `observability/` | 待建 | ADR-0015/0016 | Langfuse tracing 与 prompt 管理 |
 

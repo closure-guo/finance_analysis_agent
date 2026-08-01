@@ -109,6 +109,97 @@ class TestTestingMode:
             assert assistant_entry["tool_calls"][0]["name"] == "search_stock"
             assert assistant_entry["tool_calls"][0]["done"] is True
 
+    def test_seed_endpoint_persists_agent_timeline_and_pipeline_timelines(
+        self, client_testing, tmp_path
+    ):
+        """POST /api/test/seed 持久化 agentTimeline / pipeline_timelines / pipeline_snapshot。
+
+        persist-full-session-timeline delta：chat_history 条目的 agentTimeline 透传给
+        append_chat；顶层 pipeline_timelines / pipeline_snapshot 分别经
+        update_pipeline_timelines / update_pipeline_snapshot 落库。
+        GET /api/sessions/{id} 应原样取回（pipeline_timelines 已反序列化为 dict，
+        pipeline_snapshot 为 JSON 字符串）。
+        """
+        import finance_agent.session_store as session_store_module
+
+        with patch.object(session_store_module, "_DB_PATH", tmp_path / "test_sessions.db"):
+            session_store_module.init_db()
+            agent_timeline = [
+                {"type": "thinking", "content": "先理解用户意图：分析茅台。", "done": True},
+                {
+                    "type": "search",
+                    "query": "茅台 基本面",
+                    "results": [
+                        {"title": "贵州茅台财报", "url": "https://example.com/1", "content": "..."}
+                    ],
+                    "status": "done",
+                },
+                {"type": "thinking", "content": "搜索结果显示基本面稳健。", "done": True},
+                {
+                    "type": "tool_call",
+                    "name": "search_stock",
+                    "args": "query=茅台",
+                    "result": "600519 贵州茅台",
+                    "done": True,
+                },
+            ]
+            pipeline_timelines = {
+                "trader": [
+                    {"type": "thinking", "content": "权衡多空观点，形成交易决策。", "done": True},
+                    {
+                        "type": "tool_call",
+                        "name": "get_position",
+                        "args": "symbol=600519",
+                        "result": "{}",
+                        "done": True,
+                    },
+                ],
+                "research_manager": [
+                    {"type": "thinking", "content": "汇总多空辩论要点。", "done": True},
+                    {"type": "search", "query": "茅台 估值", "results": [], "status": "done"},
+                ],
+            }
+            pipeline_snapshot = {
+                "layerTree": "[]",
+                "currentNodeId": "",
+                "progress": 1.0,
+                "updatedAt": 1700000000000,
+            }
+            payload = {
+                "display_name": "时序持久化测试会话",
+                "session_type": "analysis",
+                "status": "completed",
+                "report_markdown": "# 测试报告",
+                "chat_history": [
+                    {"role": "user", "content": "深度分析600519"},
+                    {
+                        "role": "assistant",
+                        "content": "茅台是白酒龙头。",
+                        "agentTimeline": agent_timeline,
+                    },
+                ],
+                "pipeline_timelines": pipeline_timelines,
+                "pipeline_snapshot": pipeline_snapshot,
+            }
+            resp = client_testing.post("/api/test/seed", json=payload)
+            assert resp.status_code == 200
+            session_id = resp.json()["session_id"]
+
+            detail = client_testing.get(f"/api/sessions/{session_id}")
+            assert detail.status_code == 200
+            data = detail.json()
+            assert data["status"] == "completed"
+            assert data["report_markdown"] == "# 测试报告"
+            # assistant 条目的 agentTimeline 原样持久化（键名为 camelCase，与前端契约一致）
+            assistant_entry = data["chat_history"][1]
+            assert assistant_entry["agentTimeline"] == agent_timeline
+            # 顶层 pipeline_timelines：GET 时已反序列化为 dict
+            assert data["pipeline_timelines"] == pipeline_timelines
+            # pipeline_snapshot 存为 JSON 字符串列，GET 原样返回字符串
+            import json
+
+            assert json.loads(data["pipeline_snapshot"]) == pipeline_snapshot
+
     def test_reset_endpoint_returns_200_in_testing_mode(self, client_testing):
         """TESTING=1 下 /api/test/reset 返回 200。"""
         resp = client_testing.post("/api/test/reset", json={})

@@ -14,11 +14,16 @@ services:
       network: host
     ports:
       - "5173:80"
+    environment:
+      TZ: Asia/Shanghai
     depends_on:
       backend:
         condition: service_started
 
   # ─── 后端（FastAPI + LiteLLM + Langfuse 集成）──────────────────────
+  # 注意：StreamRegistry 为进程内内存结构（per-session 任务句柄 + 订阅者队列），
+  # 必须单 uvicorn worker 部署（不可加 --workers N）。多 worker 会导致 registry
+  # 不共享、single-flight 失效和事件丢失。开发模式的 --reload 不受影响。
   backend:
     build:
       context: .
@@ -27,6 +32,8 @@ services:
       - "8000:8000"
     env_file: .env
     environment:
+      # 容器时区（确保 datetime.now() 返回北京时间）
+      TZ: Asia/Shanghai
       # 容器内通过服务名访问 Langfuse（覆盖 .env 的 localhost）
       LANGFUSE_HOST: http://langfuse-web:3000
       # Tavily 搜索 API（从宿主机环境变量或 .env 读取）

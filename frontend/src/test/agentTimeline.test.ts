@@ -3,6 +3,7 @@ import type { SSEEvent, TimelineItem, UIMessage } from '../types'
 import {
   applyChatStreamEvent,
   applyPipelineThinkingToken,
+  applyPipelineNodeComplete,
   buildTimelineFromHistory,
 } from '../timeline'
 
@@ -185,6 +186,60 @@ describe('applyChatStreamEvent - chat_token / chat_done / error', () => {
   })
 })
 
+describe('applyChatStreamEvent - 思考横幅显式完成态（fix-pipeline-banner-and-eta）', () => {
+  it('tool_call 事件将末尾未完成 thinking item 置 done=true', () => {
+    let msg = baseMsg()
+    msg = applyChatStreamEvent(msg, ev({ type: 'thinking_token', token: '思考中' }))
+    msg = applyChatStreamEvent(msg, ev({ type: 'tool_call', name: 'search_stock', args: { query: '茅台' }, iteration: 1 }))
+    const thinking = msg.agentTimeline![0]
+    if (thinking.type === 'thinking') expect(thinking.done).toBe(true)
+  })
+
+  it('首个 chat_token 将末尾未完成 thinking item 置 done=true', () => {
+    let msg = baseMsg()
+    msg = applyChatStreamEvent(msg, ev({ type: 'thinking_token', token: '思考中' }))
+    msg = applyChatStreamEvent(msg, ev({ type: 'chat_token', token: '回答' }))
+    const thinking = msg.agentTimeline![0]
+    if (thinking.type === 'thinking') expect(thinking.done).toBe(true)
+  })
+
+  it('thinking_to_answer 将该 thinking item 置 done=true', () => {
+    const msg = baseMsg({ agentTimeline: [{ type: 'thinking', content: '思考轨迹最终回答内容' }] })
+    const next = applyChatStreamEvent(msg, ev({ type: 'thinking_to_answer', answer: '最终回答内容' }))
+    const item = next.agentTimeline![0]
+    if (item.type === 'thinking') expect(item.done).toBe(true)
+  })
+
+  it('chat_done 将所有 thinking item 置 done=true', () => {
+    const msg = baseMsg({
+      agentTimeline: [
+        { type: 'thinking', content: '## 标题\n内容' },
+        { type: 'search', query: 'q', status: 'done' },
+        { type: 'thinking', content: '第二段' },
+      ],
+    })
+    const next = applyChatStreamEvent(msg, ev({ type: 'chat_done' }))
+    for (const item of next.agentTimeline!) {
+      if (item.type === 'thinking') expect(item.done).toBe(true)
+    }
+  })
+
+  it('error 将所有未完成 thinking item 置 done=true', () => {
+    const msg = baseMsg({
+      agentTimeline: [{ type: 'thinking', content: '思考中' }],
+    })
+    const next = applyChatStreamEvent(msg, ev({ type: 'error', message: 'fail' }))
+    const item = next.agentTimeline![0]
+    if (item.type === 'thinking') expect(item.done).toBe(true)
+  })
+
+  it('新建 thinking item 默认 done=false', () => {
+    const next = applyChatStreamEvent(baseMsg(), ev({ type: 'thinking_token', token: '新思考' }))
+    const item = next.agentTimeline![0]
+    if (item.type === 'thinking') expect(item.done).toBe(false)
+  })
+})
+
 describe('applyPipelineThinkingToken - 管线按 node 分组', () => {
   it('thinking_token 按 node 字段写入对应 node 的 timeline', () => {
     let msg: UIMessage = { id: 'p1', type: 'pipeline', content: '' }
@@ -203,6 +258,41 @@ describe('applyPipelineThinkingToken - 管线按 node 分组', () => {
     const bull = msg.nodeTimelines!['bull_r1']
     expect(bull).toHaveLength(1)
     if (bull[0].type === 'thinking') expect(bull[0].content).toBe('AB')
+  })
+
+  it('收到其他节点 thinking_token 时，上一节点未完成 thinking item 收口为 done', () => {
+    let msg: UIMessage = { id: 'p1', type: 'pipeline', content: '' }
+    msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '多头思考', node: 'bull_r1' }))
+    msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '空头思考', node: 'bear_r1' }))
+    const bull = msg.nodeTimelines!['bull_r1'][0]
+    if (bull.type === 'thinking') expect(bull.done).toBe(true)
+    const bear = msg.nodeTimelines!['bear_r1'][0]
+    if (bear.type === 'thinking') expect(bear.done).toBe(false)
+  })
+})
+
+describe('applyPipelineNodeComplete - 节点完成收口思考横幅（fix-pipeline-banner-and-eta）', () => {
+  it('node_complete 将该节点末尾 thinking item 置 done=true', () => {
+    let msg: UIMessage = { id: 'p1', type: 'pipeline', content: '' }
+    msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '多头思考', node: 'bull_r1' }))
+    msg = applyPipelineNodeComplete(msg, 'bull_r1')
+    const bull = msg.nodeTimelines!['bull_r1'][0]
+    if (bull.type === 'thinking') expect(bull.done).toBe(true)
+  })
+
+  it('node_complete 不影响其他节点的 thinking item', () => {
+    let msg: UIMessage = { id: 'p1', type: 'pipeline', content: '' }
+    msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '多头', node: 'bull_r1' }))
+    msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '空头', node: 'bear_r1' }))
+    msg = applyPipelineNodeComplete(msg, 'bull_r1')
+    const bear = msg.nodeTimelines!['bear_r1'][0]
+    if (bear.type === 'thinking') expect(bear.done).toBe(false)
+  })
+
+  it('节点无 timeline 时 node_complete 不报错', () => {
+    const msg: UIMessage = { id: 'p1', type: 'pipeline', content: '' }
+    const next = applyPipelineNodeComplete(msg, 'bull_r1')
+    expect(next).toEqual(msg)
   })
 })
 

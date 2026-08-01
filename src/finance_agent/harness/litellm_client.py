@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -69,6 +70,7 @@ class LiteLLMClient:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "timeout": 120,  # 整体请求超时（秒），防止 streaming 响应卡死
         }
 
         if self.api_key:
@@ -134,7 +136,17 @@ class LiteLLMClient:
 
                 response = await litellm.acompletion(**kwargs)
 
-                async for chunk in response:
+                # per-chunk 超时保护：单个 chunk 超过 60 秒未到达则终止流
+                _chunk_iter = response.__aiter__()
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(_chunk_iter.__anext__(), timeout=60.0)
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError:
+                        logger.warning("LLM streaming chunk 超时（60s 无数据），终止当前流")
+                        break
+
                     choices = chunk.choices
                     if not choices:
                         continue
@@ -202,8 +214,6 @@ class LiteLLMClient:
             except Exception as e:
                 logger.warning(f"LLM 请求失败 (尝试 {attempt + 1}/{self.max_retries}): {e}")
                 if attempt < self.max_retries - 1:
-                    import asyncio
-
                     await asyncio.sleep(self.retry_delay * (2**attempt))
                 else:
                     if _lf_cm and _lf_obs:
@@ -214,10 +224,8 @@ class LiteLLMClient:
                                 self._langfuse.flush()
                         except Exception as e2:  # noqa: S110
                             logger.debug("Langfuse 错误观测收尾失败: %s", e2)
-                    yield LLMResponse(
-                        text_delta=f"\n[错误: LLM 请求失败 - {e}]\n",
-                        is_finished=True,
-                    )
+                    # 重试耗尽：raise 异常而非 yield 错误文本，使 Agent 主循环能正确捕获
+                    raise
 
     def _finish_langfuse(self, cm, obs, text: str, last_chunk) -> None:
         """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。"""

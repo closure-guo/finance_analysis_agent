@@ -821,7 +821,6 @@ dependencies = [
     { name = "litellm" },
     { name = "matplotlib" },
     { name = "pandas" },
-    { name = "pandas-stubs" },
     { name = "pyarrow" },
     { name = "python-docx" },
     { name = "python-dotenv" },
@@ -833,6 +832,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "pandas-stubs" },
     { name = "playwright" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -851,7 +851,6 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.0.0" },
     { name = "matplotlib", specifier = ">=3.8.0" },
     { name = "pandas", specifier = ">=2.0.0" },
-    { name = "pandas-stubs", specifier = "~=3.0.3" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "python-docx", specifier = ">=1.1.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
@@ -863,6 +862,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "mypy", specifier = ">=2.1.0" },
+    { name = "pandas-stubs", specifier = "~=3.0.3" },
     { name = "playwright", specifier = ">=1.60.0" },
     { name = "pre-commit", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=9.0.3" },
