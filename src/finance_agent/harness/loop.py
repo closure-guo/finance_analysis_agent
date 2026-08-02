@@ -52,6 +52,7 @@ from finance_agent.harness.types import (
     ToolCallRequest,
     ToolResult,
 )
+from finance_agent.langfuse_tracing import open_span
 
 logger = logging.getLogger("finance_agent.harness.loop")
 
@@ -531,36 +532,46 @@ class Agent:
                     )
 
                     # 执行工具：流式工具走 execute_stream，普通工具走 execute
-                    if self.tools.is_streaming(tc.name):
-                        # 流式工具：透传 PROGRESS / THINK 事件，提取最终 ToolResult
-                        result = None
-                        async for event in self.tools.execute_stream(tc.id, tc.name, tc.arguments):
-                            if isinstance(event, StreamEvent):
-                                if event.event_type == ActionType.PROGRESS:
-                                    yield event
-                                elif event.event_type == ActionType.THINK:
-                                    # 透传管线节点思考（含 node metadata），供 SSE 按 agent 分组
-                                    # （此前只透传 PROGRESS/TOOL_RESULT，丢 THINK——真实 bug 修复）
-                                    yield event
-                                elif (
-                                    event.event_type == ActionType.TOOL_RESULT and event.tool_result
-                                ):
-                                    result = event.tool_result
-                                    # 同时 yield 这个事件（含 metadata）
-                                    yield event
-                            elif isinstance(event, ToolResult):
-                                result = event
+                    # 用 open_span 包裹工具执行，创建 tool:{name} span（挂到 react_loop 下）
+                    with open_span(
+                        name=f"tool:{tc.name}", input={"args": tc.arguments}
+                    ) as _toolObs:
+                        if self.tools.is_streaming(tc.name):
+                            # 流式工具：透传 PROGRESS / THINK 事件，提取最终 ToolResult
+                            result = None
+                            async for event in self.tools.execute_stream(
+                                tc.id, tc.name, tc.arguments
+                            ):
+                                if isinstance(event, StreamEvent):
+                                    if event.event_type == ActionType.PROGRESS:
+                                        yield event
+                                    elif event.event_type == ActionType.THINK:
+                                        # 透传管线节点思考（含 node metadata），供 SSE 按 agent 分组
+                                        # （此前只透传 PROGRESS/TOOL_RESULT，丢 THINK——真实 bug 修复）
+                                        yield event
+                                    elif (
+                                        event.event_type == ActionType.TOOL_RESULT
+                                        and event.tool_result
+                                    ):
+                                        result = event.tool_result
+                                        # 同时 yield 这个事件（含 metadata）
+                                        yield event
+                                elif isinstance(event, ToolResult):
+                                    result = event
 
-                        if result is None:
-                            result = ToolResult(
-                                tool_call_id=tc.id,
-                                name=tc.name,
-                                output="[错误] 流式工具未返回结果",
-                                is_error=True,
-                            )
-                    else:
-                        # 普通工具
-                        result = await self.tools.execute(tc.id, tc.name, tc.arguments)
+                            if result is None:
+                                result = ToolResult(
+                                    tool_call_id=tc.id,
+                                    name=tc.name,
+                                    output="[错误] 流式工具未返回结果",
+                                    is_error=True,
+                                )
+                        else:
+                            # 普通工具
+                            result = await self.tools.execute(tc.id, tc.name, tc.arguments)
+                        # 记录工具执行结果到 span output
+                        if _toolObs:
+                            _toolObs.update(output={"result": result.output})
 
                     # 追加工具结果到上下文
                     self.context.append_tool_result(tc.id, result.output, result.is_error)

@@ -8,6 +8,7 @@
   - 后端 `src/finance_agent/`（nodes/metrics/data/events/export/harness/prompts）
   - 前端 `frontend/`（React + TS + Tailwind + ECharts）
   - LLM：DeepSeek（LiteLLM 路由）；LLM 链路追踪：Langfuse [http://localhost:3000](http://localhost:3000/)
+  - StreamRegistry 为进程内内存结构，后端必须单 uvicorn worker 部署（不可 `--workers N`）
   - 详见 `docs/architecture.md`；ADR 见 `docs/adr/`（人工维护，agent 不得新建）
 
   ## 常用命令

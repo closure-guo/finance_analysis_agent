@@ -1,0 +1,121 @@
+{
+  "skill_name": "playwright-debugger",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Debug the Playwright test failures in evals/files/results-selector-timeout.json. Classify each failure and suggest fixes.",
+      "expected_output": "Should classify 2 failures: F2 Selector Broken (selector '#submit-btn' not found in checkout.spec.ts) and F1 Flaky/Timing (timeout 30000ms exceeded waiting for getByRole('dialog') in dialog.spec.ts). Should provide concrete fix suggestions for each — e.g., update selector to match current DOM for F2, increase timeout or verify dialog trigger for F1. Should note the 2 passing tests are unaffected.",
+      "files": ["evals/files/results-selector-timeout.json"],
+      "assertions": [
+        "Classifies '#submit-btn' failure as F2 (Selector Broken)",
+        "Classifies dialog timeout as F1 (Flaky/Timing)",
+        "Identifies checkout.spec.ts:18 as location for selector failure",
+        "Reports the failing call site from errorLocation (line 18), not the test registration line (line 12)",
+        "Identifies dialog.spec.ts:15 as location for timeout failure",
+        "Notes duration near 30000ms as timeout signal for F1",
+        "Suggests fix for F2: update selector or verify element exists in DOM",
+        "Suggests fix for F1: check dialog trigger or increase timeout",
+        "Reports 2 failed, 2 passed tests total",
+        "Structured output with severity ratings (P1/P2)",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Debug the Playwright test failures in evals/files/results-mixed-failures.json. Classify each failure, identify any cascading patterns, and suggest fixes.",
+      "expected_output": "Should classify 3 failures: F3 Network Dependency (API returns 500 in api-integration.spec.ts), F10 Auth/Session (session cookie expired causing redirect to /login in auth-session.spec.ts), F4 Assertion Mismatch ('Welcome' vs 'Login' in welcome.spec.ts). Should detect potential cascade: F10 auth/session expiry could be the root cause of F4 assertion mismatch (user sees 'Login' instead of 'Welcome' because session expired).",
+      "files": ["evals/files/results-mixed-failures.json"],
+      "assertions": [
+        "Classifies API 500 error as F3 (Network Dependency)",
+        "Classifies session_expired redirect as F10 (Auth/Session)",
+        "Classifies 'Welcome' vs 'Login' mismatch as F4 (Assertion Mismatch)",
+        "Detects cascade pattern: F10 auth failure likely causes F4 assertion mismatch",
+        "Identifies net::ERR_CONNECTION_REFUSED and 500 status in API failure",
+        "Identifies session_token cookie expiration in auth failure",
+        "Suggests fix for F3: mock API or verify staging server health",
+        "Suggests fix for F10: refresh auth state or extend session TTL",
+        "Suggests fix for F4: depends on resolving F10 first",
+        "Reports 3 failed, 0 passed tests total",
+        "Structured output with severity ratings",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Debug the Playwright test failures in evals/files/results-flaky.json. Identify flaky tests, race conditions, and suggest stabilization strategies.",
+      "expected_output": "Should identify flaky test patterns from retry data. 'notification count' fails retry 0, passes retry 1 — F1 Flaky/Timing (value arrives late). 'revenue chart' fails retries 0-1, passes retry 2 — F1 Flaky/Timing with rendering delay (or F14 Animation Race). 'loading spinner' fails all 3 retries — NOT flaky, this is a consistent F14 Animation Race (spinner disappears before assertion can observe it). Should distinguish true flaky from consistent failures.",
+      "files": ["evals/files/results-flaky.json"],
+      "assertions": [
+        "Identifies 'notification count' as flaky (fails then passes on retry)",
+        "Classifies notification test as F1 (Flaky/Timing) — value arrives late",
+        "Identifies 'revenue chart' as flaky (passes on retry 2)",
+        "Classifies chart test as F1 (Flaky/Timing) or F14 (Animation Race) with rendering delay",
+        "Identifies 'loading spinner' as NOT flaky — fails all 3 retries consistently",
+        "Classifies spinner test as F14 (Animation Race) — element disappears before assertion",
+        "Suggests stabilization: use web-first assertions with auto-retry",
+        "Suggests stabilization: wait for specific state instead of fixed element",
+        "Notes retries config is set to 2",
+        "Structured output with severity ratings (P1 for flaky, P2 for consistent)",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Debug the Playwright test results in evals/files/results-clean.json. Report any failures found.",
+      "expected_output": "Should report all tests passed with no failures. Clean run across login.spec.ts, navigation.spec.ts, and search.spec.ts. No failure classifications needed. Should not produce false diagnoses or fabricated issues.",
+      "files": ["evals/files/results-clean.json"],
+      "assertions": [
+        "Reports all tests passed (0 failures)",
+        "Reports clean run status",
+        "Does NOT fabricate any failure classifications",
+        "Does NOT produce false F-code diagnoses",
+        "Does NOT suggest unnecessary fixes",
+        "Mentions total test count (7 passed)",
+        "Does NOT flag any test as flaky or problematic"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Debug the Playwright test failures in evals/files/results-hydration-race.json. Classify each failure and suggest fixes.",
+      "expected_output": "Should classify 2 failures: 'newsletter subscribe opens the confirmation dialog' — F15 Hydration Race (the click was reported complete on a server-rendered Next.js page immediately after goto, but React hydration had not attached the handler, so the dialog never opened; passes on retry 1). 'pricing table renders all three tiers' — NOT F15 (no interaction precedes the assertion): consistent client-side render delay after a slow /api/pricing fetch — F14 Animation Race or F1/F3 territory. Fix for F15: gate the first interaction on a hydration marker, or make the click self-verifying with expect(async () => {...}).toPass(); never waitForTimeout after goto.",
+      "files": ["evals/files/results-hydration-race.json"],
+      "assertions": [
+        "Classifies the subscribe-dialog failure as F15 (Hydration Race)",
+        "Cites the F15 signal chain: first interaction after goto on a server-rendered page, click reported successful, failure at the NEXT assertion, passes on retry",
+        "Distinguishes F15 from F14: the Subscribe button was rendered and visible but inert (listeners not attached), not missing from the DOM",
+        "Does NOT classify the pricing-table failure as F15 — no interaction precedes the assertion (render-delay case: F14 or F1/F3)",
+        "Suggests gating the first interaction on a hydration signal (e.g. an app-provided data-hydrated marker) or a self-verifying click via expect(async () => {...}).toPass()",
+        "Does NOT suggest waitForTimeout after goto as the fix",
+        "Severity P1 for the flaky hydration failure",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Debug the Playwright test failures in evals/files/results-error-swallowing.json. The spec source is provided at evals/files/error-swallowing.spec.ts — audit the passing tests' source for P0 silent-pass patterns before reporting.",
+      "expected_output": "One failure, one P0 silent pass, one clean pass. 'banner shows the unread count' timed out waiting for the unread badge while GET /api/notifications returned 500 — F3 Network Dependency or a real product regression (the notifications API is down). 'mark-all-read clears the badge' PASSED in 340ms but is the P0: in the source (lines 13-14) both the waitForResponse and the final expect are silenced with .catch(() => {}), so a failing notifications API can never fail this test — F13 Error Swallowing. 'rejects an oversized attachment upload' also passes and must NOT be flagged: expect(...).rejects.toThrow('413') is a legitimate expected-rejection assertion, not suppression.",
+      "files": ["evals/files/results-error-swallowing.json", "evals/files/error-swallowing.spec.ts"],
+      "assertions": [
+        "Flags the PASSING test 'mark-all-read clears the badge' (340ms) as P0 F13 (Error Swallowing) — .catch(() => {}) on both the waitForResponse and the expect at error-swallowing.spec.ts lines 13-14 means the broken notifications API cannot fail it",
+        "Classifies 'banner shows the unread count' as F3 (Network Dependency) or a real product regression, citing the GET /api/notifications 500 in the error message",
+        "Does NOT flag 'rejects an oversized attachment upload' as F13 — expect(...).rejects.toThrow('413') at line 19 asserts on the rejection instead of discarding it",
+        "Reports the F13 finding with severity P0, ordered before lower-severity findings",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Debug the Playwright test failures in evals/files/results-condition-branch.json. The spec source is provided at evals/files/condition-branch.spec.ts — audit the passing tests' source for P0 silent-pass patterns before reporting.",
+      "expected_output": "One failure, one P0 silent pass, one clean conditional. 'cookie banner links to the privacy policy' timed out — the cookie banner never rendered (locator resolved to 0 elements): product regression or F2 territory. 'dismisses the cookie banner when shown' PASSED in 480ms but is the P0: its only assertions live inside if (await ...isVisible()) (lines 6-9), so with the banner missing — which the failing sibling proves — the test asserted nothing: F6 Condition Branch Missing. 'shows account menu when logged in and sign-in button otherwise' must NOT be flagged: both branches of its conditional (lines 19-23) end in an assertion.",
+      "files": ["evals/files/results-condition-branch.json", "evals/files/condition-branch.spec.ts"],
+      "assertions": [
+        "Flags the PASSING test 'dismisses the cookie banner when shown' (480ms) as P0 F6 (Condition Branch Missing) — all assertions sit inside the isVisible() conditional at condition-branch.spec.ts lines 6-9, so the test passes silently when the banner never renders",
+        "Connects the failing sibling to the F6 finding: 'locator resolved to 0 elements' proves the passing test's condition was false, i.e. its silent pass hid the same missing banner",
+        "Classifies 'cookie banner links to the privacy policy' as F2 (Selector Broken) or a real product regression (banner never rendered)",
+        "Does NOT flag 'shows account menu when logged in and sign-in button otherwise' as F6 — both branches of its conditional (lines 19-23) end in an assertion",
+        "Reports the F6 finding with severity P0",
+        "Summary table included"
+      ]
+    }
+  ]
+}

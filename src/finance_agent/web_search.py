@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from finance_agent.langfuse_tracing import open_span
+
 
 class SearchResult(BaseModel):
     """Single web search result."""
@@ -67,27 +69,39 @@ def tavily_search(query: str, max_results: int = 5) -> SearchResponse:
 
     from tavily import TavilyClient
 
-    client = TavilyClient(api_key=api_key)
-    response = client.search(
-        query=query,
-        max_results=max_results,
-        search_depth="basic",
-        include_answer=True,
-    )
-
-    results: list[SearchResult] = []
-    for r in response.get("results", []):
-        results.append(
-            SearchResult(
-                title=r.get("title", ""),
-                url=r.get("url", ""),
-                content=r.get("content", ""),
-            )
+    # 用 open_span 包裹搜索调用，创建 search_api_call span
+    # 作为调用方 span（tool:web_search 或规则 pre_search）的子 span
+    with open_span(
+        name="search_api_call",
+        input={"query": query, "max_results": max_results},
+    ) as _searchObs:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(
+            query=query,
+            max_results=max_results,
+            search_depth="basic",
+            include_answer=True,
         )
 
-    answer = response.get("answer") or None
+        results: list[SearchResult] = []
+        for r in response.get("results", []):
+            results.append(
+                SearchResult(
+                    title=r.get("title", ""),
+                    url=r.get("url", ""),
+                    content=r.get("content", ""),
+                )
+            )
 
-    return SearchResponse(query=query, results=results, count=len(results), answer=answer)
+        answer = response.get("answer") or None
+        searchResponse = SearchResponse(
+            query=query, results=results, count=len(results), answer=answer
+        )
+        # 记录搜索结果数量到 span output
+        if _searchObs:
+            _searchObs.update(output={"count": len(results)})
+
+    return searchResponse
 
 
 def format_search_for_llm(response: SearchResponse) -> str:

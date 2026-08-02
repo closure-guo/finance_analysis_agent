@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import { TimelineRenderer, type TimelineBannerComponents } from '../TimelineRenderer'
 import { timelineToolCallToEntry, nodeDisplayName } from '../timeline'
 import { ThinkingBanner, ToolCallBanner } from '../App'
@@ -107,5 +107,48 @@ describe('TimelineRenderer - 按 agentTimeline 数组顺序渲染', () => {
     // 末尾 thinking item 流式中显示"思考中"；思考1 已完成
     expect(screen.getByText('思考中')).toBeInTheDocument()
     expect(screen.getByText('思考已完成')).toBeInTheDocument()
+  })
+})
+
+describe('ToolCallBanner - 完成后自动折叠（深度模式工具调用横幅不关闭 bug 复现）', () => {
+  it('工具完成（done=true）且不再 streaming 时，横幅内容自动折叠', () => {
+    // 深度模式澄清阶段：tool_result 已置 done=true，但 run_deep_analysis 事件
+    // 不进 chat timeline，该 tool_call item 停留末尾 → streaming 曾一直为 true。
+    // 修复后期望：streaming 变 false（或 done=true 且无 pending）时横幅自动折叠，
+    // 不再停留在"调用工具中"展开态。
+    const timeline: TimelineItem[] = [
+      { type: 'tool_call', name: 'search_stock', args: '中际旭创', result: '已识别：中际旭创 (300308)', done: true },
+    ]
+    const { container } = render(<TimelineRenderer timeline={timeline} streaming={false} components={components} />)
+    // 完成态：标题显示"已调用工具"或"工具调用"（非"调用工具中"）
+    expect(screen.queryByText(/调用工具中/)).not.toBeInTheDocument()
+    // 折叠：工具详情内容 maxHeight 应为 0px（折叠态）
+    const collapsible = container.querySelector('[data-timeline-index="0"] .overflow-hidden') as HTMLElement
+    expect(collapsible).not.toBeNull()
+    expect(collapsible.style.maxHeight).toBe('0px')
+  })
+
+  it('深度模式根因场景：工具停留末尾，tool_result 翻转 done 后横幅从展开转为折叠', () => {
+    // 深度模式：run_deep_analysis 不进 timeline，search_stock 的 tool_call item 停留末尾。
+    // tool_result 前 done=false → toolStreaming=true → 展开"调用工具中"；
+    // tool_result 后 done=true → toolStreaming=false → 应自动折叠（修复前停留展开）。
+    const pending: TimelineItem[] = [
+      { type: 'tool_call', name: 'search_stock', args: '中际旭创', done: false },
+    ]
+    const { container, rerender } = render(<TimelineRenderer timeline={pending} streaming={true} components={components} />)
+    // 展开态（调用中）
+    const before = container.querySelector('[data-timeline-index="0"] .overflow-hidden') as HTMLElement
+    expect(before.style.maxHeight).toBe('240px')
+
+    // tool_result 到达：done 翻转（item 仍末尾）
+    const doneTimeline: TimelineItem[] = [
+      { type: 'tool_call', name: 'search_stock', args: '中际旭创', result: '已识别：中际旭创 (300308)', done: true },
+    ]
+    act(() => {
+      rerender(<TimelineRenderer timeline={doneTimeline} streaming={true} components={components} />)
+    })
+    const after = container.querySelector('[data-timeline-index="0"] .overflow-hidden') as HTMLElement
+    expect(after.style.maxHeight).toBe('0px')
+    expect(screen.queryByText(/调用工具中/)).not.toBeInTheDocument()
   })
 })

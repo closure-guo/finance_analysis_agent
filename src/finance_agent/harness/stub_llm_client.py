@@ -85,8 +85,13 @@ class StubLLMClient:
 
         默认：先吐思维链（reasoning_content），再吐回答（content），1 轮完成。
         tool_call 场景：第 1 轮吐思考1 + tool_call(web_search)，第 2 轮吐思考2 + 回答。
+        llm_failure 场景：第 1 轮 raise 异常，模拟 LLM 调用失败。
         """
         self._round += 1
+
+        # LLM 失败场景：raise 异常，模拟 LLM 调用失败（harden-react-path-resilience）
+        if self.scenario == "llm_failure":
+            raise RuntimeError("STUB LLM 模拟失败")
 
         # pipeline 场景：深度分析完整链路 search_stock -> run_deep_analysis -> 回答
         if self.scenario == "pipeline" and self._round == 1:

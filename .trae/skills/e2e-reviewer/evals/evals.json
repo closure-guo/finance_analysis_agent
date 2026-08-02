@@ -1,0 +1,393 @@
+{
+  "skill_name": "e2e-reviewer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the Playwright E2E tests in evals/files/auth.spec.ts and its POM file pages/login-page.ts. Find any anti-patterns, weak assertions, or quality issues.",
+      "expected_output": "Should detect: test.only (P0), waitForTimeout (P1), dangling locator (P0), one-shot boolean (P0), conditional bypass (P0), force:true (P1), .catch(()=>{}) in POM (P0), raw DOM query in POM (P1), name-assertion mismatch (P0), missing then (P0), YAGNI unused POM members (P2), hardcoded credentials (P1), direct page.click API usage (P1)",
+      "files": [
+        "evals/files/auth.spec.ts",
+        "evals/files/pages/login-page.ts"
+      ],
+      "assertions": [
+        "Detects test.only on line 5 (#7, P0)",
+        "Detects waitForTimeout(2000) on line 16 (#9, P1)",
+        "Detects dangling locator page.locator('.login-form') on line 24 with no assertion or await (#8a, P0)",
+        "Detects one-shot boolean: isVisible() piped to toBeTruthy() on lines 17-18 (#4, P0)",
+        "Detects conditional bypass: if(await page.locator..isVisible()) gates assertion on line 42 (#5a, P0)",
+        "Detects force:true on page.click('.logout-btn') line 36 without JUSTIFIED comment (#5b, P1)",
+        "Phase 2 LLM review detects .catch(() => {}) in POM goto() line 33 swallowing networkidle failure (#3, P0) — POM files are outside the Tier 3 spec globs, so this is a Phase 2 finding",
+        "Detects raw DOM query document.querySelector in POM waitForDashboard() line 48 (#6, P1)",
+        "Flags name-assertion mismatch: 'should show user profile' only checks .user-avatar visibility, not profile info (#1, P0)",
+        "Flags missing then: 'should logout' doesn't verify session cleared or dashboard gone (#2, P0)",
+        "Identifies YAGNI: rememberMeCheckbox, forgotPasswordLink, socialLoginGoogle, socialLoginGithub, captchaWidget, termsCheckbox unused in auth.spec.ts (#11, P2)",
+        "Detects hardcoded credentials 'admin'/'password123' on lines 8, 33 (#14, P1)",
+        "Flags direct page.click() on line 36 — prefer locator.click() (#17, P1)",
+        "Does NOT flag page.goto('/reset-password') on line 40 as missing auth — public route (#12)",
+        "Does NOT flag page.goto('/dashboard') on line 22 as missing auth in redirect test — testing the redirect itself",
+        "Structured output with P0/P1/P2",
+        "Summary table included",
+        "Top Priorities section included",
+        "Does NOT flag a continuation line page.locator(...) that sits inside a multi-line await expect(\\n  page.locator(...)\\n).toBeVisible(); block as #8a — the scanner's previous-line continuation filter drops hits whose preceding non-blank line ends with ( or , and the Phase 2 backstop covers residual shapes",
+        "Still detects a dangling locator statement that ends with a semicolon (e.g. page.locator('.login-form');) as #8a (P0) — and also detects semicolonless dangling locators whose preceding line is not a continuation opener"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review the Playwright E2E tests in evals/files/dashboard.spec.ts. Identify all anti-patterns and suggest improvements.",
+      "expected_output": "Should detect: serial() (P1), >=0 always-passing (P0), waitForTimeout (P1), missing assertion (P0), toBeAttached (P0), boolean discarded (P0), positional selectors (P1), raw DOM query (P1), missing then (P0), name-assertion mismatch (P0), missing auth setup (P0), direct page action API usage (P1)",
+      "files": [
+        "evals/files/dashboard.spec.ts",
+        "evals/files/unit-helpers.test.ts"
+      ],
+      "assertions": [
+        "Detects test.describe.serial on line 3 — breaks parallel sharding (#10b, P1)",
+        "Detects toBeGreaterThanOrEqual(0) on line 8 — always passes regardless of content (#4, P0)",
+        "Detects waitForTimeout(3000) on line 15 (#9, P1)",
+        "Detects toBeAttached() on line 30 — weak assertion, element just needs to exist in DOM (#4, P0)",
+        "Detects boolean discarded: await badge.isVisible() on line 32 with result unused (#8b, P0)",
+        "Detects positional selector .first() on line 28 and .nth(2) on line 29 (#10a, P1)",
+        "Detects raw DOM query document.querySelector in evaluate() on line 44 (#6, P1)",
+        "Flags direct page.click() on lines 13-14, 21-22 (#17, P1)",
+        "Flags missing auth setup: all tests navigate to /dashboard without login or storageState (#12, P0)",
+        "Flags name-assertion mismatch: 'display correct user name' uses querySelector truthiness, doesn't check actual name (#1, P0)",
+        "Flags missing then: 'export dashboard as PDF' just clicks export buttons, no download verification (#2, P0)",
+        "Flags missing then: 'toggle sidebar' checks sidebar hidden but not that main content expanded (#2, P0)",
+        "Does NOT flag page.locator('.chart-container').toBeVisible() on line 16 as always-passing — toBeVisible is a proper web-first assertion",
+        "Structured output with P0/P1/P2",
+        "Summary table included",
+        "Top Priorities section included",
+        "Does NOT flag unit-helpers.test.ts line 11 (toBeGreaterThanOrEqual(0)) or line 16 (expect(screen.getByText(...)).toBeTruthy()) — the file is a Vitest/RTL unit test with no Playwright/Cypress marker (no @playwright/test import, no page.* usage, no cy.*), so the Tier 3 regex e2e content scoping filters both (Tier 2 sg-4f may still surface the RTL toBeTruthy line as a jest-dom-fix advisory by design — see the SKILL.md Tier scoping note; it must NOT be reported as a P0)",
+        "Still flags toBeGreaterThanOrEqual(0) inside a real Playwright spec file (imports @playwright/test or uses page.*) as #4a (P0) — content scoping must not suppress in-scope hits"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review all Playwright test files in evals/files/ including POM files. Give me a full quality audit with severity ratings.",
+      "expected_output": "Comprehensive report covering all spec files and POM files. Finds issues across all checks. Summary table with P0/P1/P2 counts. Coverage gap suggestions referencing specific findings. Cross-file YAGNI analysis. Systemic issues section. Top priorities.",
+      "files": [
+        "evals/files/auth.spec.ts",
+        "evals/files/dashboard.spec.ts",
+        "evals/files/settings.spec.ts",
+        "evals/files/pages/login-page.ts",
+        "evals/files/pages/settings-page.ts"
+      ],
+      "assertions": [
+        "Reviews all 3 spec files",
+        "Reviews both POM files",
+        "Phase 2 LLM review detects try/catch error swallowing in settings.spec.ts line 8-12: wraps toBeVisible assertion and logs instead of failing (#3, P0) — try/catch shapes are Phase 2 responsibility per SKILL.md (#3 partial)",
+        "Flags name-assertion mismatch: settings 'change password' only checks .password-section visible, not that password actually changed (#1, P0)",
+        "Flags missing assertion: settings 'toggle email notifications' clicks toggle with zero assertions (#2, P0)",
+        "Detects toBeAttached() in settings line 48 (#4, P0)",
+        "Detects one-shot getAttribute('src').toBeTruthy() in settings line 49 (#4, P0)",
+        "Detects one-shot URL: expect(page.url()).toContain on settings line 42 — no auto-retry (#4h, P0)",
+        "Detects inconsistent POM usage in settings: SettingsPage imported but spec uses raw page.fill/page.click for password, toggle, delete (#13, P1)",
+        "Detects hardcoded credentials in auth lines 8, 33 (#14, P1)",
+        "Detects missing auth setup in dashboard — no login before /dashboard (#12, P0)",
+        "YAGNI in settings-page.ts: themeSelector, languageDropdown, timezoneDropdown, twoFactorToggle, backupCodesButton, cancelButton and their methods unused (#11, P2)",
+        "YAGNI in login-page.ts: rememberMeCheckbox, forgotPasswordLink, socialLoginGoogle, socialLoginGithub, captchaWidget, termsCheckbox unused (#11, P2)",
+        "Coverage gap suggestions reference specific findings (Phase 3)",
+        "Phase 2.5 systemic issues section present",
+        "Summary table with counts",
+        "Top Priorities section included",
+        "Total 20+ issues found"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Review the Playwright E2E tests in evals/files/checkout.spec.ts and its POM file pages/checkout-page.ts. Find any anti-patterns or quality issues.",
+      "expected_output": "Clean, well-written tests. Minimal or no P0/P1 findings. Should recognize good practices: beforeEach, getByTestId/getByRole, storageState auth, env vars for credentials, test.skip with reason. Should NOT flag: test.skip with reason comment, JUSTIFIED nth() usage in POM. May suggest minor improvements but should not produce false positives.",
+      "files": [
+        "evals/files/checkout.spec.ts",
+        "evals/files/pages/checkout-page.ts"
+      ],
+      "assertions": [
+        "Does NOT flag test.skip on line 53 as #7 — has valid JIRA-4521 reason",
+        "Does NOT flag nth() in checkout-page.ts line 34 — has JUSTIFIED comment above",
+        "Does NOT flag process.env.TEST_COUPON or process.env.TEST_SHIPPING_NAME as hardcoded credentials",
+        "Does NOT produce false positives on getByTestId/getByRole/getByLabel assertions",
+        "Reports zero or near-zero P0 issues",
+        "Recognizes good practices: getByTestId, getByRole, getByLabel, env vars, beforeEach, storageState auth",
+        "Summary table included",
+        "Coverage gap suggestions present"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review the Playwright E2E tests in evals/files/search-justified.spec.ts. Check for anti-patterns and respect JUSTIFIED suppression markers.",
+      "expected_output": "Should skip patterns with JUSTIFIED comments above them (first() in search results, force:true on filter). Should flag: unjustified nth() on pagination, waitForTimeout without justification. Should not flag locator-based page.locator usage patterns.",
+      "files": [
+        "evals/files/search-justified.spec.ts"
+      ],
+      "assertions": [
+        "Skips JUSTIFIED first() on line 22-24: comment explains results are server-ordered",
+        "Skips JUSTIFIED force:true on line 32-34: comment explains custom overlay intercepting pointer events",
+        "Flags unjustified .nth(2) on pagination line 42 — no JUSTIFIED comment above (#10a, P1)",
+        "Flags waitForTimeout(500) on line 56 — should use auto-wait for suggestions (#9, P1)",
+        "Does NOT flag page.locator('#x').fill() as direct page action usage — locator-based API is correct",
+        "Does NOT over-flag: clean tests (special characters, clear-and-reset) should have zero or minimal findings",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Review the Cypress E2E tests in evals/files/products.cy.ts. Identify all anti-patterns and suggest improvements.",
+      "expected_output": "Should detect Cypress framework via Phase 0. Should detect: it.only (P0), cy.wait numeric sleeps (P1), dangling cy.get (P0), conditional assertion bypass (P0), force:true without justification (P1), name-assertion mismatch on add-to-cart (P0), missing then on product details (P0). Should skip Playwright-specific checks.",
+      "files": [
+        "evals/files/products.cy.ts"
+      ],
+      "assertions": [
+        "Detects Cypress framework in Phase 0 — uses describe/it/cy.* not Playwright",
+        "Detects it.only on line 16 (#7, P0)",
+        "Detects cy.wait(2000) on line 18, cy.wait(1500) on line 24, cy.wait(1000) on line 41 — numeric sleeps (#9b, P1)",
+        "Phase 2 LLM review flags dangling cy.get('.product-card') on line 13 — no assertion chain, no action (#8, P0; Cypress dangling selectors are a manual Phase 2 check, not a scanner rule)",
+        "Flags conditional assertion bypass: if(Cypress.env('SHOW_EMPTY_STATE')) on line 53 — test passes vacuously when env not set (#5a, P0)",
+        "Flags force:true on #apply-discount click line 62 without JUSTIFIED comment (#5b, P1)",
+        "Flags name-assertion mismatch: 'add product to cart' on line 29 only clicks, doesn't verify cart updated (#1, P0)",
+        "Flags missing assertion: 'show product details' line 33 assigns cy.get to const but no should() chain (#2, P0)",
+        "Skips Playwright-specific checks (dangling page.locator, describe.serial, missing await)",
+        "Does NOT flag cy.get('.product-price').first() on line 42 as dangling — it is chained with .invoke('text')",
+        "Does NOT flag the sort comparison logic (lines 42-49) as an anti-pattern — programmatic price comparison is legitimate",
+        "Structured output with P0/P1/P2",
+        "Summary table included",
+        "Flags the blanket cy.on('uncaught:exception', () => false) on line 69 as #3b (P0) — it swallows every application exception for the suite",
+        "Phase 1 surfaces the scoped handler on lines 79-81 as a #3b candidate (opening-match by design), but the FINAL report must NOT count it as P0 — it contains an expect(err.message...) assertion on the error, the negative-regression pattern SKILL.md #3b explicitly exempts in Phase 2"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Review the Playwright E2E tests in evals/files/profile-mixed.spec.ts. Find anti-patterns but don't over-flag legitimate try/catch and test.skip usage.",
+      "expected_output": "Should detect: missing await on expect (#15 P0), missing await on action (#16 P0), direct page.fill/page.click usage (#17 P1), networkidle usage (#9c P1). Should NOT flag: legitimate try/catch in beforeEach (setup retry), test.skip with reason, legitimate try/catch in cleanup (delete address test).",
+      "files": [
+        "evals/files/profile-mixed.spec.ts"
+      ],
+      "assertions": [
+        "Detects missing await on expect: line 33 expect(page.locator('.toast-success')).toBeVisible() without await — assertion never runs (#15, P0)",
+        "Detects missing await on action: line 38 page.locator('#photo-upload').setInputFiles() without await — upload may never execute (#16, P0)",
+        "Flags direct page.fill on line 44 and page.click on line 45 — prefer locator.fill/locator.click (#17, P1)",
+        "Detects networkidle on line 51: waitForLoadState('networkidle') is unreliable (#9c, P1)",
+        "Does NOT flag try/catch in beforeEach lines 8-14 — legitimate retry for network timeout, not around assertions",
+        "Does NOT flag test.skip on line 24 — has valid TEAM-892 tracking reason",
+        "Does NOT flag try/catch in delete-address test lines 58-62 — best-effort cleanup, not assertion swallowing",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Review the Playwright E2E test utilities in evals/files/notebook-utils.ts. Identify module-level mutable state anti-patterns but do not over-flag idiomatic Playwright fixture declarations.",
+      "expected_output": "Should detect: module-level mutable counter with initializer (#19 P1). Should NOT flag: pure type-only `let` declarations reassigned in beforeEach, JUSTIFIED worker-scoped state, indented `let` inside function bodies.",
+      "files": [
+        "evals/files/notebook-utils.ts"
+      ],
+      "assertions": [
+        "Detects `let testNotebookSequence = 0` on line 5 — module-level counter with initializer; collides across parallel workers and survives retries (#19, P1)",
+        "Detects `let resultCache = new Map()` on line 8 — module-level mutable Map without JUSTIFIED (#19, P1)",
+        "Does NOT flag `let page: Page;` on line 12 — pure type declaration without initializer, reassigned in beforeEach, idiomatic Playwright fixture",
+        "Does NOT flag `let context: BrowserContext;` on line 13 — same idiomatic fixture pattern",
+        "Does NOT flag `let workerScopedCache = new Map()` on line 17 — JUSTIFIED on line 16 documents worker-scoped intent",
+        "Does NOT flag indented `let counter = 0` inside the function body on line 26 — local variable, not module-level state",
+        "Suggests fix: replace counter-based uniqueness with `Date.now() + Math.random().toString(36).slice(2, 8)` or `testInfo.workerIndex`",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Review the Playwright E2E tests in evals/files/widened-reads.spec.ts. Identify discarded boolean checks and one-shot reads, and do not over-flag handled or assigned reads.",
+      "expected_output": "Should detect: discarded page-level isVisible() with a selector argument (#8b P0) and one-shot allTextContents() assertion (#4c-4e P0). Should NOT flag as #8b: a .isVisible().catch(...) chain (boolean handled) or an assigned 'const present = await page.isVisible(...)' used in a following condition. The .catch line is separately and correctly flagged by #3 (error swallow), which is expected and out of focus here.",
+      "files": [
+        "evals/files/widened-reads.spec.ts"
+      ],
+      "assertions": [
+        "Detects discarded await page.isVisible('[data-testid=...]') with a selector argument on line 5 (#8b, P0) — widened from the empty-parens-only form",
+        "Detects one-shot expect(await page.locator('h2').allTextContents()).toContain('Home') on line 11 (#4c-4e, P0)",
+        "Does NOT flag const present = await page.isVisible('.banner') on line 16 as #8b — the boolean is assigned and used in the following if",
+        "Does NOT flag await page.locator('.err').isVisible().catch(() => false) on line 20 as #8b — the .catch handles the boolean (it is separately and correctly flagged by #3 error-swallow, which is out of focus for this fixture)",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Review the Playwright E2E tests in evals/files/fp-guards.spec.ts. Flag missing-await, dangling-locator, and conditional-bypass anti-patterns, and do not over-flag non-locator expects or bare boolean variables.",
+      "expected_output": "Should detect: missing await on a locator expect (#15 P0), a dangling locator statement that carries a trailing comment (#8a P0), and a conditional that gates an assertion via an isVisible() call (#5a P0). Should NOT flag as #15: expect(body.page) or expect(getByteLength(...)) (non-locator subjects). Should NOT flag as #5a: a bare boolean variable 'if (isVisible)' with no .isVisible() call.",
+      "files": [
+        "evals/files/fp-guards.spec.ts"
+      ],
+      "assertions": [
+        "Detects missing await on expect(page.getByRole('button', { name: 'Save' })).toBeVisible() on line 5 (#15, P0)",
+        "Does NOT flag expect(body.page).toBe(2) on line 8 as #15 — body.page is a non-locator pagination field, not a Playwright Page or Locator (the anchored page) alternative excludes a dotted .page member)",
+        "Does NOT flag expect(getByteLength(body.raw)).toBe(1024) on line 9 as #15 — getByteLength is a byte-length helper, not a getBy* locator (the getBy[A-Z] tightening excludes it)",
+        "Detects dangling locator page.locator('.dangling') on line 10 (#8a, P0) even though it carries a trailing line comment",
+        "Detects conditional bypass: if (await page.locator('.banner').isVisible()) gates the expect on line 12 (#5a, P0)",
+        "Does NOT flag if (isVisible) on line 19 as #5a — isVisible is a bare boolean variable, not an .isVisible() call",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Review the legacy Cypress spec in evals/files/cypress/integration/legacy-awesome-bar.js. This file uses the classic cypress/integration layout with a plain .js name (no .cy./.spec./.test. suffix). Flag any committed focused test.",
+      "expected_output": "Should detect the committed it.only on the 'supports number formats' test (#7 P0), which silently skips the two sibling tests on every CI run. Detection must work even though the file has no .cy./.spec./.test. suffix because it lives under cypress/integration/.",
+      "files": [
+        "evals/files/cypress/integration/legacy-awesome-bar.js"
+      ],
+      "assertions": [
+        "Detects it.only on the 'supports number formats' test (#7, P0)",
+        "Notes that the it.only skips the two sibling it() tests in the same file on every CI run",
+        "Detection is not missed despite the legacy cypress/integration/*.js naming (no .cy./.spec./.test. suffix)",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Review the Playwright E2E tests in evals/files/misplaced-await.spec.ts. Flag the awaited-locator variant of the missing-await anti-pattern and do not over-flag valid awaited expects or value-resolving one-shot reads.",
+      "expected_output": "Should detect the two awaited-locator assertions where await is misplaced inside expect() onto the locator instead of on expect (#15 P0), so the web-first matcher promise floats. Should NOT flag the valid 'await expect(locator).toMatcher()' lines. Should classify the value-resolving 'expect(await locator.isVisible()).toBe(true)' as #4c-4e (one-shot read), not the #15 awaited-locator variant, and must not flag the numeric count() read at all.",
+      "files": [
+        "evals/files/misplaced-await.spec.ts"
+      ],
+      "assertions": [
+        "Detects expect(await page.getByTestId('run-dialog')).toBeVisible() on line 9 as #15 (P0) — await on the locator is a no-op, matcher promise unawaited",
+        "Detects expect(await page.getByText('Saved')).toHaveText('Saved') on line 10 as #15 (P0)",
+        "Does NOT flag await expect(page.getByTestId('run-dialog')).toBeVisible() (line 17) as #15 — await is correctly on expect",
+        "Does NOT flag await expect(page.getByText('Saved')).toHaveText('Saved') (line 18) as #15",
+        "Classifies expect(await page.locator('.row').isVisible()).toBe(true) (line 24) as #4c-4e one-shot read, not the #15 awaited-locator variant",
+        "Does NOT flag expect(await page.locator('.row').count()).toBeGreaterThan(0) (line 26) — non-web-first matcher on a value-resolving read",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Review the Playwright E2E tests in evals/files/always-true-locator.spec.ts. Identify always-passing assertions and any false positives to avoid.",
+      "expected_output": "Should detect the #4f always-true Locator assertions (not.toBeNull / not.to.equal(null) / toBeDefined on a Locator) and must NOT flag a not.toBeNull on a numeric value.",
+      "files": [
+        "evals/files/always-true-locator.spec.ts"
+      ],
+      "assertions": [
+        "Detects expect(page.getByText('1/31/2025, 4:05:00 PM')).not.toBeNull() on line 9 as #4f (P0) — a Locator is never null, so the assertion always passes",
+        "Detects expect(list.getByText('alpha')).not.to.equal(null) on line 15 as #4f (P0) — chai-style null comparison on a Locator is always true",
+        "Detects expect(page.locator('.beta-row')).toBeDefined() on line 16 as #4f (P0) — a Locator is always a defined object",
+        "Does NOT flag expect(rowCount).not.toBeNull() on line 22 as #4f — rowCount is a number resolved from count(), a legitimate non-Locator subject (the regex requires a locator/getBy subject inside expect())",
+        "Does NOT flag await expect(page.getByRole('row')).toHaveCount(rowCount) on line 23 — proper awaited web-first assertion",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Review the Playwright E2E tests in evals/files/delete-verification.spec.ts. Identify delete/remove tests that never verify the entity is gone (#2 Missing Then, P0), and avoid the documented false positives.",
+      "expected_output": "Should detect the 'Delete the workspace' test as #2 Missing Then (P0) and must NOT flag the API-404 delete, the afterEach cleanup delete, the success-toast delete, or the editor text removal.",
+      "files": [
+        "evals/files/delete-verification.spec.ts"
+      ],
+      "assertions": [
+        "Detects the 'Delete the workspace' test (clicks 'Delete workspace' then confirms 'Delete') as #2 Missing Then (P0) — it performs a real entity delete but never asserts the workspace is gone (no not.toBeVisible/toHaveCount(0)/redirect/toast)",
+        "Does NOT flag the 'API delete then 404 confirms removal' test — the GET asserting status() 404 after request.delete() IS the negative-existence assertion",
+        "Does NOT flag the test.afterEach delete — a teardown/cleanup delete is not a user-facing verification path",
+        "Does NOT flag the 'should delete a profile' test — the post-delete success toast getByText(/profile deleted/i) counts as verifying the deletion happened",
+        "Does NOT flag the 'should remove selected text from the editor' test — editor text removal is not an entity deletion (judged by the noun), and it asserts toBeEmpty() anyway"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Review the Playwright E2E tests in evals/files/soft-and-zero-timeout.spec.ts. Identify retry-disabling timeout options and expect.soft overuse, respecting JUSTIFIED suppression and without flagging nonzero timeout bounds.",
+      "expected_output": "Should detect: { timeout: 0 } on an assertion (#4g P0) and a test where all assertions are expect.soft (#18 P1). Should NOT flag: the JUSTIFIED { timeout: 0 } snapshot-of-absence, nonzero timeout bounds in waitFor()/toBeVisible(), or a test with a minority of soft assertions.",
+      "files": [
+        "evals/files/soft-and-zero-timeout.spec.ts"
+      ],
+      "assertions": [
+        "Detects toHaveCount(0, { timeout: 0 }) on line 7 as #4g (P0) — { timeout: 0 } disables auto-retry, turning the assertion into a one-shot snapshot of absence",
+        "Does NOT flag the { timeout: 0 } on line 19 as #4g — the // JUSTIFIED: snapshot-of-absence comment on line 18 (position-1 suppression) documents the intentional must-never-exist semantic",
+        "Does NOT flag waitFor({ state: 'hidden', timeout: 5000 }) on line 12 or toBeVisible({ timeout: 5000 }) on line 13 as #4g or #9 — nonzero timeout options are bounds, not sleeps and not retry-disables",
+        "Flags the 'shows all profile fields' test as #18 (P1) — all 3 of its assertions (lines 26-28) are expect.soft (100% > 50% threshold); no hard assertion gates the test, so cascading failures are masked",
+        "Does NOT flag the 'shows plan details' test as #18 — only 1 of its 3 assertions (line 35) is soft (33%, below the >50% threshold); the hard assertions on lines 33-34 gate the test",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Review the Playwright E2E tests in evals/files/unmocked-writes.spec.ts. Check whether write/credential paths are stubbed (#20) without flagging stubbed writes or client-side-only validation tests.",
+      "expected_output": "Should detect one unmocked real-backend write (#20 P1): the signup submit with no route stub. Should NOT flag: the test whose write endpoint is covered by page.route, or the client-side validation test that fires no request.",
+      "files": [
+        "evals/files/unmocked-writes.spec.ts"
+      ],
+      "assertions": [
+        "Flags the 'registers a new account' test as #20 (P1) — the submit on line 8 fires a real signup mutation and no page.route/cy.intercept stub in the spec or its fixtures covers the endpoint, so every CI run registers a real account on a shared backend",
+        "Does NOT flag the 'shows an error when the backend rejects the email' test as #20 — the page.route('**/api/auth/join**') stub on lines 13-15 covers the write endpoint before the submit on line 19; the test asserts the app's handling of the stubbed 409 response",
+        "Does NOT flag the 'rejects a malformed email client-side' test as #20 — client-side validation blocks submission (comment on line 27) so no network request is fired; there is nothing to stub",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Review the Playwright E2E tests in evals/files/session-state.spec.ts together with evals/files/auth.setup.ts. Check every storageState dependency for reproducibility (#21) and do not flag session files a setup project regenerates.",
+      "expected_output": "Should detect one manually-captured session-file dependency (#21 P2): the member storageState that only a manual DevTools capture produces. Should NOT flag the admin storageState, which auth.setup.ts regenerates programmatically on every run.",
+      "files": [
+        "evals/files/session-state.spec.ts",
+        "evals/files/auth.setup.ts"
+      ],
+      "assertions": [
+        "Flags the storageState '.auth/member.json' on session-state.spec.ts line 6 as #21 (P2) — per the comment on lines 3-4 only a manual DevTools capture produces the file; nothing in the automated setup regenerates it, so it is absent on fresh clones/CI and silently expires",
+        "Does NOT flag the storageState '.auth/admin.json' on session-state.spec.ts line 17 as #21 — auth.setup.ts line 9 writes that exact path programmatically on every run (a `setup` project), so the dependency is reproducible from code",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Review the Playwright E2E tests in evals/files/optimistic-ui.spec.ts. Check write-interaction tests for request proof (#22) without flagging tests that await request evidence or exercise pure client-side state.",
+      "expected_output": "Should detect one optimistic-UI-only assertion (#22 P1): the like test that asserts only the optimistically-flipped aria-pressed attribute. Should NOT flag: the variant that awaits page.waitForRequest, or the collapse test whose handler issues no request.",
+      "files": [
+        "evals/files/optimistic-ui.spec.ts"
+      ],
+      "assertions": [
+        "Flags the 'likes a sentence' test as #22 (P1) — the click on line 9 is verified only by the aria-pressed assertion on line 10, and the comment on lines 3-4 documents that the handler flips aria-pressed optimistically before the POST; the test passes even if the API wiring is deleted",
+        "Does NOT flag the 'likes a sentence and proves the write fired' test as #22 — page.waitForRequest is set up on line 16 BEFORE the click on line 19 and awaited on line 20, proving the POST /api/sentence/like fired alongside the UI assertion",
+        "Does NOT flag the 'collapses the translation panel' test as #22 — the collapse handler is pure client-side state (comment on line 26, no request in the handler), so no call proof is required",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Review the Playwright E2E tests in evals/files/liked-fixture.spec.ts together with the display component evals/files/components/liked-list.tsx. Cross-check seeded fixture data against the component's render guards (#23) and do not flag guard-passing fixtures.",
+      "expected_output": "Should detect two fixture/render-guard mismatches (#23 P2): a liked-tab fixture seeding liked: false that the component guard suppresses (element-not-found flake), and a negative toHaveCount(0) assertion that passes for the wrong reason. Should NOT flag the fixture seeding liked: true.",
+      "files": [
+        "evals/files/liked-fixture.spec.ts",
+        "evals/files/components/liked-list.tsx"
+      ],
+      "assertions": [
+        "Flags the 'shows the liked sentence' test as #23 (P2) — the fixture seeds liked: false (line 10) for the Liked tab, but LikedListItem's render guard (components/liked-list.tsx line 10: if (tabIsLiked && !item.liked) return null) suppresses the item, so the toHaveText assertion on line 14 fails as 'element not found' that looks like infra flake",
+        "Flags the 'shows the empty state when nothing is liked' test as #23 (P2) — the negative assertion toHaveCount(0) on line 26 passes for the wrong reason: the seeded item (liked: false, line 22) is guard-suppressed rather than genuinely absent, so the test would keep passing even if real liked items leaked into the empty state",
+        "Does NOT flag the 'renders a guard-passing liked item' test as #23 — the fixture seeds liked: true (line 34), which passes every render guard for the Liked view, making the assertion on line 38 meaningful",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Review the Playwright E2E tests in evals/files/documented-exclusions.spec.ts. Triage the Phase 1 hits against the documented false-positive exclusions (#5a if-without-expect, #4c-4e custom-service subject, #16 Promise.all element, #4b dynamically-injected element, #4h bare url read, #9 waitFor timeout bound) and only report the real finding.",
+      "expected_output": "Exactly one P0 should survive Phase 2: the spinner test whose expect() is gated inside an if with no unconditional assertion (#5a). All other Phase 1 hits match documented exclusions and must be skipped; the bare page.url() read and the waitFor timeout bound must not be flagged at all.",
+      "files": [
+        "evals/files/documented-exclusions.spec.ts"
+      ],
+      "assertions": [
+        "Does NOT report the #5a Phase 1 hit on line 15 as P0 — the if-body (line 16) contains no expect(); it gates a setup action (dismissing an optional cookie banner) and the test still asserts unconditionally on line 18",
+        "Still flags the #5a hit on lines 64-65 as P0 — the expect on line 65 is gated inside the if with no unconditional assertion after it, so the test passes silently whenever the spinner never appears",
+        "Does NOT report the #4c-4e Phase 1 hit on line 24 as P0 — the subject flags.isEnabled('labs-mode') is a custom FeatureFlagService method returning Promise<boolean> (defined on lines 4-10), not a Playwright Locator/Page",
+        "Does NOT report the #16 Phase 1 hit on line 33 as P0 — page.locator('#send').click() is an element of the Promise.all array opened on line 31; Promise.all awaits it, so no explicit await is needed",
+        "Does NOT report the #4b Phase 1 hit on line 44 as P0 — the .expired-license-banner is dynamically injected only when the mocked license API reports expiry (route on lines 40-42), so toBeAttached() can genuinely fail and is meaningful",
+        "Does NOT flag const originalUrl = page.url() on line 49 as #4h — a bare page.url() read captured for the later toHaveURL assertion on line 52 is the canonical baseline-then-assert pattern; only expect(page.url()) is the anti-pattern",
+        "Does NOT flag waitFor({ state: 'visible', timeout: 5000 }) on line 58 as #9 — a timeout option inside waitFor() is a bound on a condition-based wait, not a hard-coded sleep",
+        "Structured output with P0/P1/P2",
+        "Summary table included"
+      ]
+    }
+  ]
+}

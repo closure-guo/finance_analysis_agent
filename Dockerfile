@@ -3,6 +3,13 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
+# 设置时区为中国标准时间（解决容器内时间与宿主机不匹配问题）
+ENV TZ=Asia/Shanghai
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    rm -rf /var/lib/apt/lists/*
+
 # 国内 PyPI 镜像
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 

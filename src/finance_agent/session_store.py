@@ -80,6 +80,9 @@ def init_db() -> None:
         ("session_type", "ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'analysis'"),
         ("focus", "ALTER TABLE sessions ADD COLUMN focus TEXT DEFAULT ''"),
         ("pending_intent", "ALTER TABLE sessions ADD COLUMN pending_intent TEXT DEFAULT ''"),
+        ("pipeline_snapshot", "ALTER TABLE sessions ADD COLUMN pipeline_snapshot TEXT"),
+        ("pipeline_timelines", "ALTER TABLE sessions ADD COLUMN pipeline_timelines TEXT"),
+        ("failure_reason", "ALTER TABLE sessions ADD COLUMN failure_reason TEXT"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -95,6 +98,28 @@ def init_db() -> None:
     # 保留只会显示"未知时间"且排序错乱（ORDER BY created_at DESC 把它们堆在末尾）。
     # 启动时幂等删除。必须在 _repair_bad_created_at 之后执行。
     _purge_epoch_sessions(conn)
+
+    # 事件日志表：每个 SSE 事件按 session 内单调递增 seq 落库，作为断线重放的事实源。
+    # 对应 delta spec: resume-stream-on-session-switch Task 1.1
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL,
+            seq         INTEGER NOT NULL,
+            event_json  TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            UNIQUE (session_id, seq)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, seq)"
+    )
+
+    # 启动 reconcile：残留 running 会话（上次进程退出时未正常结束）置为 interrupted。
+    # 对应 delta spec: resume-stream-on-session-switch Task 1.4
+    conn.execute("UPDATE sessions SET status = 'interrupted' WHERE status = 'running'")
 
     conn.commit()
     conn.close()
@@ -243,6 +268,93 @@ def update_session_for_clarify(
     return cur.rowcount > 0
 
 
+def append_session_event(session_id: str, event: dict) -> int:
+    """将 SSE 事件追加到会话的事件日志，返回分配的 seq（会话内从 1 单调递增）。
+
+    对应 delta spec: resume-stream-on-session-switch Task 1.2。
+    事件先落库再 fan-out 给订阅者，保证断线重放的事实源不依赖进程内存。
+    """
+    conn = _get_db()
+    # 获取当前会话最大 seq，+1 作为新 seq（并发安全由 UNIQUE 约束兜底）
+    row = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_events WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    nextSeq = row["max_seq"] + 1
+    conn.execute(
+        "INSERT INTO session_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+        (
+            session_id,
+            nextSeq,
+            json.dumps(event, ensure_ascii=False, default=str),
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return nextSeq
+
+
+def list_session_events(session_id: str, after_seq: int = 0) -> list[dict]:
+    """返回会话中 seq > after_seq 的事件列表，按 seq 升序。
+
+    每行包含 seq 和 event_json 字段。对应 delta spec Task 1.2。
+    """
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT seq, event_json FROM session_events "
+        "WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
+        (session_id, after_seq),
+    ).fetchall()
+    conn.close()
+    return [{"seq": r["seq"], "event_json": r["event_json"]} for r in rows]
+
+
+def has_terminal_event(session_id: str) -> bool:
+    """检查 journal 中是否已有终态事件（done/interrupted/error）。
+
+    用于 publish 的 CAS 检查，避免重复写入终态事件。
+    """
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT event_json FROM session_events WHERE session_id = ? ORDER BY seq DESC",
+        (session_id,),
+    ).fetchall()
+    conn.close()
+    terminalTypes = {"done", "interrupted", "error"}
+    for row in rows:
+        try:
+            event: dict = json.loads(row["event_json"])
+            if event.get("type") in terminalTypes:
+                return True
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return False
+
+
+def get_terminal_event(session_id: str) -> dict | None:
+    """返回 journal 中最后一条终态事件（done/interrupted/error），无则返回 None。
+
+    用于 cancel 幂等：无活跃任务时返回终态而非 404。
+    """
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT seq, event_json FROM session_events WHERE session_id = ? ORDER BY seq DESC",
+        (session_id,),
+    ).fetchall()
+    conn.close()
+    terminalTypes = {"done", "interrupted", "error"}
+    for row in rows:
+        try:
+            event: dict = json.loads(row["event_json"])
+            if event.get("type") in terminalTypes:
+                event["seq"] = row["seq"]
+                return event
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
 def update_session_report(
     session_id: str,
     report_markdown: str = "",
@@ -286,13 +398,19 @@ def update_session_report(
     return cur.rowcount > 0
 
 
-def update_session_status(session_id: str, status: str) -> bool:
-    """更新 session 状态（如 running -> failed）。"""
+def update_session_status(session_id: str, status: str, failure_reason: str | None = None) -> bool:
+    """更新 session 状态（如 running -> failed）。可选写入 failure_reason。"""
     conn = _get_db()
-    cur = conn.execute(
-        "UPDATE sessions SET status = ? WHERE session_id = ?",
-        (status, session_id),
-    )
+    if failure_reason is not None:
+        cur = conn.execute(
+            "UPDATE sessions SET status = ?, failure_reason = ? WHERE session_id = ?",
+            (status, failure_reason, session_id),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE sessions SET status = ? WHERE session_id = ?",
+            (status, session_id),
+        )
     conn.commit()
     conn.close()
     return cur.rowcount > 0
@@ -319,6 +437,7 @@ def list_sessions() -> list[dict[str, Any]]:
         """
         SELECT session_id, stock_code, stock_name, display_name, status,
                focus, pending_intent, created_at, duration_ms, session_type,
+               failure_reason,
                length(report_markdown) as report_len
         FROM sessions
         ORDER BY created_at DESC
@@ -338,16 +457,24 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     """Get full session by id."""
     conn = _get_db()
     row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
-    conn.close()
     if not row:
+        conn.close()
         return None
     d = dict(row)
+    # 查询事件 journal 最大 seq，供前端断点续传使用
+    seqRow = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_events WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    d["last_seq"] = seqRow["max_seq"] if seqRow else 0
     for key in (
         "chart_data",
         "analyst_reports",
         "agent_process",
         "analyst_summaries",
         "chat_history",
+        "pipeline_timelines",
     ):
         if d.get(key):
             with contextlib.suppress(json.JSONDecodeError, TypeError):
@@ -368,9 +495,11 @@ def rename_session(session_id: str, display_name: str) -> bool:
 
 
 def delete_session(session_id: str) -> bool:
-    """Delete a session."""
+    """Delete a session and cascade-delete its event journal."""
     conn = _get_db()
     cur = conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    # 级联删除事件日志（对应 delta spec Task 1.3）
+    conn.execute("DELETE FROM session_events WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
     return cur.rowcount > 0
@@ -382,6 +511,7 @@ def append_chat(
     content: str,
     thinking: str | None = None,
     tool_calls: list | None = None,
+    agent_timeline: list | None = None,
 ) -> None:
     """Append a chat message to session's chat_history.
 
@@ -391,6 +521,8 @@ def append_chat(
         content: 最终回复文本
         thinking: 可选的 agent 思考过程原文（用于历史会话回显）
         tool_calls: 可选的工具调用记录列表（含 name/args/result_text/done）
+        agent_timeline: 可选的结构化时序（TimelineItem 数组：思考/搜索/工具调用交错），
+            供前端原样恢复（不再走拍平近似）
     """
     conn = _get_db()
     row = conn.execute(
@@ -408,6 +540,8 @@ def append_chat(
         entry["thinking"] = thinking
     if tool_calls:
         entry["tool_calls"] = tool_calls
+    if agent_timeline:
+        entry["agentTimeline"] = agent_timeline
     history.append(entry)
     conn.execute(
         "UPDATE sessions SET chat_history = ? WHERE session_id = ?",
@@ -415,3 +549,85 @@ def append_chat(
     )
     conn.commit()
     conn.close()
+
+
+def upsert_chat(
+    session_id: str,
+    role: str,
+    content: str,
+    thinking: str | None = None,
+    tool_calls: list | None = None,
+    agent_timeline: list | None = None,
+) -> None:
+    """upsert 语义的 chat 持久化：查找最后一条指定 role 的消息，存在则更新，无则追加。
+
+    用于运行中增量持久化：每 10 秒将 collector 内容 upsert 到 chat_history，
+    避免用户中途切走后 assistant 回复内容丢失。
+    """
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT chat_history FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+    try:
+        history = json.loads(row["chat_history"]) if row["chat_history"] else []
+    except (json.JSONDecodeError, TypeError):
+        history = []
+
+    # 从末尾查找最后一条指定 role 的消息
+    found = False
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == role:
+            history[i]["content"] = content
+            if thinking is not None:
+                history[i]["thinking"] = thinking
+            if tool_calls is not None:
+                history[i]["tool_calls"] = tool_calls
+            if agent_timeline is not None:
+                history[i]["agentTimeline"] = agent_timeline
+            history[i]["ts"] = datetime.now().isoformat()
+            found = True
+            break
+
+    if not found:
+        entry: dict = {"role": role, "content": content, "ts": datetime.now().isoformat()}
+        if thinking:
+            entry["thinking"] = thinking
+        if tool_calls:
+            entry["tool_calls"] = tool_calls
+        if agent_timeline:
+            entry["agentTimeline"] = agent_timeline
+        history.append(entry)
+
+    conn.execute(
+        "UPDATE sessions SET chat_history = ? WHERE session_id = ?",
+        (json.dumps(history, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_pipeline_snapshot(session_id: str, snapshot: dict) -> bool:
+    """持久化管线进度快照（JSON）。返回是否更新到行。"""
+    conn = _get_db()
+    cur = conn.execute(
+        "UPDATE sessions SET pipeline_snapshot = ? WHERE session_id = ?",
+        (json.dumps(snapshot, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def update_pipeline_timelines(session_id: str, timelines: dict) -> bool:
+    """持久化管线节点时序（JSON：{node: [TimelineItem]}）。返回是否更新到行。"""
+    conn = _get_db()
+    cur = conn.execute(
+        "UPDATE sessions SET pipeline_timelines = ? WHERE session_id = ?",
+        (json.dumps(timelines, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
