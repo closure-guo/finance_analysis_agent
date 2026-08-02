@@ -14,8 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 from finance_agent import agent_factory, session_store
 
 # ───────────────────────────────────────────────
@@ -37,19 +35,6 @@ def _consume_tool(tool, *args, **kwargs):
         events = []
         async for ev in tool(*args, **kwargs):
             events.append(ev)
-        return events
-
-    return asyncio.run(_run())
-
-
-def _consume_tool_expect_error(tool, *args, **kwargs):
-    """同步驱动工具并捕获异常。"""
-
-    async def _run():
-        events = []
-        with pytest.raises(RuntimeError):
-            async for ev in tool(*args, **kwargs):
-                events.append(ev)
         return events
 
     return asyncio.run(_run())
@@ -172,8 +157,12 @@ def test_status_running_during_execution(tmp_path, monkeypatch):
     assert observed == ["running"]
 
 
-def test_exception_marks_failed_and_reraises(tmp_path, monkeypatch):
-    """stub _stream_graph 抛异常 → 工具 re-raise + status=failed。"""
+def test_exception_marks_failed_and_emits_error(tmp_path, monkeypatch):
+    """stub _stream_graph 抛异常 → 后台 Task 置 status=failed + 下发错误事件（不 re-raise）。
+
+    resume-stream-on-session-switch 重构后，异常由后台 Task 独立处理：
+    不再向调用方 re-raise，而是置 failed 状态并下发错误 progress 事件。
+    """
     sid = _make_session(tmp_path, monkeypatch)
 
     def _failing_stream_graph(initial_state, config=None, session_id=None):
@@ -183,7 +172,12 @@ def test_exception_marks_failed_and_reraises(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_factory, "_stream_graph", _failing_stream_graph)
 
     tool = agent_factory._make_run_deep_analysis(session_id=sid)
-    _consume_tool_expect_error(tool, "600519", "贵州茅台")
+    events = _consume_tool(tool, "600519", "贵州茅台")
+
+    # 异常被后台 Task 捕获，不下发 RuntimeError，而是下发错误 progress 事件
+    errorEvents = [e for e in events if "分析失败" in getattr(e, "content", "")]
+    assert len(errorEvents) == 1
+    assert "RuntimeError" in errorEvents[0].content
 
     assert session_store.get_session(sid)["status"] == "failed"
 
