@@ -61,7 +61,7 @@
 
 ## 已知 pre-existing 失败（非本次改动引入）
 
-### 1. E2E 五层管线：Fund Manager 决策枚举解析
+### 1. E2E 五层管线：Fund Manager 决策枚举断言写错
 
 `tests/e2e/test_5layer_pipeline.py::Test5LayerPipelineE2E::test_full_pipeline_produces_report`
 
@@ -69,11 +69,13 @@
 AssertionError: assert 'return' in ('approve', 'reject', 'revise')
 ```
 
-Fund Manager 输出了 `return` 而非预期三个枚举值之一，属决策解析问题，与流式终态事件无关。
-
 已用 `git stash` 隔离验证：**改动前以完全相同的断言失败**（`tests/e2e/test_5layer_pipeline.py:63`），确认为 pre-existing。
 
-已开 issue 跟踪：#34
+已修复并关闭：issue #34（提交 `7e5e972`）
+
+**归因更正说明**：本报告初版写的是「Fund Manager 输出了 `return` 而非预期三个枚举值之一，属决策解析问题」——该归因方向错误。实际上 `return` 才是项目全线定义的正确枚举值（`prompts/fund_manager.md:5-7`、`state.py:96`、`routing.py:25`、ADR-0011 Layer V 均为 `approve | reject | return`，且 `src/` 下 grep `revise` 零匹配）。错的是测试断言里的 `revise`。修复后 live E2E 实测 1 passed。
+
+调查中另发现真实缺陷（Fund Manager 缺枚举校验，非法值经 `routing.py:25` else 分支静默降级为 approve），已另开 issue #36 跟踪，需 delta spec 先行。
 
 ### 2. asyncio_mode=auto 与 tests/e2e 的 Playwright sync API 冲突
 
@@ -81,21 +83,20 @@ Fund Manager 输出了 `return` 而非预期三个枚举值之一，属决策解
 
 ```
 RuntimeError: Runner.run() cannot be called from a running event loop
-RuntimeError: asyncio.run() cannot be called from a running event loop
 ```
 
-实测定位：
+**真实根因是执行顺序**（最小复现）：
 
-| 命令 | 结果 |
+| 顺序 | 结果 |
 |---|---|
-| `uv run pytest tests/ --ignore=tests/e2e --ignore=tests/scripts` | **569 passed**，零 RuntimeError |
-| `uv run pytest`（含 e2e） | 出现上述 RuntimeError |
+| `pytest tests/e2e/test_frontend_interactions.py tests/test_web_search_tool.py` | `Runner.run()` RuntimeError ×3 |
+| `pytest tests/test_web_search_tool.py tests/e2e/test_frontend_interactions.py` | **7 passed** |
 
-根因为 `asyncio_mode = "auto"` 与 `tests/e2e/conftest.py` 的 Playwright **同步** API（`sync_playwright()`）冲突：sync Playwright 内部调用 `asyncio.run()`，在 pytest-asyncio 已建立的运行中事件循环内被调用即报错。属测试基础设施配置问题，非产品代码缺陷。
+同一集合仅调换顺序结果相反：sync Playwright（session 级 `browser` fixture）先运行后留下未清理的事件循环状态，使 pytest-asyncio 对后续 async 测试失效。
 
-已开 issue 跟踪：#35
+已修复并关闭：issue #35（提交 `a17b328`，`pyproject.toml` 加 `norecursedirs` 排除 `tests/e2e` 与 `tests/scripts`，与 CI 分层执行对齐）
 
-**归因更正说明**：本报告初版曾将此描述为「约 87 个失败、并跑时事件循环隔离问题」。该数字与归因均不准确 —— 后续实测确认排除 `tests/e2e` 后 569 个测试全部通过，且 `tests/e2e` 仅收集到 6 个测试，凑不出 87 个失败。以上表实测结论为准。
+**归因更正说明**：本报告初版将此描述为「约 87 个失败、并跑时事件循环隔离问题」，且 issue #35 初版归因为「sync Playwright 内部调 `asyncio.run()` 被已有循环拦住」——方向相反。实际是 sync Playwright 留下循环污染后续测试。「87」这一数字亦无可靠来源，实际报错次数等于 e2e 之后的 async 测试数量。
 
 ## 改动范围
 
