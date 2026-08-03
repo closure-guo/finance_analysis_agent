@@ -124,15 +124,24 @@ async def test_chat_disconnect_task_continues(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_chat_single_flight_rejects_second_request(tmp_path, monkeypatch):
-    """single-flight：任务运行中（stub 搜索 5s 窗口）再发消息返回 409，且不追加 user 消息。"""
+    """single-flight：任务运行中（stub 搜索 5s 窗口）再发消息返回 409，且不追加 user 消息。
+
+    首个请求用后台 task 发起并持续消费（不 await 完成），确保断言第二个请求时
+    首个任务确实仍在运行；若改用"读首事件即断开"，首事件要等 stub sleep 5s 后才到达，
+    此时任务已跑完，断言落在任务注销的竞态窗口上（见 fix-terminal-event-dedup-scope）。
+    """
     _setup(tmp_path, monkeypatch, scenario="tool_call")
     from finance_agent.api import app
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        # 启动首个请求并断开（后台任务因 _stub_web_search sleep 5s 仍在运行）
-        await _read_first_event_then_disconnect(client, "/api/chat", {"message": "茅台最新消息"})
+        # 后台发起首个请求并持续消费（任务在 _stub_web_search sleep 5s 窗口内运行）
+        streamTask = asyncio.create_task(
+            _consume_stream_until_done(client, "/api/chat", {"message": "茅台最新消息"})
+        )
+        # 等任务启动并进入 sleep 5s 窗口
+        await asyncio.sleep(1.0)
         sessionId = _latest_session_id()
 
         # 任务仍在运行（stub web_search 5s 窗口），第二个请求必须被拒
@@ -140,7 +149,10 @@ async def test_chat_single_flight_rejects_second_request(tmp_path, monkeypatch):
         assert resp.status_code == 409, f"运行中未拒绝新消息: {resp.status_code}"
         assert resp.json().get("error") == "session_busy"
 
-    # 等首个任务完成，校验 user 消息只有一条（409 未追加）
+        # 等首个任务自然跑完（保持连接活跃，使后台任务能推进）
+        await asyncio.wait_for(streamTask, timeout=15.0)
+
+    # 校验 user 消息只有一条（409 未追加）
     terminal = await _wait_terminal_event(sessionId)
     assert terminal["type"] == "done", f"首个任务应正常完成: {terminal}"
     session = session_store.get_session(sessionId)

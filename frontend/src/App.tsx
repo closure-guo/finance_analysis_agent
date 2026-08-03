@@ -837,6 +837,16 @@ export default function App() {
               continue
             }
 
+            if (event.type === 'chat_done') {
+              // 对话流结束：置 streaming=false 并收口所有 thinking item（与 quickChat 对齐）。
+              // 缺此分支时深度模式的 chat_done 被静默丢弃，游标依赖 done 终态事件，
+              // 后端终态被吞时游标永久卡死（fix-terminal-event-dedup-scope D2）
+              if (assistantMsgIdRef.current) {
+                handleChatStreamEvent(event, assistantMsgIdRef.current)
+              }
+              continue
+            }
+
             if (event.type === 'awaiting_input') {
               setAppState('clarifying')
               if (assistantMsgIdRef.current) {
@@ -1004,12 +1014,20 @@ export default function App() {
         abortRef.current = null
         handleStreamTerminal(finishedSessionId)
       }
+      // 兜底清除游标：流已结束，助手消息不应再显示流式转圈
+      // （游标不依赖单一终态事件，fix-terminal-event-dedup-scope D3）
+      if (assistantMsgIdRef.current) {
+        commitMessages(prev => prev.map(m =>
+          m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+        ))
+      }
     } catch (e) {
       // 清理 SSE 会话标记
       const failedSessionId = streamingSessionIdRef.current
       streamingSessionIdRef.current = null
       abortRef.current = null
       // 切换会话/新建分析主动中断，不是错误，静默退出
+      // （不清 streaming：消息属被切走的会话视图，由会话恢复逻辑接管）
       if (e instanceof Error && e.name === 'AbortError') return
       handleStreamTerminal(failedSessionId)
       console.error('SSE error:', e)
@@ -1018,6 +1036,12 @@ export default function App() {
         type: 'error',
         content: `连接错误: ${e instanceof Error ? e.message : 'Unknown'}`,
       }])
+      // 兜底清除游标：连接异常中断，助手消息不应再显示流式转圈
+      if (assistantMsgIdRef.current) {
+        commitMessages(prev => prev.map(m =>
+          m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+        ))
+      }
     }
   }
 
