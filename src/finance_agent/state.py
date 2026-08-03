@@ -94,7 +94,7 @@ class AnalysisState(TypedDict, total=False):
     final_trade_decision: dict  # TradeDecision 序列化
 
     # Layer V: Fund Manager
-    fund_manager_decision: str  # approve | reject | return
+    fund_manager_decision: Literal["approve", "reject", "return"]
     return_count: int  # 退回次数（上限 1）
 
     # 引用校验（ADR-0010 Step 3）

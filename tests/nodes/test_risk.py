@@ -3,6 +3,9 @@
 import json
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from finance_agent.nodes.risk import (
     aggressive_debater,
     conservative_debater,
@@ -75,3 +78,24 @@ class TestRiskJudge:
         decision = result["final_trade_decision"]
         assert decision.action == "buy"
         assert decision.confidence == 0.6
+
+
+class TestRiskFieldValidation:
+    """role 与 confidence 约束（harden-llm-output-validation）。"""
+
+    @patch("finance_agent.nodes.risk.call_llm_streaming")
+    def test_invalid_role_raises(self, mock_llm):
+        """风控辩论者输出非法 role 时抛 ValidationError。"""
+        mock_llm.return_value = _mock_risk_msg("激进派")  # 非法：中文角色名
+        with pytest.raises(ValidationError):
+            aggressive_debater({"risk_debate_history": [], "trader_plan": {}})
+
+    @patch("finance_agent.nodes.risk.call_llm_streaming")
+    def test_judge_confidence_out_of_range_raises(self, mock_llm):
+        """Risk Judge 返回百分数置信度时抛 ValidationError。"""
+        mock_llm.return_value = json.dumps(
+            {"action": "buy", "confidence": 95, "reasoning": "按百分数返回"},
+            ensure_ascii=False,
+        )
+        with pytest.raises(ValidationError):
+            risk_judge({"trader_plan": {}, "risk_debate_history": []})

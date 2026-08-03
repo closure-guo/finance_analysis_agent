@@ -5,7 +5,12 @@
 """
 
 from finance_agent.citation import Claim, verify_claims
-from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
+from finance_agent.models import (
+    AnalystReport,
+    DebateMessage,
+    FundManagerDecision,
+    TradeDecision,
+)
 
 
 class TestAnalystReport:
@@ -84,3 +89,94 @@ class TestTradeDecision:
                 confidence=0.8,
                 reasoning="",
             )
+
+
+class TestModelFieldConstraints:
+    """枚举与范围约束（harden-llm-output-validation）。
+
+    加固前 role 是裸 str、confidence 无 ge/le、round 无范围——
+    LLM 串角色或返回百分数置信度不会被发现，只会污染报告渲染。
+    """
+
+    def test_debate_message_invalid_role_rejected(self):
+        """非法角色值被拒绝（加固前为裸 str，静默透传）。"""
+        import pytest
+
+        with pytest.raises(ValueError):
+            DebateMessage(
+                role="随便",
+                round=1,
+                content="内容",
+                key_arguments=["论据"],
+            )
+
+    def test_debate_message_all_legal_roles_accepted(self):
+        """7 个合法角色值全部通过校验。"""
+        for role in (
+            "bull",
+            "bear",
+            "aggressive",
+            "conservative",
+            "neutral",
+            "research_manager",
+            "risk_judge",
+        ):
+            msg = DebateMessage(role=role, round=1, content="内容", key_arguments=["论据"])
+            assert msg.role == role
+
+    def test_debate_message_invalid_round_rejected(self):
+        """round 小于 1 被拒绝。"""
+        import pytest
+
+        for badRound in (0, -1):
+            with pytest.raises(ValueError):
+                DebateMessage(
+                    role="bull",
+                    round=badRound,
+                    content="内容",
+                    key_arguments=["论据"],
+                )
+
+    def test_trade_decision_confidence_out_of_range_rejected(self):
+        """置信度超出 0-1 被拒绝（如 LLM 按百分数返回 95）。"""
+        import pytest
+
+        for badConfidence in (95, -0.5, 1.5):
+            with pytest.raises(ValueError):
+                TradeDecision(
+                    action="buy",
+                    confidence=badConfidence,
+                    reasoning="理由",
+                )
+
+    def test_trade_decision_confidence_boundaries_accepted(self):
+        """置信度边界值 0 与 1 合法。"""
+        for okConfidence in (0.0, 1.0):
+            decision = TradeDecision(action="hold", confidence=okConfidence, reasoning="理由")
+            assert decision.confidence == okConfidence
+
+
+class TestFundManagerDecision:
+    """Layer V 基金经理审批决策模型（harden-llm-output-validation）。"""
+
+    def test_legal_decisions_accepted(self):
+        for decision in ("approve", "reject", "return"):
+            model = FundManagerDecision(decision=decision, reasoning="理由")
+            assert model.decision == decision
+
+    def test_normalizes_case_and_whitespace(self):
+        """大小写与首尾空白归一化。"""
+        assert FundManagerDecision(decision=" Approve ").decision == "approve"
+        assert FundManagerDecision(decision="REJECT").decision == "reject"
+
+    def test_invalid_decision_rejected(self):
+        """非法值被拒绝，不做同义词映射。"""
+        import pytest
+
+        for illegal in ("revise", "拒绝", "maybe", ""):
+            with pytest.raises(ValueError):
+                FundManagerDecision(decision=illegal)
+
+    def test_reasoning_optional(self):
+        """reasoning 缺省为空串，不阻塞校验。"""
+        assert FundManagerDecision(decision="approve").reasoning == ""

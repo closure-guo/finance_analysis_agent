@@ -3,6 +3,9 @@
 import json
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from finance_agent.nodes.debate import bear_debater, bull_debater
 
 
@@ -63,3 +66,26 @@ class TestBearDebater:
         msg = result["debate_history"][0]
         assert msg.role == "bear"
         assert msg.round == 1
+
+
+class TestDebateRoleValidation:
+    """role 枚举约束（harden-llm-output-validation）。
+
+    加固前 DebateMessage.role 是裸 str，LLM 串角色不会被发现，
+    只会污染报告正文渲染与依赖 role 过滤的节点摘要提取。
+    """
+
+    @patch("finance_agent.nodes.debate.call_llm_streaming")
+    def test_invalid_role_raises(self, mock_llm):
+        """LLM 输出非法 role 时节点抛 ValidationError。"""
+        mock_llm.return_value = json.dumps(
+            {
+                "role": "超级多头",
+                "round": 1,
+                "content": "内容",
+                "key_arguments": ["论据"],
+            },
+            ensure_ascii=False,
+        )
+        with pytest.raises(ValidationError):
+            bull_debater({"analyst_reports": {}, "debate_history": []})

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from finance_agent.citation import Claim
 
@@ -25,6 +25,10 @@ class AnalystReport(BaseModel):
     key_findings: list[str]
     claims: list[Claim]  # 用于确定性引用校验
     markdown: str  # 完整章节 Markdown，用于最终报告渲染
+    # 解析降级标记：LLM 输出解析失败时为 True，使下游能区分
+    # 「解析失败导致的零 claim」与「LLM 正常输出的零 claim」
+    # （零 claim 会使引用校验 all_passed=True，见 citation.py 的 failed == 0）
+    parse_degraded: bool = False
 
 
 class DebateMessage(BaseModel):
@@ -34,8 +38,16 @@ class DebateMessage(BaseModel):
     每轮辩论中各角色用 Send 并行产出，收集到 debate_history。
     """
 
-    role: str  # "bull" | "bear" | "aggressive" | "conservative" | "neutral" | "research_manager" | "risk_judge"
-    round: int
+    role: Literal[
+        "bull",
+        "bear",
+        "aggressive",
+        "conservative",
+        "neutral",
+        "research_manager",
+        "risk_judge",
+    ]
+    round: int = Field(ge=1)
     content: str
     key_arguments: list[str]
 
@@ -48,9 +60,30 @@ class TradeDecision(BaseModel):
     """
 
     action: Literal["buy", "sell", "hold", "watch"]
-    confidence: float
+    confidence: float = Field(ge=0, le=1)
     reasoning: str
     position_size: str | None = None
     entry_price: float | None = None
     stop_loss: float | None = None
     target_price: float | None = None
+
+
+class FundManagerDecision(BaseModel):
+    """Layer V Fund Manager 的审批决策。
+
+    decision 受 Literal 约束，仅允许 approve/reject/return（ADR-0011 Layer V）。
+    校验前做归一化（去首尾空白 + 转小写），容许 LLM 输出的大小写抖动；
+    归一化后仍非法则抛 ValidationError 中断管线，不降级为任何默认决策
+    （harden-llm-output-validation 决策 1、2）。
+    """
+
+    decision: Literal["approve", "reject", "return"]
+    reasoning: str = ""
+
+    @field_validator("decision", mode="before")
+    @classmethod
+    def _normalize_decision(cls, value: object) -> object:
+        """归一化决策值：仅处理大小写与首尾空白，不做同义词映射。"""
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
