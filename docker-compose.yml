@@ -18,7 +18,7 @@ services:
       TZ: Asia/Shanghai
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
 
   # ─── 后端（FastAPI + LiteLLM + Langfuse 集成）──────────────────────
   # 注意：StreamRegistry 为进程内内存结构（per-session 任务句柄 + 订阅者队列），
@@ -44,6 +44,13 @@ services:
     depends_on:
       langfuse-web:
         condition: service_started
+    healthcheck:
+      # 后端启动需要数秒（uvicorn + init_db），healthcheck 确保就绪后才接受流量
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/sessions', timeout=3).read()\""]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
 
   # ═══════════════════════════════════════════════════════════════════
   # Langfuse 可观测性平台（配置来自官方 docker-compose.yml）

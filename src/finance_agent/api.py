@@ -42,6 +42,7 @@ from finance_agent.session_store import (  # noqa: E402
     list_session_events,
     list_sessions,
     rename_session,
+    set_pipeline_anchor,
     update_pipeline_snapshot,
     update_pipeline_timelines,
     update_session_for_clarify,
@@ -1231,9 +1232,11 @@ async def _run_react_analysis(
             collector.feed(preToolCall)
             await registry.publish(session_id, preToolCall)
             # 补发 search_start：前端搜索横幅由 search_start/search_result 驱动
-            await registry.publish(
-                session_id, {"type": "search_start", "query": searchQuery, "timestamp": _now()}
-            )
+            # 同步 feed collector：search_start 生成 searching 状态的 search item，
+            # 持久化到 chat_history.agentTimeline，刷新后才能恢复搜索横幅
+            searchStartEvent = {"type": "search_start", "query": searchQuery, "timestamp": _now()}
+            collector.feed(searchStartEvent)
+            await registry.publish(session_id, searchStartEvent)
 
             searchResult = ""
             try:
@@ -1251,21 +1254,22 @@ async def _run_react_analysis(
             collector.feed(preToolResult)
             await registry.publish(session_id, preToolResult)
             # 补发 search_result（结构化来源），驱动搜索横幅转"已搜索 N 个网页"
+            # 同步 feed collector：search_result 将 searching item 更新为 done 并写入 results，
+            # 持久化后刷新才能恢复完整的搜索横幅（含结果数量）
             from finance_agent.web_search import parse_search_output
 
             preResults = parse_search_output(searchResult)
-            await registry.publish(
-                session_id,
-                {
-                    "type": "search_result",
-                    "query": searchQuery,
-                    "results": [
-                        {"title": r.title, "url": r.url, "content": r.content} for r in preResults
-                    ],
-                    "count": len(preResults),
-                    "timestamp": _now(),
-                },
-            )
+            searchResultEvent = {
+                "type": "search_result",
+                "query": searchQuery,
+                "results": [
+                    {"title": r.title, "url": r.url, "content": r.content} for r in preResults
+                ],
+                "count": len(preResults),
+                "timestamp": _now(),
+            }
+            collector.feed(searchResultEvent)
+            await registry.publish(session_id, searchResultEvent)
             userQuery = (
                 f"{req.query}\n\n"
                 f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
@@ -1390,6 +1394,8 @@ async def analyze(req: AnalyzeRequest):
     if stock_code and not req.session_id:
         # 追加用户输入到 chat_history
         append_chat(session_id, "user", req.query)
+        # 持久化管线触发锚点：fast path 下 chat_history 仅一条 user，锚点 = 1
+        set_pipeline_anchor(session_id)
         update_session_for_clarify(
             session_id, stock_code=stock_code, stock_name=stock_name, status="running"
         )

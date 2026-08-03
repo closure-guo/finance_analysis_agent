@@ -85,4 +85,30 @@ test.describe('F3a streaming: 快速模式流式渲染', () => {
     await expect(streamOutput).toContainText('固定回复', { timeout: 15_000 })
     await expect(streamOutput).toContainText('增量累积', { timeout: 15_000 })
   })
+
+  // Bug 复现：第二轮追问输出完毕后，末尾加载游标（stream-status）不消失，
+  // 切换会话后才消失。第一轮正常，仅第二轮（同会话追问）复现。
+  test('第二轮追问后流式指示器也应消失', async ({ page }) => {
+    await page.goto('/')
+    await page.evaluate(() => {
+      localStorage.setItem('fa_api_key', 'stub-key-for-testing')
+      localStorage.setItem('fa_user_id', 'user-test-123')
+    })
+    await page.reload()
+
+    // 第一轮：快速模式发送，游标正常出现并消失
+    await page.getByRole('button', { name: /模式/ }).click()
+    await page.getByRole('button', { name: /快速模式/ }).click()
+    await page.getByPlaceholder(/输入问题/).fill('第一轮问题')
+    await page.getByTestId('send-button').click()
+    await expect(page.getByTestId('stream-status')).toBeVisible()
+    await expect(page.getByTestId('stream-status')).toBeHidden({ timeout: 15_000 })
+
+    // 第二轮：同会话追问（ChatInputBar 输入框占位符与首页一致）
+    await page.getByPlaceholder(/输入问题/).fill('第二轮问题')
+    await page.getByTestId('send-button').click()
+    await expect(page.getByTestId('stream-status')).toBeVisible()
+    // 修复前：第二轮 done 事件未触发 streaming=false，游标常驻
+    await expect(page.getByTestId('stream-status')).toBeHidden({ timeout: 15_000 })
+  })
 })

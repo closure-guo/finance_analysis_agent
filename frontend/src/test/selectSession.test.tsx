@@ -520,3 +520,117 @@ describe('selectSession 结构化时序恢复（persist-full-session-timeline）
     expect(screen.queryByText('多头分析师')).not.toBeInTheDocument()
   })
 })
+
+// ── pipeline_anchor 锚点定位报告插入位置（fix-history-report-anchor）──
+describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  // 辅助：断言元素 a 在文档中位于 b 之前
+  function assertBefore(a: Element, b: Element) {
+    expect(
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  }
+
+  it('多轮澄清会话：报告插在最后一条 user 之后（锚点=3）', async () => {
+    // chat_history: [user1「分析热门股票」, assistant1(思考), user2「中际旭创」]
+    // 期望 DOM 顺序：user1 → assistant → user2 → pipeline-timeline → 报告
+    const tree = treeAllCompleted()
+    const snapshot = makeSnapshot(tree, '', 1)
+    const detail = makeSessionDetail({
+      status: 'completed',
+      pipeline_snapshot: snapshot,
+      report_markdown: '# 分析报告',
+      pipeline_anchor: 3,
+      chat_history: [
+        { role: 'user', content: '分析热门股票', ts: '2026-07-01T00:00:00Z' },
+        {
+          role: 'assistant',
+          content: '我来搜索',
+          ts: '2026-07-01T00:00:01Z',
+          agentTimeline: [{ type: 'thinking', content: '搜索思考', done: true }],
+        },
+        { role: 'user', content: '中际旭创', ts: '2026-07-01T00:00:02Z' },
+      ],
+    })
+    stubFetchWithSessionList('s1', '多轮澄清会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '多轮澄清会话')
+
+    const user1 = screen.getByText('分析热门股票')
+    const user2 = screen.getByText('中际旭创')
+    const timeline = screen.getByTestId('pipeline-timeline')
+    const report = screen.getByText('分析报告')
+
+    // 关键断言：user2 在 timeline 之前（当前实现会失败：报告插在 user1 后，user2 被挤到报告后）
+    assertBefore(user2, timeline)
+    // timeline 在 report 之前
+    assertBefore(timeline, report)
+    // user1 在 user2 之前
+    assertBefore(user1, user2)
+  })
+
+  it('报告后追问会话：报告插在第一条 user 之后（锚点=1）', async () => {
+    // chat_history: [user1「分析茅台」, user2「再看看风险」, assistant2(追问回复)]
+    // 期望 DOM 顺序：user1 → pipeline-timeline → 报告 → user2 → assistant2
+    const tree = treeAllCompleted()
+    const snapshot = makeSnapshot(tree, '', 1)
+    const detail = makeSessionDetail({
+      status: 'completed',
+      pipeline_snapshot: snapshot,
+      report_markdown: '# 茅台报告',
+      pipeline_anchor: 1,
+      chat_history: [
+        { role: 'user', content: '分析茅台', ts: '2026-07-01T00:00:00Z' },
+        { role: 'user', content: '再看看风险', ts: '2026-07-01T00:00:01Z' },
+        { role: 'assistant', content: '追问回复', ts: '2026-07-01T00:00:02Z' },
+      ],
+    })
+    stubFetchWithSessionList('s1', '追问会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '追问会话')
+
+    const user1 = screen.getByText('分析茅台')
+    const user2 = screen.getByText('再看看风险')
+    const timeline = screen.getByTestId('pipeline-timeline')
+    const report = screen.getByText('茅台报告')
+
+    // 报告在 user1 之后、user2 之前
+    assertBefore(user1, timeline)
+    assertBefore(timeline, report)
+    assertBefore(report, user2)
+  })
+
+  it('无锚点旧会话回退：报告插在第一个 user 之后', async () => {
+    // pipeline_anchor 为 null/缺失（旧数据），保持现有回退行为
+    const tree = treeAllCompleted()
+    const snapshot = makeSnapshot(tree, '', 1)
+    const detail = makeSessionDetail({
+      status: 'completed',
+      pipeline_snapshot: snapshot,
+      report_markdown: '# 旧报告',
+      // 不设 pipeline_anchor（旧会话）
+      chat_history: [
+        { role: 'user', content: '分析茅台', ts: '2026-07-01T00:00:00Z' },
+      ],
+    })
+    stubFetchWithSessionList('s1', '旧版会话', [{ ok: true, body: detail }])
+
+    await renderAndSelect('s1', '旧版会话')
+
+    const user1 = screen.getByText('分析茅台')
+    const timeline = screen.getByTestId('pipeline-timeline')
+    const report = screen.getByText('旧报告')
+
+    // 回退：user1 → timeline → report
+    assertBefore(user1, timeline)
+    assertBefore(timeline, report)
+  })
+})

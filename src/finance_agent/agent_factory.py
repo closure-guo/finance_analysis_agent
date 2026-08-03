@@ -193,7 +193,11 @@ def _make_search_stock(api_key: str | None = None):
 
         from finance_agent.react_agent import search_stock_tool
 
-        result = search_stock_tool(query, api_key)
+        # 用 to_thread 包装同步调用：search_stock_tool 内部含 AKShare 同步重试
+        # （每次 3 次重试，可能阻塞 10+ 秒），直接调用会阻塞事件循环，
+        # 导致 /api/sessions 等所有 API 请求被挂起，前端表现为切换会话卡顿、
+        # 刷新后历史会话清空（实际数据未丢，仅加载请求超时）。
+        result = await asyncio.to_thread(search_stock_tool, query, api_key)
         return _format_stock_result(result)
 
     return search_stock
@@ -338,7 +342,12 @@ def _make_run_deep_analysis(
 
         # 状态兜底：工具入口置 running（管线本体已在 executor 线程运行）
         if _track_snapshot:
+            # _track_snapshot = bool(session_id)，类型收窄供 mypy
+            assert session_id is not None  # noqa: S101
             _session_store.update_session_status(session_id, "running")
+            # 持久化管线触发锚点：ReAct 路径下锚点 = chat_history 中
+            # 最后一条 user 消息索引 + 1，供前端历史重建定位报告插入位置
+            _session_store.set_pipeline_anchor(session_id)
 
         # 在线程中运行同步 graph.stream，避免阻塞事件循环
         # ADR-0015：CallbackHandler 通过 langchain callback 机制工作（不依赖 OTel

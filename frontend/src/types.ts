@@ -225,7 +225,10 @@ export interface InterruptedEvent {
 }
 
 // ── Session types ──
-export type SSEEvent =
+// seq 字段：事件日志架构核心，后端 session_events journal 中每个事件按 session 内
+// 单调递增 seq 落库。前端用 seq 做断点续传（after_seq）和去重（跳过 seq <= lastSeq）。
+// 所有 SSE 事件都可能带 seq，但部分非 journal 事件（如临时心跳）可能没有，故为可选。
+export type SSEEvent = (
   | AnalysisStartEvent
   | NodeStartEvent
   | NodeCompleteEvent
@@ -250,6 +253,7 @@ export type SSEEvent =
   | SessionCreatedEvent
   | AwaitingInputEvent
   | InterruptedEvent
+) & { seq?: number }
 
 // ── Session types ──
 
@@ -295,6 +299,9 @@ export interface SessionDetail extends SessionMeta {
   pipeline_snapshot: string | null
   // 管线各节点的结构化时序（persist-full-session-timeline；后端已反序列化为 dict，可能为 null/缺失）
   pipeline_timelines?: Record<string, TimelineItem[]> | null
+  // 管线触发锚点：管线启动时 chat_history 中最后一条 user 消息索引 + 1，
+  // 供历史重建定位报告消息插入位置（null = 旧会话，回退第一个 user 后）
+  pipeline_anchor?: number | null
   // 事件 journal 最大 seq，供前端断点续传使用
   last_seq?: number
 }
