@@ -38,6 +38,12 @@ class TestAfterFundManager:
         assert after_fund_manager(state) == "generate_report"
 
     def test_reject_returns_generate_report(self):
+        """reject 仍进入报告生成 —— 符合 ADR-0011 Layer V「Reject → 报告标注未通过审批」。
+
+        本用例把「reject 走 generate_report」固化为基线，但这**不代表** reject
+        语义等价于 approve：两者的区分由报告中的中文标注承担
+        （report.py 的 _FUND_MANAGER_ANNOTATIONS，reject 标注为「未通过审批」）。
+        """
         state = {"fund_manager_decision": "reject"}
         assert after_fund_manager(state) == "generate_report"
 

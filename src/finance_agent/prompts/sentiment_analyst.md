@@ -39,7 +39,7 @@
 ## 要求
 
 1. 每个关键新闻/事件都生成 Claim
-2. claim_type: textual（文本引用）
+2. claim_type: entity（实体/事件引用）
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. 如果新闻数据缺失，标注"新闻数据暂不可用"，基于已有信息分析
 5. markdown 中包含完整的舆情分析章节
