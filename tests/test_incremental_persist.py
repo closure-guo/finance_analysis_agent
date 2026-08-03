@@ -74,3 +74,53 @@ def test_upsert_chat_updates_last_assistant_only(tmp_path, monkeypatch):
     assert len(history) == 4
     assert history[1]["content"] == "回复1"
     assert history[3]["content"] == "更新回复2"
+
+
+def test_upsert_chat_appends_for_new_round_after_user_message(tmp_path, monkeypatch):
+    """Bug 复现：新一轮（user 消息已落库、assistant 尚未产生）的增量持久化
+    应追加新 assistant 条目，而不是覆盖上一轮的 assistant 内容。
+
+    场景（用户反馈：快速模式追问后切换会话，历史重建中本轮内容串到上一轮位置、
+    上一轮内容消失）：
+    1. 第一轮：user 沈阳天气 → assistant 沈阳回复（含 agentTimeline）
+    2. 第二轮：user 上海天气 落库后，_upsert_assistant_chat 每 10s upsert
+       → 修复前会覆盖第一轮 assistant，chat_history 变为
+         [user沈阳, assistant上海内容, user上海]，重建后表现为串台+内容丢失
+    """
+    _setup_db(tmp_path, monkeypatch)
+    sid = session_store.create_chat_session("天气问答")
+    # 第一轮完整落库
+    session_store.append_chat(sid, "user", "沈阳天气")
+    session_store.upsert_chat(
+        sid,
+        "assistant",
+        "沈阳晴",
+        thinking="第一轮思考",
+        agent_timeline=[{"type": "thinking", "text": "第一轮思考", "done": True}],
+    )
+    # 第二轮：user 消息落库（assistant 尚未产生）
+    session_store.append_chat(sid, "user", "上海天气")
+
+    # 第二轮的首次增量持久化：应追加新 assistant 条目
+    session_store.upsert_chat(
+        sid,
+        "assistant",
+        "上海多云",
+        thinking="第二轮思考",
+        agent_timeline=[{"type": "thinking", "text": "第二轮思考", "done": True}],
+    )
+
+    session = session_store.get_session(sid)
+    history = session["chat_history"]
+    assert len(history) == 4, (
+        f"应为 4 条（两轮 user+assistant），实际: {[h['role'] for h in history]}"
+    )
+    # 第一轮内容不被覆盖
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == "沈阳晴"
+    assert history[1]["thinking"] == "第一轮思考"
+    # 第二轮内容追加在第二轮 user 之后
+    assert history[2]["role"] == "user"
+    assert history[3]["role"] == "assistant"
+    assert history[3]["content"] == "上海多云"
+    assert history[3]["thinking"] == "第二轮思考"

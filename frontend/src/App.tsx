@@ -100,6 +100,15 @@ export default function App() {
   // messages ref 镜像：会话切换时读取最新 messages 存入快照
   const messagesRef = useRef<UIMessage[]>([])
 
+  // 统一 messages 更新入口：在 setMessages 调度的同时同步更新 messagesRef.current，
+  // 避免 useEffect 滞后导致 selectSession 保存快照时读取到旧值（根因：async 函数中
+  // setMessages 调度后渲染/effect 未及时执行，切换会话时快照保存了过时的 messages）
+  const commitMessages = (updater: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => {
+    const newMsgs = typeof updater === 'function' ? updater(messagesRef.current) : updater
+    messagesRef.current = newMsgs
+    setMessages(newMsgs)
+  }
+
   // ── per-session 流状态（delta spec Task 5.1）──
   // 每个 session 独立跟踪 abort/pipelineMsg/streamingReport/lastSeq，
   // 切换会话时保留状态，切回时恢复并经恢复端点续传事件流。
@@ -193,9 +202,21 @@ export default function App() {
     messagesRef.current = messages
   }, [messages])
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom：仅在用户未手动上拉时自动滚动（避免抢占手动滚动）
+  const userScrolledUpRef = useRef(false)
+  useEffect(() => {
+    const onScroll = () => {
+      const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 100
+      userScrolledUpRef.current = !nearBottom
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
   const scrollToBottom = useCallback(() => {
+    if (userScrolledUpRef.current) return
     setTimeout(() => {
+      if (userScrolledUpRef.current) return
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
     }, 100)
   }, [])
@@ -205,18 +226,40 @@ export default function App() {
   }, [messages, scrollToBottom])
 
   // ── Session management ──
-  const loadSessions = useCallback(async () => {
+  // 返回是否成功：调用方可据此决定是否重试（useEffect 初始化时退避重试）
+  const loadSessions = useCallback(async (): Promise<boolean> => {
     try {
       const resp = await fetch('/api/sessions')
+      if (!resp.ok) return false
       const data = await resp.json()
       setSessions(data.sessions || [])
+      return true
     } catch (e) {
       console.error('Failed to load sessions:', e)
+      return false
     }
   }, [])
 
+  // 首次加载：后端启动需要数秒（uvicorn + init_db），depends_on 只等容器启动。
+  // 首次 fetch 可能失败（502/连接拒绝），退避重试直到后端就绪，避免用户需手动刷新。
   useEffect(() => {
-    loadSessions()
+    let cancelled = false
+    let retryCount = 0
+    const maxRetries = 6
+
+    const loadWithRetry = async () => {
+      const ok = await loadSessions()
+      if (cancelled) return
+      if (!ok && retryCount < maxRetries) {
+        // 退避：500ms, 1s, 2s, 4s, 8s, 16s（覆盖后端 ~4s 启动窗口）
+        const delay = 500 * Math.pow(2, retryCount)
+        retryCount++
+        setTimeout(loadWithRetry, delay)
+      }
+    }
+
+    loadWithRetry()
+    return () => { cancelled = true }
   }, [loadSessions])
 
   // ── Task 6: 运行指示与显式停止 ──
@@ -292,7 +335,7 @@ export default function App() {
       // 优先从快照恢复：后端 chat_history 此时未持久化 agent 的思考/工具调用内容
       const cached = sessionCacheRef.current.get(sessionId)
       if (cached && (data.status === 'clarifying' || data.status === 'running')) {
-        setMessages(cached.messages)
+        commitMessages(cached.messages)
         setMode(data.session_type === 'chat' ? 'quick' : 'deep')
         streamingReportRef.current = cached.streamingReport
         pipelineMsgRef.current = cached.pipelineMsg
@@ -303,8 +346,12 @@ export default function App() {
         bufferedSseEventsRef.current = []
         // running 和 clarifying 会话都恢复实时事件流（只订阅新事件，不重放历史）
         // ReAct 路径中 session status 为 clarifying（非 running），但后端任务可能仍在运行
-        // 不覆盖 lastSeq：保持切换前的值，后端通过 after_seq 只发送新事件
+        // 用后端 last_seq 兜底：state.lastSeq 可能因首次切换、ref 重置等原因停留在 0，
+        // 此时 after_seq=0 会重放全部历史事件（可能数百上千个）导致 UI 卡顿。
+        // 取 max 确保不回退：已处理的 lastSeq 优先，后端 last_seq 作为下界兜底。
         if (data.status === 'running' || data.status === 'clarifying') {
+          const streamState = getStreamState(sessionId)
+          streamState.lastSeq = Math.max(streamState.lastSeq, data.last_seq ?? 0)
           resumeStream(sessionId, false)
         }
         return
@@ -322,7 +369,7 @@ export default function App() {
       }
 
       // 先完全重置所有状态
-      setMessages([])
+      commitMessages([])
       setAppState('report')
       // 按会话类型锁定模式：chat -> quick，analysis -> deep
       setMode(data.session_type === 'chat' ? 'quick' : 'deep')
@@ -385,14 +432,13 @@ export default function App() {
       const newMessages: UIMessage[] = []
       let reportInserted = false
       const history = Array.isArray(data.chat_history) ? data.chat_history : []
-      for (const h of history) {
+      // 管线触发锚点：非空时按锚点定位报告插入位置（多轮澄清场景）；
+      // null/缺失（旧会话）回退第一个 user 消息后插入
+      const anchor = data.pipeline_anchor ?? null
+      for (let i = 0; i < history.length; i++) {
+        const h = history[i]
         if (h.role === 'user') {
           newMessages.push({ id: genId(), type: 'user', content: h.content })
-          if (reportMsg && !reportInserted) {
-            if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
-            newMessages.push(reportMsg)
-            reportInserted = true
-          }
         } else {
           newMessages.push({
             id: genId(),
@@ -406,6 +452,18 @@ export default function App() {
               ? deserializeTimeline(h.agentTimeline)
               : buildTimelineFromHistory(h.thinking, h.tool_calls),
           })
+        }
+        // 锚点非空：处理完第 anchor 条后插入报告（多轮澄清场景正确定位）
+        if (anchor !== null && i + 1 === anchor && reportMsg && !reportInserted) {
+          if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
+          newMessages.push(reportMsg)
+          reportInserted = true
+        }
+        // 锚点为 null（旧会话）：回退第一个 user 消息后插入
+        if (anchor === null && h.role === 'user' && reportMsg && !reportInserted) {
+          if (pipelineDoneMsg) newMessages.push(pipelineDoneMsg)
+          newMessages.push(reportMsg)
+          reportInserted = true
         }
       }
       if (reportMsg && !reportInserted) {
@@ -450,7 +508,7 @@ export default function App() {
       pipelineMsgIdRef.current = pipelineDoneMsg.id
       pipelineMsgRef.current = pipelineDoneMsg
     }
-    setMessages(newMessages)
+    commitMessages(newMessages)
     // 清空缓冲区：消息已从 chat_history 重建，缓冲事件会与之重叠导致叠加
     bufferedSseEventsRef.current = []
 
@@ -460,9 +518,14 @@ export default function App() {
     // running 和 clarifying 都恢复：ReAct 路径 status 为 clarifying 但任务可能仍在运行
     if (data.status === 'running' || data.status === 'clarifying') {
       const streamState = getStreamState(sessionId)
-      // 用后端返回的 last_seq 作为 after_seq，只接收新事件
-      streamState.lastSeq = data.last_seq ?? 0
-      resumeStream(sessionId, false)
+      // 与快照恢复路径一致：取 max 防回退（state.lastSeq 可能已因快照恢复而推进）
+      const backendLastSeq = data.last_seq ?? 0
+      streamState.lastSeq = Math.max(streamState.lastSeq, backendLastSeq)
+      // lastSeq 仍为 0 时（后端 journal 为空或字段缺失），after_seq=0 会重放全部历史。
+      // 此时 skipIncremental=true 跳过增量内容事件（thinking_token/chat_token 等），
+      // 避免与重建消息重复叠加；只处理状态转换事件（analysis_start/done 等）。
+      const skipIncremental = streamState.lastSeq === 0
+      resumeStream(sessionId, skipIncremental)
     }
     // interrupted/completed/failed 不恢复流（无活跃任务或已终态）
     } catch (e) {
@@ -488,6 +551,8 @@ export default function App() {
       sessionCacheRef.current.delete(sessionId)
       await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
       setSessions(prev => prev.filter(s => s.session_id !== sessionId))
+      // 同步后端列表（确保顺序/其他字段一致，乐观更新可能遗漏后端副作用）
+      loadSessions()
       if (currentSessionId === sessionId) {
         disconnectSubscription()
         setCurrentSessionId(null)
@@ -496,7 +561,7 @@ export default function App() {
         assistantMsgIdRef.current = null
         pipelineMsgIdRef.current = null
         bufferedSseEventsRef.current = []
-        setMessages([])
+        commitMessages([])
         setAppState('empty')
       }
     } catch (e) {
@@ -512,6 +577,8 @@ export default function App() {
         body: JSON.stringify({ display_name: displayName }),
       })
       setSessions(prev => prev.map(s => s.session_id === sessionId ? { ...s, display_name: displayName } : s))
+      // 同步后端列表（确保顺序/其他字段一致）
+      loadSessions()
     } catch (e) {
       console.error('Failed to rename session:', e)
     }
@@ -541,7 +608,7 @@ export default function App() {
     pipelineMsgIdRef.current = null
     // 清空缓冲区，避免旧会话的缓冲事件污染新分析
     bufferedSseEventsRef.current = []
-    setMessages([])
+    commitMessages([])
     setAppState('empty')
   }
 
@@ -585,7 +652,7 @@ export default function App() {
       type: 'user',
       content: query,
     }
-    setMessages(prev => [...prev, userMsg])
+    commitMessages(prev => [...prev, userMsg])
 
     // 流式处理 SSE 事件
     // 每轮重置消息 ID ref，确保会话切换后新事件能正确更新重建的消息
@@ -608,7 +675,7 @@ export default function App() {
       }
       pipelineMsgIdRef.current = pm.id
       pipelineMsgRef.current = pm
-      setMessages(prev => [...prev, pm])
+      commitMessages(prev => [...prev, pm])
       setAppState('analyzing')
       return pm
     }
@@ -620,7 +687,7 @@ export default function App() {
       if (assistantMsgIdRef.current) return assistantMsgIdRef.current
       const newId = genId()
       assistantMsgIdRef.current = newId
-      setMessages(prev => [...prev, {
+      commitMessages(prev => [...prev, {
         id: newId,
         type: 'chat',
         content: '',
@@ -632,7 +699,13 @@ export default function App() {
 
     try {
       // 每轮新建 controller；前一轮的已在 abortStreaming 时中断
-      abortRef.current = new AbortController()
+      const localAbort = new AbortController()
+      abortRef.current = localAbort
+      // 提前激活 seq 去重（与 quickChat 一致）：追问场景后端可能不重发 session_created，
+      // fetch 前设置 streamingSessionIdRef 使去重从第一个事件起生效
+      if (sessionId) {
+        streamingSessionIdRef.current = sessionId
+      }
       const resp = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -646,7 +719,7 @@ export default function App() {
           ...(stockName ? { stock_name: stockName } : {}),
           ...(focus ? { focus } : {}),
         }),
-        signal: abortRef.current.signal,
+        signal: localAbort.signal,
       })
 
       // 409 session_busy：后端检测到该会话已有活跃任务（delta spec Task 6.2）
@@ -682,9 +755,14 @@ export default function App() {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
 
+            // abort 后跳过事件处理：disconnectSubscription 后 buffer 中残留的事件
+            // 可能仍被读取，此时 streamingSessionIdRef 可能已被其他会话覆盖，
+            // 隔离检查会失效导致事件更新到错误消息（症状：上海天气输出覆盖沈阳天气）
+            if (localAbort.signal.aborted) break
+
             // seq 去重：跳过 seq <= lastSeq 的旧事件
             if (streamingSessionIdRef.current) {
-              const seq = (event as SSEEvent & { seq?: number }).seq
+              const seq = event.seq
               if (seq !== undefined) {
                 const ss = getStreamState(streamingSessionIdRef.current)
                 if (seq <= ss.lastSeq) continue
@@ -698,6 +776,13 @@ export default function App() {
               // 将 abort controller 存入 per-session 流状态（delta spec Task 5.4）
               const streamState = getStreamState(event.session_id)
               streamState.abort = abortRef.current
+              // session_created 的 seq 也计入 lastSeq：去重块在 streamingSessionIdRef
+              // 赋值前执行，session_created 自身的 seq 不会被去重块处理，此处补推，
+              // 避免 lastSeq 比实际已处理 seq 少 1（resumeStream 时 after_seq 偏小重放）
+              const scSeq = event.seq
+              if (scSeq !== undefined && scSeq > streamState.lastSeq) {
+                streamState.lastSeq = scSeq
+              }
               loadSessions()
               continue
             }
@@ -726,7 +811,7 @@ export default function App() {
               }
               pipelineMsgIdRef.current = pipelineMsg.id
               pipelineMsgRef.current = pipelineMsg
-              setMessages(prev => [...prev, pipelineMsg])
+              commitMessages(prev => [...prev, pipelineMsg])
               continue
             }
 
@@ -735,7 +820,7 @@ export default function App() {
               if (!assistantMsgIdRef.current) {
                 const newAssistantId = genId()
                 assistantMsgIdRef.current = newAssistantId
-                setMessages(prev => [...prev, {
+                commitMessages(prev => [...prev, {
                   id: newAssistantId,
                   type: 'chat',
                   content: '',
@@ -745,7 +830,7 @@ export default function App() {
               } else {
                 // 复用 applyChatStreamEvent：累加 chatResponse 同时收口末尾 thinking item，
                 // 避免思考横幅在 agent 回复期间持续显示"思考中"（与 quickChat 路径行为一致）
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? applyChatStreamEvent(m, event) : m
                 ))
               }
@@ -755,7 +840,7 @@ export default function App() {
             if (event.type === 'awaiting_input') {
               setAppState('clarifying')
               if (assistantMsgIdRef.current) {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
@@ -852,7 +937,7 @@ export default function App() {
               handleStreamTerminal(finishedSessionId)
               setAppState('clarifying')
               if (assistantMsgIdRef.current) {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
@@ -874,7 +959,7 @@ export default function App() {
               handleStreamTerminal(finishedSessionId)
               // 流正常结束
               if (assistantMsgIdRef.current) {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
@@ -882,14 +967,28 @@ export default function App() {
             }
 
             if (event.type === 'error') {
+              // error 终态事件：与 interrupted 对齐清理，避免 isSessionRunning 误判
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              setAppState('clarifying')
               if (pipelineMsgRef.current) {
                 handleSSEEvent(event, pipelineMsgRef.current)
               } else {
-                setMessages(prev => [...prev, {
+                commitMessages(prev => [...prev, {
                   id: genId(),
                   type: 'error',
                   content: `错误: ${event.message}`,
                 }])
+              }
+              if (assistantMsgIdRef.current) {
+                commitMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+                ))
               }
               continue
             }
@@ -914,7 +1013,7 @@ export default function App() {
       if (e instanceof Error && e.name === 'AbortError') return
       handleStreamTerminal(failedSessionId)
       console.error('SSE error:', e)
-      setMessages(prev => [...prev, {
+      commitMessages(prev => [...prev, {
         id: genId(),
         type: 'error',
         content: `连接错误: ${e instanceof Error ? e.message : 'Unknown'}`,
@@ -988,12 +1087,12 @@ export default function App() {
             streaming: true,
           }
           streamingReportRef.current = reportMsg
-          setMessages(prev => [...prev, reportMsg])
+          commitMessages(prev => [...prev, reportMsg])
         } else {
           const id = streamingReportRef.current.id
           const newText = (streamingReportRef.current.reportMarkdown || '') + event.text
           streamingReportRef.current = { ...streamingReportRef.current, reportMarkdown: newText }
-          setMessages(prev => prev.map(m => m.id === id ? { ...m, reportMarkdown: newText } : m))
+          commitMessages(prev => prev.map(m => m.id === id ? { ...m, reportMarkdown: newText } : m))
         }
         break
       }
@@ -1027,7 +1126,7 @@ export default function App() {
             sessionId: event.session_id,
             webSources,
           }
-          setMessages(prev => [...prev, reportMsg])
+          commitMessages(prev => [...prev, reportMsg])
         }
         setAppState('report')
         setCurrentSessionId(event.session_id)
@@ -1039,7 +1138,7 @@ export default function App() {
           type: 'system',
           content: `分析完成 · 耗时 ${Math.round(event.duration_ms / 1000)} 秒`,
         }
-        setMessages(prev => [...prev, completionMsg])
+        commitMessages(prev => [...prev, completionMsg])
         break
       }
 
@@ -1077,7 +1176,7 @@ export default function App() {
       case 'error':
         // 统一写入 agentTimeline（含思考片段断开、搜索/工具调用 item 生命周期），
         // 具体规则见 timeline.ts 与 agent-turn-box-display design.md
-        setMessages(prev => prev.map(m => (m.id === chatId ? applyChatStreamEvent(m, event) : m)))
+        commitMessages(prev => prev.map(m => (m.id === chatId ? applyChatStreamEvent(m, event) : m)))
         return true
 
       case 'thinking_to_answer':
@@ -1091,7 +1190,7 @@ export default function App() {
   }
 
   const updateMessage = (id: string, updates: Partial<UIMessage>) => {
-    setMessages(prev => prev.map(m => {
+    commitMessages(prev => prev.map(m => {
       if (m.id !== id) return m
       const updated = { ...m, ...updates }
       if (pipelineMsgRef.current?.id === id) {
@@ -1127,7 +1226,7 @@ export default function App() {
           }
           pipelineMsgIdRef.current = pm.id
           pipelineMsgRef.current = pm
-          setMessages(prev => [...prev, pm])
+          commitMessages(prev => [...prev, pm])
         } else {
           handleSSEEvent(event, pipelineMsgRef.current)
         }
@@ -1150,7 +1249,7 @@ export default function App() {
           }
           pipelineMsgIdRef.current = pm.id
           pipelineMsgRef.current = pm
-          setMessages(prev => [...prev, pm])
+          commitMessages(prev => [...prev, pm])
         }
         handleSSEEvent(event, pipelineMsgRef.current)
         continue
@@ -1171,7 +1270,7 @@ export default function App() {
           }
           pipelineMsgIdRef.current = pm.id
           pipelineMsgRef.current = pm
-          setMessages(prev => [...prev, pm])
+          commitMessages(prev => [...prev, pm])
         }
         handleSSEEvent(event, pipelineMsgRef.current)
         continue
@@ -1194,14 +1293,14 @@ export default function App() {
             }
             pipelineMsgIdRef.current = pm.id
             pipelineMsgRef.current = pm
-            setMessages(prev => [...prev, pm])
+            commitMessages(prev => [...prev, pm])
           }
         } else {
           // 搜索类工具调用 → 对话流
           if (!assistantMsgIdRef.current) {
             const newId = genId()
             assistantMsgIdRef.current = newId
-            setMessages(prev => [...prev, {
+            commitMessages(prev => [...prev, {
               id: newId,
               type: 'chat',
               content: '',
@@ -1221,7 +1320,7 @@ export default function App() {
           if (!assistantMsgIdRef.current) {
             const newId = genId()
             assistantMsgIdRef.current = newId
-            setMessages(prev => [...prev, {
+            commitMessages(prev => [...prev, {
               id: newId,
               type: 'chat',
               content: '',
@@ -1238,7 +1337,7 @@ export default function App() {
         if (!assistantMsgIdRef.current) {
           const newId = genId()
           assistantMsgIdRef.current = newId
-          setMessages(prev => [...prev, {
+          commitMessages(prev => [...prev, {
             id: newId,
             type: 'chat',
             content: '',
@@ -1265,7 +1364,7 @@ export default function App() {
       if (event.type === 'awaiting_input') {
         setAppState('clarifying')
         if (assistantMsgIdRef.current) {
-          setMessages(prev => prev.map(m =>
+          commitMessages(prev => prev.map(m =>
             m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
           ))
         }
@@ -1283,7 +1382,7 @@ export default function App() {
         handleStreamTerminal(finishedSessionId)
         setAppState('clarifying')
         if (assistantMsgIdRef.current) {
-          setMessages(prev => prev.map(m =>
+          commitMessages(prev => prev.map(m =>
             m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
           ))
         }
@@ -1303,7 +1402,7 @@ export default function App() {
         }
         handleStreamTerminal(finishedSessionId)
         if (assistantMsgIdRef.current) {
-          setMessages(prev => prev.map(m =>
+          commitMessages(prev => prev.map(m =>
             m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
           ))
         }
@@ -1311,14 +1410,28 @@ export default function App() {
       }
 
       if (event.type === 'error') {
+        // error 终态事件：与 done 对齐清理，避免 isSessionRunning 误判
+        const finishedSessionId = streamingSessionIdRef.current
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+        if (finishedSessionId) {
+          sessionCacheRef.current.delete(finishedSessionId)
+        }
+        handleStreamTerminal(finishedSessionId)
+        setAppState('clarifying')
         if (pipelineMsgRef.current) {
           handleSSEEvent(event, pipelineMsgRef.current)
         } else {
-          setMessages(prev => [...prev, {
+          commitMessages(prev => [...prev, {
             id: genId(),
             type: 'error',
             content: `错误: ${event.message}`,
           }])
+        }
+        if (assistantMsgIdRef.current) {
+          commitMessages(prev => prev.map(m =>
+            m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+          ))
         }
         continue
       }
@@ -1359,7 +1472,7 @@ export default function App() {
       }
       pipelineMsgIdRef.current = pm.id
       pipelineMsgRef.current = pm
-      setMessages(prev => [...prev, pm])
+      commitMessages(prev => [...prev, pm])
       setAppState('analyzing')
       return pm
     }
@@ -1369,7 +1482,7 @@ export default function App() {
       if (assistantMsgIdRef.current) return assistantMsgIdRef.current
       const newId = genId()
       assistantMsgIdRef.current = newId
-      setMessages(prev => [...prev, {
+      commitMessages(prev => [...prev, {
         id: newId,
         type: 'chat',
         content: '',
@@ -1403,8 +1516,11 @@ export default function App() {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
 
+            // abort 后跳过事件处理（与 startAnalysis 一致）
+            if (abortCtrl.signal.aborted) break
+
             // seq 去重：跳过 seq <= lastSeq 的旧事件
-            const seq = (event as SSEEvent & { seq?: number }).seq
+            const seq = event.seq
             if (seq !== undefined) {
               if (seq <= state.lastSeq) continue
               state.lastSeq = seq
@@ -1420,7 +1536,7 @@ export default function App() {
               handleStreamTerminal(sessionId)
               setAppState('clarifying')
               if (assistantMsgIdRef.current) {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
@@ -1462,7 +1578,7 @@ export default function App() {
                 }
                 pipelineMsgIdRef.current = pm.id
                 pipelineMsgRef.current = pm
-                setMessages(prev => [...prev, pm])
+                commitMessages(prev => [...prev, pm])
               }
               continue
             }
@@ -1471,7 +1587,7 @@ export default function App() {
               if (!assistantMsgIdRef.current) {
                 const newAssistantId = genId()
                 assistantMsgIdRef.current = newAssistantId
-                setMessages(prev => [...prev, {
+                commitMessages(prev => [...prev, {
                   id: newAssistantId,
                   type: 'chat',
                   content: '',
@@ -1479,7 +1595,7 @@ export default function App() {
                   streaming: true,
                 }])
               } else {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? applyChatStreamEvent(m, event) : m
                 ))
               }
@@ -1489,7 +1605,7 @@ export default function App() {
             if (event.type === 'awaiting_input') {
               setAppState('clarifying')
               if (assistantMsgIdRef.current) {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
@@ -1576,7 +1692,7 @@ export default function App() {
               }
               handleStreamTerminal(finishedSessionId)
               if (assistantMsgIdRef.current) {
-                setMessages(prev => prev.map(m =>
+                commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
                 ))
               }
@@ -1584,14 +1700,28 @@ export default function App() {
             }
 
             if (event.type === 'error') {
+              // error 终态事件：与 done 对齐清理，避免 isSessionRunning 误判
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              setAppState('clarifying')
               if (pipelineMsgRef.current) {
                 handleSSEEvent(event, pipelineMsgRef.current)
               } else {
-                setMessages(prev => [...prev, {
+                commitMessages(prev => [...prev, {
                   id: genId(),
                   type: 'error',
                   content: `错误: ${event.message}`,
                 }])
+              }
+              if (assistantMsgIdRef.current) {
+                commitMessages(prev => prev.map(m =>
+                  m.id === assistantMsgIdRef.current ? { ...m, streaming: false } : m
+                ))
               }
               continue
             }
@@ -1681,40 +1811,12 @@ export default function App() {
           }
           // running 但无快照（或快照解析失败）：本周期静默忽略，等下个周期重试
         } else if (data.status === 'completed') {
-          // 后台管线完成：直接恢复报告 + 最终静态时间轴，不调 selectSession
-          // （避免递归切换 + 切换 async 窗口期旧 timer 残留导致强制跳转）
-          const pm = pipelineMsgRef.current
-          const finalSnap: PipelineSnapshot | null = data.pipeline_snapshot
-            ? (() => {
-                try { return JSON.parse(data.pipeline_snapshot) } catch { return null }
-              })()
-            : null
-          if (pm) {
-            const updated: UIMessage = {
-              ...pm,
-              layerTree: finalSnap ? deserializeLayerTree(finalSnap.layerTree) : pm.layerTree,
-              currentNode: '',
-              progress: 1,
-            }
-            pipelineMsgRef.current = updated
-            updateMessage(pm.id, updated)
-          }
-          // 报告消息追加（若后端有 report_markdown）
-          if (data.report_markdown) {
-            const reportMsg: UIMessage = {
-              id: genId(),
-              type: 'report',
-              content: '',
-              reportMarkdown: data.report_markdown,
-              chartData: data.chart_data || {},
-              stockName: data.stock_name,
-              durationMs: data.duration_ms,
-              sessionId: currentSessionId,
-            }
-            setMessages(prev => [...prev, reportMsg])
-          }
-          setAppState('report') // 切 report 后轮询 effect cleanup 自然停止
-          loadSessions()
+          // 后台管线完成：走 selectSession 完整重建（复用锚点定位、agentTimeline
+          // 恢复、pipeline_timelines 结构化时序等逻辑，避免报告插入位置错误或时序丢失）。
+          // clearInterval 先停止轮询，selectSession 内部 setCurrentSessionId 触发
+          // effect 重跑时 timer 已清理，不会递归。
+          clearInterval(timer)
+          await selectSession(currentSessionId)
         } else if (data.status === 'failed') {
           // 管线失败：展示中断原因，停止轮询
           clearInterval(timer)
@@ -1756,7 +1858,7 @@ export default function App() {
       type: 'user',
       content: message,
     }
-    setMessages(prev => [...prev, userMsg])
+    commitMessages(prev => [...prev, userMsg])
 
     const chatId = genId()
     const chatMsg: UIMessage = {
@@ -1766,10 +1868,23 @@ export default function App() {
       chatResponse: '',
       streaming: true,
     }
-    setMessages(prev => [...prev, chatMsg])
+    commitMessages(prev => [...prev, chatMsg])
+    // 同步设置 assistantMsgIdRef：quickChat 的 SSE 循环用局部 chatId 更新消息，
+    // 但快照保存/resumeStream 依赖 assistantMsgIdRef。若不设置，切换会话后
+    // 快照保存 null，切回时 resumeStream 创建新消息 ID，导致思考内容丢失
+    // （症状：切换会话后思考 UI 消失）
+    assistantMsgIdRef.current = chatId
 
     try {
-      abortRef.current = new AbortController()
+      const localAbort = new AbortController()
+      abortRef.current = localAbort
+      // 提前激活 seq 去重：fetch 前设置 streamingSessionIdRef，使 SSE 循环的
+      // 去重块（if (streamingSessionIdRef.current)）从第一个事件起生效，
+      // 不依赖后端是否下发 session_created（追问场景后端可能不重发）。
+      // 不重置 lastSeq：保留切换前已消费的 seq，避免重放
+      if (currentSessionId) {
+        streamingSessionIdRef.current = currentSessionId
+      }
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1779,7 +1894,7 @@ export default function App() {
           user_id: getUserId(),
           api_key: apiKey,
         }),
-        signal: abortRef.current.signal,
+        signal: localAbort.signal,
       })
 
       // 409 session_busy：后端检测到该会话已有活跃任务（delta spec Task 6.2）
@@ -1815,14 +1930,36 @@ export default function App() {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6))
 
+            // abort 后跳过事件处理（与 startAnalysis 一致）
+            if (localAbort.signal.aborted) break
+
             // seq 去重：跳过 seq <= lastSeq 的旧事件
             if (streamingSessionIdRef.current) {
-              const seq = (event as SSEEvent & { seq?: number }).seq
+              const seq = event.seq
               if (seq !== undefined) {
                 const ss = getStreamState(streamingSessionIdRef.current)
                 if (seq <= ss.lastSeq) continue
                 ss.lastSeq = seq
               }
+            }
+
+            // error 终态事件：先清理 streaming 状态（与 interrupted 对齐），
+            // 再由 handleChatStreamEvent 写入 agentTimeline 渲染错误
+            if (event.type === 'error') {
+              const finishedSessionId = streamingSessionIdRef.current
+              streamingSessionIdRef.current = null
+              abortRef.current = null
+              if (finishedSessionId) {
+                sessionCacheRef.current.delete(finishedSessionId)
+              }
+              handleStreamTerminal(finishedSessionId)
+              setAppState('clarifying')
+              // 仍让 handleChatStreamEvent 处理渲染（写入 agentTimeline）
+              handleChatStreamEvent(event, chatId)
+              commitMessages(prev => prev.map(m =>
+                m.id === chatId ? { ...m, streaming: false } : m
+              ))
+              continue
             }
 
             // 对话流公共事件（thinking/tool/chat/error）统一走共享处理
@@ -1836,6 +1973,11 @@ export default function App() {
               // 将 abort controller 存入 per-session 流状态（delta spec Task 5.4）
               const streamState = getStreamState(event.session_id)
               streamState.abort = abortRef.current
+              // session_created 的 seq 计入 lastSeq（与 startAnalysis 一致）
+              const scSeq = event.seq
+              if (scSeq !== undefined && scSeq > streamState.lastSeq) {
+                streamState.lastSeq = scSeq
+              }
               loadSessions()
               continue
             }
@@ -1850,7 +1992,7 @@ export default function App() {
               }
               handleStreamTerminal(finishedSessionId)
               setAppState('clarifying')
-              setMessages(prev => prev.map(m =>
+              commitMessages(prev => prev.map(m =>
                 m.id === chatId ? { ...m, streaming: false } : m
               ))
               continue
@@ -1865,7 +2007,7 @@ export default function App() {
                 sessionCacheRef.current.delete(finishedSessionId)
               }
               handleStreamTerminal(finishedSessionId)
-              setMessages(prev => prev.map(m =>
+              commitMessages(prev => prev.map(m =>
                 m.id === chatId ? { ...m, streaming: false } : m
               ))
               continue
@@ -1888,7 +2030,7 @@ export default function App() {
       abortRef.current = null
       if (e instanceof Error && e.name === 'AbortError') return
       handleStreamTerminal(failedSessionId)
-      setMessages(prev => prev.map(m =>
+      commitMessages(prev => prev.map(m =>
         m.id === chatId
           ? { ...m, type: 'error', content: `错误: ${e instanceof Error ? e.message : 'Unknown'}`, streaming: false }
           : m
@@ -2476,8 +2618,21 @@ export function ThinkingBanner({ content, streaming, title, embedded = false }: 
     setExpanded(streaming)
   }, [streaming])
 
+  // 流式时自动滚底，但用户手动上拉后不抢占
+  const contentScrolledUpRef = useRef(false)
   useEffect(() => {
-    if (expanded && streaming && contentRef.current) {
+    const el = contentRef.current
+    if (!el) return
+    const onScroll = () => {
+      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20
+      contentScrolledUpRef.current = !nearBottom
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    if (expanded && streaming && contentRef.current && !contentScrolledUpRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
   }, [content, expanded, streaming])

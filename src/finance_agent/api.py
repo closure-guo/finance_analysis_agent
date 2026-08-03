@@ -35,12 +35,14 @@ from finance_agent.session_store import (  # noqa: E402
     create_chat_session,
     create_session,
     delete_session,
+    get_max_event_seq,
     get_session,
     get_terminal_event,
     init_db,
     list_session_events,
     list_sessions,
     rename_session,
+    set_pipeline_anchor,
     update_pipeline_snapshot,
     update_pipeline_timelines,
     update_session_for_clarify,
@@ -1230,9 +1232,11 @@ async def _run_react_analysis(
             collector.feed(preToolCall)
             await registry.publish(session_id, preToolCall)
             # 补发 search_start：前端搜索横幅由 search_start/search_result 驱动
-            await registry.publish(
-                session_id, {"type": "search_start", "query": searchQuery, "timestamp": _now()}
-            )
+            # 同步 feed collector：search_start 生成 searching 状态的 search item，
+            # 持久化到 chat_history.agentTimeline，刷新后才能恢复搜索横幅
+            searchStartEvent = {"type": "search_start", "query": searchQuery, "timestamp": _now()}
+            collector.feed(searchStartEvent)
+            await registry.publish(session_id, searchStartEvent)
 
             searchResult = ""
             try:
@@ -1250,21 +1254,22 @@ async def _run_react_analysis(
             collector.feed(preToolResult)
             await registry.publish(session_id, preToolResult)
             # 补发 search_result（结构化来源），驱动搜索横幅转"已搜索 N 个网页"
+            # 同步 feed collector：search_result 将 searching item 更新为 done 并写入 results，
+            # 持久化后刷新才能恢复完整的搜索横幅（含结果数量）
             from finance_agent.web_search import parse_search_output
 
             preResults = parse_search_output(searchResult)
-            await registry.publish(
-                session_id,
-                {
-                    "type": "search_result",
-                    "query": searchQuery,
-                    "results": [
-                        {"title": r.title, "url": r.url, "content": r.content} for r in preResults
-                    ],
-                    "count": len(preResults),
-                    "timestamp": _now(),
-                },
-            )
+            searchResultEvent = {
+                "type": "search_result",
+                "query": searchQuery,
+                "results": [
+                    {"title": r.title, "url": r.url, "content": r.content} for r in preResults
+                ],
+                "count": len(preResults),
+                "timestamp": _now(),
+            }
+            collector.feed(searchResultEvent)
+            await registry.publish(session_id, searchResultEvent)
             userQuery = (
                 f"{req.query}\n\n"
                 f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
@@ -1389,6 +1394,8 @@ async def analyze(req: AnalyzeRequest):
     if stock_code and not req.session_id:
         # 追加用户输入到 chat_history
         append_chat(session_id, "user", req.query)
+        # 持久化管线触发锚点：fast path 下 chat_history 仅一条 user，锚点 = 1
+        set_pipeline_anchor(session_id)
         update_session_for_clarify(
             session_id, stock_code=stock_code, stock_name=stock_name, status="running"
         )
@@ -1444,8 +1451,11 @@ async def analyze(req: AnalyzeRequest):
     if not started:
         # single-flight：会话已有活跃任务，拒绝新消息（不追加 user 消息）
         return JSONResponse(status_code=409, content={"error": "session_busy"})
+    # 追问时跳过历史事件重放：用当前 journal 最大 seq 作为 after_seq，
+    # 避免上一轮 done 终态事件导致 registry.subscribe 提前 return（SSE 流终止）
+    afterSeq = get_max_event_seq(session_id)
     return StreamingResponse(
-        _subscribe_sse(session_id),
+        _subscribe_sse(session_id, after_seq=afterSeq),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -1476,6 +1486,12 @@ async def quick_chat(req: ChatRequest):
         display_name = req.message.strip()[:30] or "快速问答"
         session_id = create_chat_session(display_name)
 
+    # 追问时跳过历史事件重放：用当前 journal 最大 seq 作为 after_seq，
+    # 避免上一轮 done 终态事件导致 registry.subscribe 提前 return（SSE 流终止），
+    # 与 /api/analyze ReAct 路径对齐。
+    # 须在 registry.start 前取值：新会话的 session_created 由任务发布，
+    # start 后再取 max_seq 可能跳过该事件，导致前端拿不到 session_id
+    afterSeq = get_max_event_seq(session_id)
     started = await registry.start(
         session_id, _run_chat_task(session_id, req, display_name, api_key)
     )
@@ -1483,7 +1499,7 @@ async def quick_chat(req: ChatRequest):
         # single-flight：会话已有活跃任务，拒绝新消息（不追加 user 消息）
         return JSONResponse(status_code=409, content={"error": "session_busy"})
     return StreamingResponse(
-        _subscribe_sse(session_id),
+        _subscribe_sse(session_id, after_seq=afterSeq),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
