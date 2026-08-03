@@ -28,7 +28,12 @@ package = true
 where = ["src"]
 
 [tool.pytest.ini_options]
+# 默认只跑单元/集成测试：tests/e2e 用 Playwright 同步 API（session 级 browser fixture），
+# 与 asyncio_mode=auto 的 pytest-asyncio 冲突--e2e 先跑会使后续 async 测试抛
+# "Runner.run() cannot be called from a running event loop"（issue #35）。
+# e2e 需单独执行：uv run pytest tests/e2e/（与 CI 分层一致，见 .github/workflows/ci.yml）
 testpaths = ["tests"]
+norecursedirs = ["tests/e2e", "tests/scripts"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 markers = [
