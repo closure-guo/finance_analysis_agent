@@ -83,6 +83,9 @@ def init_db() -> None:
         ("pipeline_snapshot", "ALTER TABLE sessions ADD COLUMN pipeline_snapshot TEXT"),
         ("pipeline_timelines", "ALTER TABLE sessions ADD COLUMN pipeline_timelines TEXT"),
         ("failure_reason", "ALTER TABLE sessions ADD COLUMN failure_reason TEXT"),
+        # 管线触发锚点：管线启动时 chat_history 中最后一条 user 消息索引 + 1，
+        # 供前端历史重建定位报告消息插入位置（NULL = 旧会话，前端回退第一个 user 后）
+        ("pipeline_anchor", "ALTER TABLE sessions ADD COLUMN pipeline_anchor INTEGER"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -332,6 +335,23 @@ def has_terminal_event(session_id: str) -> bool:
     return False
 
 
+def get_max_event_seq(session_id: str) -> int:
+    """返回会话 journal 中最大 seq，无事件时返回 0。
+
+    用于追问时 POST /api/analyze 设置 after_seq，跳过历史事件重放
+    （避免上一轮 done 终态事件导致 SSE 流提前终止）。
+    """
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT MAX(seq) as max_seq FROM session_events WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    if row and row["max_seq"] is not None:
+        return int(row["max_seq"])
+    return 0
+
+
 def get_terminal_event(session_id: str) -> dict | None:
     """返回 journal 中最后一条终态事件（done/interrupted/error），无则返回 None。
 
@@ -551,6 +571,43 @@ def append_chat(
     conn.close()
 
 
+def set_pipeline_anchor(session_id: str) -> None:
+    """将管线触发锚点持久化到 sessions.pipeline_anchor 列。
+
+    锚点 = chat_history 中最后一条 role='user' 条目的索引 + 1，
+    即"触发本轮分析的用户消息之后"，供前端历史重建定位报告消息插入位置。
+    锚定 user 消息而非取 chat_history 长度，避免 ReAct 路径 assistant 在途
+    增量 upsert 导致锚点随持久化时机抖动。chat_history 无 user 消息时不写。
+    """
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT chat_history FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+    try:
+        history = json.loads(row["chat_history"]) if row["chat_history"] else []
+    except (json.JSONDecodeError, TypeError):
+        history = []
+    # 从末尾查找最后一条 user 消息，锚点 = 其索引 + 1
+    anchor = 0
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            anchor = i + 1
+            break
+    if anchor == 0:
+        # chat_history 无 user 消息，不写锚点
+        conn.close()
+        return
+    conn.execute(
+        "UPDATE sessions SET pipeline_anchor = ? WHERE session_id = ?",
+        (anchor, session_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def upsert_chat(
     session_id: str,
     role: str,
@@ -576,10 +633,20 @@ def upsert_chat(
     except (json.JSONDecodeError, TypeError):
         history = []
 
-    # 从末尾查找最后一条指定 role 的消息
+    # 从末尾查找最后一条指定 role 的消息。
+    # 仅当它位于最后一条 user 消息之后（即属于当前轮次）时才更新；
+    # 否则说明新一轮已开始（本轮 user 已落库、assistant 尚未产生），
+    # 必须追加新条目——否则新一轮的增量持久化会覆盖上一轮的 assistant 内容，
+    # 导致历史重建后本轮内容串到上一轮位置、上一轮内容丢失
+    lastUserIdx = -1
+    if role != "user":
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].get("role") == "user":
+                lastUserIdx = i
+                break
     found = False
     for i in range(len(history) - 1, -1, -1):
-        if history[i].get("role") == role:
+        if history[i].get("role") == role and i > lastUserIdx:
             history[i]["content"] = content
             if thinking is not None:
                 history[i]["thinking"] = thinking
