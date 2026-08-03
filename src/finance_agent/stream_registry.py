@@ -38,6 +38,7 @@ class SessionStream:
     task: asyncio.Task[Any] | None = None
     subscribers: list[asyncio.Queue[dict | None]] = field(default_factory=list)
     lastSeq: int = 0  # noqa: N815 - camelCase 符合项目命名规范（N806 已全局 ignore）
+    terminalPublished: bool = False  # noqa: N815 - per-run 终态 CAS 标志，start() 时天然重置
 
 
 class StreamRegistry:
@@ -89,18 +90,34 @@ class StreamRegistry:
         if self._streams.get(session_id) is stream:
             del self._streams[session_id]
 
+    def _try_mark_terminal(self, session_id: str, event: dict) -> bool:
+        """终态事件 per-run CAS：同轮内首个终态置位并放行，重复终态返回 False。
+
+        作用域是单次运行（SessionStream 生命周期），不跨轮次：
+        start() 每次新建 stream，标志天然为 False，因此同一会话多轮追问的
+        终态事件各自独立下发。CAS 只用于抑制同一轮内的重复终态
+        （生成逻辑显式发 done + _run_task 结束时自动发 done）。
+
+        无 stream 时（如 Fast path 未注册 task）不做去重，直接放行。
+        """
+        if event.get("type") not in ("done", "interrupted", "error"):
+            return True
+        stream = self._streams.get(session_id)
+        if stream is None:
+            return True
+        if stream.terminalPublished:
+            return False
+        stream.terminalPublished = True
+        return True
+
     async def publish(self, session_id: str, event: dict) -> int:
         """先落 session_events journal，再 fan-out 到订阅者队列。
 
         对应 delta spec Task 2.3。返回分配的 seq。
-        终态事件（done/interrupted/error）做 CAS 检查：已有终态则放弃（返回 0）。
+        终态事件（done/interrupted/error）做 per-run CAS：同轮内已有终态则放弃（返回 0）。
         """
-        # 终态 CAS 检查：已有终态事件时拒绝写入（避免重复终态）
-        eventType = event.get("type")
-        if eventType in ("done", "interrupted", "error"):
-            existing = await asyncio.to_thread(session_store.has_terminal_event, session_id)
-            if existing:
-                return 0  # 已有终态，放弃
+        if not self._try_mark_terminal(session_id, event):
+            return 0  # 同轮内已有终态，放弃
         # 同步 SQLite 写入放在 executor 中避免阻塞事件循环（design.md D2）
         seq = await asyncio.to_thread(session_store.append_session_event, session_id, event)
         # 将 seq 注入事件 dict，使前端能追踪 lastSeq 实现断点续传
@@ -121,6 +138,8 @@ class StreamRegistry:
 
     def _publish_sync(self, session_id: str, event: dict) -> int:
         """同步版 publish：直接调用 session_store（不 await），用于 CancelledError 块。"""
+        if not self._try_mark_terminal(session_id, event):
+            return 0  # 同轮内已有终态，放弃
         try:
             seq = session_store.append_session_event(session_id, event)
         except Exception:
