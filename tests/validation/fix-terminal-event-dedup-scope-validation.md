@@ -73,15 +73,29 @@ Fund Manager 输出了 `return` 而非预期三个枚举值之一，属决策解
 
 已用 `git stash` 隔离验证：**改动前以完全相同的断言失败**（`tests/e2e/test_5layer_pipeline.py:63`），确认为 pre-existing。
 
-### 2. 全量并跑时的事件循环隔离问题
+已开 issue 跟踪：#34
 
-全量 `uv run pytest` 存在约 87 个 `RuntimeError: Runner.run() cannot be called from a running event loop` 失败：
+### 2. asyncio_mode=auto 与 tests/e2e 的 Playwright sync API 冲突
 
-- 涉及本次未触碰的文件（如 `tests/test_web_search_tool.py`、`tests/test_tool_call_span.py`）
-- 相关文件单独运行全部通过（已验证：`test_web_search_tool.py` + `test_subscribe_order.py` + `test_tool_call_span.py` -> 7 passed）
-- 属测试基础设施问题，非产品代码缺陷
+全量 `uv run pytest`（含 `tests/e2e/`）时出现：
 
-建议为上述两项各开 issue 跟踪。
+```
+RuntimeError: Runner.run() cannot be called from a running event loop
+RuntimeError: asyncio.run() cannot be called from a running event loop
+```
+
+实测定位：
+
+| 命令 | 结果 |
+|---|---|
+| `uv run pytest tests/ --ignore=tests/e2e --ignore=tests/scripts` | **569 passed**，零 RuntimeError |
+| `uv run pytest`（含 e2e） | 出现上述 RuntimeError |
+
+根因为 `asyncio_mode = "auto"` 与 `tests/e2e/conftest.py` 的 Playwright **同步** API（`sync_playwright()`）冲突：sync Playwright 内部调用 `asyncio.run()`，在 pytest-asyncio 已建立的运行中事件循环内被调用即报错。属测试基础设施配置问题，非产品代码缺陷。
+
+已开 issue 跟踪：#35
+
+**归因更正说明**：本报告初版曾将此描述为「约 87 个失败、并跑时事件循环隔离问题」。该数字与归因均不准确 —— 后续实测确认排除 `tests/e2e` 后 569 个测试全部通过，且 `tests/e2e` 仅收集到 6 个测试，凑不出 87 个失败。以上表实测结论为准。
 
 ## 改动范围
 
