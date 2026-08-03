@@ -35,6 +35,7 @@ from finance_agent.session_store import (  # noqa: E402
     create_chat_session,
     create_session,
     delete_session,
+    get_max_event_seq,
     get_session,
     get_terminal_event,
     init_db,
@@ -1444,8 +1445,11 @@ async def analyze(req: AnalyzeRequest):
     if not started:
         # single-flight：会话已有活跃任务，拒绝新消息（不追加 user 消息）
         return JSONResponse(status_code=409, content={"error": "session_busy"})
+    # 追问时跳过历史事件重放：用当前 journal 最大 seq 作为 after_seq，
+    # 避免上一轮 done 终态事件导致 registry.subscribe 提前 return（SSE 流终止）
+    afterSeq = get_max_event_seq(session_id)
     return StreamingResponse(
-        _subscribe_sse(session_id),
+        _subscribe_sse(session_id, after_seq=afterSeq),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -1476,6 +1480,12 @@ async def quick_chat(req: ChatRequest):
         display_name = req.message.strip()[:30] or "快速问答"
         session_id = create_chat_session(display_name)
 
+    # 追问时跳过历史事件重放：用当前 journal 最大 seq 作为 after_seq，
+    # 避免上一轮 done 终态事件导致 registry.subscribe 提前 return（SSE 流终止），
+    # 与 /api/analyze ReAct 路径对齐。
+    # 须在 registry.start 前取值：新会话的 session_created 由任务发布，
+    # start 后再取 max_seq 可能跳过该事件，导致前端拿不到 session_id
+    afterSeq = get_max_event_seq(session_id)
     started = await registry.start(
         session_id, _run_chat_task(session_id, req, display_name, api_key)
     )
@@ -1483,7 +1493,7 @@ async def quick_chat(req: ChatRequest):
         # single-flight：会话已有活跃任务，拒绝新消息（不追加 user 消息）
         return JSONResponse(status_code=409, content={"error": "session_busy"})
     return StreamingResponse(
-        _subscribe_sse(session_id),
+        _subscribe_sse(session_id, after_seq=afterSeq),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
