@@ -252,6 +252,7 @@ Kimi_Agent_简化 Agent Harness/
 tests/e2e/playwright/node_modules/
 tests/e2e/playwright/playwright-report/
 tests/e2e/playwright/test-results/
+/test-results/
 
 # Superpowers SDD 工作流临时产物
 .superpowers/
