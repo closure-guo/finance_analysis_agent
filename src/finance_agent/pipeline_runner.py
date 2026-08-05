@@ -403,6 +403,8 @@ class PipelineRunner:
                         "currentNodeId": _current_node(tree),
                         "progress": _progress(tree),
                         "updatedAt": now_ms,
+                        # 管线启动时间戳（毫秒）：前端刷新重建用作「已用时」计时起点
+                        "pipeline_start_ts": int(start_time * 1000),
                     }
                     session_store.update_pipeline_snapshot(session_id, snapshot)
         except Exception as e:
