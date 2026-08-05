@@ -1,0 +1,520 @@
+﻿diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 0483409..daa610d 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -1217,8 +1217,11 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
+             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
+               <i className="fas fa-robot text-white text-xs"></i>
+             </div>
+-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-4 flex-1">
+-              {/* 按 agentTimeline 数组顺序渲染：每个思考片段/搜索/工具调用一个独立横幅，
++            {/* Kimi 时间轴重构：chat 分支不再用 .msg-system 灰框包住横幅+response。
++                思考区是独立的白色时间轴容器（TimelineRenderer 内 .timeline-container），
++                response 在容器下方独立渲染：无框、纯白底，直接 Markdown 排版。 */}
++            <div className="flex-1 min-w-0">
++              {/* 按 agentTimeline 数组顺序渲染：每个思考片段/搜索/工具调用为时间轴的一行，
+                   反映 agent 实际执行时序（思考 -> 搜索 -> 再思考 -> 工具调用 -> ...） */}
+               {msg.agentTimeline && msg.agentTimeline.length > 0 && (
+                 <TimelineRenderer
+@@ -1228,7 +1231,7 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
+                 />
+               )}
+               {msg.chatResponse ? (
+-                <div className="prose prose-sm max-w-none" style={{ color: 'var(--text-secondary)' }}>
++                <div className="prose prose-sm max-w-none py-1" style={{ color: 'var(--text-secondary)' }}>
+                   <ReactMarkdown
+                     remarkPlugins={[remarkGfm]}
+                     components={{
+@@ -1270,12 +1273,15 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
+ // ── Thinking Banner (Kimi-style collapsible reasoning) ──
+ // 思考横幅：统一快速模式与深度模式澄清阶段的思考流式展示。
+ // 思考中显示"思考中"并自动展开；完成后按横幅展开/折叠状态与是否有标题分别展示。
++// Kimi 时间轴重构：本组件不再带独立灰底框与外边距，仅渲染标题按钮 + 展开内容区，
++// 作为 TimelineRenderer 统一白色容器内的一行（节点图标/竖线由容器层负责）。
+ export function ThinkingBanner({ content, streaming, title }: { content: string; streaming: boolean; title?: string }) {
+   const [expanded, setExpanded] = useState(true)
+   const contentRef = useRef<HTMLDivElement>(null)
+ 
++  // 流式时展开（实时看思考过程），完成后自动折叠（与 Kimi 一致）
+   useEffect(() => {
+-    if (streaming) setExpanded(true)
++    setExpanded(streaming)
+   }, [streaming])
+ 
+   useEffect(() => {
+@@ -1292,22 +1298,13 @@ export function ThinkingBanner({ content, streaming, title }: { content: string;
+       : (title || '思考已完成')
+ 
+   return (
+-    <div className="mb-3">
++    <div>
+       <button
+         onClick={() => setExpanded(!expanded)}
+-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
+-        style={{ background: 'var(--bg-overlay-l1)' }}
+-        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
+-        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
++        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-left"
++        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
++        onMouseLeave={(e) => {e.currentTarget.style.background = 'transparent'}}
+       >
+-        {streaming ? (
+-          <span className="relative flex h-2 w-2 flex-shrink-0">
+-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+-            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
+-          </span>
+-        ) : (
+-          <i className="fas fa-check-circle text-xs flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
+-        )}
+         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+           {bannerText}
+         </span>
+@@ -1319,8 +1316,7 @@ export function ThinkingBanner({ content, streaming, title }: { content: string;
+       >
+         <div
+           ref={contentRef}
+-          className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg"
+-          style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
++          className="px-2 py-1.5 max-h-[240px] overflow-y-auto mt-0.5"
+         >
+           {/* 有标题时标题加粗置顶 */}
+           {!streaming && title && (
+@@ -1337,6 +1333,8 @@ export function ThinkingBanner({ content, streaming, title }: { content: string;
+ }
+ 
+ // ── Tool Call Banner (工具调用，与思考过程分离展示) ──
++// Kimi 时间轴重构：同 ThinkingBanner，去掉独立灰底框/外边距/内嵌图标，
++// 作为 TimelineRenderer 统一容器内的一行（节点图标/竖线由容器层负责）。
+ export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEntry[]; streaming: boolean }) {
+   const [expanded, setExpanded] = useState(true)
+   const pendingCount = toolCalls.filter(t => !t.done).length
+@@ -1350,22 +1348,13 @@ export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEn
+   const isJustFinished = !streaming && prevStreamingRef.current
+ 
+   return (
+-    <div className="mb-3">
++    <div>
+       <button
+         onClick={() => setExpanded(!expanded)}
+-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
+-        style={{ background: 'var(--bg-overlay-l1)' }}
+-        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l2)'}}
+-        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
++        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-left"
++        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
++        onMouseLeave={(e) => {e.currentTarget.style.background = 'transparent'}}
+       >
+-        {streaming && pendingCount > 0 ? (
+-          <span className="relative flex h-2 w-2 flex-shrink-0">
+-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+-            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
+-          </span>
+-        ) : (
+-          <i className="fas fa-tools text-xs flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
+-        )}
+         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+           {streaming && pendingCount > 0 ? '调用工具中' : isJustFinished ? '已调用工具' : '工具调用'}
+           <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {toolCalls.length} 次</span>
+@@ -1377,8 +1366,7 @@ export function ToolCallBanner({ toolCalls, streaming }: { toolCalls: ToolCallEn
+         style={{ maxHeight: expanded ? '240px' : '0px', opacity: expanded ? 1 : 0 }}
+       >
+         <div
+-          className="px-3 py-2 max-h-[240px] overflow-y-auto mt-1 rounded-lg flex flex-col gap-2"
+-          style={{ background: 'var(--bg-overlay-l1)', border: '1px solid var(--border-neutral-l1)' }}
++          className="px-2 py-1.5 max-h-[240px] overflow-y-auto mt-0.5 flex flex-col gap-2"
+         >
+           {toolCalls.map((tc, i) => (
+             <div key={i} className="text-xs leading-relaxed break-words">
+diff --git a/frontend/src/SearchBanner.tsx b/frontend/src/SearchBanner.tsx
+index 967f38f..c8a53e2 100644
+--- a/frontend/src/SearchBanner.tsx
++++ b/frontend/src/SearchBanner.tsx
+@@ -36,20 +36,14 @@ function getFavicon(url: string): string {
+ export function SearchBanner({ status, query, results = [] }: SearchBannerProps) {
+   const [expanded, setExpanded] = useState(false)
+ 
+-  // 搜索中：脉冲动画 + "正在搜索：{query}"
++  // 搜索中："正在搜索：{query}"（进行中动画由 TimelineRenderer 时间轴节点承担，此处仅文案）
+   if (status === 'searching') {
+     return (
+-      <div className="mb-3">
+-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-overlay-l1)' }}>
+-          <span className="relative flex h-2 w-2 flex-shrink-0">
+-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+-            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
+-          </span>
+-          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+-            正在搜索
+-            {query && <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>：{query}</span>}
+-          </span>
+-        </div>
++      <div className="px-2 py-1.5">
++        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
++          正在搜索
++          {query && <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>：{query}</span>}
++        </span>
+       </div>
+     )
+   }
+@@ -57,26 +51,24 @@ export function SearchBanner({ status, query, results = [] }: SearchBannerProps)
+   // 搜索失败
+   if (status === 'error') {
+     return (
+-      <div className="mb-3">
+-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-overlay-l1)' }}>
+-          <i className="fas fa-exclamation-circle text-xs flex-shrink-0" style={{ color: 'var(--status-error-default)' }}></i>
+-          <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>搜索失败</span>
+-        </div>
++      <div className="px-2 py-1.5">
++        <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
++          <i className="fas fa-exclamation-circle mr-1.5" style={{ color: 'var(--status-error-default)' }}></i>
++          搜索失败
++        </span>
+       </div>
+     )
+   }
+ 
+-  // 搜索完成：可折叠的结果列表
++  // 搜索完成：可折叠的结果列表（时间轴一行：透明标题按钮 + 展开内容，无独立灰底框）
+   return (
+-    <div className="mb-3">
++    <div>
+       <button
+         onClick={() => setExpanded(!expanded)}
+-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
+-        style={{ background: 'var(--bg-overlay-l1)' }}
+-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l2)' }}
+-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
++        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-left"
++        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
++        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+       >
+-        <i className="fas fa-search text-xs flex-shrink-0" style={{ color: 'var(--status-success-default)' }}></i>
+         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+           搜索了
+           <span className="mx-1 font-medium" style={{ color: 'var(--text-default)' }}>{results.length}</span>
+@@ -89,7 +81,7 @@ export function SearchBanner({ status, query, results = [] }: SearchBannerProps)
+         className="overflow-hidden transition-all duration-300 ease-out"
+         style={{ maxHeight: expanded ? '400px' : '0px', opacity: expanded ? 1 : 0 }}
+       >
+-        <div className="space-y-2 mt-1 max-h-[400px] overflow-y-auto pr-1">
++        <div className="space-y-2 mt-0.5 px-2 max-h-[400px] overflow-y-auto pr-1">
+           {results.map((r, i) => (
+             <a
+               key={i}
+diff --git a/frontend/src/TimelineRenderer.tsx b/frontend/src/TimelineRenderer.tsx
+index 06fd414..e016f97 100644
+--- a/frontend/src/TimelineRenderer.tsx
++++ b/frontend/src/TimelineRenderer.tsx
+@@ -3,8 +3,12 @@
+ // 避免 TimelineRenderer -> App.tsx 的循环依赖。
+ // 设计见 agent-turn-box-display design.md 决策 3/4：每个 timeline item 一个横幅实例，
+ // ToolCallBanner 接收单条目数组（toolCalls={[entry]}）保持组件签名不变。
++//
++// Kimi 风格时间轴重构：所有 timeline item 包在一个统一白色圆角容器里，
++// 容器内左侧一条贯穿竖线串联各 item 的节点图标（思考=圆点、搜索=🔍、工具=🛠）。
++// 竖线与节点图标由本层（容器层）负责，各 banner 组件签名不变，仅去掉自身灰底框。
+ 
+-import type { ComponentType } from 'react'
++import type { ComponentType, ReactNode } from 'react'
+ import type { TimelineItem, ToolCallEntry } from './types'
+ import { timelineToolCallToEntry } from './timeline'
+ 
+@@ -15,9 +19,42 @@ export interface TimelineBannerComponents {
+   ToolCallBanner: ComponentType<{ toolCalls: ToolCallEntry[]; streaming: boolean }>
+ }
+ 
+-// 渲染一条 agentTimeline：每个 item 一个独立横幅，顺序即数组顺序。
++// 节点图标尺寸（px），与竖线水平位置对齐：图标中心 = 竖线 left + 1px
++const NODE_SIZE = 16
++
++// 时间轴节点图标：包裹白色圆底盖住竖线，形成"竖线上的节点"视觉。
++// active=true 时（流式进行中）用品牌色跳动圆点（现有 animate-ping 样式）。
++function TimelineNode({ type, active }: { type: TimelineItem['type']; active: boolean }) {
++  // 进行中：跳动的品牌色圆点（thinking / searching / tool_call 统一）
++  if (active) {
++    return (
++      <span className="timeline-node" style={{ width: NODE_SIZE, height: NODE_SIZE }}>
++        <span className="relative flex h-2 w-2">
++          <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
++          <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
++        </span>
++      </span>
++    )
++  }
++  // 完成态：思考=圆点（品牌色）、搜索=放大镜、工具=扳手
++  const content =
++    type === 'thinking' ? (
++      <span className="block rounded-full" style={{ width: 7, height: 7, background: 'var(--text-brand)' }} />
++    ) : type === 'search' ? (
++      <i className="fas fa-search" style={{ fontSize: 9, color: 'var(--text-brand)' }}></i>
++    ) : (
++      <i className="fas fa-tools" style={{ fontSize: 9, color: 'var(--text-brand)' }}></i>
++    )
++  return (
++    <span className="timeline-node" style={{ width: NODE_SIZE, height: NODE_SIZE }}>
++      {content}
++    </span>
++  )
++}
++
++// 渲染一条 agentTimeline：所有 item 包在统一白色容器内，左侧竖线时间轴串联。
+ // streaming 为整条消息的流式标记；仅当"消息流式中 且 末尾 item 未完成"时，
+-// 对应末尾横幅显示进行中动画（思考中/搜索中/调用工具中），其余已完成横幅不显示"思考中"。
++// 对应末尾 item 的节点显示进行中动画（思考中/搜索中/调用工具中），其余 item 显示完成态节点。
+ export function TimelineRenderer({
+   timeline,
+   streaming,
+@@ -28,35 +65,45 @@ export function TimelineRenderer({
+   components: TimelineBannerComponents
+ }) {
+   const { ThinkingBanner, SearchBanner, ToolCallBanner } = components
++
++  // 各 item 的横幅内容（保持原有渲染分发逻辑与 data-timeline-index 标记）
++  const renderItem = (item: TimelineItem, i: number): ReactNode => {
++    const isLast = i === timeline.length - 1
++    if (item.type === 'thinking') {
++      // 仅当消息流式中且该 thinking item 在 timeline 末尾（agent 正在思考）时显示"思考中"；
++      // agent 转去执行搜索/工具调用后（末尾变为 search/tool_call item），该横幅不再显示"思考中"
++      const thinkingStreaming = streaming && isLast
++      return <ThinkingBanner content={item.content} streaming={thinkingStreaming} title={item.title} />
++    }
++    if (item.type === 'search') {
++      return <SearchBanner status={item.status} query={item.query} results={item.results} />
++    }
++    // tool_call：单条目数组传入 ToolCallBanner（组件签名不变）
++    const toolStreaming = streaming && isLast && !item.done
++    return <ToolCallBanner toolCalls={[timelineToolCallToEntry(item)]} streaming={toolStreaming} />
++  }
++
+   return (
+-    <>
++    <div className="timeline-container" data-testid="timeline-container">
++      {/* 贯穿竖线：absolute 定位在容器左 padding 内，top/bottom 贯穿全部 item */}
++      <div className="timeline-line"></div>
+       {timeline.map((item, i) => {
+         const isLast = i === timeline.length - 1
+-        if (item.type === 'thinking') {
+-          // 仅当消息流式中且该 thinking item 在 timeline 末尾（agent 正在思考）时显示"思考中"；
+-          // agent 转去执行搜索/工具调用后（末尾变为 search/tool_call item），该横幅不再显示"思考中"
+-          const thinkingStreaming = streaming && isLast
+-          return (
+-            <div key={i} data-timeline-index={i}>
+-              <ThinkingBanner content={item.content} streaming={thinkingStreaming} title={item.title} />
+-            </div>
+-          )
+-        }
+-        if (item.type === 'search') {
+-          return (
+-            <div key={i} data-timeline-index={i}>
+-              <SearchBanner status={item.status} query={item.query} results={item.results} />
+-            </div>
+-          )
+-        }
+-        // tool_call：单条目数组传入 ToolCallBanner（组件签名不变）
+-        const toolStreaming = streaming && isLast && !item.done
++        // 进行中节点动画与横幅 streaming 逻辑一致：
++        // thinking 末尾流式中、search searching、tool_call 末尾未完成
++        const active =
++          item.type === 'thinking'
++            ? streaming && isLast
++            : item.type === 'search'
++              ? item.status === 'searching'
++              : streaming && isLast && !item.done
+         return (
+-          <div key={i} data-timeline-index={i}>
+-            <ToolCallBanner toolCalls={[timelineToolCallToEntry(item)]} streaming={toolStreaming} />
++          <div key={i} className="timeline-item" data-timeline-index={i}>
++            <TimelineNode type={item.type} active={active} />
++            <div className="flex-1 min-w-0">{renderItem(item, i)}</div>
+           </div>
+         )
+       })}
+-    </>
++    </div>
+   )
+ }
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 76bdd7d..dcf19a3 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -115,6 +115,47 @@ input:focus, textarea:focus { outline: none; }
+ .expand-content { max-height: 0; overflow: hidden; transition: max-height 0.4s ease-out, opacity 0.3s ease; opacity: 0; }
+ .expand-content.open { max-height: 2000px; opacity: 1; }
+ 
++/* ── Kimi 风格思考时间轴 ── */
++/* 统一白色圆角容器：包住整条 agentTimeline 的思考/搜索/工具调用横幅 */
++.timeline-container {
++  position: relative;
++  background: #FFFFFF;
++  border: 1px solid var(--border-neutral-l1);
++  border-radius: 12px;
++  padding: 6px 12px;
++  margin-bottom: 8px;
++}
++/* 贯穿竖线：absolute 定位在容器左 padding 内（left=19px，节点图标 16px 宽，图标中心 20px ≈ 竖线中线 19.5px），
++   top/bottom 落在首尾 item 的标题行高度附近，形成"一条竖线串联所有节点"的视觉 */
++.timeline-line {
++  position: absolute;
++  left: 19px;
++  top: 21px;
++  bottom: 21px;
++  width: 1px;
++  background: var(--border-neutral-l2);
++}
++/* 每个时间轴条目：节点图标 + 横幅内容，占一行 */
++.timeline-item {
++  position: relative;
++  display: flex;
++  align-items: flex-start;
++  gap: 6px;
++  padding: 3px 0;
++}
++/* 节点图标：白色圆底（盖住竖线形成节点），固定在竖线位置 */
++.timeline-node {
++  flex-shrink: 0;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  background: #FFFFFF;
++  border-radius: 50%;
++  position: relative;
++  z-index: 1;
++  margin-top: 9px; /* 与横幅标题行基线对齐（标题行高约 30px，图标 16px 居中） */
++}
++
+ /* Chips */
+ .chip { transition: all 0.2s ease; cursor: pointer; }
+ .chip:hover { background: var(--bg-brand-popup); border-color: var(--bg-brand); transform: translateY(-1px); }
+diff --git a/frontend/src/test/ThinkingBanner.test.tsx b/frontend/src/test/ThinkingBanner.test.tsx
+index c609bee..876980a 100644
+--- a/frontend/src/test/ThinkingBanner.test.tsx
++++ b/frontend/src/test/ThinkingBanner.test.tsx
+@@ -10,35 +10,38 @@ describe('ThinkingBanner 思考横幅', () => {
+     expect(screen.getByText('分析中...')).toBeVisible()
+   })
+ 
+-  it('完成态折叠 + 有标题 -> 横幅显示标题，不显示字数', () => {
+-    render(<ThinkingBanner content="## 茅台分析\n内容" streaming={false} title="茅台分析" />)
+-    // 默认展开，点击折叠
+-    fireEvent.click(screen.getByRole('button'))
+-    // 横幅标题在 span 中（下拉框置顶标题在 p.font-bold 中，折叠时不可见）
++  it('完成态默认折叠（Kimi 行为）：有标题 -> 横幅显示标题，不显示字数', () => {
++    render(<ThinkingBanner content="## 茅台分析\n详细分析内容" streaming={false} title="茅台分析" />)
++    // 完成后默认折叠，横幅直接显示标题（无需点击）
+     expect(screen.getByText('茅台分析', { selector: 'span' })).toBeInTheDocument()
++    // 内容区折叠不可见（正文"详细分析内容"在折叠容器内，不可见）
++    expect(screen.getByText('详细分析内容')).not.toBeVisible()
+     // 不显示"· N 字"
+     expect(screen.queryByText(/字/)).not.toBeInTheDocument()
+   })
+ 
+-  it('完成态折叠 + 无标题 -> 横幅显示"思考已完成"', () => {
++  it('完成态默认折叠 + 无标题 -> 横幅显示"思考已完成"', () => {
+     render(<ThinkingBanner content="简短思考" streaming={false} />)
+-    fireEvent.click(screen.getByRole('button'))
+     expect(screen.getByText('思考已完成')).toBeInTheDocument()
+     expect(screen.queryByText(/字/)).not.toBeInTheDocument()
+   })
+ 
+-  it('完成态展开 + 有标题 -> 横幅显示"思考已完成"，下拉框标题加粗置顶', () => {
++  it('完成态点击展开 + 有标题 -> 横幅显示"思考已完成"，下拉框标题加粗置顶', () => {
+     render(<ThinkingBanner content="## 茅台分析\n详细内容" streaming={false} title="茅台分析" />)
++    // 默认折叠显示标题，点击展开
++    fireEvent.click(screen.getByRole('button'))
+     // 展开态横幅固定显示"思考已完成"
+     expect(screen.getByText('思考已完成')).toBeInTheDocument()
+     // 下拉框内标题加粗置顶（font-bold）
+-    const titleEl = screen.getByText('茅台分析')
++    const titleEl = screen.getByText('茅台分析', { selector: 'p' })
+     expect(titleEl).toBeInTheDocument()
+     expect(titleEl.className).toContain('font-bold')
+   })
+ 
+-  it('完成态展开 + 无标题 -> 横幅显示"思考已完成"，下拉框无置顶标题', () => {
++  it('完成态点击展开 + 无标题 -> 横幅显示"思考已完成"，下拉框无置顶标题', () => {
+     render(<ThinkingBanner content="简短思考内容" streaming={false} />)
++    // 默认折叠，点击展开后内容可见
++    fireEvent.click(screen.getByRole('button'))
+     expect(screen.getByText('思考已完成')).toBeInTheDocument()
+     // 下拉框内不渲染置顶标题（思考正文直接显示）
+     expect(screen.getByText('简短思考内容')).toBeVisible()
+diff --git a/frontend/src/test/timelineRenderer.test.tsx b/frontend/src/test/timelineRenderer.test.tsx
+index 85233dd..0e01ba4 100644
+--- a/frontend/src/test/timelineRenderer.test.tsx
++++ b/frontend/src/test/timelineRenderer.test.tsx
+@@ -1,4 +1,4 @@
+-﻿import { describe, it, expect } from 'vitest'
++import { describe, it, expect } from 'vitest'
+ import { render, screen } from '@testing-library/react'
+ import { TimelineRenderer, type TimelineBannerComponents } from '../TimelineRenderer'
+ import { timelineToolCallToEntry, nodeDisplayName } from '../timeline'
+@@ -57,12 +57,27 @@ describe('TimelineRenderer - 按 agentTimeline 数组顺序渲染', () => {
+     expect([...banners].map(b => b.getAttribute('data-timeline-index'))).toEqual(['0', '1', '2', '3'])
+   })
+ 
+-  it('每个 thinking item 渲染为独立 ThinkingBanner（独立折叠状态）', () => {
++  it('Kimi 时间轴：所有 item 包在一个统一白色容器内，左侧一条贯穿竖线 + 每 item 一个节点', () => {
++    const { container } = render(<TimelineRenderer timeline={timeline} streaming={false} components={components} />)
++    // 统一容器（白色圆角）
++    const timelineContainer = container.querySelector('.timeline-container')
++    expect(timelineContainer).not.toBeNull()
++    // 所有 item 都在这一个容器里
++    expect(timelineContainer!.querySelectorAll('[data-timeline-index]')).toHaveLength(4)
++    // 容器内有且仅有一条贯穿竖线
++    expect(timelineContainer!.querySelectorAll('.timeline-line')).toHaveLength(1)
++    // 每个 item 一个时间轴节点图标
++    expect(timelineContainer!.querySelectorAll('.timeline-node')).toHaveLength(4)
++    // 每个 item 是时间轴的一行（节点 + 横幅内容）
++    expect(timelineContainer!.querySelectorAll('.timeline-item')).toHaveLength(4)
++  })
++
++  it('每个 thinking item 渲染为独立 ThinkingBanner（独立折叠状态，完成后默认折叠显示标题）', () => {
+     render(<TimelineRenderer timeline={timeline} streaming={false} components={components} />)
+-    // 两段思考各自独立：思考1有标题（展开态横幅固定"思考已完成"，框内标题加粗置顶），
+-    // 思考2无标题 -> 展开态横幅也显示"思考已完成"；两个独立横幅 => "思考已完成"出现两次
+-    expect(screen.getByText('初步判断')).toBeInTheDocument()
+-    expect(screen.getAllByText('思考已完成').length).toBeGreaterThanOrEqual(2)
++    // 两段思考各自独立：完成后默认折叠，思考1折叠态横幅显示其标题，
++    // 思考2无标题 -> 折叠态横幅显示"思考已完成"
++    expect(screen.getByText('初步判断', { selector: 'span' })).toBeInTheDocument()
++    expect(screen.getAllByText('思考已完成').length).toBeGreaterThanOrEqual(1)
+   })
+ 
+   it('search item 渲染为独立 SearchBanner', () => {
+diff --git a/uv.lock b/uv.lock
+index d107e38..7f31064 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -821,7 +821,6 @@ dependencies = [
+     { name = "litellm" },
+     { name = "matplotlib" },
+     { name = "pandas" },
+-    { name = "pandas-stubs" },
+     { name = "pyarrow" },
+     { name = "python-docx" },
+     { name = "python-dotenv" },
+@@ -833,6 +832,7 @@ dependencies = [
+ [package.dev-dependencies]
+ dev = [
+     { name = "mypy" },
++    { name = "pandas-stubs" },
+     { name = "playwright" },
+     { name = "pre-commit" },
+     { name = "pytest" },
+@@ -851,7 +851,6 @@ requires-dist = [
+     { name = "litellm", specifier = ">=1.0.0" },
+     { name = "matplotlib", specifier = ">=3.8.0" },
+     { name = "pandas", specifier = ">=2.0.0" },
+-    { name = "pandas-stubs", specifier = "~=3.0.3" },
+     { name = "pyarrow", specifier = ">=24.0.0" },
+     { name = "python-docx", specifier = ">=1.1.0" },
+     { name = "python-dotenv", specifier = ">=1.2.2" },
+@@ -863,6 +862,7 @@ requires-dist = [
+ [package.metadata.requires-dev]
+ dev = [
+     { name = "mypy", specifier = ">=2.1.0" },
++    { name = "pandas-stubs", specifier = "~=3.0.3" },
+     { name = "playwright", specifier = ">=1.60.0" },
+     { name = "pre-commit", specifier = ">=4.0.0" },
+     { name = "pytest", specifier = ">=9.0.3" },
