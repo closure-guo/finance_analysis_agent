@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -48,8 +49,6 @@ def test_followup_sse_not_terminated_by_previous_done(isolated_db):
     assert max_seq > 0, "应有历史事件"
 
     # 模拟第二轮：用 after_seq=max_seq 订阅，不应收到上一轮的 done
-    import asyncio
-
     async def collect_events():
         events = []
         gen = stream_registry.registry.subscribe(sid, after_seq=max_seq)
@@ -109,6 +108,8 @@ def test_followup_api_sends_new_events(isolated_db, monkeypatch):
     callCount = {"n": 0}
 
     async def fake_react_task(session_id, req, analysis_id, start_time, display_name, api_key):
+        # 等待 subscriber 就绪，避免时序竞争丢失 thinking_token
+        await asyncio.sleep(0.05)
         for ev in newEvents:
             await stream_registry.registry.publish(session_id, ev)
         callCount["n"] += 1
@@ -163,6 +164,8 @@ def test_quick_chat_followup_sse_not_terminated_by_previous_done(isolated_db, mo
     ]
 
     async def fake_chat_task(session_id, req, display_name, api_key):
+        # 等待 subscriber 就绪，避免时序竞争丢失事件
+        await asyncio.sleep(0.05)
         for ev in newEvents:
             await stream_registry.registry.publish(session_id, ev)
 
