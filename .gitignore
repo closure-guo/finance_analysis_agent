@@ -236,6 +236,11 @@ cache.db*
 
 # Runtime data
 **/sessions.db
+# SQLite WAL/SHM 与 E2E 独立测试库（SESSIONS_DB_PATH 注入）
+**/sessions.db-wal
+**/sessions.db-shm
+data/test-e2e-sessions.db*
+data/*.corrupt-backup
 
 # Build artifacts
 frontend/tsconfig.tsbuildinfo

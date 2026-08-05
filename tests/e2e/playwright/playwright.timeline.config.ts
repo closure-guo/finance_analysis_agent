@@ -43,7 +43,7 @@ export default defineConfig({
     {
       // 后端：TESTING=1 + STUB_SCENARIO=tool_call，确定性模拟思考-搜索-思考
       command: 'uv run uvicorn finance_agent.api:app --port 8001',
-      env: { TESTING: '1', STUB_SCENARIO: 'tool_call' },
+      env: { TESTING: '1', STUB_SCENARIO: 'tool_call', SESSIONS_DB_PATH: 'data/test-e2e-sessions.db' },
       url: 'http://localhost:8001/api/health',
       timeout: 30_000,
       reuseExistingServer: !process.env.CI,
@@ -64,7 +64,7 @@ export default defineConfig({
     // 与 tool_call 场景隔离：两组后端 STUB_SCENARIO 不同，不能共用端口。
     {
       command: 'uv run uvicorn finance_agent.api:app --port 8002',
-      env: { TESTING: '1', STUB_SCENARIO: 'pipeline', STUB_NODE_DELAY: '1.5' },
+      env: { TESTING: '1', STUB_SCENARIO: 'pipeline', STUB_NODE_DELAY: '1.5', SESSIONS_DB_PATH: 'data/test-e2e-sessions.db' },
       url: 'http://localhost:8002/api/health',
       timeout: 30_000,
       reuseExistingServer: !process.env.CI,
