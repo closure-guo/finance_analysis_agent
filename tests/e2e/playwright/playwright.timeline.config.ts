@@ -78,5 +78,24 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       cwd: '../../../frontend',
     },
+    // ── LLM 失败场景（harden-react-path-resilience 8.3）──
+    // 独立端口对（后端 8003 / 前端 5176），STUB_SCENARIO=llm_failure
+    // LLM 在第 1 轮 raise 异常，验证前端展示错误信息而非无限等待。
+    {
+      command: 'uv run uvicorn finance_agent.api:app --port 8003',
+      env: { TESTING: '1', STUB_SCENARIO: 'llm_failure', SESSIONS_DB_PATH: 'data/test-e2e-sessions.db' },
+      url: 'http://localhost:8003/api/health',
+      timeout: 30_000,
+      reuseExistingServer: !process.env.CI,
+      cwd: '../../../',
+    },
+    {
+      command: 'npm run dev -- --port 5176',
+      env: { VITE_API_TARGET: 'http://127.0.0.1:8003' },
+      url: 'http://localhost:5176',
+      timeout: 30_000,
+      reuseExistingServer: !process.env.CI,
+      cwd: '../../../frontend',
+    },
   ],
 })
