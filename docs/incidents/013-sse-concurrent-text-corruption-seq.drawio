@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-08-04T00:00:00.000Z" agent="drawio-chart" version="24.0.0">
+  <diagram name="sse-token-loss-seq" id="sse-token-loss-seq">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1100" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- 标题 -->
+        <mxCell id="title" value="SSE 流式文字丢失根因时序图（session_created 与 currentSessionIdRef 的异步窗口）" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="360" y="16" width="900" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== 左栏：修复前 ==================== -->
+        <mxCell id="left-header" value="修复前（bug）：ref 靠 useEffect 异步同步" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontStyle=1;fontColor=#DC2626;" vertex="1" parent="1">
+          <mxGeometry x="250" y="64" width="360" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- 左栏泳道：后端 SSE / session_created 处理器 / React useEffect / currentSessionIdRef / chat_token 处理器 -->
+        <mxCell id="l-lane1" value="后端 SSE 流" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="60" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-lane2" value="session_created 处理器" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="210" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-lane3" value="React state / useEffect" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="360" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-lane4" value="currentSessionIdRef" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="510" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-lane5" value="chat_token 处理器" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="660" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+
+        <!-- 左栏事件流 -->
+        <mxCell id="l-ev1" value="T0: session_created(新会话)" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="140" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-ev2" value="setAndPersistSession(新)" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="140" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="l-ev1" target="l-ev2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-ev3" value="setState(新) 已调用但排队" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="140" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge2" value="异步" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="l-ev2" target="l-ev3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-ref-old" value="ref.current = 旧值" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="200" width="110" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-tok1" value="T0+1ms: chat_token 这是" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="260" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-drop1" value="判为非当前会话 → 丢弃" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="670" y="260" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#DC2626;" edge="1" source="l-tok1" target="l-drop1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge3b" value="读 ref=旧值" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#DC2626;dashed=1;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#DC2626;" edge="1" source="l-ref-old" target="l-drop1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-tok2" value="T0+2ms: chat_token 一段" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="330" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-drop2" value="判为非当前会话 → 丢弃" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="670" y="330" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#DC2626;" edge="1" source="l-tok2" target="l-drop2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-window" value="窗口期：ref 未同步，token 全丢" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="290" width="110" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-render" value="T0+5ms: React 渲染完成" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="410" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-ue" value="useEffect 执行" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="470" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="l-render" target="l-ue" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-ref-new" value="ref.current = 新值" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="470" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge6" value="同步" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="l-ue" target="l-ref-new" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-tok3" value="T0+6ms: chat_token 测试用的" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="540" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-ok" value="判为当前会话 → 渲染" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="670" y="540" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="l-edge7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="l-tok3" target="l-ok" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="l-note" value="结果：寒武纪(688256) → 武(256)，前几个字保留后全丢" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="620" width="460" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== 右栏：修复后 ==================== -->
+        <mxCell id="right-header" value="修复后：session_created 同步更新 ref，消灭窗口" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontStyle=1;fontColor=#4CA497;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="64" width="380" height="28" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="r-lane1" value="后端 SSE 流" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="870" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-lane2" value="session_created 处理器" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-lane4" value="currentSessionIdRef" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-lane5" value="chat_token 处理器" style="swimlane;whiteSpace=wrap;fillColor=none;strokeColor=#005D7B;dashed=1;strokeWidth=2;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="100" width="130" height="560" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="r-ev1" value="T0: session_created(新会话)" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="880" y="140" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-ev2" value="同步: ref.current = 新值" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="140" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-edge1" value="立即" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#4CA497;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#4CA497;" edge="1" source="r-ev1" target="r-ev2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="r-ev3" value="再调 setAndPersistSession(新)" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="200" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-edge2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="r-ev1" target="r-ev3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="r-tok1" value="T0+1ms: chat_token 这是" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="880" y="270" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-ok1" value="判为当前会话 → 渲染" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="270" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-edge3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#4CA497;" edge="1" source="r-tok1" target="r-ok1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-edge3b" value="读 ref=新值" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#4CA497;dashed=1;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#4CA497;" edge="1" source="r-ev2" target="r-ok1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="r-tok2" value="T0+2ms: chat_token 一段" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="880" y="340" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-ok2" value="判为当前会话 → 渲染" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="340" width="110" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="r-edge4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#4CA497;" edge="1" source="r-tok2" target="r-ok2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="r-note" value="结果：全文完整渲染，无窗口" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="620" width="320" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- 底部分隔说明 -->
+        <mxCell id="bottom-note" value="关键差异：左栏 ref 同步依赖 useEffect（渲染后异步执行），T0~T0+5ms 窗口内 token 被误判丢弃；右栏在 session_created 处理处同步赋值 ref，token 到达时 ref 已是新值。" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="200" y="680" width="1250" height="30" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
