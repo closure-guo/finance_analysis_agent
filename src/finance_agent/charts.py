@@ -20,7 +20,15 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # ── 中文字体 ──
-plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "Arial"]
+# 回退链覆盖 Windows（微软雅黑/黑体）、macOS（Arial Unicode MS）与 Linux 容器
+# （Noto Sans CJK SC，由 Dockerfile 安装 fonts-noto-cjk 提供）
+plt.rcParams["font.sans-serif"] = [
+    "Microsoft YaHei",
+    "SimHei",
+    "Noto Sans CJK SC",
+    "Arial Unicode MS",
+    "Arial",
+]
 plt.rcParams["axes.unicode_minus"] = False
 
 # ── 配色 ──
