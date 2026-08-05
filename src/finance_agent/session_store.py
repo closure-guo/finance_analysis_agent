@@ -8,15 +8,29 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
+import os
 import sqlite3
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-_DB_PATH = Path("data/sessions.db")
+logger = logging.getLogger(__name__)
 
-_DB_PATH.parent.mkdir(exist_ok=True)
+# DB 路径支持 SESSIONS_DB_PATH 覆盖，默认 data/sessions.db。
+# 必需性：E2E 测试后端（TESTING=1，独立端口）若与 docker 生产后端共用同一
+# SQLite 文件，两个进程并发写会破坏 WAL 与主库的一致性——实测导致主库文件
+# 被 WAL 帧覆盖、SQLite 魔数丢失，报 "file is not a database" 且数据不可恢复。
+# 测试环境必须注入独立路径隔离。
+_DB_PATH = Path(os.getenv("SESSIONS_DB_PATH", "data/sessions.db"))
+
+_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# 事件落库并发重试：seq 分配虽已原子化，仍可能遇到写锁竞争（多 writer 高频写）
+_EVENT_APPEND_MAX_RETRIES = 5
+_EVENT_APPEND_RETRY_SLEEP = 0.05
 
 # created_at 列曾被旧版代码错写为 session_type 的值（'chat' / 'analysis'），
 # 这些值无法被 Date 解析，前端显示 "Invalid Date"。这里集中兜底。
@@ -45,9 +59,11 @@ def _normalize_created_at(ts: str | None) -> str:
 
 
 def _get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False, timeout=15.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # 并发写等待锁而非立即抛 "database is locked"（流式 token 高频落库场景必需）
+    conn.execute("PRAGMA busy_timeout=15000")
     return conn
 
 
@@ -276,26 +292,45 @@ def append_session_event(session_id: str, event: dict) -> int:
 
     对应 delta spec: resume-stream-on-session-switch Task 1.2。
     事件先落库再 fan-out 给订阅者，保证断线重放的事实源不依赖进程内存。
+
+    并发安全：seq 分配与插入必须原子。此前实现为 `SELECT MAX(seq)` + `INSERT`
+    两步非原子，并发写（流式 token 高频落库）时多个 writer 读到同一 max_seq，
+    UNIQUE 约束让后到的 INSERT 失败 —— 事件永久丢失，症状为流式文本随机缺整个
+    token。现改为 BEGIN IMMEDIATE 事务内 `INSERT ... SELECT MAX(seq)+1` 单条语句，
+    并对锁竞争/冲突做有限重试。
     """
-    conn = _get_db()
-    # 获取当前会话最大 seq，+1 作为新 seq（并发安全由 UNIQUE 约束兜底）
-    row = conn.execute(
-        "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_events WHERE session_id = ?",
-        (session_id,),
-    ).fetchone()
-    nextSeq = row["max_seq"] + 1
-    conn.execute(
-        "INSERT INTO session_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-        (
-            session_id,
-            nextSeq,
-            json.dumps(event, ensure_ascii=False, default=str),
-            datetime.now().isoformat(),
-        ),
-    )
-    conn.commit()
-    conn.close()
-    return nextSeq
+    eventJson = json.dumps(event, ensure_ascii=False, default=str)
+    createdAt = datetime.now().isoformat()
+    lastError: Exception | None = None
+
+    for _attempt in range(_EVENT_APPEND_MAX_RETRIES):
+        conn = _get_db()
+        try:
+            # BEGIN IMMEDIATE：立即取写锁，避免 SELECT/INSERT 之间被其他 writer 插入
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "INSERT INTO session_events (session_id, seq, event_json, created_at) "
+                "SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? "
+                "FROM session_events WHERE session_id = ?",
+                (session_id, eventJson, createdAt, session_id),
+            )
+            conn.commit()
+            # 取回本次实际写入的 seq
+            row = conn.execute(
+                "SELECT seq FROM session_events WHERE rowid = ?", (cur.lastrowid,)
+            ).fetchone()
+            return int(row["seq"]) if row else 0
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as e:
+            lastError = e
+            with contextlib.suppress(Exception):
+                conn.rollback()
+            time.sleep(_EVENT_APPEND_RETRY_SLEEP)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+
+    logger.error("append_session_event 重试耗尽，事件丢失: %s", lastError)
+    raise lastError if lastError else RuntimeError("append_session_event failed")
 
 
 def list_session_events(session_id: str, after_seq: int = 0) -> list[dict]:

@@ -66,6 +66,80 @@ function formatSessionTime(ts: string | undefined | null): string {
   return d.toLocaleString()
 }
 
+// 快照恢复路径：决定 resumeStream 的 after_seq。
+// 快照只含前端实时流渲染到的内容，lastSeq 是实际渲染进度。
+// 优先用前端 lastSeq 续传未渲染事件；为 0（从未收到事件）时用后端 last_seq 兜底。
+// 不可用 Math.max(front, back)——后端 last_seq 是 journal 全量 max，
+// 用它会跳过快照与后端之间前端未渲染的事件（流式文字内容缺失根因）。
+export function resumeAfterSeqFromSnapshot(frontLastSeq: number, backLastSeq: number): number {
+  return frontLastSeq > 0 ? frontLastSeq : backLastSeq
+}
+
+// selectSession stale guard：fetch 返回后判断用户是否仍在请求的会话。
+//
+// 根因：selectSession 是 async 函数，await fetch 期间用户可能已切换到其他会话。
+// 若不检查，fetch 返回后会为已切走的会话启动 resumeStream，导致两个 resumeStream
+// reader 并发——它们竞争覆盖全局 streamingSessionIdRef，使隔离检查失效，
+// chat_token 等增量事件被误判为「非当前视图」丢弃（continue 跳过）→ 内容缺失。
+export function shouldProcessFetchedSession(
+  requestedSessionId: string,
+  currentSessionId: string | null,
+): boolean {
+  return requestedSessionId === currentSessionId
+}
+
+// resumeStream 会话隔离检查：判断 SSE 事件是否属于当前视图。
+//
+// 必须用 reader 的局部 sessionId（绑定到本次 SSE 订阅），不可用全局
+// streamingSessionIdRef.current——多个并发 resumeStream reader 会竞争覆盖该全局 ref，
+// 导致隔离检查使用错误的值（内容缺失根因）。
+export function isCurrentViewEvent(
+  readerSessionId: string,
+  currentSessionId: string | null,
+): boolean {
+  return readerSessionId === currentSessionId
+}
+
+// Single-reader 不变量：启动新 SSE reader 前先 abort 现存的全局 controller。
+// 根因：resumeStream/quickChat 直接覆盖 abortRef.current 而不先 abort 旧值，
+// 旧 reader 继续运行并写全局 assistantMsgIdRef → 串字/丢内容。
+export function ensureSingleReader(
+  currentAbort: AbortController | null,
+  newAbort: AbortController,
+): AbortController {
+  if (currentAbort && !currentAbort.signal.aborted) {
+    currentAbort.abort()
+  }
+  return newAbort
+}
+
+// reader 退出时该清理哪条消息的 streaming 游标。
+//
+// 根因（E2E 复现确认）：reader 退出的兜底清理读全局 assistantMsgIdRef.current，
+// 但并发场景下该 ref 已被后启动的会话覆盖 → 旧 reader 退出时把
+// 新会话正在流式的消息误置 streaming:false → 前端停止渲染后续 token
+// → 新会话文本后半段整段丢失（症状：「这是一段测试用的固定回复。」后面全没了）。
+//
+// 修复：只清理本 reader 自己创建的消息（局部 ownMsgId），
+// 且仅当全局 ref 仍指向它时才动（双重保险）。
+export function msgIdToClearOnReaderExit(
+  ownMsgId: string | null,
+  globalMsgId: string | null,
+): string | null {
+  if (!ownMsgId) return null
+  return ownMsgId === globalMsgId ? ownMsgId : null
+}
+
+// SSE 诊断日志：复现流式文字缺失问题时，在 URL 加 ?sse_debug 开启。
+// 控制台过滤 [SSE] 查看事件路由轨迹、seq 去重、abort 时序、reader 生命周期。
+const SSE_DEBUG = typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('sse_debug')
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sseDebug(action: string, details: Record<string, any>) {
+  if (!SSE_DEBUG) return
+  console.warn('[SSE]', action, JSON.stringify(details))
+}
+
 export default function App() {
   const [appState, setAppState] = useState<'empty' | 'analyzing' | 'report' | 'clarifying'>('empty')
   const [messages, setMessages] = useState<UIMessage[]>([])
@@ -84,6 +158,16 @@ export default function App() {
   // Session state
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  // 包装 setCurrentSessionId：同步持久化到 localStorage（fa_current_session_id），
+  // 供刷新后自动恢复当前会话（delta spec: restore-session-on-refresh）
+  const setAndPersistSession = useCallback((id: string | null) => {
+    if (id) {
+      localStorage.setItem('fa_current_session_id', id)
+    } else {
+      localStorage.removeItem('fa_current_session_id')
+    }
+    setCurrentSessionId(id)
+  }, [])
   // ref 镜像：SSE 事件处理闭包中读取最新 currentSessionId，判断事件是否属于当前视图
   const currentSessionIdRef = useRef<string | null>(null)
   // SSE 流绑定的会话 ID：用于事件处理闭包中判断事件是否属于当前视图
@@ -165,6 +249,11 @@ export default function App() {
   // 断开当前会话的本地 SSE 订阅连接（不取消后端任务）
   const disconnectSubscription = useCallback(() => {
     if (abortRef.current) {
+      sseDebug('disconnect', {
+        streamingSession: streamingSessionIdRef.current,
+        view: currentSessionIdRef.current,
+        aborted: !abortRef.current.signal.aborted,
+      })
       abortRef.current.abort()
       abortRef.current = null
     }
@@ -226,35 +315,59 @@ export default function App() {
   }, [messages, scrollToBottom])
 
   // ── Session management ──
-  // 返回是否成功：调用方可据此决定是否重试（useEffect 初始化时退避重试）
-  const loadSessions = useCallback(async (): Promise<boolean> => {
+  // 返回加载到的会话数组（失败返回 null）：调用方可据此决定是否重试
+  // （useEffect 初始化时退避重试），成功时亦可直接拿到列表做存在性校验
+  const loadSessions = useCallback(async (): Promise<SessionMeta[] | null> => {
     try {
       const resp = await fetch('/api/sessions')
-      if (!resp.ok) return false
+      if (!resp.ok) return null
       const data = await resp.json()
-      setSessions(data.sessions || [])
-      return true
+      // 200 但 body 缺 sessions 字段（代理/中间件异常返回 {} 等）视为失败，
+      // 不用空数组覆盖已有列表（否则分析运行期间一次异常响应就清空侧边栏）
+      if (!Array.isArray(data?.sessions)) return null
+      setSessions(data.sessions)
+      return data.sessions as SessionMeta[]
     } catch (e) {
       console.error('Failed to load sessions:', e)
-      return false
+      return null
     }
   }, [])
 
-  // 首次加载：后端启动需要数秒（uvicorn + init_db），depends_on 只等容器启动。
-  // 首次 fetch 可能失败（502/连接拒绝），退避重试直到后端就绪，避免用户需手动刷新。
+  // selectSession 引用：mount 自动恢复在 selectSession 定义之前执行，经 ref 取最新引用
+  const selectSessionRef = useRef<((id: string) => Promise<void>) | null>(null)
+  // 刷新自动恢复仅执行一次（避免 loadSessions 后续触发时重复恢复覆盖用户已切换视图）
+  const restoredRef = useRef(false)
+
+  // 首次加载：后端启动需要数秒（uvicorn + init_db），且深度分析运行期间
+  // 事件循环被阻塞会导致 /api/sessions 长时间挂起。失败时持续退避重试
+  // （间隔封顶 10s），后端恢复后列表自动出现，不再因重试次数耗尽而永久空白。
   useEffect(() => {
     let cancelled = false
     let retryCount = 0
-    const maxRetries = 6
 
     const loadWithRetry = async () => {
-      const ok = await loadSessions()
-      if (cancelled) return
-      if (!ok && retryCount < maxRetries) {
-        // 退避：500ms, 1s, 2s, 4s, 8s, 16s（覆盖后端 ~4s 启动窗口）
-        const delay = 500 * Math.pow(2, retryCount)
+      const loaded = await loadSessions()
+      if (cancelled || loaded === null) {
+        if (cancelled) return
+        // 退避：500ms, 1s, 2s, ... 封顶 10s，无限重试直到成功
+        const delay = Math.min(500 * Math.pow(2, retryCount), 10000)
         retryCount++
         setTimeout(loadWithRetry, delay)
+        return
+      }
+      // 列表加载成功：刷新后自动恢复此前查看的会话（delta spec: restore-session-on-refresh）
+      if (!restoredRef.current) {
+        restoredRef.current = true
+        const persistedId = localStorage.getItem('fa_current_session_id')
+        if (persistedId) {
+          if (loaded.some(s => s.session_id === persistedId)) {
+            // 会话仍存在：复用 selectSession 恢复（含 running 时 SSE 重连）
+            void selectSessionRef.current?.(persistedId)
+          } else {
+            // 持久化会话已被删除：清除并停留空态首页
+            localStorage.removeItem('fa_current_session_id')
+          }
+        }
       }
     }
 
@@ -325,11 +438,21 @@ export default function App() {
       })
     }
 
-    setCurrentSessionId(sessionId)
+    setAndPersistSession(sessionId)
+    // 同步更新 ref：setAndPersistSession 调用 setCurrentSessionId 触发 React 状态更新，
+    // 但 currentSessionIdRef.current 要等 useEffect 异步同步。在 await fetch 挂起期间，
+    // ref 可能仍是旧值，导致 stale guard 不可靠。此处同步赋值确保 ref 立即生效。
+    currentSessionIdRef.current = sessionId
     try {
       const resp = await fetch(`/api/sessions/${sessionId}`)
       if (!resp.ok) throw new Error('Failed to load session')
       const data: SessionDetail = await resp.json()
+
+      // stale guard：fetch 期间用户可能已切换到其他会话（selectSession 是 async，
+      // 两个 selectSession 可交错执行）。若用户已切走，不处理此响应、不启动 resumeStream，
+      // 否则两个 resumeStream reader 并发会竞争覆盖全局 streamingSessionIdRef，
+      // 使隔离检查失效导致 chat_token 被误丢弃（内容缺失根因）。
+      if (!shouldProcessFetchedSession(sessionId, currentSessionIdRef.current)) return
 
       // 若 agent 仍在生成（clarifying/running）且前端有该会话的消息快照，
       // 优先从快照恢复：后端 chat_history 此时未持久化 agent 的思考/工具调用内容
@@ -351,7 +474,9 @@ export default function App() {
         // 取 max 确保不回退：已处理的 lastSeq 优先，后端 last_seq 作为下界兜底。
         if (data.status === 'running' || data.status === 'clarifying') {
           const streamState = getStreamState(sessionId)
-          streamState.lastSeq = Math.max(streamState.lastSeq, data.last_seq ?? 0)
+          // 快照恢复：前端 lastSeq 是实际渲染进度，优先用它续传；
+          // 为 0 时用后端 last_seq 兜底。不可取 Math.max（见 resumeAfterSeqFromSnapshot 注释）。
+          streamState.lastSeq = resumeAfterSeqFromSnapshot(streamState.lastSeq, data.last_seq ?? 0)
           resumeStream(sessionId, false)
         }
         return
@@ -391,7 +516,8 @@ export default function App() {
               currentNode: snapshot.currentNodeId,
               nodeOutputs: {},
               progress: snapshot.progress,
-              startedAt: Date.now(),
+              // 已用时计时起点：优先用后端快照的管线启动时间戳（刷新不归零），缺省回退本地
+              startedAt: snapshot.pipeline_start_ts ?? Date.now(),
               layerTree: deserializeLayerTree(snapshot.layerTree),
               ...(restoredNodeTimelines ? { nodeTimelines: restoredNodeTimelines } : {}),
             }
@@ -518,9 +644,11 @@ export default function App() {
     // running 和 clarifying 都恢复：ReAct 路径 status 为 clarifying 但任务可能仍在运行
     if (data.status === 'running' || data.status === 'clarifying') {
       const streamState = getStreamState(sessionId)
-      // 与快照恢复路径一致：取 max 防回退（state.lastSeq 可能已因快照恢复而推进）
-      const backendLastSeq = data.last_seq ?? 0
-      streamState.lastSeq = Math.max(streamState.lastSeq, backendLastSeq)
+      // 与快照恢复路径一致：前端 lastSeq 是实际渲染进度，优先用它续传；
+      // 为 0 时用后端 last_seq 兜底。不可取 Math.max——后端 last_seq 是 journal 全量 max，
+      // 用它会跳过 chat_history 重建后、后端 journal 中前端尚未通过流式渲染的增量事件
+      // （两 session 同时运行时后端事件增长更快、backLastSeq 更大 → 跳过更多 → 必然缺失）。
+      streamState.lastSeq = resumeAfterSeqFromSnapshot(streamState.lastSeq, data.last_seq ?? 0)
       // lastSeq 仍为 0 时（后端 journal 为空或字段缺失），after_seq=0 会重放全部历史。
       // 此时 skipIncremental=true 跳过增量内容事件（thinking_token/chat_token 等），
       // 避免与重建消息重复叠加；只处理状态转换事件（analysis_start/done 等）。
@@ -532,6 +660,8 @@ export default function App() {
       console.error('Failed to load session:', e)
     }
   }
+  // 同步到 ref：供 mount 自动恢复（定义顺序在 selectSession 之前的 effect）调用
+  selectSessionRef.current = selectSession
 
   const deleteSession = async (sessionId: string) => {
     try {
@@ -555,7 +685,7 @@ export default function App() {
       loadSessions()
       if (currentSessionId === sessionId) {
         disconnectSubscription()
-        setCurrentSessionId(null)
+        setAndPersistSession(null)
         streamingReportRef.current = null
         pipelineMsgRef.current = null
         assistantMsgIdRef.current = null
@@ -601,7 +731,7 @@ export default function App() {
       })
     }
 
-    setCurrentSessionId(null)
+    setAndPersistSession(null)
     streamingReportRef.current = null
     pipelineMsgRef.current = null
     assistantMsgIdRef.current = null
@@ -642,7 +772,7 @@ export default function App() {
 
     // 只有新会话才重置 session；澄清轮次保留 currentSessionId
     if (!sessionId) {
-      setCurrentSessionId(null)
+      setAndPersistSession(null)
       streamingReportRef.current = null
     }
 
@@ -684,9 +814,13 @@ export default function App() {
     // 澄清/解析阶段（search_stock / web_search / thinking）走对话流，不触发管线 UI；
     // 仅 run_deep_analysis 才调用 ensurePipelineMsg 进入管线 UI（ADR-0017）。
     const ensureAssistantMsg = (): string => {
-      if (assistantMsgIdRef.current) return assistantMsgIdRef.current
+      if (assistantMsgIdRef.current) {
+        ownAssistantMsgId = assistantMsgIdRef.current
+        return assistantMsgIdRef.current
+      }
       const newId = genId()
       assistantMsgIdRef.current = newId
+      ownAssistantMsgId = newId
       commitMessages(prev => [...prev, {
         id: newId,
         type: 'chat',
@@ -697,14 +831,38 @@ export default function App() {
       return newId
     }
 
+    // 在 try 外声明：catch 块也需要访问（终止清理）
+    let activeSessionId = sessionId || ''
+    // 本 reader 自己创建/接管的助手消息 ID（局部，不受并发会话覆盖全局 ref 影响）。
+    // reader 退出时只清理这条消息的游标，避免误清并发会话正在流式的消息。
+    let ownAssistantMsgId: string | null = null
+
     try {
-      // 每轮新建 controller；前一轮的已在 abortStreaming 时中断
-      const localAbort = new AbortController()
+      // 并发订阅隔离：先 abort 该会话已有的活跃订阅（与 resumeStream 一致）。
+      // 否则两条 SSE reader 并发累加同一消息，React setState 各自基于同一份 prev，
+      // 后到的覆盖先到的，导致随机丢失 token（症状：流式文本概率性错乱）。
+      if (sessionId) {
+        const existingState = getStreamState(sessionId)
+        if (existingState.abort && !existingState.abort.signal.aborted) {
+          existingState.abort.abort()
+        }
+      }
+      // 全局 single-reader 不变量：abort 任何残留 reader（与 resumeStream/quickChat 一致）。
+      // line 736 的 abortStreaming() 只 abort 全局 abortRef，若期间有其他路径
+      // （如 selectSession → resumeStream）重新赋值，此处兜底确保只有一条 reader。
+      if (abortRef.current && !abortRef.current.signal.aborted) {
+        sseDebug('global_abort', { source: 'startAnalysis', session: sessionId, aborting: streamingSessionIdRef.current })
+      }
+      const localAbort = ensureSingleReader(abortRef.current, new AbortController())
       abortRef.current = localAbort
       // 提前激活 seq 去重（与 quickChat 一致）：追问场景后端可能不重发 session_created，
       // fetch 前设置 streamingSessionIdRef 使去重从第一个事件起生效
       if (sessionId) {
         streamingSessionIdRef.current = sessionId
+        // 追问路径后端不重发 session_created，localAbort 不会经 session_created 写入
+        // streamRegistry。此处同步登记，使 isSessionRunning 在「澄清/工具执行中」
+        // 能读到未中断 abort，拦截重复发送（否则工具执行中仍可发送消息）。
+        getStreamState(sessionId).abort = localAbort
       }
       const resp = await fetch('/api/analyze', {
         method: 'POST',
@@ -739,6 +897,7 @@ export default function App() {
       const reader = resp.body?.getReader()
       if (!reader) return
 
+      sseDebug('reader_start', { source: 'startAnalysis', session: activeSessionId, view: currentSessionIdRef.current })
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -758,21 +917,34 @@ export default function App() {
             // abort 后跳过事件处理：disconnectSubscription 后 buffer 中残留的事件
             // 可能仍被读取，此时 streamingSessionIdRef 可能已被其他会话覆盖，
             // 隔离检查会失效导致事件更新到错误消息（症状：上海天气输出覆盖沈阳天气）
-            if (localAbort.signal.aborted) break
+            if (localAbort.signal.aborted) {
+              sseDebug('reader_abort', { source: 'startAnalysis', session: activeSessionId, eventType: event.type, seq: event.seq })
+              break
+            }
 
             // seq 去重：跳过 seq <= lastSeq 的旧事件
-            if (streamingSessionIdRef.current) {
+            if (activeSessionId) {
               const seq = event.seq
               if (seq !== undefined) {
-                const ss = getStreamState(streamingSessionIdRef.current)
-                if (seq <= ss.lastSeq) continue
+                const ss = getStreamState(activeSessionId)
+                if (seq <= ss.lastSeq) {
+                  sseDebug('seq_skip', { source: 'startAnalysis', session: activeSessionId, seq, lastSeq: ss.lastSeq, eventType: event.type })
+                  continue
+                }
                 ss.lastSeq = seq
               }
             }
 
             if (event.type === 'session_created') {
+              activeSessionId = event.session_id
               streamingSessionIdRef.current = event.session_id
-              setCurrentSessionId(event.session_id)
+              setAndPersistSession(event.session_id)
+              // 同步更新 ref：setAndPersistSession 只触发 React setState，
+              // currentSessionIdRef 要等 useEffect 异步同步。在此期间到达的
+              // chat_token 会因 activeSessionId !== currentSessionIdRef.current
+              // 被会话隔离分支误判为「非当前视图」而丢弃 → 流式文本后半段整段缺失
+              // （E2E concurrent-streaming-integrity 复现：seq 9+ 全部被隔离）。
+              currentSessionIdRef.current = event.session_id
               // 将 abort controller 存入 per-session 流状态（delta spec Task 5.4）
               const streamState = getStreamState(event.session_id)
               streamState.abort = abortRef.current
@@ -790,7 +962,10 @@ export default function App() {
             // 会话隔离：如果当前视图不是 SSE 流的会话，事件存入缓冲区
             // 切回原会话时 replayBufferedEvents() 回放，确保状态转换（搜索结果、管线创建等）不丢失。
             // 纯增量内容事件（chat_token, thinking_token, report_chunk）不缓冲——这些在切回时从后端重建。
-            if (streamingSessionIdRef.current && streamingSessionIdRef.current !== currentSessionIdRef.current) {
+            if (activeSessionId && activeSessionId !== currentSessionIdRef.current) {
+              if (event.type === 'chat_token' || event.type === 'thinking_token') {
+                sseDebug('isolate', { source: 'startAnalysis', session: activeSessionId, view: currentSessionIdRef.current, eventType: event.type, seq: event.seq, token: (event.token || '').slice(0, 20) })
+              }
               const skipTypes = new Set(['chat_token', 'thinking_token', 'report_chunk', 'report_ready'])
               if (!skipTypes.has(event.type)) {
                 bufferedSseEventsRef.current.push(event)
@@ -817,9 +992,11 @@ export default function App() {
 
             if (event.type === 'chat_token') {
               // Agent 的文本回复（澄清/追问）
+              sseDebug('chat_token', { source: 'startAnalysis', session: activeSessionId, msgId: assistantMsgIdRef.current, seq: event.seq, token: (event.token || '').slice(0, 30) })
               if (!assistantMsgIdRef.current) {
                 const newAssistantId = genId()
                 assistantMsgIdRef.current = newAssistantId
+                ownAssistantMsgId = newAssistantId
                 commitMessages(prev => [...prev, {
                   id: newAssistantId,
                   type: 'chat',
@@ -828,11 +1005,22 @@ export default function App() {
                   streaming: true,
                 }])
               } else {
+                ownAssistantMsgId = assistantMsgIdRef.current
                 // 复用 applyChatStreamEvent：累加 chatResponse 同时收口末尾 thinking item，
                 // 避免思考横幅在 agent 回复期间持续显示"思考中"（与 quickChat 路径行为一致）
                 commitMessages(prev => prev.map(m =>
                   m.id === assistantMsgIdRef.current ? applyChatStreamEvent(m, event) : m
                 ))
+              }
+              continue
+            }
+
+            if (event.type === 'chat_done') {
+              // 对话流结束：置 streaming=false 并收口所有 thinking item（与 quickChat 对齐）。
+              // 缺此分支时深度模式的 chat_done 被静默丢弃，游标依赖 done 终态事件，
+              // 后端终态被吞时游标永久卡死（fix-terminal-event-dedup-scope D2）
+              if (assistantMsgIdRef.current) {
+                handleChatStreamEvent(event, assistantMsgIdRef.current)
               }
               continue
             }
@@ -885,29 +1073,28 @@ export default function App() {
             }
 
             if (event.type === 'thinking_token') {
-              if (pipelineMsgRef.current) {
-                // 管线运行期间的思考 -> 管线 UI
-                handleSSEEvent(event, pipelineMsgRef.current)
+              // 按事件归属路由（delta spec: fix-stream-event-routing）：
+              // 仅管线节点思考（携带 node 字段）进管线 UI；
+              // 澄清/解析阶段思考（不带 node）进对话流，即使管线消息已存在。
+              if (event.node) {
+                handleSSEEvent(event, pipelineMsgRef.current || ensurePipelineMsg('深度分析进行中...'))
               } else {
-                // 澄清/解析阶段的思考 -> 对话流（agent 思考过程）
                 handleChatStreamEvent(event, ensureAssistantMsg())
               }
               continue
             }
 
             if (event.type === 'thinking_replace') {
-              // 替换已流式输出的思考内容（DSML 清理等后处理）
-              if (!pipelineMsgRef.current) {
-                handleChatStreamEvent(event, ensureAssistantMsg())
-              }
+              // 替换已流式输出的思考内容（DSML 清理等后处理）。
+              // 作用于对话流末尾 thinking item，始终路由到对话流，不因管线消息存在而丢弃。
+              handleChatStreamEvent(event, ensureAssistantMsg())
               continue
             }
 
             if (event.type === 'thinking_to_answer') {
               // 文本已作为 thinking_token 逐 token 流式输出，流末判定为最终回答。
-              if (!pipelineMsgRef.current) {
-                handleChatStreamEvent(event, ensureAssistantMsg())
-              }
+              // 作用于对话流，始终路由，不因管线消息存在而丢弃。
+              handleChatStreamEvent(event, ensureAssistantMsg())
               continue
             }
 
@@ -952,6 +1139,8 @@ export default function App() {
               const finishedSessionId = streamingSessionIdRef.current
               streamingSessionIdRef.current = null
               abortRef.current = null
+              // 收口 pipelineMsgRef（delta spec: fix-stream-event-routing）
+              pipelineMsgRef.current = null
               // agent 已完成，数据已持久化到后端，清除前端快照缓存
               if (finishedSessionId) {
                 sessionCacheRef.current.delete(finishedSessionId)
@@ -998,26 +1187,50 @@ export default function App() {
         }
       }
       // 流结束但未收到终态事件：清理本地状态（防御性，避免 isSessionRunning 误判）
-      if (streamingSessionIdRef.current) {
-        const finishedSessionId = streamingSessionIdRef.current
-        streamingSessionIdRef.current = null
-        abortRef.current = null
-        handleStreamTerminal(finishedSessionId)
+      sseDebug('reader_exit', { source: 'startAnalysis', session: activeSessionId, reason: 'stream_end', view: currentSessionIdRef.current })
+      if (activeSessionId) {
+        // 仅当全局 ref 仍指向本次会话时才清理，避免误清并发会话的状态
+        if (streamingSessionIdRef.current === activeSessionId) {
+          streamingSessionIdRef.current = null
+          abortRef.current = null
+        }
+        handleStreamTerminal(activeSessionId)
+      }
+      // 兜底清除游标：流已结束，助手消息不应再显示流式转圈
+      // （游标不依赖单一终态事件，fix-terminal-event-dedup-scope D3）
+      // 只清理本 reader 自己的消息：并发会话下全局 ref 可能已指向别的会话，
+      // 直接用它会把对方正在流式的消息误置 streaming:false → 对方文本后半段丢失。
+      const clearId = msgIdToClearOnReaderExit(ownAssistantMsgId, assistantMsgIdRef.current)
+      if (clearId) {
+        commitMessages(prev => prev.map(m =>
+          m.id === clearId ? { ...m, streaming: false } : m
+        ))
       }
     } catch (e) {
-      // 清理 SSE 会话标记
-      const failedSessionId = streamingSessionIdRef.current
-      streamingSessionIdRef.current = null
-      abortRef.current = null
+      sseDebug('reader_exit', { source: 'startAnalysis', session: activeSessionId, reason: e instanceof Error && e.name === 'AbortError' ? 'abort' : 'error', view: currentSessionIdRef.current })
+      // 清理 SSE 会话标记：仅当全局 ref 仍指向本次会话时才清理
+      if (streamingSessionIdRef.current === activeSessionId) {
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+      }
       // 切换会话/新建分析主动中断，不是错误，静默退出
+      // （不清 streaming：消息属被切走的会话视图，由会话恢复逻辑接管）
       if (e instanceof Error && e.name === 'AbortError') return
-      handleStreamTerminal(failedSessionId)
+      handleStreamTerminal(activeSessionId)
       console.error('SSE error:', e)
       commitMessages(prev => [...prev, {
         id: genId(),
         type: 'error',
         content: `连接错误: ${e instanceof Error ? e.message : 'Unknown'}`,
       }])
+      // 兜底清除游标：连接异常中断，助手消息不应再显示流式转圈
+      // 只清理本 reader 自己的消息（见 stream_end 分支同款注释）
+      const errClearId = msgIdToClearOnReaderExit(ownAssistantMsgId, assistantMsgIdRef.current)
+      if (errClearId) {
+        commitMessages(prev => prev.map(m =>
+          m.id === errClearId ? { ...m, streaming: false } : m
+        ))
+      }
     }
   }
 
@@ -1129,8 +1342,11 @@ export default function App() {
           commitMessages(prev => [...prev, reportMsg])
         }
         setAppState('report')
-        setCurrentSessionId(event.session_id)
+        setAndPersistSession(event.session_id)
         loadSessions()
+        // 管线完成：收口 pipelineMsgRef（delta spec: fix-stream-event-routing），
+        // 避免后续轮次澄清思考被路由到已完成的管线消息。保留 pipelineMsg 展示，仅清 ref。
+        pipelineMsgRef.current = null
 
         // Add completion system message
         const completionMsg: UIMessage = {
@@ -1452,7 +1668,22 @@ export default function App() {
   // 用于已从缓存恢复内容的场景，避免重放导致重复。
   const resumeStream = async (sessionId: string, skipIncremental: boolean) => {
     const state = getStreamState(sessionId)
-    const abortCtrl = new AbortController()
+    // 并发订阅隔离：同一会话同一时刻只允许一条活跃订阅消费 state.lastSeq。
+    // 否则两条订阅（实时流 + resume）各自字节流进度不同步，会把对方尚未处理的
+    // 事件误判为「旧事件」丢弃（seq <= lastSeq），导致随机丢整个 token —— 症状为
+    // thinking/chat 流式文本概率性错乱（如「中环海陆（301040）」变「中陆301040」）。
+    if (state.abort && !state.abort.signal.aborted) {
+      state.abort.abort()
+    }
+    // 全局 single-reader 不变量：abort 其他 session 残留的 reader。
+    // selectSession 虽在调用 resumeStream 前执行 disconnectSubscription，
+    // 但 abort 是异步的——旧 reader 的 await reader.read() 不会立即返回。
+    // 若不先 abort 全局 abortRef，直接覆盖会使旧 reader 的 controller 丢失引用，
+    // 旧 reader 继续运行并写全局 assistantMsgIdRef → 与新 reader 串字/丢内容。
+    if (abortRef.current && !abortRef.current.signal.aborted) {
+      sseDebug('global_abort', { source: 'resumeStream', session: sessionId, aborting: streamingSessionIdRef.current })
+    }
+    const abortCtrl = ensureSingleReader(abortRef.current, new AbortController())
     abortRef.current = abortCtrl
     state.abort = abortCtrl
     streamingSessionIdRef.current = sessionId
@@ -1493,6 +1724,7 @@ export default function App() {
     }
 
     try {
+      sseDebug('resume_start', { session: sessionId, afterSeq: state.lastSeq, skipIncremental, view: currentSessionIdRef.current })
       const resp = await fetch(`/api/sessions/${sessionId}/stream?after_seq=${state.lastSeq}`, {
         signal: abortCtrl.signal,
       })
@@ -1500,6 +1732,7 @@ export default function App() {
       const reader = resp.body?.getReader()
       if (!reader) return
 
+      sseDebug('reader_start', { source: 'resumeStream', session: sessionId, view: currentSessionIdRef.current })
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -1517,12 +1750,18 @@ export default function App() {
             const event: SSEEvent = JSON.parse(line.slice(6))
 
             // abort 后跳过事件处理（与 startAnalysis 一致）
-            if (abortCtrl.signal.aborted) break
+            if (abortCtrl.signal.aborted) {
+              sseDebug('reader_abort', { source: 'resumeStream', session: sessionId, eventType: event.type, seq: event.seq })
+              break
+            }
 
             // seq 去重：跳过 seq <= lastSeq 的旧事件
             const seq = event.seq
             if (seq !== undefined) {
-              if (seq <= state.lastSeq) continue
+              if (seq <= state.lastSeq) {
+                sseDebug('seq_skip', { source: 'resumeStream', session: sessionId, seq, lastSeq: state.lastSeq, eventType: event.type })
+                continue
+              }
               state.lastSeq = seq
             }
 
@@ -1547,7 +1786,12 @@ export default function App() {
             }
 
             // 会话隔离：非当前视图事件存入缓冲区
-            if (streamingSessionIdRef.current && streamingSessionIdRef.current !== currentSessionIdRef.current) {
+            // 用局部 sessionId 而非全局 streamingSessionIdRef.current——后者在并发
+            // resumeStream 场景下会被其他 reader 覆盖，导致本 reader 的事件被误隔离丢弃。
+            if (!isCurrentViewEvent(sessionId, currentSessionIdRef.current)) {
+              if (event.type === 'chat_token' || event.type === 'thinking_token') {
+                sseDebug('isolate', { source: 'resumeStream', session: sessionId, view: currentSessionIdRef.current, eventType: event.type, seq: event.seq, token: (event.token || '').slice(0, 20) })
+              }
               const skipTypes = new Set(['chat_token', 'thinking_token', 'report_chunk', 'report_ready'])
               if (!skipTypes.has(event.type)) {
                 bufferedSseEventsRef.current.push(event)
@@ -1558,7 +1802,10 @@ export default function App() {
             // 跳过增量内容事件（已从缓存恢复，避免重放重复）
             if (skipIncremental) {
               const incrementalTypes = new Set(['chat_token', 'thinking_token', 'thinking_replace', 'thinking_to_answer', 'report_chunk'])
-              if (incrementalTypes.has(event.type)) continue
+              if (incrementalTypes.has(event.type)) {
+                sseDebug('skip_incremental', { source: 'resumeStream', session: sessionId, eventType: event.type, seq: event.seq })
+                continue
+              }
             }
 
             // 以下事件路由与 startAnalysis 保持一致
@@ -1646,8 +1893,10 @@ export default function App() {
             }
 
             if (event.type === 'thinking_token') {
-              if (pipelineMsgRef.current) {
-                handleSSEEvent(event, pipelineMsgRef.current)
+              // 按事件归属路由（delta spec: fix-stream-event-routing）：
+              // 带 node 进管线 UI，不带 node 进对话流（与 startAnalysis 一致）
+              if (event.node) {
+                handleSSEEvent(event, pipelineMsgRef.current || ensurePipelineMsg('深度分析进行中...'))
               } else {
                 handleChatStreamEvent(event, ensureAssistantMsg())
               }
@@ -1655,16 +1904,14 @@ export default function App() {
             }
 
             if (event.type === 'thinking_replace') {
-              if (!pipelineMsgRef.current) {
-                handleChatStreamEvent(event, ensureAssistantMsg())
-              }
+              // 作用于对话流末尾 thinking item，始终路由到对话流
+              handleChatStreamEvent(event, ensureAssistantMsg())
               continue
             }
 
             if (event.type === 'thinking_to_answer') {
-              if (!pipelineMsgRef.current) {
-                handleChatStreamEvent(event, ensureAssistantMsg())
-              }
+              // 作用于对话流，始终路由
+              handleChatStreamEvent(event, ensureAssistantMsg())
               continue
             }
 
@@ -1687,6 +1934,8 @@ export default function App() {
               const finishedSessionId = streamingSessionIdRef.current
               streamingSessionIdRef.current = null
               abortRef.current = null
+              // 收口 pipelineMsgRef（delta spec: fix-stream-event-routing）
+              pipelineMsgRef.current = null
               if (finishedSessionId) {
                 sessionCacheRef.current.delete(finishedSessionId)
               }
@@ -1875,8 +2124,22 @@ export default function App() {
     // （症状：切换会话后思考 UI 消失）
     assistantMsgIdRef.current = chatId
 
+    // 在 try 外声明：catch 块也需要访问（终止清理）
+    let activeSessionId = currentSessionId || ''
+
     try {
-      const localAbort = new AbortController()
+      // 并发订阅隔离：先 abort 该会话已有的活跃订阅（与 resumeStream/startAnalysis 一致）。
+      if (currentSessionId) {
+        const existingState = getStreamState(currentSessionId)
+        if (existingState.abort && !existingState.abort.signal.aborted) {
+          existingState.abort.abort()
+        }
+      }
+      // 全局 single-reader 不变量：abort 任何残留 reader（与 resumeStream 一致）。
+      if (abortRef.current && !abortRef.current.signal.aborted) {
+        sseDebug('global_abort', { source: 'quickChat', session: currentSessionId, aborting: streamingSessionIdRef.current })
+      }
+      const localAbort = ensureSingleReader(abortRef.current, new AbortController())
       abortRef.current = localAbort
       // 提前激活 seq 去重：fetch 前设置 streamingSessionIdRef，使 SSE 循环的
       // 去重块（if (streamingSessionIdRef.current)）从第一个事件起生效，
@@ -1884,6 +2147,8 @@ export default function App() {
       // 不重置 lastSeq：保留切换前已消费的 seq，避免重放
       if (currentSessionId) {
         streamingSessionIdRef.current = currentSessionId
+        // 追问路径后端不重发 session_created，同步登记 abort 使 isSessionRunning 生效
+        getStreamState(currentSessionId).abort = localAbort
       }
       const resp = await fetch('/api/chat', {
         method: 'POST',
@@ -1934,10 +2199,10 @@ export default function App() {
             if (localAbort.signal.aborted) break
 
             // seq 去重：跳过 seq <= lastSeq 的旧事件
-            if (streamingSessionIdRef.current) {
+            if (activeSessionId) {
               const seq = event.seq
               if (seq !== undefined) {
-                const ss = getStreamState(streamingSessionIdRef.current)
+                const ss = getStreamState(activeSessionId)
                 if (seq <= ss.lastSeq) continue
                 ss.lastSeq = seq
               }
@@ -1946,13 +2211,14 @@ export default function App() {
             // error 终态事件：先清理 streaming 状态（与 interrupted 对齐），
             // 再由 handleChatStreamEvent 写入 agentTimeline 渲染错误
             if (event.type === 'error') {
-              const finishedSessionId = streamingSessionIdRef.current
-              streamingSessionIdRef.current = null
-              abortRef.current = null
-              if (finishedSessionId) {
-                sessionCacheRef.current.delete(finishedSessionId)
+              if (streamingSessionIdRef.current === activeSessionId) {
+                streamingSessionIdRef.current = null
+                abortRef.current = null
               }
-              handleStreamTerminal(finishedSessionId)
+              if (activeSessionId) {
+                sessionCacheRef.current.delete(activeSessionId)
+              }
+              handleStreamTerminal(activeSessionId)
               setAppState('clarifying')
               // 仍让 handleChatStreamEvent 处理渲染（写入 agentTimeline）
               handleChatStreamEvent(event, chatId)
@@ -1968,8 +2234,12 @@ export default function App() {
             }
             // search_* 已由共享分支处理；此处处理 session_created/terminal 事件
             if (event.type === 'session_created') {
+              activeSessionId = event.session_id
               streamingSessionIdRef.current = event.session_id
-              setCurrentSessionId(event.session_id)
+              setAndPersistSession(event.session_id)
+              // 同步更新 ref（与 startAnalysis 一致）：避免 useEffect 同步前到达的
+              // 增量事件被会话隔离分支误判丢弃，导致流式文本缺失。
+              currentSessionIdRef.current = event.session_id
               // 将 abort controller 存入 per-session 流状态（delta spec Task 5.4）
               const streamState = getStreamState(event.session_id)
               streamState.abort = abortRef.current
@@ -1984,13 +2254,14 @@ export default function App() {
 
             // 中断终态事件：清除 streaming 状态（delta spec Task 5.5）
             if (event.type === 'interrupted') {
-              const finishedSessionId = streamingSessionIdRef.current
-              streamingSessionIdRef.current = null
-              abortRef.current = null
-              if (finishedSessionId) {
-                sessionCacheRef.current.delete(finishedSessionId)
+              if (streamingSessionIdRef.current === activeSessionId) {
+                streamingSessionIdRef.current = null
+                abortRef.current = null
               }
-              handleStreamTerminal(finishedSessionId)
+              if (activeSessionId) {
+                sessionCacheRef.current.delete(activeSessionId)
+              }
+              handleStreamTerminal(activeSessionId)
               setAppState('clarifying')
               commitMessages(prev => prev.map(m =>
                 m.id === chatId ? { ...m, streaming: false } : m
@@ -2000,13 +2271,14 @@ export default function App() {
 
             // 流正常结束：清理 SSE 会话标记
             if (event.type === 'done') {
-              const finishedSessionId = streamingSessionIdRef.current
-              streamingSessionIdRef.current = null
-              abortRef.current = null
-              if (finishedSessionId) {
-                sessionCacheRef.current.delete(finishedSessionId)
+              if (streamingSessionIdRef.current === activeSessionId) {
+                streamingSessionIdRef.current = null
+                abortRef.current = null
               }
-              handleStreamTerminal(finishedSessionId)
+              if (activeSessionId) {
+                sessionCacheRef.current.delete(activeSessionId)
+              }
+              handleStreamTerminal(activeSessionId)
               commitMessages(prev => prev.map(m =>
                 m.id === chatId ? { ...m, streaming: false } : m
               ))
@@ -2018,18 +2290,20 @@ export default function App() {
         }
       }
       // 流结束但未收到终态事件：清理本地状态（防御性，避免 isSessionRunning 误判）
-      if (streamingSessionIdRef.current) {
-        const finishedSessionId = streamingSessionIdRef.current
-        streamingSessionIdRef.current = null
-        abortRef.current = null
-        handleStreamTerminal(finishedSessionId)
+      if (activeSessionId) {
+        if (streamingSessionIdRef.current === activeSessionId) {
+          streamingSessionIdRef.current = null
+          abortRef.current = null
+        }
+        handleStreamTerminal(activeSessionId)
       }
     } catch (e) {
-      const failedSessionId = streamingSessionIdRef.current
-      streamingSessionIdRef.current = null
-      abortRef.current = null
+      if (streamingSessionIdRef.current === activeSessionId) {
+        streamingSessionIdRef.current = null
+        abortRef.current = null
+      }
       if (e instanceof Error && e.name === 'AbortError') return
-      handleStreamTerminal(failedSessionId)
+      handleStreamTerminal(activeSessionId)
       commitMessages(prev => prev.map(m =>
         m.id === chatId
           ? { ...m, type: 'error', content: `错误: ${e instanceof Error ? e.message : 'Unknown'}`, streaming: false }
@@ -2135,21 +2409,23 @@ export default function App() {
                 ))}
             </div>
 
-            {/* 停止按钮 + 警告提示（流式输出时显示，delta spec Task 6.2/6.3） */}
-            {(appState === 'analyzing' || messages.some(m => m.streaming) || warningMessage) && (
+            {/* 「会话生成中」警告：fixed 顶部 toast，浮于 header(z-50)/输入框(z-40) 之上 */}
+            {warningMessage && (
+              <div
+                className="fixed top-16 left-1/2 -translate-x-1/2 z-[60] px-4 py-2 rounded-lg text-xs flex items-center gap-2 shadow-lg"
+                style={{ background: 'var(--status-warning-default)', color: 'white' }}
+              >
+                <i className="fas fa-exclamation-triangle"></i>
+                {warningMessage}
+              </div>
+            )}
+
+            {/* 停止按钮（流式输出时显示） */}
+            {(appState === 'analyzing' || messages.some(m => m.streaming)) && (
               <div
                 className="fixed right-0 z-40 flex flex-col items-center gap-2 px-4"
                 style={{ left: leftInset, bottom: '90px' }}
               >
-                {warningMessage && (
-                  <div
-                    className="px-4 py-2 rounded-lg text-xs flex items-center gap-2"
-                    style={{ background: 'var(--status-warning-default)', color: 'white' }}
-                  >
-                    <i className="fas fa-exclamation-triangle"></i>
-                    {warningMessage}
-                  </div>
-                )}
                 {(appState === 'analyzing' || messages.some(m => m.streaming)) && currentSessionId && (
                   <button
                     onClick={stopGeneration}
