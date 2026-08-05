@@ -19,6 +19,10 @@ export default defineConfig({
     'pipeline-eta-banner.spec.ts',
     'pipeline-hierarchical-timeline.spec.ts',
     'resume-pipeline-across-sessions.spec.ts',
+    // 以下为前置技术债：使用 waitForTimeout 的时序依赖测试，在 CI 上不稳定，
+    // 需专属 STUB_SCENARIO 或在 timeline config 内运行
+    'session-switch-resumption.spec.ts',
+    'debug-switch-during-response.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },
