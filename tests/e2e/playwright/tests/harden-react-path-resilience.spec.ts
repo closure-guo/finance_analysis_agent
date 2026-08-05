@@ -20,7 +20,7 @@ import { test, expect } from '@playwright/test'
 test.setTimeout(180_000)
 
 const API_BASE = 'http://localhost:8002'
-const FRONTEND_BASE = 'http://localhost:5177'
+const FRONTEND_BASE = 'http://localhost:5175'
 
 async function clickSession(page: import('@playwright/test').Page, name: string) {
   await page.getByText(name, { exact: true }).first().click()
