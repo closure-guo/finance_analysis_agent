@@ -36,29 +36,38 @@ def _call_ak(func, *args, **kwargs):
     """带超时 + 重试的 AKShare 调用包装。
 
     超时或连接异常（含 RemoteDisconnected 限频）时重试，全部失败返回 None。
+
+    注意：不能用 `with ThreadPoolExecutor(...) as pool`（退出时 shutdown(wait=True)
+    会无限等待卡死的 AKShare 线程，超时形同虚设，泄漏线程打满 executor 池）。
+    超时后 shutdown(wait=False, cancel_futures=True) 立即释放，卡死线程自然消亡。
     """
     for attempt in range(1, _AK_MAX_RETRIES + 1):
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(func, *args, **kwargs)
-            try:
-                return future.result(timeout=_AK_TIMEOUT)
-            except FuturesTimeoutError:
-                logger.warning(
-                    "AKShare 调用超时 (%ds): %s (attempt %d/%d)",
-                    _AK_TIMEOUT,
-                    getattr(func, "__name__", str(func)),
-                    attempt,
-                    _AK_MAX_RETRIES,
-                )
-            except Exception as e:
-                # 捕获 RemoteDisconnected / ConnectionError 等网络异常，重试而非直接抛出
-                logger.warning(
-                    "AKShare 调用异常: %s: %s (attempt %d/%d)",
-                    getattr(func, "__name__", str(func)),
-                    type(e).__name__,
-                    attempt,
-                    _AK_MAX_RETRIES,
-                )
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(func, *args, **kwargs)
+        try:
+            result = future.result(timeout=_AK_TIMEOUT)
+            pool.shutdown(wait=False)
+            return result
+        except FuturesTimeoutError:
+            # 超时：不等待卡死线程（wait=False），取消其未来任务，释放 executor
+            pool.shutdown(wait=False, cancel_futures=True)
+            logger.warning(
+                "AKShare 调用超时 (%ds): %s (attempt %d/%d)",
+                _AK_TIMEOUT,
+                getattr(func, "__name__", str(func)),
+                attempt,
+                _AK_MAX_RETRIES,
+            )
+        except Exception as e:
+            # 捕获 RemoteDisconnected / ConnectionError 等网络异常，重试而非直接抛出
+            pool.shutdown(wait=False, cancel_futures=True)
+            logger.warning(
+                "AKShare 调用异常: %s: %s (attempt %d/%d)",
+                getattr(func, "__name__", str(func)),
+                type(e).__name__,
+                attempt,
+                _AK_MAX_RETRIES,
+            )
         if attempt < _AK_MAX_RETRIES:
             time.sleep(_AK_RETRY_DELAY * attempt)  # 线性退避
     logger.error(
