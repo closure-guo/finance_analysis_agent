@@ -25,5 +25,5 @@
 
 - [x] 4.1 运行 `uv run ruff check` 与 `uv run mypy` 确认后端 lint 与类型检查通过。
 - [x] 4.2 运行 `cd frontend && npm test` 确认前端全通过（17 files / 147 tests）。
-- [x] 4.3 确认全量 `uv run pytest` 的失败均为 pre-existing：(a) `test_5layer_pipeline.py` 的 Fund Manager 决策枚举断言（`assert 'return' in ('approve','reject','revise')`），已用 git stash 隔离验证改动前以相同断言失败；(b) 约 87 个 `Runner.run() cannot be called from a running event loop`，为并跑时事件循环隔离问题，涉及未触碰文件，单独运行全部通过。
+- [x] 4.3 确认全量 `uv run pytest` 的失败均为 pre-existing，与本次改动无关，各开 issue 跟踪：(a) `test_5layer_pipeline.py` 的 Fund Manager 决策枚举断言（`assert 'return' in ('approve','reject','revise')`），已用 git stash 隔离验证改动前以相同断言失败 -> issue #34；(b) `asyncio_mode=auto` 与 `tests/e2e/conftest.py` 的 Playwright sync API 冲突导致 `Runner.run() cannot be called from a running event loop`，排除 `tests/e2e` 后 569 passed 零报错 -> issue #35。
 - [x] 4.4 人工验证：启动全栈，执行两轮深度追问 + 一轮"再分析一只股票"触发二次管线，确认第二轮游标正常消失。验证报告落 `tests/validation/fix-terminal-event-dedup-scope-validation.md`。
