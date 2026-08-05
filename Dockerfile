@@ -4,8 +4,15 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 
 # 设置时区为中国标准时间（解决容器内时间与宿主机不匹配问题）
+# fonts-noto-cjk：matplotlib 图表渲染中文所需（slim 基础镜像不含任何 CJK 字体，
+# 缺失时中文全部渲染为豆腐块，且 matplotlib 仅静默回退 DejaVu Sans 无报错）
 ENV TZ=Asia/Shanghai
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+# 先把 apt 源换成清华镜像（与 PIP_INDEX_URL 同思路），否则国内拉 deb.debian.org
+# 只有几十 kB/s，安装 fonts-noto-cjk（56MB）会卡几十分钟
+RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' \
+        /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends tzdata fonts-noto-cjk && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone && \
     rm -rf /var/lib/apt/lists/*
