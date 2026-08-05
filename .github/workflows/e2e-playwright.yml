@@ -28,6 +28,13 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --group dev
 
+      - name: Install CJK fonts (matplotlib charts)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk
+          # 清除 matplotlib 字体缓存，使新安装的字体生效
+          rm -rf ~/.cache/matplotlib /home/runner/.cache/matplotlib
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
