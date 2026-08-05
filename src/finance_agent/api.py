@@ -567,13 +567,13 @@ async def get_pipeline():
 @app.get("/api/sessions")
 async def get_sessions():
     """List all sessions (metadata only)."""
-    return {"sessions": list_sessions()}
+    return {"sessions": await asyncio.to_thread(list_sessions)}
 
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str):
     """Get full session by id."""
-    session = get_session(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -582,7 +582,8 @@ async def get_session_detail(session_id: str):
 @app.patch("/api/sessions/{session_id}")
 async def rename_session_api(session_id: str, req: RenameRequest):
     """Rename a session."""
-    if not rename_session(session_id, req.display_name):
+    renamed = await asyncio.to_thread(rename_session, session_id, req.display_name)
+    if not renamed:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
 
@@ -590,7 +591,8 @@ async def rename_session_api(session_id: str, req: RenameRequest):
 @app.delete("/api/sessions/{session_id}")
 async def delete_session_api(session_id: str):
     """Delete a session."""
-    if not delete_session(session_id):
+    deleted = await asyncio.to_thread(delete_session, session_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
 
@@ -1104,12 +1106,12 @@ async def _run_chat_task(
                 },
             )
         # user 消息在任务内落库：409（single-flight 拒绝）时不追加，避免污染历史
-        append_chat(session_id, "user", req.message)
+        await asyncio.to_thread(append_chat, session_id, "user", req.message)
         # 状态置 running：恢复端点与前端运行指示依赖
-        update_session_status(session_id, "running")
+        await asyncio.to_thread(update_session_status, session_id, "running")
 
         # 模式推断：analysis 会话 -> follow-up（报告追问）；chat 会话 -> quick
-        session = get_session(session_id) or {}
+        session = await asyncio.to_thread(get_session, session_id) or {}
         mode = "follow-up" if session.get("session_type") == "analysis" else "quick"
 
         agent = build_agent(mode=mode, api_key=api_key, session_id=session_id)
@@ -1128,22 +1130,27 @@ async def _run_chat_task(
             # 增量持久化：每 10s upsert，避免运行中切走后 assistant 回复丢失
             now = time.time()
             if now - lastPersistTime >= PERSIST_INTERVAL:
-                _upsert_assistant_chat(session_id, collector)
+                await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
                 lastPersistTime = now
 
         # 正常完成：最终持久化 + 状态流转 + done 终态
-        _upsert_assistant_chat(session_id, collector)
-        update_session_status(session_id, "completed")
+        await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
+        await asyncio.to_thread(update_session_status, session_id, "completed")
         await registry.publish(
             session_id, {"type": "done", "session_id": session_id, "timestamp": _now()}
         )
     except asyncio.CancelledError:
-        _persist_interrupted(session_id, collector)
-        update_session_status(session_id, "interrupted")
+        await asyncio.to_thread(_persist_interrupted, session_id, collector)
+        await asyncio.to_thread(update_session_status, session_id, "interrupted")
         raise
     except Exception as exc:
-        _upsert_assistant_chat(session_id, collector)
-        update_session_status(session_id, "failed", failure_reason=f"{type(exc).__name__}: {exc}")
+        await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
+        await asyncio.to_thread(
+            update_session_status,
+            session_id,
+            "failed",
+            failure_reason=f"{type(exc).__name__}: {exc}",
+        )
         raise
 
 
@@ -1175,11 +1182,11 @@ async def _run_react_analysis(
                     "timestamp": _now(),
                 },
             )
-        append_chat(session_id, "user", req.query)
-        update_session_status(session_id, "running")
+        await asyncio.to_thread(append_chat, session_id, "user", req.query)
+        await asyncio.to_thread(update_session_status, session_id, "running")
 
         # 从 session 恢复 focus，与用户输入合并
-        session = get_session(session_id) or {}
+        session = await asyncio.to_thread(get_session, session_id) or {}
         accumulatedFocus = (session.get("focus") or "").strip()
         currentFocus = (req.focus or "").strip()
         if currentFocus:
@@ -1200,11 +1207,14 @@ async def _run_react_analysis(
 
         def on_resolved_cb(sc: str, sn: str) -> None:
             """股票代码解析完成回调 -- 更新 session。"""
-            update_session_for_clarify(
-                session_id,
-                stock_code=sc,
-                stock_name=sn,
-                display_name=f"{sn}({sc})",
+            asyncio.create_task(
+                asyncio.to_thread(
+                    update_session_for_clarify,
+                    session_id,
+                    stock_code=sc,
+                    stock_name=sn,
+                    display_name=f"{sn}({sc})",
+                )
             )
 
         # 对时效性查询，预调 web_search 并将结果注入用户消息
@@ -1302,11 +1312,11 @@ async def _run_react_analysis(
             await registry.publish(session_id, data)
             now = time.time()
             if now - lastPersistTime >= PERSIST_INTERVAL:
-                _upsert_assistant_chat(session_id, collector)
+                await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
                 lastPersistTime = now
 
         # 最终持久化（upsert 语义，避免与增量重复落库）
-        _upsert_assistant_chat(session_id, collector)
+        await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
 
         # 如果 Agent 调用了 run_deep_analysis，说明已进入分析阶段
         if collectedMetadata.get("report_markdown") or collectedMetadata.get("stock_code"):
@@ -1315,9 +1325,14 @@ async def _run_react_analysis(
         if not analysisExecuted:
             # 分析未执行：Agent 仍在澄清阶段，保存状态并通知前端等待输入
             if currentFocus:
-                update_session_for_clarify(session_id, focus=accumulatedFocus, status="clarifying")
+                await asyncio.to_thread(
+                    update_session_for_clarify,
+                    session_id,
+                    focus=accumulatedFocus,
+                    status="clarifying",
+                )
             else:
-                update_session_for_clarify(session_id, status="clarifying")
+                await asyncio.to_thread(update_session_for_clarify, session_id, status="clarifying")
             await registry.publish(
                 session_id,
                 {
@@ -1341,12 +1356,17 @@ async def _run_react_analysis(
             },
         )
     except asyncio.CancelledError:
-        _persist_interrupted(session_id, collector)
-        update_session_status(session_id, "interrupted")
+        await asyncio.to_thread(_persist_interrupted, session_id, collector)
+        await asyncio.to_thread(update_session_status, session_id, "interrupted")
         raise
     except Exception as exc:
-        _upsert_assistant_chat(session_id, collector)
-        update_session_status(session_id, "failed", failure_reason=f"{type(exc).__name__}: {exc}")
+        await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
+        await asyncio.to_thread(
+            update_session_status,
+            session_id,
+            "failed",
+            failure_reason=f"{type(exc).__name__}: {exc}",
+        )
         raise
 
 
@@ -1372,12 +1392,13 @@ async def analyze(req: AnalyzeRequest):
     session_id = req.session_id
     display_name: str | None = None
     if session_id:
-        session = get_session(session_id)
+        session = await asyncio.to_thread(get_session, session_id)
         if not session:
             return _sse_error_response("Session not found")
     else:
         display_name = req.query.strip()[:30] or "深度分析"
-        session_id = create_session(
+        session_id = await asyncio.to_thread(
+            create_session,
             stock_code="",
             stock_name="",
             display_name=display_name,
@@ -1393,11 +1414,15 @@ async def analyze(req: AnalyzeRequest):
     # 追问/复用旧会话时走 ReAct 路径
     if stock_code and not req.session_id:
         # 追加用户输入到 chat_history
-        append_chat(session_id, "user", req.query)
+        await asyncio.to_thread(append_chat, session_id, "user", req.query)
         # 持久化管线触发锚点：fast path 下 chat_history 仅一条 user，锚点 = 1
-        set_pipeline_anchor(session_id)
-        update_session_for_clarify(
-            session_id, stock_code=stock_code, stock_name=stock_name, status="running"
+        await asyncio.to_thread(set_pipeline_anchor, session_id)
+        await asyncio.to_thread(
+            update_session_for_clarify,
+            session_id,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            status="running",
         )
         # session_created 同步写入 journal（恢复端点重放的事实源；
         # 在线客户端经 subscribe 重放收到，无需单独直发）。
@@ -1425,6 +1450,8 @@ async def analyze(req: AnalyzeRequest):
                 "currentNodeId": "",
                 "progress": 0.0,
                 "updatedAt": int(time.time() * 1000),
+                # 管线启动时间戳（毫秒）：前端刷新重建用作「已用时」计时起点
+                "pipeline_start_ts": int(start_time * 1000),
             },
             loop=loop,
         )
@@ -1453,7 +1480,7 @@ async def analyze(req: AnalyzeRequest):
         return JSONResponse(status_code=409, content={"error": "session_busy"})
     # 追问时跳过历史事件重放：用当前 journal 最大 seq 作为 after_seq，
     # 避免上一轮 done 终态事件导致 registry.subscribe 提前 return（SSE 流终止）
-    afterSeq = get_max_event_seq(session_id)
+    afterSeq = await asyncio.to_thread(get_max_event_seq, session_id)
     return StreamingResponse(
         _subscribe_sse(session_id, after_seq=afterSeq),
         media_type="text/event-stream",
@@ -1479,19 +1506,19 @@ async def quick_chat(req: ChatRequest):
     session_id = req.session_id
     display_name: str | None = None
     if session_id:
-        session = get_session(session_id)
+        session = await asyncio.to_thread(get_session, session_id)
         if not session:
             return _sse_error_response("Session not found")
     else:
         display_name = req.message.strip()[:30] or "快速问答"
-        session_id = create_chat_session(display_name)
+        session_id = await asyncio.to_thread(create_chat_session, display_name)
 
     # 追问时跳过历史事件重放：用当前 journal 最大 seq 作为 after_seq，
     # 避免上一轮 done 终态事件导致 registry.subscribe 提前 return（SSE 流终止），
     # 与 /api/analyze ReAct 路径对齐。
     # 须在 registry.start 前取值：新会话的 session_created 由任务发布，
     # start 后再取 max_seq 可能跳过该事件，导致前端拿不到 session_id
-    afterSeq = get_max_event_seq(session_id)
+    afterSeq = await asyncio.to_thread(get_max_event_seq, session_id)
     started = await registry.start(
         session_id, _run_chat_task(session_id, req, display_name, api_key)
     )

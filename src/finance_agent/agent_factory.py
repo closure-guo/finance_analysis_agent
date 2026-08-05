@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import json
 import os
@@ -253,6 +254,16 @@ def _parse_stock_result_text(text: str) -> dict | None:
 # 后台管线任务注册表：session_id -> asyncio.Task，用于测试等待和调试
 _background_tasks: dict[str, asyncio.Task] = {}
 
+# ReAct 管线专用 executor：_run_graph（含 matplotlib 图表生成等长任务）在此运行，
+# 与事件循环默认 executor 隔离。此前用 run_in_executor(None,...) 共享默认池，
+# 管线的长任务（generate_all_charts 的 findfont 全盘扫描）占满默认池后，
+# 事件循环上 to_thread 的 SQLite 等快速 IO（/api/sessions、/api/health）排队超时，
+# 前端表现为「刷新后会话列表为空」。独立 executor 使管线长任务不再饿死快速 IO。
+_pipeline_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=max(4, min(32, (os.cpu_count() or 4) + 4)),
+    thread_name_prefix="pipeline",
+)
+
 
 def _make_run_deep_analysis(
     api_key: str | None = None,
@@ -280,6 +291,9 @@ def _make_run_deep_analysis(
         # 工具自带 executor 线程不经 PipelineRunner，故在工具内维护
         # pipeline_snapshot 与会话 status，使「切换会话恢复」对真实主链路生效。
         # 事件流（StreamEvent yield 序列、metadata 结构、chunk_queue）保持不变。
+        # 管线起始计时：用于报告落库的 duration_ms（ReAct 路径与 fast path 同语义）
+        import time as _time_module
+
         from finance_agent import session_store as _session_store
         from finance_agent.api import (
             _ALL_NODES,
@@ -298,6 +312,8 @@ def _make_run_deep_analysis(
             apply_pipeline_node_complete,
             apply_pipeline_thinking_token,
         )
+
+        _pipeline_start_time = _time_module.time()
 
         # session_id 非空时才写快照/状态（理论空路径保持现状行为）
         _track_snapshot = bool(session_id)
@@ -323,6 +339,9 @@ def _make_run_deep_analysis(
                     "currentNodeId": _current_node(tree),
                     "progress": _progress(tree),
                     "updatedAt": now_ms,
+                    # 管线启动时间戳（毫秒）：前端刷新重建 running 管线时用作「已用时」
+                    # 计时起点，避免用前端本地 Date.now() 导致刷新归零。
+                    "pipeline_start_ts": int(_pipeline_start_time * 1000),
                 },
             )
 
@@ -364,7 +383,7 @@ def _make_run_deep_analysis(
             finally:
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(None), loop)
 
-        loop.run_in_executor(None, _run_graph)
+        loop.run_in_executor(_pipeline_executor, _run_graph)
 
         # event_queue：后台 Task -> SSE 转发层，maxsize 防止消费者断开后无限增长
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -374,6 +393,11 @@ def _make_run_deep_analysis(
             # 节点真实生命周期时间戳（custom 流的 node_start/node_end），
             # 用于给 updates 流的 node_complete 附加 server_*（修复快速节点计时恒 0）。
             node_lifecycle: dict[str, dict] = {}
+            # thinking chunk 高频写库节流：上次 update_pipeline_timelines 的时间戳。
+            # 修复「事件循环被高频同步 SQLite 写冻结」：写操作 to_thread 移出事件循环，
+            # 且按 TIMELINE_PERSIST_INTERVAL 节流，避免每个 thinking chunk 都写库。
+            last_timeline_persist = 0.0
+            TIMELINE_PERSIST_INTERVAL = 0.5  # 秒
 
             def _put_event(evt):
                 with contextlib.suppress(asyncio.QueueFull):
@@ -409,9 +433,16 @@ def _make_run_deep_analysis(
                                     _nodeTimelines = apply_pipeline_thinking_token(
                                         _nodeTimelines, node, chunk.get("token", "")
                                     )
-                                    _session_store.update_pipeline_timelines(
-                                        session_id, _nodeTimelines
-                                    )
+                                    # 高频写节流 + to_thread：避免每个 thinking chunk 都在
+                                    # 事件循环线程同步写 SQLite 冻结事件循环（会话列表超时根因）
+                                    now_p = _time_module.time()
+                                    if now_p - last_timeline_persist >= TIMELINE_PERSIST_INTERVAL:
+                                        last_timeline_persist = now_p
+                                        await asyncio.to_thread(
+                                            _session_store.update_pipeline_timelines,
+                                            session_id,
+                                            _nodeTimelines,
+                                        )
                                 _put_event(
                                     StreamEvent.think(
                                         chunk.get("token", ""),
@@ -444,7 +475,8 @@ def _make_run_deep_analysis(
                                         },
                                         _now,
                                     )
-                                    _persist_snapshot(_tree, _now)
+                                    # to_thread：快照写移出事件循环
+                                    await asyncio.to_thread(_persist_snapshot, _tree, _now)
                                 _put_event(
                                     StreamEvent.progress(
                                         content=f"{node_name} timing",
@@ -503,7 +535,8 @@ def _make_run_deep_analysis(
                                     },
                                     _now,
                                 )
-                                _persist_snapshot(_tree, _now)
+                                # to_thread：快照写移出事件循环
+                                await asyncio.to_thread(_persist_snapshot, _tree, _now)
                             _put_event(
                                 StreamEvent.progress(
                                     content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
@@ -525,10 +558,16 @@ def _make_run_deep_analysis(
                                 {"type": "node_complete", "node_id": node_name, "output": output},
                                 _now,
                             )
-                            _persist_snapshot(_tree, _now)
+                            # to_thread：快照写移出事件循环
+                            await asyncio.to_thread(_persist_snapshot, _tree, _now)
                             # 管线时序收口：node_complete 将该节点末尾未完成 thinking 置 done
                             _nodeTimelines = apply_pipeline_node_complete(_nodeTimelines, node_name)
-                            _session_store.update_pipeline_timelines(session_id, _nodeTimelines)
+                            # to_thread：同步 SQLite 写移出事件循环（节点级低频，但仍不阻塞事件循环）
+                            await asyncio.to_thread(
+                                _session_store.update_pipeline_timelines,
+                                session_id,
+                                _nodeTimelines,
+                            )
                         _put_event(
                             StreamEvent.progress(
                                 content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
@@ -558,8 +597,11 @@ def _make_run_deep_analysis(
             except Exception as e:
                 # 异常兜底：置 failed + failure_reason（后台 Task 独立处理异常，不再 re-raise）
                 if _track_snapshot:
-                    _session_store.update_session_status(
-                        session_id, "failed", failure_reason=f"{type(e).__name__}: {e}"
+                    await asyncio.to_thread(
+                        _session_store.update_session_status,
+                        session_id,
+                        "failed",
+                        failure_reason=f"{type(e).__name__}: {e}",
                     )
                 # 下发错误事件，使 SSE 转发层能感知异常（不 re-raise，仅通知）
                 _put_event(
@@ -570,10 +612,29 @@ def _make_run_deep_analysis(
             else:
                 # 正常结束：写最终快照并置 completed（组装 report metadata 前）
                 if _track_snapshot:
-                    _persist_snapshot(_tree, _now_ms())
-                    _session_store.update_session_status(session_id, "completed")
+                    await asyncio.to_thread(_persist_snapshot, _tree, _now_ms())
+                    # flush：thinking 高频写按节流可能跳过末尾 chunk，结束时补写完整时序
+                    await asyncio.to_thread(
+                        _session_store.update_pipeline_timelines, session_id, _nodeTimelines
+                    )
 
                 report_md = accumulated.get("final_report", "")
+                # 报告数据落库（与 fast path _run_graph_streaming 同语义）：
+                # ReAct 路径此前仅置 status，不落 report_markdown/chart_data/duration_ms，
+                # 导致刷新重建时报告正文/图表丢失、耗时显示"未知"。
+                if session_id:
+                    await asyncio.to_thread(
+                        _session_store.update_session_report,
+                        session_id,
+                        report_markdown=report_md,
+                        chart_data=accumulated.get("chart_data") or {},
+                        analyst_reports=accumulated.get("analyst_reports") or {},
+                        agent_process=accumulated.get("agent_process") or {},
+                        analyst_summaries=accumulated.get("analyst_summaries") or {},
+                        duration_ms=int((_time_module.time() - _pipeline_start_time) * 1000),
+                        status="completed",
+                    )
+
                 metadata = {
                     "chart_data": accumulated.get("chart_data") or {},
                     "analyst_reports": accumulated.get("analyst_reports") or {},

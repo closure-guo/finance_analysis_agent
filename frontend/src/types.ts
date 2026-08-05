@@ -286,6 +286,8 @@ export interface PipelineSnapshot {
   currentNodeId: string
   progress: number
   updatedAt: number
+  // 管线启动时间戳（毫秒）。刷新重建 running 管线时用作「已用时」计时起点；缺省回退本地时间
+  pipeline_start_ts?: number
 }
 
 export interface SessionDetail extends SessionMeta {
