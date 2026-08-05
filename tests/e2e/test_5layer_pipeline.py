@@ -59,5 +59,7 @@ class Test5LayerPipelineE2E:
         assert decision.action in ("buy", "sell", "hold", "watch")
 
         # ── Layer V：基金经理决策 ──
+        # 合法枚举 approve | reject | return（见 prompts/fund_manager.md、state.py:96、
+        # routing.py:25、ADR-0011 Layer V）。此处曾误写 revise 导致 live 用例必然失败（issue #34）
         assert "fund_manager_decision" in result
-        assert result["fund_manager_decision"] in ("approve", "reject", "revise")
+        assert result["fund_manager_decision"] in ("approve", "reject", "return")
