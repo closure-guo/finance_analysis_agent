@@ -17,17 +17,28 @@ export interface TimelineBannerComponents {
   ToolCallBanner: ComponentType<{ toolCalls: ToolCallEntry[]; streaming: boolean; embedded?: boolean }>
 }
 
-// 时间轴条目外壳：左侧时间轴节点圆点 + 竖线（除最后一个条目外竖线向下延伸），
+// 时间轴条目外壳：左侧时间轴节点图标 + 竖线（除最后一个条目外竖线向下延伸），
 // 内容缩进在竖线右侧，形成 Kimi 风格的左侧时间轴串联效果。
-function TimelineEntry({ isLast, children }: { isLast: boolean; children: ReactNode }) {
+// 节点图标按类型区分：active 时品牌色跳动圆点，完成态思考=圆点/搜索=放大镜/工具=扳手。
+function TimelineEntry({ type, active, isLast, children }: { type: TimelineItem['type']; active: boolean; isLast: boolean; children: ReactNode }) {
   return (
     <div className="relative flex gap-3">
-      {/* 左侧时间轴：节点圆点 + 向下延伸的竖线（最后一个条目不画竖线） */}
-      <div className="flex flex-col items-center flex-shrink-0" style={{ width: '10px' }}>
-        <div
-          className="rounded-full flex-shrink-0 mt-2.5"
-          style={{ width: '7px', height: '7px', background: 'var(--border-neutral-l2)' }}
-        />
+      {/* 左侧时间轴：节点图标 + 向下延伸的竖线（最后一个条目不画竖线） */}
+      <div className="flex flex-col items-center flex-shrink-0" style={{ width: '16px' }}>
+        <div className="flex-shrink-0 mt-2 flex items-center justify-center" style={{ width: '16px', height: '16px' }}>
+          {active ? (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: 'var(--bg-brand)' }}></span>
+              <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: 'var(--bg-brand)' }}></span>
+            </span>
+          ) : type === 'thinking' ? (
+            <span className="block rounded-full" style={{ width: 7, height: 7, background: 'var(--text-brand)' }} />
+          ) : type === 'search' ? (
+            <i className="fas fa-search" style={{ fontSize: 9, color: 'var(--text-brand)' }}></i>
+          ) : (
+            <i className="fas fa-tools" style={{ fontSize: 9, color: 'var(--text-brand)' }}></i>
+          )}
+        </div>
         {!isLast && (
           <div className="flex-1 w-px" style={{ background: 'var(--border-neutral-l1)' }} />
         )}
@@ -66,8 +77,8 @@ export function TimelineRenderer({
           const thinkingStreaming = item.done === true ? false : streaming && isLast
           return (
             <div key={i} data-timeline-index={i}>
-              <TimelineEntry isLast={isLast}>
-                <ThinkingBanner content={item.content} streaming={thinkingStreaming} title={item.title} embedded />
+              <TimelineEntry type={item.type} active={thinkingStreaming} isLast={isLast}>
+              <ThinkingBanner content={item.content} streaming={thinkingStreaming} title={item.title} embedded />
               </TimelineEntry>
             </div>
           )
@@ -75,8 +86,8 @@ export function TimelineRenderer({
         if (item.type === 'search') {
           return (
             <div key={i} data-timeline-index={i}>
-              <TimelineEntry isLast={isLast}>
-                <SearchBanner status={item.status} query={item.query} results={item.results} embedded />
+              <TimelineEntry type={item.type} active={item.status === 'searching'} isLast={isLast}>
+              <SearchBanner status={item.status} query={item.query} results={item.results} embedded />
               </TimelineEntry>
             </div>
           )
@@ -85,7 +96,7 @@ export function TimelineRenderer({
         const toolStreaming = streaming && isLast && !item.done
         return (
           <div key={i} data-timeline-index={i}>
-            <TimelineEntry isLast={isLast}>
+            <TimelineEntry type={item.type} active={toolStreaming} isLast={isLast}>
               <ToolCallBanner toolCalls={[timelineToolCallToEntry(item)]} streaming={toolStreaming} embedded />
             </TimelineEntry>
           </div>
