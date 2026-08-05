@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from finance_agent.models import AnalystReport
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt
+
+logger = logging.getLogger(__name__)
 
 _VALID_CLAIM_TYPES = {
     "numerical",
@@ -27,14 +30,27 @@ _VALID_CLAIM_TYPES = {
 _VALID_SOURCE_TYPES = {"data", "event", "llm_inference", "mixed"}
 
 
-def _sanitize_claims(data: dict) -> dict:
-    """Fix invalid claim values from LLM output."""
+def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
+    """修正 LLM 输出中非法的 claim 字段值。
+
+    非法枚举值被强制改写为兜底值，并记录 WARNING —— 改写本身是有意的降级
+    （保证管线不因单个 claim 失败中断），但需可观测，否则 prompt 与代码的
+    枚举不一致会被系统性静默掩盖。
+    """
     for claim in data.get("claims", []):
-        if claim.get("claim_type") not in _VALID_CLAIM_TYPES:
+        claimType = claim.get("claim_type")
+        if claimType not in _VALID_CLAIM_TYPES:
+            logger.warning(
+                "分析师 %s 的 claim_type 非法，已改写：%r -> 'entity'", agent_name, claimType
+            )
             claim["claim_type"] = "entity"
-        if claim.get("source_type") not in _VALID_SOURCE_TYPES:
+        sourceType = claim.get("source_type")
+        if sourceType not in _VALID_SOURCE_TYPES:
+            logger.warning(
+                "分析师 %s 的 source_type 非法，已改写：%r -> 'data'", agent_name, sourceType
+            )
             claim["source_type"] = "data"
-        # Fix None values in required string fields
+        # 必填字符串字段的 None 值兜底为空串
         for field in ("field_ref", "stated_value", "interpretation"):
             if claim.get(field) is None:
                 claim[field] = ""
@@ -42,18 +58,31 @@ def _sanitize_claims(data: dict) -> dict:
 
 
 def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
-    """Parse LLM response into AnalystReport, with fallback for malformed JSON."""
+    """解析 LLM 响应为 AnalystReport，解析失败时降级为原始文本报告。
+
+    降级保障单个分析师解析失败不拖垮整条管线，但会产出 claims=[]，
+    而零 claim 使引用校验 all_passed=True（citation.py 的 failed == 0）。
+    故降级 SHALL 记录 WARNING 并打标记，使问题可被发现而非静默通过。
+    降级标记仅用于可观测性，不改变图的走向（不触发 citation retry，
+    见 harden-llm-output-validation 决策 4 与 incidents/006）。
+    """
     try:
-        data = _sanitize_claims(parse_json_response(response))
+        data = _sanitize_claims(parse_json_response(response), agent_name)
         return AnalystReport.model_validate(data)
-    except Exception:
-        # Fallback: construct minimal report from raw text
+    except Exception as e:
+        logger.warning(
+            "分析师 %s 的 LLM 输出解析失败，降级为原始文本报告：%s: %s",
+            agent_name,
+            type(e).__name__,
+            e,
+        )
         return AnalystReport(
             agent_name=agent_name,
             summary=response[:200] if response else "分析完成",
             key_findings=[],
             claims=[],
             markdown=response or "## 分析\n（LLM 响应解析失败，显示原始文本）",
+            parse_degraded=True,
         )
 
 

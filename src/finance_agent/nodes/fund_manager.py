@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from finance_agent.models import FundManagerDecision
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt
 
@@ -16,7 +17,9 @@ def fund_manager(state: dict) -> dict:
 
     response = call_llm_streaming(context, system=system, api_key=api_key, node_name="fund_manager")
     data = parse_json_response(response)
-    decision = data["decision"]
+    # 枚举强校验：非法值/缺键抛 ValidationError 中断管线，不静默降级为 approve
+    # （加固前为 data["decision"] 裸取键，非法值经 routing 的 else 分支被当作批准放行）
+    decision = FundManagerDecision.model_validate(data).decision
 
     result: dict = {"fund_manager_decision": decision}
     if decision == "return":

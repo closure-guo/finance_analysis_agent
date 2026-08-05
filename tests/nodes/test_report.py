@@ -6,6 +6,8 @@
 3. 返回 {"final_report": markdown}
 """
 
+import pytest
+
 from finance_agent.models import AnalystReport, TradeDecision
 from finance_agent.nodes.report import generate_report
 
@@ -57,7 +59,7 @@ class TestGenerateReport:
         assert "75%" in report
 
     def test_report_contains_fund_manager_decision(self):
-        """报告包含基金经理决策。"""
+        """报告包含基金经理决策（以中文标注呈现，非原始英文枚举值）。"""
         state = {
             "stock_name": "贵州茅台",
             "stock_code": "600519",
@@ -65,7 +67,41 @@ class TestGenerateReport:
         }
         result = generate_report(state)
         report = result["final_report"]
-        assert "approve" in report
+        assert "审批通过" in report
+
+    @pytest.mark.parametrize(
+        ("decision", "expected"),
+        [
+            ("approve", "审批通过"),
+            ("reject", "未通过审批"),
+            ("return", "退回"),
+        ],
+    )
+    def test_fund_manager_decision_chinese_annotation(self, decision, expected):
+        """三种决策各自渲染为语义明确的中文标注（ADR-0011 Layer V）。
+
+        加固前 report.py 只输出 `**reject**`，读者无法从报告识别「未通过审批」。
+        """
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "fund_manager_decision": decision,
+        }
+        report = generate_report(state)["final_report"]
+        assert expected in report
+
+    def test_report_tolerates_legacy_invalid_decision(self):
+        """历史非法决策值不应让报告生成抛错，回退显示原始值。
+
+        读路径不因历史数据失败（harden-llm-output-validation Migration Plan）。
+        """
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "fund_manager_decision": "revise",  # 加固前可能写入的非法值
+        }
+        report = generate_report(state)["final_report"]
+        assert "revise" in report
 
     def test_report_contains_stock_header(self):
         """报告包含股票名称和代码。"""

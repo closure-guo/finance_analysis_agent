@@ -14,3 +14,4 @@
 ```
 
 action 仅允许: buy / sell / hold / watch
+confidence 必须是 0 到 1 之间的小数（如 0.6 表示 60% 置信度），不要用百分数
