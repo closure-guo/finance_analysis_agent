@@ -10,9 +10,16 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './tests',
-  // 时间序列 spec 需要专属 config（playwright.timeline.config.ts，STUB_SCENARIO=tool_call/pipeline），
+  // 时间序列/管线 spec 需要专属 config（playwright.timeline.config.ts，STUB_SCENARIO=tool_call/pipeline/llm_failure），
   // 在默认 config 下排除，避免无 STUB_SCENARIO 时失败
-  testIgnore: 'thinking-timeline*.spec.ts',
+  testIgnore: [
+    'thinking-timeline*.spec.ts',
+    'harden-react-path-resilience.spec.ts',
+    'persist-full-session-timeline.spec.ts',
+    'pipeline-eta-banner.spec.ts',
+    'pipeline-hierarchical-timeline.spec.ts',
+    'resume-pipeline-across-sessions.spec.ts',
+  ],
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: true,
