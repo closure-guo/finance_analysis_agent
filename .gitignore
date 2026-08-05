@@ -224,6 +224,9 @@ test-assets/cache/
 reports/
 screenshots/
 
+# E2E 临时产物（REPORTS_DIR 隔离目录、临时输出）
+tmp/
+
 # Playwright MCP cache
 .playwright-mcp/
 .playwright-cli/

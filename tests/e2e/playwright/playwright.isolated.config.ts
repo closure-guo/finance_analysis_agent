@@ -28,6 +28,8 @@ export default defineConfig({
         TESTING: '1',
         // 独立测试库，与生产 data/sessions.db 物理隔离
         SESSIONS_DB_PATH: 'data/test-e2e-sessions.db',
+        // 隔离报告落盘目录，避免 E2E 副作用污染 reports/
+        REPORTS_DIR: 'tmp/e2e-reports-8001',
       },
       url: 'http://localhost:8001/api/health',
       timeout: 30_000,

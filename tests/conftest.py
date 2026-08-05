@@ -1,7 +1,35 @@
 """Shared test fixtures: synthetic financial data mimicking AKShare DataFrames."""
 
+import os
+
 import pandas as pd
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_reports_dir(request, tmp_path):
+    """为 live E2E 测试隔离 REPORTS_DIR，避免污染 reports/ 目录。
+
+    generate_file 节点（5 层管线终点）会向 REPORTS_DIR 写 .docx/.pptx。
+    E2E 测试（test_5layer_pipeline.py / Playwright pipeline 场景）反复跑同一
+    只股票会在 reports/ 堆积大量垃圾文件（见 docs/incidents 约定）。
+
+    对带 `live` mark 的测试注入临时目录 tmp_path/e2e-reports，跑完自动清理；
+    非 live 测试（单元/集成）保持原样，不改变其 REPORTS_DIR 行为。
+    """
+    marker = request.node.get_closest_marker("live")
+    if marker is None:
+        yield
+        return
+    old = os.environ.get("REPORTS_DIR")
+    os.environ["REPORTS_DIR"] = str(tmp_path / "e2e-reports")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("REPORTS_DIR", None)
+        else:
+            os.environ["REPORTS_DIR"] = old
 
 
 @pytest.fixture
