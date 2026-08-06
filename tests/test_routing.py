@@ -51,9 +51,14 @@ class TestAfterFundManager:
         state = {"fund_manager_decision": "return", "return_count": 0}
         assert after_fund_manager(state) == "trader"
 
-    def test_return_with_max_count_returns_generate_report(self):
-        """退回次数已达上限（1 次），强制进入报告生成。"""
+    def test_return_with_one_count_returns_trader(self):
+        """已退回 1 次（节点刚递增），仍允许退回 Trader 重新评估。"""
         state = {"fund_manager_decision": "return", "return_count": 1}
+        assert after_fund_manager(state) == "trader"
+
+    def test_return_with_max_count_returns_generate_report(self):
+        """退回次数已达上限（2 次），强制进入报告生成。"""
+        state = {"fund_manager_decision": "return", "return_count": 2}
         assert after_fund_manager(state) == "generate_report"
 
 

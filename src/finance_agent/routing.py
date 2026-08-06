@@ -23,7 +23,7 @@ def after_validate(state: dict) -> str:
 def after_fund_manager(state: dict) -> str:
     """Layer V Fund Manager 路由：退回 Trader（最多 1 次）或生成报告。"""
     decision = state.get("fund_manager_decision", "approve")
-    if decision == "return" and state.get("return_count", 0) < 1:
+    if decision == "return" and state.get("return_count", 0) <= 1:
         return "trader"
     return "generate_report"
 
