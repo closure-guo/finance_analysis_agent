@@ -1,75 +1,87 @@
 import { describe, it, expect } from 'vitest'
-import { isCurrentViewEvent } from '../App'
+import { StreamStore } from '../stores/streamStore'
+import type { SSEEvent } from '../types'
 
 // 回归：两会话并发流式输出时，后启动会话的文本后半段整段丢失。
 //
 // 根因（E2E concurrent-streaming-integrity.spec.ts 复现 + SSE 轨迹定位）：
 // startAnalysis/quickChat 处理 session_created 事件时只调 setAndPersistSession()，
 // 它触发 React setState，但 currentSessionIdRef.current 要等 useEffect 才异步同步。
+// 在这个同步窗口内到达的 chat_token 被会话隔离分支误判为「非当前视图」丢弃 → 整段缺失。
 //
-// 在这个同步窗口内到达的 chat_token 会执行会话隔离检查：
-//   activeSessionId(新 session) !== currentSessionIdRef.current(旧值/null) → 判为非当前视图
-// → 走隔离分支被 continue 丢弃（chat_token 在 skipTypes 中，连缓冲都不进）
-// → 流式文本从某个 seq 起整段消失。
+// E2E 实测轨迹（修复前）：seq 5-8 渲染成功，seq 9/10/11 全部丢失。
 //
-// E2E 实测轨迹（修复前）：seq 5-8 渲染成功，seq 9/10/11 全部丢失
-//   前端渲染 "这是一段测试用的固定回复。"
-//   后端实际 "这是一段测试用的固定回复。用于验证流式渲染的增量累积。"
-//
-// 修复：session_created 处同步赋值 currentSessionIdRef.current = event.session_id，
-// 与 selectSession 的同步赋值保持一致，消除 setState/ref 的同步窗口。
+// 迁移说明：会话隔离检查已随重构被结构性消除——
+// session_created 在 store 内完成 key 迁移（临时 key '' → 实际 sessionId），
+// 后续事件经 reader 局部绑定的 sessionId 分流写入，不经过任何「当前视图」运行时判断，
+// 也不依赖 React ref 的同步时序。本测试验证迁移后 seq 序列完整无丢失。
 
-describe('session_created 同步 currentSessionIdRef（并发流式文本完整性）', () => {
+describe('session_created key 迁移（并发流式文本完整性）', () => {
 
-  it('ref 已同步时，新会话的 chat_token 判为当前视图（正确渲染）', () => {
-    const newSessionId = 'session-B'
-    // session_created 处已同步赋值
-    const currentSessionIdRefValue = newSessionId
-    expect(isCurrentViewEvent(newSessionId, currentSessionIdRefValue)).toBe(true)
+  it('session_created 把临时 key 的状态迁移到实际 sessionId', () => {
+    const store = new StreamStore()
+    // submit 预提交的用户消息挂在临时 key '' 上
+    store['streams'].set('', {
+      phase: 'connecting',
+      messages: [{ id: 'm1', type: 'user', content: '分析平安银行' }],
+      lastSeq: 0,
+      origin: 'live',
+    })
+
+    store['applyEvent']('', { type: 'session_created', session_id: 'session-B', display_name: '平安银行', timestamp: '', seq: 1 } as SSEEvent)
+
+    expect(store['streams'].has('')).toBe(false)
+    const state = store.getSnapshot('session-B')
+    expect(state.messages[0].content).toBe('分析平安银行')
+    expect(state.lastSeq).toBe(1)
   })
 
-  it('文档化 bug：ref 未同步（仍为旧值）时 chat_token 被误隔离丢弃', () => {
-    const newSessionId = 'session-B'
-    // 修复前：setAndPersistSession 只触发 setState，ref 仍是上一个会话
-    const staleRefValue = 'session-A'
-    expect(isCurrentViewEvent(newSessionId, staleRefValue)).toBe(false)
+  it('reader 绑定随 key 迁移更新，后续事件写入实际 sessionId', () => {
+    const store = new StreamStore()
+    const abort = new AbortController()
+    store['activeReader'] = { sessionId: '', abort }
+    store['streams'].set('', { phase: 'connecting', messages: [], lastSeq: 0, origin: 'live' })
+
+    store['applyEvent']('', { type: 'session_created', session_id: 'session-B', display_name: '', timestamp: '', seq: 1 } as SSEEvent)
+
+    expect(store['activeReader']?.sessionId).toBe('session-B')
   })
 
-  it('文档化 bug：新建会话首次 session_created，ref 为 null 时同样被丢弃', () => {
-    const newSessionId = 'session-B'
-    // 新建分析路径 currentSessionId 被置 null，ref 同步前为 null
-    expect(isCurrentViewEvent(newSessionId, null)).toBe(false)
-  })
+  it('迁移后完整 seq 序列全部写入（旧结构下 seq 9+ 会被隔离丢弃）', () => {
+    const store = new StreamStore()
+    store['streams'].set('', { phase: 'connecting', messages: [], lastSeq: 0, origin: 'live' })
 
-  it('并发场景：两会话各自 ref 同步后互不干扰', () => {
-    // A 先启动并同步，B 后启动并同步（ref 最终指向 B）
-    const refAfterBCreated = 'session-B'
-
-    // B 的 reader：事件应处理（B 是当前视图）
-    expect(isCurrentViewEvent('session-B', refAfterBCreated)).toBe(true)
-    // A 的 reader（若仍活跃）：事件应隔离，不污染 B 的视图
-    expect(isCurrentViewEvent('session-A', refAfterBCreated)).toBe(false)
-  })
-
-  it('回归断言：完整 seq 序列在 ref 同步后全部通过隔离检查', () => {
-    // 模拟 E2E 中丢失的 seq 9/10/11：ref 同步后应全部放行
-    const sessionId = 'session-B'
-    const ref = sessionId
-    const seqTokens = [
-      { seq: 5, token: '这是' },
-      { seq: 6, token: '一段' },
-      { seq: 7, token: '测试用的' },
-      { seq: 8, token: '固定回复。' },
-      { seq: 9, token: '用于验证' },
-      { seq: 10, token: '流式渲染' },
-      { seq: 11, token: '的增量累积。' },
+    // seq 连续序列（含 session_created seq=1）：seq 空洞检测只在跳号时触发 resync
+    const events: SSEEvent[] = [
+      { type: 'session_created', session_id: 'session-B', display_name: '', timestamp: '', seq: 1 } as SSEEvent,
+      { type: 'chat_token', token: '这是', timestamp: '', seq: 2 } as SSEEvent,
+      { type: 'chat_token', token: '一段', timestamp: '', seq: 3 } as SSEEvent,
+      { type: 'chat_token', token: '测试用的', timestamp: '', seq: 4 } as SSEEvent,
+      { type: 'chat_token', token: '固定回复。', timestamp: '', seq: 5 } as SSEEvent,
+      { type: 'chat_token', token: '用于验证', timestamp: '', seq: 6 } as SSEEvent,
+      { type: 'chat_token', token: '流式渲染', timestamp: '', seq: 7 } as SSEEvent,
+      { type: 'chat_token', token: '的增量累积。', timestamp: '', seq: 8 } as SSEEvent,
     ]
+    let key = ''
+    for (const event of events) {
+      store['applyEvent'](key, event)
+      if (event.type === 'session_created') key = event.session_id
+    }
 
-    const rendered = seqTokens
-      .filter(() => isCurrentViewEvent(sessionId, ref))
-      .map(t => t.token)
-      .join('')
+    expect(store.getSnapshot('session-B').messages[0].chatResponse).toBe(
+      '这是一段测试用的固定回复。用于验证流式渲染的增量累积。',
+    )
+  })
 
-    expect(rendered).toBe('这是一段测试用的固定回复。用于验证流式渲染的增量累积。')
+  it('并发场景：两会话各自绑定后事件互不干扰', () => {
+    const store = new StreamStore()
+    store['streams'].set('session-A', { phase: 'streaming', messages: [], lastSeq: 0 })
+    store['streams'].set('session-B', { phase: 'streaming', messages: [], lastSeq: 0 })
+
+    store['applyEvent']('session-A', { type: 'chat_token', token: 'A', timestamp: '', seq: 1 } as SSEEvent)
+    store['applyEvent']('session-B', { type: 'chat_token', token: 'B', timestamp: '', seq: 1 } as SSEEvent)
+
+    expect(store.getSnapshot('session-A').messages[0].chatResponse).toBe('A')
+    expect(store.getSnapshot('session-B').messages[0].chatResponse).toBe('B')
   })
 })

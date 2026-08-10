@@ -70,6 +70,18 @@ function buildFetchMock(options: {
   })
 }
 
+// 构造一个 SSE Response：把给定事件按 text/event-stream 帧格式编码
+function sseResponse(events: Array<Record<string, unknown>>): Response {
+  const payload = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(payload))
+      controller.close()
+    },
+  })
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+}
+
 describe('刷新后自动恢复当前会话', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -101,6 +113,51 @@ describe('刷新后自动恢复当前会话', () => {
 
     // 不应停留在空态首页
     expect(screen.queryByText('AI 驱动的 A 股投研分析系统')).not.toBeInTheDocument()
+  })
+
+  it('刷新恢复运行中会话后，journal replay 续传的思考事件应渲染到页面', { timeout: 20000 }, async () => {
+    vi.useRealTimers()
+    localStorage.setItem('fa_current_session_id', 'sess-running')
+    // 新架构（journal replay）：刷新后 running 会话 rebuild 只保留 user 消息，
+    // lastSeq=0，resume 从 after_seq=0 全量重放 journal。收到 thinking_token 事件
+    // 重建 assistant chat（含思考），渲染到页面。
+    // 回归：旧「快照+续传」架构用 last_seq 做 after_seq，跳过未渲染的中间事件，
+    // 刷新后内容残缺/消失。replay 彻底消除该丢失窗口。
+    const detail = { ...runningSessionDetail, last_seq: 5 }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.startsWith('/api/sessions/') && url.includes('/stream')) {
+        return sseResponse([
+          { type: 'thinking_token', token: 'replay 重建的思考内容', timestamp: '', seq: 1 },
+        ])
+      }
+      if (url.startsWith('/api/sessions/') && !url.endsWith('/stream')) {
+        return new Response(JSON.stringify(detail), { status: 200 })
+      }
+      if (url === '/api/sessions' && (!init || !init.method || init.method === 'GET')) {
+        return new Response(JSON.stringify({ sessions: [runningSession] }), { status: 200 })
+      }
+      return new Response('', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    // 重建的 user 消息出现（rebuild 只保留 user，assistant 交给 replay）
+    await waitFor(() => {
+      expect(screen.getByText('分析中际旭创')).toBeInTheDocument()
+    }, { timeout: 10000 })
+
+    // 关键断言：replay 重放的思考事件渲染到页面（思考横幅含该文本）
+    await waitFor(() => {
+      expect(screen.getByText(/replay 重建的思考内容/)).toBeInTheDocument()
+    }, { timeout: 10000 })
+
+    // 确认确实发起了 resume 全量重放请求（after_seq=0）
+    await waitFor(() => {
+      const called = fetchMock.mock.calls.some(([u]) => String(u).includes('/stream?after_seq=0'))
+      expect(called).toBe(true)
+    }, { timeout: 5000 })
   })
 
   it('持久化会话已被删除时，清除 localStorage 并回退空态首页', { timeout: 20000 }, async () => {

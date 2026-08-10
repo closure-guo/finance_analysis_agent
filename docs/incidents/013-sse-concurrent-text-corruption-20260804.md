@@ -108,7 +108,7 @@ setAndPersistSession(event.session_id)
 
 1. **概率性并发 bug 绝不能靠静态推理修。** 必须先让它在受控环境确定性地失败，拿到运行时证据，再动手。本次第四轮用 stub + 诊断日志，10 分钟定位，而前三轮静态推理全部失败。
 
-2. **违反了自己的红线。** systematic-debugging 明确写「BEFORE proposing fixes, add diagnostic instrumentation」，前三轮直接跳到修复阶段。
+2. **违反了自己的红线。** superpower 的 systematic-debugging skill 明确写者「Phase 1: Root Cause Investigation 中的第二点 **Reproduce Consistently**」，前三轮直接跳到修复阶段。
 
 3. **测试环境与生产环境必须物理隔离有状态资源。** SQLite 单文件、WAL 模式下多进程写是已知高危操作，但此前 4 个 playwright 配置全部用生产库——这个雷不只 AI 会踩。
 
