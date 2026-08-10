@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pandas as pd
 
 from finance_agent.data.akshare_client import AKShareClient
 from finance_agent.data.cache import DataCache
+from finance_agent.langfuse_tracing import open_span
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,22 @@ def _get_client(client: AKShareClient | None = None) -> AKShareClient:
     return _CLIENT
 
 
+def _set_optional_fallback(result: dict, label: str) -> None:
+    """非必需数据拉取失败时设置 fallback 值。"""
+    fallbacks = {
+        "financial_indicators": None,
+        "industry_info": {},
+        "stock_quote": {},
+        "kline": None,
+        "benchmark_kline": None,
+        "industry_pe": None,
+        "quarterly_income": None,
+        "macro_indicators": {},
+        "news_list": [],
+    }
+    result[label] = fallbacks.get(label)
+
+
 def fetch_data(state: dict, cache=None, client=None) -> dict:
     # TESTING=1：确定性 stub（不触 AKShare/网络），供管线 E2E 使用
     if os.getenv("TESTING") == "1":
@@ -129,122 +147,127 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
 
     result: dict[str, Any] = {}
 
-    # Step 1: 必需数据（缺失报错）
-    bs = ak.fetch_balance_sheet(code)
-    c.set(f"{code}:balance_sheet", bs)
-    result["balance_sheet"] = bs
+    # ── Step 1: 全部独立调用并行提交 ──
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures: dict = {}
 
-    is_df = ak.fetch_income_statement(code)
-    c.set(f"{code}:income_statement", is_df)
-    result["income_statement"] = is_df
+        # 必需数据（缺失报错）
+        futures[pool.submit(ak.fetch_balance_sheet, code)] = "balance_sheet"
+        futures[pool.submit(ak.fetch_income_statement, code)] = "income_statement"
+        futures[pool.submit(ak.fetch_cash_flow, code)] = "cash_flow_statement"
 
-    cf = ak.fetch_cash_flow(code)
-    c.set(f"{code}:cash_flow_statement", cf)
-    result["cash_flow_statement"] = cf
+        # 非必需数据（缺失标记 N/A）
+        futures[pool.submit(ak.fetch_indicators, code)] = "financial_indicators"
+        futures[pool.submit(ak.fetch_industry, code)] = "industry_info"
+        futures[pool.submit(ak.fetch_stock_quote, code)] = "stock_quote"
+        futures[pool.submit(ak.fetch_kline, code)] = "kline"
+        futures[pool.submit(ak.fetch_benchmark_kline)] = "benchmark_kline"
+        futures[pool.submit(ak.fetch_industry_pe, code)] = "industry_pe"
+        futures[pool.submit(ak.fetch_quarterly_income, code)] = "quarterly_income"
+        futures[pool.submit(ak.fetch_macro_indicators)] = "macro_indicators"
+        futures[pool.submit(ak.fetch_news, code)] = "news_list"
 
-    # Step 1: 非必需数据（缺失标记 N/A）
-    try:
-        indicators = ak.fetch_indicators(code)
-        c.set(f"{code}:indicators", indicators)
-        result["financial_indicators"] = indicators
-    except Exception as e:
-        logger.warning("预计算指标拉取失败: %s", e)
-        result["financial_indicators"] = None
+        # ── 收集结果（每个调用带 Langfuse span 追踪）──
+        for future in as_completed(futures):
+            label = futures[future]
+            span_name = f"akshare:{label}"
+            with open_span(span_name, input={"code": code, "label": label}) as obs:
+                try:
+                    value = future.result()
+                    if obs:
+                        obs.update(output={"status": "success"})
+                except Exception as e:
+                    if obs:
+                        obs.update(output={"status": "error", "error": str(e)})
+                    if label in ("balance_sheet", "income_statement", "cash_flow_statement"):
+                        raise  # 必需数据异常传播，终止管线
+                    logger.warning("%s 拉取失败: %s", label, e)
+                    _set_optional_fallback(result, label)
+                    continue
 
-    try:
-        industry = ak.fetch_industry(code)
-        c.set(f"{code}:industry_info", industry, ttl_seconds=2_592_000)
-        result["industry_info"] = industry
-    except Exception as e:
-        logger.warning("行业归属拉取失败: %s", e)
-        result["industry_info"] = {}
+            # 按类型处理成功结果
+            if label == "balance_sheet":
+                c.set(f"{code}:balance_sheet", value)
+                result["balance_sheet"] = value
+            elif label == "income_statement":
+                c.set(f"{code}:income_statement", value)
+                result["income_statement"] = value
+            elif label == "cash_flow_statement":
+                c.set(f"{code}:cash_flow_statement", value)
+                result["cash_flow_statement"] = value
+            elif label == "financial_indicators":
+                c.set(f"{code}:indicators", value)
+                result["financial_indicators"] = value
+            elif label == "industry_info":
+                c.set(f"{code}:industry_info", value, ttl_seconds=2_592_000)
+                result["industry_info"] = value
+            elif label == "stock_quote":
+                c.set(f"{code}:stock_quote", value, ttl_seconds=86_400)
+                result["stock_quote"] = value
+            elif label == "kline":
+                if not value.empty:
+                    c.set(f"{code}:kline", value, ttl_seconds=3600)
+                    result["kline"] = value
+                else:
+                    logger.warning("K线数据为空: %s", code)
+            elif label == "benchmark_kline":
+                if not value.empty:
+                    c.set("benchmark_kline", value, ttl_seconds=3600)
+                    result["benchmark_kline"] = value
+                else:
+                    logger.warning("沪深300 K线数据为空")
+            elif label == "industry_pe":
+                if value:
+                    c.set(f"{code}:industry_pe", value, ttl_seconds=86_400)
+                    result["industry_pe"] = value
+            elif label == "quarterly_income":
+                c.set(f"{code}:quarterly_income", value)
+                result["quarterly_income"] = value
+            elif label == "macro_indicators":
+                c.set("macro_indicators", value, ttl_seconds=86_400)
+                result["macro_indicators"] = value
+            elif label == "news_list":
+                c.set(f"{code}:news", value, ttl_seconds=3600)
+                result["news_list"] = value
 
-    try:
-        quote = ak.fetch_stock_quote(code)
-        c.set(f"{code}:stock_quote", quote, ttl_seconds=86_400)
-        result["stock_quote"] = quote
-    except Exception as e:
-        logger.warning("行情数据拉取失败: %s", e)
-        result["stock_quote"] = {}
+    # ── Step 2: 依赖 industry_info 的串行调用 ──
+    # 关键非财务事件（需要股票名称）
+    with open_span("akshare:key_events", input={"code": code}) as obs:
+        try:
+            from finance_agent.events.pipeline import fetch_key_events
 
-    # K 线数据（技术指标 + 风控指标依赖）
-    try:
-        kline = ak.fetch_kline(code)
-        if not kline.empty:
-            c.set(f"{code}:kline", kline, ttl_seconds=3600)
-            result["kline"] = kline
-        else:
-            logger.warning("K线数据为空: %s", code)
-    except Exception as e:
-        logger.warning("K线数据拉取失败: %s", e)
+            use_web = state.get("enable_web_search", True)
+            events = fetch_key_events(
+                code,
+                (result.get("industry_info") or {}).get("name", ""),
+                use_web_search=use_web,
+            )
+            c.set(f"{code}:key_events", events)
+            result["key_events"] = events
+            if obs:
+                obs.update(output={"status": "success", "count": len(events)})
+        except Exception as e:
+            if obs:
+                obs.update(output={"status": "error", "error": str(e)})
+            logger.warning("关键事件获取失败: %s", e)
+            result["key_events"] = []
 
-    try:
-        benchmark = ak.fetch_benchmark_kline()
-        if not benchmark.empty:
-            c.set("benchmark_kline", benchmark, ttl_seconds=3600)
-            result["benchmark_kline"] = benchmark
-    except Exception as e:
-        logger.warning("沪深300 K线拉取失败: %s", e)
-
-    try:
-        industry_pe = ak.fetch_industry_pe(code)
-        if industry_pe:
-            c.set(f"{code}:industry_pe", industry_pe, ttl_seconds=86_400)
-            result["industry_pe"] = industry_pe
-    except Exception as e:
-        logger.warning("行业PE拉取失败: %s", e)
-
-    # Step 1: 季度数据（非必需，失败不阻塞）
-    try:
-        q_income = ak.fetch_quarterly_income(code)
-        c.set(f"{code}:quarterly_income", q_income)
-        result["quarterly_income"] = q_income
-    except Exception as e:
-        logger.warning("季度利润表拉取失败: %s", e)
-        result["quarterly_income"] = None
-
-    # Step 1: 关键非财务事件（非必需，失败不阻塞，降级安全）
-    try:
-        from finance_agent.events.pipeline import fetch_key_events
-
-        use_web = state.get("enable_web_search", True)
-        events = fetch_key_events(
-            code,
-            (result.get("industry_info") or {}).get("name", ""),
-            use_web_search=use_web,
-        )
-        c.set(f"{code}:key_events", events)
-        result["key_events"] = events
-    except Exception as e:
-        logger.warning("关键事件获取失败: %s", e)
-        result["key_events"] = []
-
-    # Step 2: 同业数据（依赖行业归属）
-    try:
-        peers = _fetch_peers(ak, code, state, result.get("industry_info"))
-        if peers is not None:
-            result["peer_financials"] = peers
-    except Exception as e:
-        logger.warning("同业数据拉取失败: %s", e)
-        result["peer_financials"] = None
-
-    # Step 2: 宏观指标（非必需，失败不阻塞）
-    try:
-        macro = ak.fetch_macro_indicators()
-        c.set("macro_indicators", macro, ttl_seconds=86_400)
-        result["macro_indicators"] = macro
-    except Exception as e:
-        logger.warning("宏观指标拉取失败: %s", e)
-        result["macro_indicators"] = {}
-
-    # Step 2: 新闻资讯（非必需，失败不阻塞）
-    try:
-        news = ak.fetch_news(code)
-        c.set(f"{code}:news", news, ttl_seconds=3600)
-        result["news_list"] = news
-    except Exception as e:
-        logger.warning("新闻资讯拉取失败: %s", e)
-        result["news_list"] = []
+    # 同业数据（依赖行业归属）
+    with open_span("akshare:peer_financials", input={"code": code}) as obs:
+        try:
+            peers = _fetch_peers(ak, code, state, result.get("industry_info"))
+            if peers is not None:
+                result["peer_financials"] = peers
+                if obs:
+                    obs.update(output={"status": "success", "peer_count": len(peers)})
+            else:
+                if obs:
+                    obs.update(output={"status": "skipped", "reason": "无同业代码"})
+        except Exception as e:
+            if obs:
+                obs.update(output={"status": "error", "error": str(e)})
+            logger.warning("同业数据拉取失败: %s", e)
+            result["peer_financials"] = None
 
     return result
 

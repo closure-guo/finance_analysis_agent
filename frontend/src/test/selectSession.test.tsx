@@ -122,6 +122,13 @@ function stubFetchWithSessionList(sessionId: string, displayName: string, detail
       )
     }
     if (url.startsWith(`/api/sessions/${sessionId}`)) {
+      // SSE stream 端点：新架构下 running 会话优先走 journal replay，但本组用例
+      // 测的是「无在途 SSE（404）时轮询接管」场景——rebuild 只保留 user 消息，
+      // resume 收到 404 保持 streaming 相位，轮询 effect 启动后用 updatePipelineSnapshot
+      // 从 detail.pipeline_snapshot 创建/刷新管线消息（SSE 不可用时的兜底路径）。
+      if (url.includes('/stream')) {
+        return new Response('{}', { status: 404 })
+      }
       const idx = Math.min(detailCallCount, detailResponses.length - 1)
       detailCallCount += 1
       const item = detailResponses[idx]
@@ -151,8 +158,11 @@ describe('selectSession 按会话状态恢复管线', () => {
 
     await renderAndSelect('s1', '运行中会话')
 
-    // appState === 'analyzing' → pipeline 消息渲染出分层时间轴
-    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+    // 新架构：rebuild 只保留 user 消息，resume 收到 404（无在途 SSE）后保持 streaming，
+    // 轮询 effect 启动首个 tick 用 detail.pipeline_snapshot 创建 pipeline 消息 → 时间轴渲染
+    await waitFor(() => {
+      expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+    }, { timeout: 5000 })
   })
 
   it('completed 会话恢复报告消息 + 静态时间轴（时间轴在报告之前）', async () => {
@@ -216,6 +226,10 @@ describe('selectSession 按会话状态恢复管线', () => {
     await waitFor(() => expect(screen.getByText('轮询会话')).toBeInTheDocument())
     await act(async () => {
       fireEvent.click(screen.getByText('轮询会话'))
+    })
+    // resume 404 后轮询首个 tick 创建 pipeline 消息
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100)
     })
     // 恢复 running 时间轴
     expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
@@ -295,10 +309,15 @@ describe('selectSession 按会话状态恢复管线', () => {
         })
       }
       if (url.startsWith('/api/sessions/')) {
+        // SSE stream 端点：模拟「无在途 SSE、靠轮询恢复」，返回 404 让 resume 安静保持相位
+        if (url.includes('/stream')) {
+          return new Response('{}', { status: 404 })
+        }
         detailCallCount += 1
-        // 首次为 selectSession 恢复（running + 快照）；此后若轮询未让位则命中 completed，
-        // 走 selectSession → abortStreaming()，放大竞态后果便于断言
-        const body = detailCallCount === 1 ? detailRunning : detailCompleted
+        // 首次为 selectSession 恢复（running + 快照）；第 2 次（轮询首个 tick 创建 pipeline）
+        // 仍 running；此后若轮询未让位则命中 completed，走 selectSession → abortStreaming()，
+        // 放大竞态后果便于断言
+        const body = detailCallCount <= 2 ? detailRunning : detailCompleted
         return new Response(JSON.stringify(body), { status: 200 })
       }
       return new Response('{}', { status: 404 })
@@ -310,7 +329,10 @@ describe('selectSession 按会话状态恢复管线', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('轮询让位会话'))
     })
-    // 恢复 running 时间轴，进入 analyzing + 轮询启动
+    // 恢复 running：resume 收到 404 保持 streaming，轮询首个 tick 创建 pipeline 消息
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100)
+    })
     expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
 
     // 模拟用户在恢复态发起新分析：ChatInput 输入 → 点击发送 → startAnalysis 设置 abortRef 并建立 SSE。
@@ -355,6 +377,10 @@ describe('selectSession 按会话状态恢复管线', () => {
     await waitFor(() => expect(screen.getByText('卡住会话')).toBeInTheDocument())
     await act(async () => {
       fireEvent.click(screen.getByText('卡住会话'))
+    })
+    // resume 404 后轮询首个 tick 创建 pipeline 消息
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100)
     })
     expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
 
@@ -476,30 +502,9 @@ describe('selectSession 结构化时序恢复（persist-full-session-timeline）
     expect(await screen.findByText('多头结构化思考内容')).toBeInTheDocument()
   })
 
-  it('running 会话恢复 pipeline_timelines 为管线消息的 nodeTimelines', async () => {
-    const tree = treeWithRunningNode('trader', ['check_cache', 'trader'])
-    const snapshot = makeSnapshot(tree, 'trader', 0.5)
-    const detail = makeSessionDetail({
-      status: 'running',
-      pipeline_snapshot: snapshot,
-      pipeline_timelines: {
-        check_cache: [{ type: 'thinking', content: '数据准备节点思考', done: true }],
-      },
-    })
-    stubFetchWithSessionList('s1', '运行中结构化会话', [{ ok: true, body: detail }])
-
-    await renderAndSelect('s1', '运行中结构化会话')
-
-    // 运行中管线消息同样恢复节点时序（角色名标题 + 思考横幅）。
-    // "数据准备"在分层时间轴与节点时序分组标题中均出现，断言至少一处且思考横幅存在。
-    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
-    expect(screen.getAllByText('数据准备').length).toBeGreaterThan(0)
-    const pipelineMsg = screen.getByTestId('pipeline-timeline').closest('.msg-system')!
-    const thinkingBtn = Array.from(pipelineMsg.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('思考已完成'),
-    )
-    expect(thinkingBtn).toBeTruthy()
-  })
+  // running 会话的 pipeline_timelines 恢复已迁移至 journal replay 架构：
+  // rebuild 不再生成 pipeline 消息（只留 user），nodeTimelines 由 resume 重放
+  // thinking_token(node=...) 事件重建。该路径在 store 层 replay 测试中覆盖。
 
   it('旧数据无 pipeline_timelines 时管线消息不设 nodeTimelines（不渲染节点时序区）', async () => {
     const tree = treeAllCompleted()

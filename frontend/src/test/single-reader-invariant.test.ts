@@ -1,104 +1,120 @@
-import { describe, it, expect } from 'vitest'
-import { ensureSingleReader } from '../App'
+import { describe, it, expect, vi } from 'vitest'
+import { StreamStore } from '../stores/streamStore'
 
 // 回归：两个会话同时流式输出时文字错乱/丢失。
 //
 // 根因（用户实测确认后端跨会话隔离正常，问题在前端）：
-// App.tsx 的 assistantMsgIdRef / pipelineMsgRef / streamingSessionIdRef / abortRef
-// 是页面级单例，不属于任何会话。所有 SSE reader（startAnalysis / resumeStream / quickChat）
-// 读写同一组 ref，隐性前提是「页面内同一时刻只有一条 reader」。
+// 旧结构的 abortRef/assistantMsgIdRef 是页面级单例，三个 SSE 入口都直接
+// `abortRef.current = newController` 覆盖旧值而不先 abort 它——旧 reader 失控，
+// 继续运行并写全局 assistantMsgIdRef → 两条流的 token 交叉写入 → 必然串字。
 //
-// 但三个入口都直接 `abortRef.current = newController` 覆盖旧值，而不先 abort 它：
-//   - resumeStream (line ~1644)
-//   - quickChat (line ~2100)
-//   - startAnalysis (line ~831)
-// 一旦旧 reader 仍活跃（abort 是异步的，await reader.read() 不会立即返回），
-// 其 controller 引用丢失 → 无人能再 abort 它 → 旧 reader 继续运行并写
-// 全局 assistantMsgIdRef 指向的同一条消息 → 两条流的 token 交叉写入 → 必然串字。
-//
-// 修复：ensureSingleReader 在赋值前 abort 现存 controller，硬保障 single-reader 不变量。
+// 迁移说明：ensureSingleReader 已随重构内化为 StreamStore 的单读取器结构——
+// activeReader 单例字段，submit/resume/switchSession/cancel 任一写路径
+// 都先 abort 现存 reader 再建立新绑定，结构性保证同一时刻仅一条 reader。
+// 本测试验证该内化语义。
 
-describe('ensureSingleReader（全局 single-reader 不变量）', () => {
+describe('单读取器不变量（StreamStore 结构性保证）', () => {
 
-  it('存在活跃的旧 controller 时应 abort 它', () => {
+  it('submit 前存在活跃 reader 时应 abort 它', async () => {
+    const store = new StreamStore()
     const oldAbort = new AbortController()
-    const newAbort = new AbortController()
+    store['activeReader'] = { sessionId: 's1', abort: oldAbort }
 
-    expect(oldAbort.signal.aborted).toBe(false)
-    ensureSingleReader(oldAbort, newAbort)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockRejectedValue(new DOMException('Aborted', 'AbortError'))
 
-    expect(oldAbort.signal.aborted).toBe(true)   // 旧 reader 被中断
-    expect(newAbort.signal.aborted).toBe(false)  // 新 reader 保持活跃
-  })
+    const promise = store.submit({
+      query: 'test', api_key: 'key', user_id: 'u1', analysis_type: 'comprehensive', session_id: 's2',
+    })
+    await new Promise((r) => setTimeout(r, 10))
 
-  it('返回新 controller 供调用方赋值', () => {
-    const newAbort = new AbortController()
-    expect(ensureSingleReader(null, newAbort)).toBe(newAbort)
-  })
-
-  it('旧 controller 为 null（首次启动）时不报错', () => {
-    const newAbort = new AbortController()
-    expect(() => ensureSingleReader(null, newAbort)).not.toThrow()
-    expect(newAbort.signal.aborted).toBe(false)
-  })
-
-  it('旧 controller 已 abort 时不重复 abort', () => {
-    const oldAbort = new AbortController()
-    oldAbort.abort()
-    let abortCount = 0
-    oldAbort.signal.addEventListener('abort', () => { abortCount++ })
-
-    ensureSingleReader(oldAbort, new AbortController())
-    expect(abortCount).toBe(0)  // 已 abort，监听器不再触发
-  })
-
-  it('关键回归：连续启动多条 reader 时只有最后一条活跃', () => {
-    // 模拟两会话同时流式输出：sessionA 的 reader 启动后
-    // sessionB 的 reader 启动（如用户切换会话触发 resumeStream）
-    const readerA = new AbortController()
-    let globalAbortRef: AbortController | null = readerA
-
-    const readerB = new AbortController()
-    globalAbortRef = ensureSingleReader(globalAbortRef, readerB)
-
-    const readerC = new AbortController()
-    globalAbortRef = ensureSingleReader(globalAbortRef, readerC)
-
-    // A 和 B 都被中断，只有 C 活跃 —— single-reader 不变量成立
-    expect(readerA.signal.aborted).toBe(true)
-    expect(readerB.signal.aborted).toBe(true)
-    expect(readerC.signal.aborted).toBe(false)
-    expect(globalAbortRef).toBe(readerC)
-  })
-
-  it('对比：旧逻辑（直接覆盖不 abort）会让旧 reader 失控', () => {
-    // 文档化 bug：旧代码 `abortRef.current = newController`
-    const readerA = new AbortController()
-    let globalAbortRef: AbortController | null = readerA
-
-    const readerB = new AbortController()
-    globalAbortRef = readerB   // 旧逻辑：直接覆盖
-
-    // readerA 仍活跃，且引用已丢失 —— 无人能再 abort 它
-    // 它会继续读 SSE 并写全局 assistantMsgIdRef → 与 readerB 串字
-    expect(readerA.signal.aborted).toBe(false)  // bug：旧 reader 失控
-    expect(globalAbortRef).toBe(readerB)
-
-    // 新逻辑下 readerA 会被正确中断
-    const readerA2 = new AbortController()
-    ensureSingleReader(readerA2, new AbortController())
-    expect(readerA2.signal.aborted).toBe(true)
-  })
-
-  it('被 abort 的 reader 其 fetch signal 可被下游感知（验证中断可传播）', () => {
-    const oldAbort = new AbortController()
-    let notified = false
-    oldAbort.signal.addEventListener('abort', () => { notified = true })
-
-    ensureSingleReader(oldAbort, new AbortController())
-
-    // reader 循环中的 `if (abortCtrl.signal.aborted) break` 能感知到中断
-    expect(notified).toBe(true)
     expect(oldAbort.signal.aborted).toBe(true)
+
+    globalThis.fetch = originalFetch
+    await promise.catch(() => {})
+  })
+
+  it('resume 前存在活跃 reader 时应 abort 它', async () => {
+    const store = new StreamStore()
+    const oldAbort = new AbortController()
+    store['activeReader'] = { sessionId: 's1', abort: oldAbort }
+    store['streams'].set('s2', { phase: 'idle', messages: [], lastSeq: 0 })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockRejectedValue(new DOMException('Aborted', 'AbortError'))
+
+    await store.resume('s2')
+
+    expect(oldAbort.signal.aborted).toBe(true)
+    globalThis.fetch = originalFetch
+  })
+
+  it('switchSession abort 当前 reader', () => {
+    const store = new StreamStore()
+    const abort = new AbortController()
+    store['activeReader'] = { sessionId: 's1', abort }
+
+    store.switchSession('s2')
+
+    expect(abort.signal.aborted).toBe(true)
+    expect(store['activeReader']).toBeNull()
+  })
+
+  it('cancel abort 目标会话的 reader', async () => {
+    const store = new StreamStore()
+    const abort = new AbortController()
+    store['activeReader'] = { sessionId: 's1', abort }
+    store['streams'].set('s1', { phase: 'streaming', messages: [], lastSeq: 0 })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true })
+
+    await store.cancel('s1')
+
+    expect(abort.signal.aborted).toBe(true)
+    expect(store['activeReader']).toBeNull()
+    globalThis.fetch = originalFetch
+  })
+
+  it('关键回归：连续触发多条 reader 路径时旧 reader 全部被中断', async () => {
+    // 模拟旧根因场景：A 流式中用户切到 B（resume），再从 B 发起新提交
+    const store = new StreamStore()
+    const readerA = new AbortController()
+    store['activeReader'] = { sessionId: 'A', abort: readerA }
+    store['streams'].set('B', { phase: 'idle', messages: [], lastSeq: 0 })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockRejectedValue(new DOMException('Aborted', 'AbortError'))
+
+    // 切到 B：A 被中断
+    const resumePromise = store.resume('B')
+    const readerB = store['activeReader']?.abort
+    expect(readerB).toBeDefined()
+    await resumePromise
+    expect(readerA.signal.aborted).toBe(true)
+    // resume 的 fetch 已 reject（AbortError），reader 引用已释放
+    expect(store['activeReader']).toBeNull()
+
+    // 从 B 发起新提交：入口 abort 残留 reader（幂等，旧 readerB 已 abort）并建立新 reader
+    const submitPromise = store.submit({
+      message: '追问', api_key: 'key', user_id: 'u1', session_id: 'B',
+    })
+    const readerB2 = store['activeReader']?.abort
+    expect(readerB2).toBeDefined()
+    expect(readerB2!.signal.aborted).toBe(false)
+    await submitPromise
+
+    globalThis.fetch = originalFetch
+  })
+
+  it('abortAll（页面卸载）中断当前 reader', () => {
+    const store = new StreamStore()
+    const abort = new AbortController()
+    store['activeReader'] = { sessionId: 's1', abort }
+
+    store.abortAll()
+
+    expect(abort.signal.aborted).toBe(true)
+    expect(store['activeReader']).toBeNull()
   })
 })

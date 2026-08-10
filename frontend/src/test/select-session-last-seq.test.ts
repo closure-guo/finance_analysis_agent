@@ -1,33 +1,53 @@
 import { describe, it, expect } from 'vitest'
-import { resumeAfterSeqFromSnapshot } from '../App'
+import { StreamStore } from '../stores/streamStore'
+import type { SessionDetail } from '../types'
 
-// 回归：selectSession 快照恢复路径曾用 Math.max(frontLastSeq, backLastSeq) 推进 after_seq。
-// 后端 last_seq 是 journal 全量 max，远超前端渲染进度时，resumeStream 跳过前端未渲染的
-// 中间事件，导致流式文字内容缺失（如「寒武纪（688256）」变「武（256」）。
-// 两 session 同时运行时后端事件增长更快、backLastSeq 更大 → 必然跳过更多 → 必然发生。
-// 修复：前端 lastSeq（实际渲染进度）优先，仅 0 时用后端 last_seq 兜底。
+// 刷新恢复架构修正：进行中会话走 journal full replay（rebuild 只保留 user 消息，
+// lastSeq=0 让 resume 全量重放 journal）。本测试验证 lastSeq 续传游标的新语义。
+//
+// 历史：旧实现用 chat_history 快照重建 + last_seq 续传，后端 last_seq 是 journal
+// 全量 max，用它做 after_seq 会跳过已 journal 但前端从未渲染的中间事件（流式文字
+// 缺失根因）。现在 running/clarifying 强制 lastSeq=0，从第一个事件全量重放，
+// 彻底消除「快照残缺 + 续传跳过」的丢失窗口。
 
-describe('resumeAfterSeqFromSnapshot（快照恢复 after_seq 计算）', () => {
-  it('前端 lastSeq > 0 时用它续传，不被后端 max 超前推进', () => {
-    // 前端渲染到 seq=50，后端 journal 已到 seq=100
-    // 修复前 Math.max(50,100)=100 → 跳过 51-100 → 内容缺失
-    expect(resumeAfterSeqFromSnapshot(50, 100)).toBe(50)
+function detail(status: string, lastSeq: number): SessionDetail {
+  return {
+    session_id: 's1', status, session_type: 'analysis', last_seq: lastSeq,
+    chat_history: [{ role: 'user', content: 'q', ts: '2026-08-10T00:00:00' }],
+  } as unknown as SessionDetail
+}
+
+describe('rebuildSession lastSeq 续传游标（journal replay 架构）', () => {
+  it('running 会话 lastSeq=0（全量 replay，不跳过任何历史事件）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', detail('running', 100))
+    expect(store.getSnapshot('s1').lastSeq).toBe(0)
   })
 
-  it('前端 lastSeq = 0（从未收到事件）时用后端 last_seq 兜底', () => {
-    expect(resumeAfterSeqFromSnapshot(0, 100)).toBe(100)
+  it('clarifying 会话 lastSeq=0（同 running，全量 replay）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', detail('clarifying', 100))
+    expect(store.getSnapshot('s1').lastSeq).toBe(0)
   })
 
-  it('前端已追平后端时从当前位置续传', () => {
-    expect(resumeAfterSeqFromSnapshot(100, 100)).toBe(100)
+  it('completed 会话 lastSeq=后端 last_seq（终态，不再 resume）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', detail('completed', 99))
+    expect(store.getSnapshot('s1').lastSeq).toBe(99)
   })
 
-  it('对比：旧 Math.max 会错误跳过未渲染事件（文档化根因）', () => {
-    const frontLastSeq = 50
-    const backLastSeq = 100
-    // 旧代码 Math.max 行为：after_seq=100，跳过 51-100 的未渲染事件
-    expect(Math.max(frontLastSeq, backLastSeq)).toBe(100)
-    // 修复后：after_seq=50，resumeStream 收到 51-100 并 append 到快照消息
-    expect(resumeAfterSeqFromSnapshot(frontLastSeq, backLastSeq)).toBe(50)
+  it('interrupted 会话 lastSeq=后端 last_seq（终态，不再 resume）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', detail('interrupted', 88))
+    expect(store.getSnapshot('s1').lastSeq).toBe(88)
+  })
+
+  it('running 会话即使前端内存有旧 lastSeq 也强制归 0（刷新场景：内存已清空，但防御）', () => {
+    // 刷新后 store 是新实例，existing.lastSeq 不存在；但即使切回一个内存中
+    // 还有旧 lastSeq 的在途会话，rebuild 也应归 0（它要全量 replay 重建完整状态）
+    const store = new StreamStore()
+    store['streams'].set('s1', { phase: 'streaming', messages: [], lastSeq: 50, origin: 'live' })
+    store.rebuildSession('s1', detail('running', 100))
+    expect(store.getSnapshot('s1').lastSeq).toBe(0)
   })
 })
