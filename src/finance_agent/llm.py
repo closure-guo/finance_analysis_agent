@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from dataclasses import dataclass
 
 import litellm
 
@@ -79,6 +80,19 @@ _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 _QUICK_MODEL = "deepseek/deepseek-chat"
 
 
+@dataclass
+class LLMConfig:
+    """请求级 LLM 配置，字段为 None 时回退环境变量。
+
+    字段用 camelCase 命名（baseUrl / apiKey），与前端 JSON 契约及项目命名约定一致。
+    """
+
+    model: str | None = None
+    baseUrl: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
+    apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
+    thinking: str | None = None
+
+
 def _is_deepseek(model: str) -> bool:
     """Check if model is a DeepSeek model."""
     return "deepseek" in model.lower()
@@ -98,10 +112,31 @@ def _build_kwargs(
     api_key: str | None = None,
     tools: list[dict] | None = None,
     disable_thinking: bool = False,
+    llm_config: LLMConfig | None = None,
 ) -> dict:
-    """Build litellm kwargs with provider-specific params."""
+    """Build litellm kwargs with provider-specific params.
+
+    配置解析优先级（请求级 llm_config → 环境变量 → 默认值）：
+    - model: llm_config.model → 传入的 model 参数（已由调用方解析 quick/非 quick）
+    - base_url: llm_config.baseUrl → LLM_BASE_URL → 空
+    - api_key: llm_config.apiKey → api_key 参数 → LLM_API_KEY/DEEPSEEK_API_KEY
+    - thinking: llm_config.thinking → LLM_THINKING → "enabled"
+    """
+    cfg = llm_config or LLMConfig()
+
+    # model: llm_config.model 优先覆盖传入的 model 参数
+    effectiveModel = cfg.model or model
+
+    # 自动补 litellm provider 前缀：
+    # 用户填了自定义 base_url（OpenAI 兼容端点）但模型名缺少 provider 前缀时，
+    # litellm 无法识别调用协议（BadRequestError: LLM Provider NOT provided）。
+    # 自定义 OpenAI 兼容端点统一用 openai/ 前缀路由。
+    base_url = cfg.baseUrl or os.environ.get("LLM_BASE_URL", "")
+    if base_url and effectiveModel and "/" not in effectiveModel:
+        effectiveModel = f"openai/{effectiveModel}"
+
     kwargs: dict = {
-        "model": model,
+        "model": effectiveModel,
         "messages": messages,
         "max_tokens": max_tokens,
     }
@@ -109,11 +144,13 @@ def _build_kwargs(
     if stream:
         kwargs["stream"] = True
 
-    key = _resolve_key(api_key)
+    # api_key: llm_config.apiKey 优先于 api_key 参数，再回退环境变量
+    effectiveKey = cfg.apiKey or api_key
+    key = _resolve_key(effectiveKey)
     if key:
         kwargs["api_key"] = key
 
-    base_url = os.environ.get("LLM_BASE_URL", "")
+    # base_url: llm_config.baseUrl 优先于环境变量
     if base_url:
         kwargs["api_base"] = base_url
 
@@ -122,8 +159,8 @@ def _build_kwargs(
         kwargs["tool_choice"] = "auto"
 
     # DeepSeek-specific: thinking mode
-    is_ds = _is_deepseek(model)
-    thinking = os.environ.get("LLM_THINKING", "enabled")
+    is_ds = _is_deepseek(effectiveModel)
+    thinking = cfg.thinking or os.environ.get("LLM_THINKING", "enabled")
 
     if is_ds and thinking == "enabled" and not disable_thinking and not tools:
         # DeepSeek thinking mode: no temperature, use reasoning_effort
@@ -149,13 +186,18 @@ def call_llm(
     max_tokens: int = 4096,
     api_key: str | None = None,
     quick: bool = False,
+    llm_config: LLMConfig | None = None,
 ) -> str:
     """Non-streaming LLM call — returns full response string.
 
     If quick=True, uses LLM_QUICK_MODEL (default deepseek-chat) with thinking disabled.
     Use quick=True for simple tasks like JSON extraction, classification, etc.
+
+    llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
     """
-    if quick:
+    if llm_config and llm_config.model:
+        model = llm_config.model
+    elif quick:
         model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
     else:
         model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
@@ -172,6 +214,7 @@ def call_llm(
         temperature=temperature,
         api_key=api_key,
         disable_thinking=quick,
+        llm_config=llm_config,
     )
 
     _lf = _get_langfuse()
@@ -216,6 +259,7 @@ def call_llm_stream(
     api_key: str | None = None,
     messages: list[dict] | None = None,
     quick: bool = False,
+    llm_config: LLMConfig | None = None,
 ):
     """Streaming LLM call — yields tokens one by one.
 
@@ -223,8 +267,12 @@ def call_llm_stream(
     (used for tool result follow-up calls).
 
     If ``quick=True``, uses LLM_QUICK_MODEL instead of LLM_MODEL.
+
+    llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
     """
-    if messages is not None or quick:
+    if llm_config and llm_config.model:
+        model = llm_config.model
+    elif messages is not None or quick:
         model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
     else:
         model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
@@ -246,6 +294,7 @@ def call_llm_stream(
         temperature=temperature,
         api_key=api_key,
         disable_thinking=disable_thinking,
+        llm_config=llm_config,
     )
 
     _lf = _get_langfuse()
@@ -308,6 +357,7 @@ def call_llm_with_tools(
     tool_choice: str = "auto",
     messages: list[dict] | None = None,
     model: str | None = None,
+    llm_config: LLMConfig | None = None,
 ):
     """Non-streaming LLM call with tool support.
 
@@ -316,8 +366,12 @@ def call_llm_with_tools(
 
     If ``messages`` is provided, it replaces the default prompt/system construction
     (used for ReAct multi-turn dialogue with tool results).
+
+    llm_config.model（若提供）覆盖 model 参数的解析。
     """
-    if model is None:
+    if llm_config and llm_config.model:
+        model = llm_config.model
+    elif model is None:
         model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
 
     if messages is None:
@@ -334,6 +388,7 @@ def call_llm_with_tools(
         api_key=api_key,
         tools=tools,
         disable_thinking=True,
+        llm_config=llm_config,
     )
     if tool_choice:
         kwargs["tool_choice"] = tool_choice

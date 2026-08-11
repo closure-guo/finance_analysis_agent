@@ -13,7 +13,13 @@ def trader(state: dict) -> dict:
     system = load_prompt("trader")
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="trader")
+    response = call_llm_streaming(
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="trader",
+        llm_config=state.get("llm_config"),
+    )
     data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)
 

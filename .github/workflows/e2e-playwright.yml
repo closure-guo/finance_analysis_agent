@@ -29,6 +29,9 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --group dev
 
+      - name: Secret leak scan
+        run: uv run python tests/scripts/check_secrets.py
+
       - name: Install CJK fonts (matplotlib charts)
         run: |
           sudo apt-get update -qq

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import Any
 
 from finance_agent.harness import Agent, PermissionMode
+from finance_agent.llm import LLMConfig
 from finance_agent.prompts.loader import load_prompt
 
 # ───────────────────────────────────────────────
@@ -272,6 +273,7 @@ def _make_run_deep_analysis(
     enable_web_search: bool = False,
     session_id: str | None = None,
     web_sources: list[dict] | None = None,
+    llm_config: LLMConfig | None = None,
 ):
     """创建 run_deep_analysis 流式工具，注入配置闭包。
 
@@ -353,6 +355,8 @@ def _make_run_deep_analysis(
             "enable_web_search": enable_web_search,
             "api_key": api_key,
             "web_sources": web_sources or [],
+            # 请求级 LLM 配置透传到管线节点（call_llm_streaming / call_llm）
+            "llm_config": llm_config,
         }
 
         accumulated: dict = dict(initial_state)
@@ -731,6 +735,7 @@ def build_agent(
     analysis_type: str = "comprehensive",
     peer_codes: list | None = None,
     enable_web_search: bool = False,
+    llm_config: LLMConfig | None = None,
     **kwargs: Any,
 ) -> Agent:
     """构建指定模式的 ReAct Agent。
@@ -741,13 +746,30 @@ def build_agent(
         analysis_type: 分析类型（深度模式，闭包注入 run_deep_analysis）
         peer_codes: 对标股代码（深度模式，闭包注入）
         enable_web_search: 是否启用搜索（深度模式，闭包注入）
+        llm_config: 请求级 LLM 配置（model/baseUrl/apiKey/thinking），覆盖环境变量
         **kwargs: 额外参数（session_id 等）
 
     Returns:
         配置好的 Agent 实例
     """
-    model = os.getenv("LLM_MODEL", "deepseek/deepseek-chat")
-    llm_client = _make_llm_client(model, api_key)
+    # model 解析优先级：llm_config.model → 环境变量 LLM_MODEL → 默认值
+    model = (
+        (llm_config.model if llm_config and llm_config.model else None)
+        or os.getenv("LLM_MODEL")
+        or "deepseek/deepseek-chat"
+    )
+    # api_key 解析优先级：llm_config.apiKey → 顶层 api_key → 环境变量（在 LiteLLMClient 内回退）
+    effectiveApiKey = (llm_config.apiKey if llm_config and llm_config.apiKey else None) or api_key
+    # base_url / thinking 从 llm_config 解析，None 时由 LiteLLMClient 回退环境变量/默认值
+    effectiveBaseUrl = llm_config.baseUrl if llm_config and llm_config.baseUrl else None
+    effectiveThinking = llm_config.thinking if llm_config and llm_config.thinking else None
+
+    llm_client = _make_llm_client(
+        model,
+        api_key=effectiveApiKey,
+        base_url=effectiveBaseUrl,
+        thinking=effectiveThinking,
+    )
 
     if mode == "quick":
         prompt = _quick_mode_prompt().format(now=_now())
@@ -789,6 +811,7 @@ def build_agent(
                 enable_web_search=enable_web_search,
                 session_id=kwargs.get("session_id"),
                 web_sources=web_sources_collector,
+                llm_config=llm_config,
             ),
             name="run_deep_analysis",
         )
@@ -836,7 +859,12 @@ def _now() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
 
 
-def _make_llm_client(model: str, api_key: str | None = None):
+def _make_llm_client(
+    model: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    thinking: str | None = None,
+):
     """创建 litellm 适配的 LLM 客户端。
 
     TESTING=1 时返回 StubLLMClient（按固定节奏吐文本 delta），不连真 LLM。
@@ -854,7 +882,7 @@ def _make_llm_client(model: str, api_key: str | None = None):
 
     from finance_agent.harness.litellm_client import LiteLLMClient
 
-    return LiteLLMClient(model=model, api_key=api_key)
+    return LiteLLMClient(model=model, api_key=api_key, base_url=base_url, thinking=thinking)
 
 
 def _inject_chat_history(agent: Agent, session_id: str) -> None:

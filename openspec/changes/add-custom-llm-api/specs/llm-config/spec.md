@@ -1,0 +1,258 @@
+## ADDED Requirements
+
+### Requirement: 前端设置面板支持自定义 LLM 配置
+
+系统 SHALL 在前端提供设置面板（取代现有仅 API Key 的弹窗），允许用户配置 model（模型名称）、base_url（API 端点）、api_key（API 密钥）、thinking（思考模式开关）四项 LLM 参数，配置持久化到浏览器 localStorage。
+
+#### Scenario: 设置面板展示四项配置字段
+
+- **WHEN** 用户点击 header 齿轮按钮打开设置面板
+- **THEN** 面板 SHALL 展示四个配置项：API Key（密码输入框）、模型名称（文本输入框）、API Base URL（文本输入框）、思考模式（Toggle 开关，enabled/disabled）
+
+#### Scenario: 配置持久化到 localStorage
+
+- **WHEN** 用户在设置面板修改任意配置项并关闭面板
+- **THEN** 系统 SHALL 将全部配置序列化为 JSON 存入 localStorage key `fa_llm_config`
+- **AND** 页面刷新后重新打开设置面板时，SHALL 从 localStorage 恢复上次保存的配置
+
+#### Scenario: 设置面板占位符显示后端默认值
+
+- **WHEN** 设置面板首次加载（localStorage 无配置）
+- **THEN** 模型名称输入框的 placeholder SHALL 显示后端默认模型（从 `GET /api/llm-config` 获取）
+- **AND** API Base URL 输入框的 placeholder SHALL 显示后端默认 base_url
+- **AND** 思考模式开关 SHALL 默认设为后端默认值
+
+#### Scenario: 设置面板向后兼容现有 API Key
+
+- **WHEN** localStorage 中存在旧 key `fa_api_key`（升级前保存的 API Key）且不存在 `fa_llm_config`
+- **THEN** 系统 SHALL 自动迁移：将 `fa_api_key` 的值读入 `fa_llm_config.api_key`，并清除旧 key
+
+### Requirement: 请求携带 LLM 配置
+
+前端向 `/api/chat`、`/api/analyze` 发送请求时 SHALL 携带 `llm_config` 字段（包含 model / base_url / api_key / thinking），后端 SHALL 以请求级配置覆盖环境变量默认值。
+
+#### Scenario: 请求携带用户自定义配置
+
+- **WHEN** 用户在设置面板配置了 model、base_url、api_key、thinking 并提交分析/聊天请求
+- **THEN** 请求体 SHALL 包含 `llm_config` 字段（JSON 对象），包含用户配置的非空字段
+- **AND** 后端 SHALL 使用 `llm_config` 中的值覆盖对应环境变量默认值
+
+#### Scenario: 请求未携带 llm_config 时使用环境变量默认值
+
+- **WHEN** 请求体不包含 `llm_config` 字段或该字段为 null
+- **THEN** 后端 SHALL 使用环境变量（`LLM_MODEL`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_THINKING`）的值作为 LLM 配置
+- **AND** 系统行为 SHALL 与未引入此功能前完全一致
+
+#### Scenario: llm_config 部分字段为空时回退环境变量
+
+- **WHEN** 请求体 `llm_config` 中 model 字段有值但 base_url 为空
+- **THEN** 后端 SHALL 使用 `llm_config.model` 的值作为模型名，base_url 回退到环境变量 `LLM_BASE_URL`
+
+### Requirement: 后端提供默认配置端点
+
+系统 SHALL 提供 `GET /api/llm-config` 端点，返回当前后端环境变量的 LLM 默认配置，供前端展示占位符和默认值。
+
+#### Scenario: 获取默认配置
+
+- **WHEN** 前端调用 `GET /api/llm-config`
+- **THEN** 系统 SHALL 返回 JSON 对象，包含 `model`（环境变量 `LLM_MODEL` 的值或内置默认值）、`base_url`（环境变量 `LLM_BASE_URL` 的值或空字符串）、`thinking`（环境变量 `LLM_THINKING` 的值或 `"enabled"`）
+- **AND** 响应 SHALL NOT 包含 api_key（安全考虑，不暴露密钥）
+
+### Requirement: 管线链路支持请求级 LLM 配置
+
+管线节点 LLM 调用（`call_llm` / `call_llm_stream` / `call_llm_with_tools`）SHALL 接受请求级 LLM 配置参数，覆盖环境变量中的 model / base_url / api_key / thinking。
+
+#### Scenario: 管线节点使用请求级模型配置
+
+- **WHEN** 分析请求携带 `llm_config.model = "openai/gpt-4o"` 并触发深度分析
+- **THEN** 5 层分析流水线所有节点的 LLM 调用 SHALL 使用模型 `openai/gpt-4o`
+- **AND** Langfuse trace 中的 generation span SHALL 记录实际使用的模型名
+
+#### Scenario: 管线节点使用请求级 base_url
+
+- **WHEN** 分析请求携带 `llm_config.base_url = "https://api.example.com/v1"`
+- **THEN** 管线 LLM 调用 SHALL 通过 litellm 的 `api_base` 参数使用该端点
+
+#### Scenario: 管线节点使用请求级思考模式
+
+- **WHEN** 分析请求携带 `llm_config.thinking = "disabled"` 且模型为 DeepSeek 系列
+- **THEN** 管线 LLM 调用 SHALL 在 `extra_body` 中设置 `{"thinking": {"type": "disabled"}}`
+- **AND** 非 DeepSeek 模型 SHALL 忽略 thinking 配置（使用 temperature 参数）
+
+#### Scenario: 管线节点使用请求级 api_key
+
+- **WHEN** 分析请求携带 `llm_config.api_key = "sk-xxx"`
+- **THEN** 管线 LLM 调用 SHALL 使用该 api_key 进行认证
+- **AND** 若 `llm_config.api_key` 为空，SHALL 回退到环境变量 `LLM_API_KEY` 再回退 `DEEPSEEK_API_KEY`
+
+### Requirement: ReAct Agent 链路支持请求级 LLM 配置
+
+ReAct Agent（`build_agent` → `LiteLLMClient`）SHALL 接受请求级 LLM 配置参数，覆盖环境变量中的 model / base_url / api_key / thinking。
+
+#### Scenario: ReAct Agent 使用请求级模型配置
+
+- **WHEN** 聊天请求携带 `llm_config.model = "anthropic/claude-sonnet-4-20250514"` 并触发快速模式
+- **THEN** ReAct Agent 的 LLM 调用 SHALL 使用模型 `anthropic/claude-sonnet-4-20250514`
+
+#### Scenario: ReAct Agent 使用请求级 base_url
+
+- **WHEN** 聊天请求携带 `llm_config.base_url = "http://localhost:11434/v1"`（本地 Ollama）
+- **THEN** `LiteLLMClient` SHALL 通过 `api_base` 参数使用该端点
+
+#### Scenario: ReAct Agent 使用请求级思考模式
+
+- **WHEN** 聊天请求携带 `llm_config.thinking = "disabled"` 且模型为 DeepSeek 系列
+- **THEN** `LiteLLMClient._build_kwargs` SHALL 在 `extra_body` 中设置 `{"thinking": {"type": "disabled"}}`
+- **AND** 非 DeepSeek 模型 SHALL 忽略 thinking 配置（使用 temperature 参数）
+
+### Requirement: 配置变更对 Langfuse trace 透明
+
+LLM 配置的注入 SHALL 不改变 Langfuse trace 的结构——trace 中仅 model 字段反映实际使用的模型，其余 span 结构不变。
+
+#### Scenario: trace 记录实际模型名
+
+- **WHEN** 用户使用自定义模型 `openai/gpt-4o` 发起分析
+- **THEN** Langfuse trace 的 generation span SHALL 记录 `model: "openai/gpt-4o"`
+- **AND** span 的父子层级结构 SHALL 与使用默认模型时一致
+
+### Requirement: Provider 预设快捷填充
+
+设置面板 SHALL 提供 Provider 预设选择器，用户选择预设后自动填充 model 和 base_url 输入框，降低手动输入出错率。预设数据为前端静态常量，不需后端端点。
+
+#### Scenario: 选择 DeepSeek 预设自动填充
+
+- **WHEN** 用户在设置面板选择 "DeepSeek 官方" 预设
+- **THEN** model 输入框 SHALL 自动填充为 `deepseek/deepseek-chat`
+- **AND** base_url 输入框 SHALL 自动填充为 `https://api.deepseek.com/v1`
+- **AND** 思考模式开关 SHALL 默认设为 enabled
+
+#### Scenario: 选择 OpenAI 预设自动填充
+
+- **WHEN** 用户在设置面板选择 "OpenAI" 预设
+- **THEN** model 输入框 SHALL 自动填充为 `openai/gpt-4o`
+- **AND** base_url 输入框 SHALL 留空（litellm 自动路由）
+- **AND** 思考模式开关 SHALL 隐藏（非 DeepSeek 模型）
+
+#### Scenario: 选择本地 Ollama 预设自动填充
+
+- **WHEN** 用户在设置面板选择 "本地 Ollama" 预设
+- **THEN** model 输入框 SHALL 自动填充为 `openai/llama3`
+- **AND** base_url 输入框 SHALL 自动填充为 `http://localhost:11434/v1`
+
+#### Scenario: 选择预设后用户仍可手动修改
+
+- **WHEN** 用户选择预设后手动修改了 model 或 base_url 输入框中的值
+- **THEN** 系统 SHALL 接受用户修改后的值，不强制覆盖
+- **AND** 预设选择器 SHALL 切换为 "自定义" 状态
+
+### Requirement: 模型自动发现
+
+系统 SHALL 提供模型自动发现功能，用户填写 base_url 后可拉取该端点支持的模型列表。模型发现请求 SHALL 由后端代理调用（非前端直连），规避 CORS 和密钥暴露问题。
+
+#### Scenario: 成功拉取模型列表
+
+- **WHEN** 用户填写了 base_url（如 `https://api.deepseek.com/v1`）和 api_key，点击"刷新模型列表"按钮
+- **THEN** 前端 SHALL 调用 `POST /api/llm-config/models` 发送 base_url 和 api_key 到后端
+- **AND** 后端 SHALL 调用 `GET {base_url}/models` 拉取可用模型列表
+- **AND** 前端 SHALL 将返回的模型列表渲染为下拉选择
+
+#### Scenario: 用户从模型列表选择模型后自动拼接前缀
+
+- **WHEN** 用户从自动发现的模型下拉中选择 `deepseek-chat`（base_url 为 `https://api.deepseek.com/v1`）
+- **THEN** model 输入框 SHALL 自动填充为 `deepseek/deepseek-chat`（litellm 前缀格式）
+
+#### Scenario: base_url 为空时不回退环境变量（决策 A）
+
+- **WHEN** 用户点击"刷新模型列表"但 base_url 输入框为空（如选择 OpenAI/Anthropic/自定义预设时）
+- **THEN** 后端 SHALL **NOT** 回退到环境变量 `LLM_BASE_URL` 拉取模型列表
+- **AND** 系统 SHALL 返回空模型列表，并提示用户"请先配置 API Base URL 再刷新模型列表"
+- **AND** 分析链路 `call_llm` 的回退行为 SHALL 不受影响（仍为 请求配置 → 环境变量 → 默认值）
+
+#### Scenario: base_url 不支持模型列表端点时优雅降级
+
+- **WHEN** 用户点击"刷新模型列表"但 base_url 不支持 `/models` 端点（如返回 404 或非标准格式）
+- **THEN** 系统 SHALL 返回空模型列表并展示提示信息（"该端点不支持模型自动发现，请手动输入"）
+- **AND** 用户 SHALL 仍能手动在 model 输入框中输入模型名
+
+#### Scenario: 模型发现请求超时或网络错误
+
+- **WHEN** 模型发现请求超时或网络不通
+- **THEN** 系统 SHALL 返回错误状态并展示错误信息（如"连接超时，请检查 Base URL"）
+- **AND** 错误 SHALL 不阻塞用户继续手动配置
+
+### Requirement: 连通性测试
+
+系统 SHALL 提供连通性测试功能，用户在保存配置前可验证 LLM 配置是否有效。测试请求 SHALL 由后端发送极简 LLM 请求验证，返回成功/失败结果及错误分类。
+
+#### Scenario: 测试成功
+
+- **WHEN** 用户填写了完整 LLM 配置并点击"测试连接"按钮
+- **THEN** 后端 SHALL 使用该配置发送一个极简 LLM 请求（`max_tokens=1`，prompt="Hi"）
+- **AND** 若请求成功，前端 SHALL 展示成功状态（绿色）和响应延迟（毫秒）
+
+#### Scenario: 测试失败返回错误分类
+
+- **WHEN** 用户点击"测试连接"但配置无效（如 API key 错误、base_url 不通、模型名不存在）
+- **THEN** 前端 SHALL 展示失败状态（红色）和错误信息
+- **AND** 系统 SHALL 返回错误分类（`auth` / `network` / `model_not_found` / `unknown`）便于前端展示针对性提示
+
+#### Scenario: 认证失败时提示检查 API Key
+
+- **WHEN** 连通性测试返回 `error_type: "auth"`
+- **THEN** 前端 SHALL 展示提示 "API Key 无效，请检查密钥配置"
+
+#### Scenario: 连接不通时提示检查 Base URL
+
+- **WHEN** 连通性测试返回 `error_type: "network"`
+- **THEN** 前端 SHALL 展示提示 "无法连接到 API 端点，请检查 Base URL"
+
+### Requirement: 多配置管理（profiles）
+
+系统 SHALL 支持保存多套命名 LLM 配置（profile），持久化到浏览器 localStorage（key `fa_llm_profiles`），同一时刻恰好一个 profile 为激活状态；请求携带的 `llm_config` 字段 SHALL 来自激活 profile。后端 SHALL NOT 存储 profile。
+
+#### Scenario: 保存当前配置为命名 profile
+
+- **WHEN** 用户在设置面板配置好 model / base_url / api_key / thinking 后，在「配置管理」区输入名称（如「DeepSeek 办公」）并点击「另存为」
+- **THEN** 系统 SHALL 将当前表单配置保存为一个新 profile（含唯一 id、名称、config）
+- **AND** 新保存的 profile SHALL 成为激活 profile
+- **AND** 名称 SHALL NOT 为空（为空时提示用户输入名称，不保存）
+
+#### Scenario: 已有 profile 列表展示
+
+- **WHEN** 用户打开设置面板且已保存 ≥1 个 profile
+- **THEN** 「配置管理」区 SHALL 展示 profile 列表，每项包含名称、激活标记（如对勾）、删除按钮
+
+#### Scenario: 从 LLM 切换下拉框切换 profile
+
+- **WHEN** 用户在模式选择器右侧的 LLM 切换下拉框中选择某个 profile
+- **THEN** 该 profile SHALL 立即成为激活 profile 并持久化到 localStorage
+- **AND** 后续 `/api/chat`、`/api/analyze` 请求 SHALL 携带该 profile 的 config（`llm_config` 字段）
+- **AND** 下拉框 SHALL 显示当前激活 profile 名
+
+#### Scenario: 切换下拉框在 EmptyState 与聊天输入区均可见
+
+- **WHEN** 用户处于空闲首页（EmptyState）
+- **THEN** LLM 切换下拉框 SHALL 显示在模式选择器（"模式："下拉）右侧
+- **WHEN** 用户处于聊天界面
+- **THEN** LLM 切换下拉框 SHALL 显示在 ChatInputBar 模式切换旁
+
+#### Scenario: 删除 profile 时激活项回退
+
+- **WHEN** 用户在设置面板删除当前激活的 profile，且仍有其他 profile
+- **THEN** 系统 SHALL 自动激活剩余第一个 profile
+- **WHEN** 用户删除最后一个 profile
+- **THEN** 系统 SHALL 将无可用配置，前端 SHALL 阻止发起分析/聊天并引导打开设置面板（后端环境变量回退仅作为兜底，不再提供前端隐式入口）
+
+#### Scenario: 旧配置自动迁移为第一个 profile
+
+- **WHEN** localStorage 存在旧 key `fa_llm_config`（升级前保存的配置）且 `fa_llm_profiles` 不存在或为空
+- **THEN** 系统 SHALL 将 `fa_llm_config` 迁移为第一个 profile（名称「旧配置」），并激活之
+- **AND** 迁移后 SHALL 清除旧 key `fa_llm_config`，此后以 `fa_llm_profiles` 为唯一配置来源
+
+#### Scenario: 无任何 profile 时必须先配置（强制配置）
+
+- **WHEN** `fa_llm_profiles` 不存在/为空且旧 key `fa_llm_config` 也不存在
+- **THEN** LLM 切换下拉框 SHALL 显示"未配置"，点击 SHALL 引导打开设置面板
+- **AND** 用户尝试发送分析/聊天（回车或点击发送按钮）时，系统 SHALL 阻止发送并自动打开设置面板
+- **AND** 用户通过设置面板保存配置后 SHALL 创建第一个 profile 并自动激活，方可发起分析
+- **AND** 后端环境变量回退保留（供后端直连测试与 CI 使用），但前端不提供任何隐式默认配置入口

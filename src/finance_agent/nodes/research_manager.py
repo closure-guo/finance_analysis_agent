@@ -13,7 +13,11 @@ def research_manager(state: dict) -> dict:
     api_key = state.get("api_key")
 
     conclusion = call_llm_streaming(
-        context, system=system, api_key=api_key, node_name="research_manager"
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="research_manager",
+        llm_config=state.get("llm_config"),
     )
 
     return {"research_manager_conclusion": conclusion}

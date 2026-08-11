@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test'
  *
  * 前置：docker compose up -d --build（后端 LLM 指向 opencode，前端为最新代码）
  */
-const LLM_KEY = process.env.LLM_API_KEY || 'sk-9Ve5ssMJuMIRhr7vUh88O8Ut6U7quO6H95DCayUc7TC7xo52TmX8YYLdpKgD3KWY'
+const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-e2e-test'
 
 test.describe('场景验收 · 刷新恢复 @live', () => {
   test('快速模式流式进行中刷新，恢复后思考不分裂、续写同一回复', async ({ page }) => {
@@ -14,6 +14,21 @@ test.describe('场景验收 · 刷新恢复 @live', () => {
 
     await page.goto('/')
     await page.evaluate((key) => {
+      // #48 起前端从 fa_llm_profiles 读取激活配置（无配置时强制拦截发送）。
+      // 显式写入 profiles 模拟「已配置 LLM」用户；fa_api_key 仅作旧版兼容迁移来源。
+      localStorage.setItem(
+        'fa_llm_profiles',
+        JSON.stringify({
+          profiles: [
+            {
+              id: 'e2e-profile',
+              name: 'E2E',
+              config: { model: 'deepseek/deepseek-chat', baseUrl: '', apiKey: key, thinking: 'enabled' },
+            },
+          ],
+          activeId: 'e2e-profile',
+        }),
+      )
       localStorage.setItem('fa_api_key', key)
       localStorage.setItem('fa_user_id', `e2e-refresh-${Date.now()}`)
       localStorage.removeItem('fa_current_session_id')
@@ -73,6 +88,20 @@ test.describe('场景验收 · 刷新恢复 @live', () => {
 
     await page.goto('/')
     await page.evaluate((key) => {
+      // 同上：显式写入 fa_llm_profiles 模拟已配置 LLM 用户（#48 起无配置会拦截发送）
+      localStorage.setItem(
+        'fa_llm_profiles',
+        JSON.stringify({
+          profiles: [
+            {
+              id: 'e2e-profile',
+              name: 'E2E',
+              config: { model: 'deepseek/deepseek-chat', baseUrl: '', apiKey: key, thinking: 'enabled' },
+            },
+          ],
+          activeId: 'e2e-profile',
+        }),
+      )
       localStorage.setItem('fa_api_key', key)
       localStorage.setItem('fa_user_id', `e2e-deep-refresh-${Date.now()}`)
       localStorage.removeItem('fa_current_session_id')

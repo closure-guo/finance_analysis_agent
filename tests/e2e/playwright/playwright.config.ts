@@ -23,6 +23,14 @@ export default defineConfig({
     // 需专属 STUB_SCENARIO 或在 timeline config 内运行
     'session-switch-resumption.spec.ts',
     'debug-switch-during-response.spec.ts',
+    // 以下为 @live 人工验证/时序敏感测试，stub 环境无法满足其前提（见 spec 内注释）：
+    // - refresh-resume-accept：要求「流式进行中」刷新（真实 LLM 慢速流式下思考横幅
+    //   持续可见）；stub 瞬时输出使「思考中」无可见窗口，仅能验证完成态渲染。
+    //   按 spec 注释用 docker compose（真实 LLM）人工验证，CI stub 下跳过。
+    // - refresh-concurrent-misalignment：固定连 5174（timeline 端口对），与默认
+    //   config（5173）不匹配且 timeline 环境亦不稳定，属 pre-existing 孤儿测试。
+    'refresh-resume-accept.spec.ts',
+    'refresh-concurrent-misalignment.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },

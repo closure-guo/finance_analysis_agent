@@ -3,15 +3,17 @@ import { test } from '@playwright/test'
 /**
  * 探索脚本：获取切换会话前后的页面 ARIA snapshot
  */
+const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-testing'
+
 test('探索：切换会话前后的页面状态', async ({ page }) => {
   page.on('console', msg => console.log(`[BROWSER ${msg.type()}]`, msg.text()))
   page.on('pageerror', err => console.log('[BROWSER ERROR]', err.message))
 
   await page.goto('http://localhost:5173')
-  await page.evaluate(() => {
-    localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2')
+  await page.evaluate((key) => {
+    localStorage.setItem('fa_api_key', key)
     localStorage.setItem('fa_user_id', 'debug-explore')
-  })
+  }, LLM_KEY)
   await page.reload()
   await page.waitForTimeout(500)
 

@@ -141,7 +141,14 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
         f"各层分析产出:\n" + "\n".join(materials)
     )
     with contextlib.suppress(Exception):
-        resp = call_llm(prompt, system=system, api_key=api_key, max_tokens=400, quick=True)
+        resp = call_llm(
+            prompt,
+            system=system,
+            api_key=api_key,
+            max_tokens=400,
+            quick=True,
+            llm_config=state.get("llm_config"),
+        )
         resp = (resp or "").strip()
         if resp:
             return resp

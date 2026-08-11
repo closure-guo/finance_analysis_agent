@@ -1,4 +1,5 @@
 import type { SSEEvent, SessionDetail, UIMessage } from '../../types'
+import type { LLMConfigPayload } from '../../llmConfig'
 import type { SessionStreamState, StreamPhase } from './types'
 import { IDLE_STATE, genMsgId } from './types'
 import { reduce } from './reduce'
@@ -17,6 +18,8 @@ export interface AnalyzeRequest {
   stock_code?: string
   stock_name?: string
   focus?: string
+  // 请求级 LLM 配置（覆盖后端环境变量默认值）；null/undefined 时不携带
+  llm_config?: LLMConfigPayload | null
 }
 
 export interface ChatRequest {
@@ -24,6 +27,8 @@ export interface ChatRequest {
   user_id: string
   api_key: string
   session_id?: string
+  // 请求级 LLM 配置（覆盖后端环境变量默认值）；null/undefined 时不携带
+  llm_config?: LLMConfigPayload | null
 }
 
 // ── 回调通知 ──
@@ -183,12 +188,14 @@ export class StreamStore {
           ...((req as AnalyzeRequest).stock_code ? { stock_code: (req as AnalyzeRequest).stock_code } : {}),
           ...((req as AnalyzeRequest).stock_name ? { stock_name: (req as AnalyzeRequest).stock_name } : {}),
           ...((req as AnalyzeRequest).focus ? { focus: (req as AnalyzeRequest).focus } : {}),
+          ...(req.llm_config ? { llm_config: req.llm_config } : {}),
         }
       : {
           message: (req as ChatRequest).message,
           user_id: req.user_id,
           api_key: req.api_key,
           ...(req.session_id ? { session_id: req.session_id } : {}),
+          ...(req.llm_config ? { llm_config: req.llm_config } : {}),
         }
 
     const abort = new AbortController()

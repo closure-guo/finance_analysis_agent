@@ -7,7 +7,7 @@ const { chromium } = require('playwright');
   page.on('console', msg => logs.push(`[${msg.type()}] ${msg.text()}`));
 
   await page.goto('http://localhost:5173', { waitUntil: 'networkidle' });
-  await page.evaluate(() => localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2'));
+  await page.evaluate((key) => localStorage.setItem('fa_api_key', key), process.env.LLM_API_KEY || 'stub-key-for-testing');
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(2000);
 
