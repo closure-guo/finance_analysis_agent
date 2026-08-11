@@ -84,9 +84,10 @@ export function saveLlmConfigToStorage(cfg: LLMConfig): void {
 // 与 spec 场景对齐：「请求体 SHALL 包含 llm_config 字段，包含用户配置的非空字段」。
 export function buildLlmConfigPayload(cfg: LLMConfig): LLMConfigPayload | null {
   const payload: LLMConfigPayload = {}
-  const model = cfg.model.trim()
-  const baseUrl = cfg.baseUrl.trim()
-  const apiKey = cfg.apiKey.trim()
+  // 防御：localStorage 数据（含旧版/手改/损坏）可能缺字段，避免 undefined.trim() 崩溃
+  const model = (cfg.model ?? '').trim()
+  const baseUrl = (cfg.baseUrl ?? '').trim()
+  const apiKey = (cfg.apiKey ?? '').trim()
   if (model) payload.model = model
   if (baseUrl) payload.baseUrl = baseUrl
   if (apiKey) payload.apiKey = apiKey

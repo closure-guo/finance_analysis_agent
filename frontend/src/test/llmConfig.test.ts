@@ -128,6 +128,12 @@ describe('buildLlmConfigPayload - 载荷构建', () => {
     expect(buildLlmConfigPayload(cfg)).toBeNull()
   })
 
+  it('缺字段配置不崩溃（localStorage 手改/旧数据防御）', () => {
+    // config 对象缺少 baseUrl 字段（type 断言绕过 TS），应回退空串而非 undefined.trim() 崩溃
+    const cfg = { model: 'openai/gpt-4o', apiKey: 'sk-1', thinking: 'enabled' } as unknown as LLMConfig
+    expect(buildLlmConfigPayload(cfg)).toEqual({ model: 'openai/gpt-4o', apiKey: 'sk-1', thinking: 'enabled' })
+  })
+
   it('仅 thinking 有效但其余为空时仍输出 thinking', () => {
     const cfg: LLMConfig = { apiKey: '', model: '', baseUrl: '', thinking: 'disabled' }
     expect(buildLlmConfigPayload(cfg)).toEqual({ thinking: 'disabled' })

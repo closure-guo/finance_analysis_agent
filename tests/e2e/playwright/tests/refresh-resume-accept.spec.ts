@@ -23,7 +23,7 @@ test.describe('场景验收 · 刷新恢复 @live', () => {
             {
               id: 'e2e-profile',
               name: 'E2E',
-              config: { model: 'deepseek/deepseek-chat', apiKey: key, thinking: 'enabled' },
+              config: { model: 'deepseek/deepseek-chat', baseUrl: '', apiKey: key, thinking: 'enabled' },
             },
           ],
           activeId: 'e2e-profile',
@@ -96,7 +96,7 @@ test.describe('场景验收 · 刷新恢复 @live', () => {
             {
               id: 'e2e-profile',
               name: 'E2E',
-              config: { model: 'deepseek/deepseek-chat', apiKey: key, thinking: 'enabled' },
+              config: { model: 'deepseek/deepseek-chat', baseUrl: '', apiKey: key, thinking: 'enabled' },
             },
           ],
           activeId: 'e2e-profile',
