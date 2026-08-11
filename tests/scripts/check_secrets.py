@@ -22,7 +22,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 已知曾泄露的真实密钥（黑名单）。仅用于 CI 门禁，防止回滚复发。
-# 注意：这些密钥本身不应出现在任何已跟踪文件中（除 .env，其被 gitignore 排除）。
+# 注意：这些密钥本身不应出现在任何已跟踪文件中（除 .env，其被 gitignore 排除；
+# 以及本脚本自身——黑名单定义就是这些密钥的文本）。
 KNOWN_LEAKED_KEYS = [
     "sk-9Ve5ssMJuMIRhr7vUh88O8Ut6U7quO6H95DCayUc7TC7xo52TmX8YYLdpKgD3KWY",
     "sk-2e9c5078489c4a9abb8d275470a8b4b2",
@@ -55,6 +56,8 @@ EXCLUDE_SUBSTR = (
     ".ruff_cache",
     "test-assets/output",
     ".superpowers",
+    # 黑名单定义自身含密钥文本（KNOWN_LEAKED_KEYS），跳过对自身的扫描
+    "tests/scripts/check_secrets.py",
 )
 
 
