@@ -23,6 +23,9 @@ export default defineConfig({
     // 需专属 STUB_SCENARIO 或在 timeline config 内运行
     'session-switch-resumption.spec.ts',
     'debug-switch-during-response.spec.ts',
+    // 并发刷新恢复 spec 固定连 5174（与 timeline config 的 webServer 端口对配套），
+    // 在默认 config（5173）下排除，避免 ERR_CONNECTION_REFUSED 误报
+    'refresh-concurrent-misalignment.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },
