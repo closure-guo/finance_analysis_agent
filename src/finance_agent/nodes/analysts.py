@@ -93,7 +93,11 @@ def technical_analyst(state: dict) -> dict:
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
-        context, system=system, api_key=api_key, node_name="technical_analyst"
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="technical_analyst",
+        llm_config=state.get("llm_config"),
     )
     report = _parse_analyst_report(response, "technical")
 
@@ -126,7 +130,11 @@ def macro_analyst(state: dict) -> dict:
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
-        context, system=system, api_key=api_key, node_name="macro_analyst"
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="macro_analyst",
+        llm_config=state.get("llm_config"),
     )
     report = _parse_analyst_report(response, "macro")
 
@@ -172,7 +180,11 @@ def fundamental_analyst(state: dict) -> dict:
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
-        context, system=system, api_key=api_key, node_name="fundamental_analyst"
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="fundamental_analyst",
+        llm_config=state.get("llm_config"),
     )
     report = _parse_analyst_report(response, "fundamental")
 
@@ -272,7 +284,11 @@ def sentiment_analyst(state: dict) -> dict:
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
-        context, system=system, api_key=api_key, node_name="sentiment_analyst"
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="sentiment_analyst",
+        llm_config=state.get("llm_config"),
     )
     report = _parse_analyst_report(response, "sentiment")
 

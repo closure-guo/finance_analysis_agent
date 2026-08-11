@@ -23,6 +23,7 @@ import { test, expect } from '@playwright/test'
 // 支持隔离配置（playwright.isolated.config.ts 用 8001/5174，避免占用 docker 的 8000/5173）
 const API_BASE = process.env.E2E_API_BASE ?? 'http://localhost:8000'
 const FRONTEND = process.env.E2E_FRONTEND ?? 'http://localhost:5173'
+const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-testing'
 
 // 会话库含历史遗留数据（同名会话可能存在多条），每个测试用独立唯一 tag
 // 使 display_name 全局唯一，避免 find 命中历史/上一轮会话导致断言错位。
@@ -56,10 +57,10 @@ test.describe('并发流式输出完整性', () => {
     page.on('pageerror', err => console.log('[PAGE ERROR]', err.message))
 
     await page.goto(FRONTEND)
-    await page.evaluate(() => {
-      localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2')
+    await page.evaluate((key) => {
+      localStorage.setItem('fa_api_key', key)
       localStorage.setItem('fa_user_id', 'e2e-concurrent-stream')
-    })
+    }, LLM_KEY)
     await page.reload()
     await page.waitForTimeout(500)
   })

@@ -42,12 +42,21 @@ class LiteLLMClient:
         model: str = "deepseek/deepseek-chat",
         api_key: str | None = None,
         base_url: str | None = None,
+        thinking: str | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ):
         self.model = model
         self.api_key = _resolve_key(api_key)
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "")
+
+        # 自动补 litellm provider 前缀：
+        # 用户填了自定义 base_url（OpenAI 兼容端点）但模型名缺少 provider 前缀时，
+        # litellm 无法识别调用协议。自定义 OpenAI 兼容端点统一用 openai/ 前缀路由。
+        if self.base_url and self.model and "/" not in self.model:
+            self.model = f"openai/{self.model}"
+        # thinking 模式：None 时默认 "enabled"（向后兼容），由 build_agent 从 llm_config 注入
+        self.thinking = thinking
         self.max_retries = max_retries
         self.retry_delay = retry_delay
 
@@ -86,10 +95,12 @@ class LiteLLMClient:
         # 官方文档（2025-12 起更新）：思考模式支持工具调用，仅要求工具调用轮次
         # 在后续请求中回传 reasoning_content 字段（见 Message.to_api_dict / ContextManager）。
         # 思考模式不支持 temperature/top_p 等参数（设置不报错但不生效）。
+        # thinking 由构造时传入（build_agent 从 llm_config 解析），None 时默认 "enabled"（向后兼容）。
         is_ds = _is_deepseek(self.model)
+        effectiveThinking = self.thinking or "enabled"
 
         if is_ds:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+            kwargs["extra_body"] = {"thinking": {"type": effectiveThinking}}
         else:
             kwargs["temperature"] = temperature
 

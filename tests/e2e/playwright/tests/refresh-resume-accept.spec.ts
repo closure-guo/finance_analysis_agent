@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test'
  *
  * 前置：docker compose up -d --build（后端 LLM 指向 opencode，前端为最新代码）
  */
-const LLM_KEY = process.env.LLM_API_KEY || 'sk-9Ve5ssMJuMIRhr7vUh88O8Ut6U7quO6H95DCayUc7TC7xo52TmX8YYLdpKgD3KWY'
+const LLM_KEY = process.env.LLM_API_KEY || ''
 
 test.describe('场景验收 · 刷新恢复 @live', () => {
   test('快速模式流式进行中刷新，恢复后思考不分裂、续写同一回复', async ({ page }) => {

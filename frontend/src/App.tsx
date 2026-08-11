@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
@@ -11,6 +11,24 @@ import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
+import {
+  loadProfiles,
+  saveProfiles,
+  addProfile,
+  deleteProfile,
+  activateProfile,
+  getActiveConfig,
+  getActiveProfileName,
+  buildLlmConfigPayload,
+  isDeepSeekModel,
+  matchPreset,
+  buildModelWithPrefix,
+  PROVIDER_PRESETS,
+  CUSTOM_PRESET_NAME,
+  type LLMConfig,
+  type LLMProfile,
+  type ProfileStore,
+} from './llmConfig'
 
 // 搜索类工具集合：这类工具的状态与结果由独立搜索横幅（SearchBanner）承载，
 // 不进入工具调用横幅（ToolCallBanner），避免同一搜索行为同时出现两个横幅。
@@ -99,14 +117,75 @@ function deriveAppState(
 }
 
 export default function App() {
-  const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('fa_api_key') || '')
-  const saveApiKey = useCallback((v: string) => {
-    setApiKeyState(v)
-    if (v) localStorage.setItem('fa_api_key', v)
-    else localStorage.removeItem('fa_api_key')
+  // 多配置管理（profiles，delta Decision 10）
+  const [profileStore, setProfileStore] = useState<ProfileStore>(() => loadProfiles())
+  // 激活配置从 profileStore 派生（替代直接读 fa_llm_config）
+  const llmConfig = useMemo(() => getActiveConfig(profileStore), [profileStore])
+  // apiKey 由激活 profile 派生（EmptyState/请求拦截保持语义不变）
+  const apiKey = llmConfig.apiKey
+  // 切换激活 profile（LLM 切换下拉框使用）
+  const switchProfile = useCallback((id: string) => {
+    setProfileStore(prev => {
+      const next = activateProfile(prev, id)
+      saveProfiles(next)
+      return next
+    })
   }, [])
-  const setApiKey = saveApiKey
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false)
+  // 保存配置到激活 profile（SettingsModal 确认按钮使用）
+  // 无激活 profile 时自动创建「我的配置」profile 并保存（向前兼容：确认即视为显式配置）
+  const handleSaveConfig = useCallback((cfg: LLMConfig) => {
+    setProfileStore(prev => {
+      // 无 profile 时自动创建默认 profile（含配置）
+      if (prev.profiles.length === 0) {
+        const next = addProfile(prev, '我的配置', cfg)
+        saveProfiles(next)
+        return next
+      }
+      // 更新激活 profile 的 config
+      const newProfiles = prev.profiles.map(p =>
+        p.id === prev.activeId ? { ...p, config: cfg } : p
+      )
+      const next = { ...prev, profiles: newProfiles }
+      saveProfiles(next)
+      return next
+    })
+  }, [])
+  // 另存为新 profile（SettingsModal「另存为」按钮使用）
+  const handleSaveAsConfig = useCallback((cfg: LLMConfig, name: string) => {
+    setProfileStore(prev => {
+      const next = addProfile(prev, name, cfg)
+      saveProfiles(next)
+      return next
+    })
+  }, [])
+  // 删除 profile（SettingsModal 列表删除按钮使用）
+  const handleDeleteProfile = useCallback((id: string) => {
+    setProfileStore(prev => {
+      const next = deleteProfile(prev, id)
+      saveProfiles(next)
+      return next
+    })
+  }, [])
+  const [showSettings, setShowSettings] = useState(false)
+  // 后端默认 LLM 配置（GET /api/llm-config），用作设置面板输入框 placeholder（delta 5.3）
+  const [backendDefaults, setBackendDefaults] = useState<{ model: string; baseUrl: string; thinking: string }>({ model: '', baseUrl: '', thinking: 'enabled' })
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/llm-config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        setBackendDefaults({
+          model: typeof data.model === 'string' ? data.model : '',
+          baseUrl: typeof data.base_url === 'string' ? data.base_url : '',
+          thinking: typeof data.thinking === 'string' ? data.thinking : 'enabled',
+        })
+      })
+      .catch(() => {
+        // 后端不可用时静默回退到内置默认 placeholder，不阻塞使用
+      })
+    return () => { cancelled = true }
+  }, [])
   // 轮询起始时间（超时保护基准，cleanup 时重置）
   const pollStartRef = useRef<number | null>(null)
 
@@ -330,7 +409,7 @@ export default function App() {
 
   const startAnalysis = async (query: string, sessionId: string | null = null) => {
     if (!apiKey.trim()) {
-      setShowApiKeyInput(true)
+      setShowSettings(true)
       return
     }
     // 拦截：当前会话正在运行时不允许提交新消息（delta spec Task 6.2）
@@ -338,6 +417,8 @@ export default function App() {
       showWarning('该会话正在生成中，可停止后再发')
       return
     }
+    // 请求级 LLM 配置（delta 5.4）：仅在有非空配置时携带 llm_config 字段
+    const llmConfigPayload = buildLlmConfigPayload(llmConfig)
     try {
       await store.submit(
         {
@@ -346,6 +427,7 @@ export default function App() {
           user_id: getUserId(),
           analysis_type: 'comprehensive',
           ...(sessionId ? { session_id: sessionId } : {}),
+          ...(llmConfigPayload ? { llm_config: llmConfigPayload } : {}),
         },
         { currentView: currentSessionId },
       )
@@ -362,6 +444,8 @@ export default function App() {
       showWarning('该会话正在生成中，可停止后再发')
       return
     }
+    // 请求级 LLM 配置（delta 5.4）：仅在有非空配置时携带 llm_config 字段
+    const llmConfigPayload = buildLlmConfigPayload(llmConfig)
     try {
       await store.submit(
         {
@@ -369,6 +453,7 @@ export default function App() {
           user_id: getUserId(),
           api_key: apiKey,
           ...(currentSessionId ? { session_id: currentSessionId } : {}),
+          ...(llmConfigPayload ? { llm_config: llmConfigPayload } : {}),
         },
         { currentView: currentSessionId },
       )
@@ -504,7 +589,17 @@ export default function App() {
       />
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
         {appState === 'empty' ? (
-          <EmptyState onSend={handleSendFromEmpty} apiKey={apiKey} setApiKey={setApiKey} showApiKeyInput={showApiKeyInput} setShowApiKeyInput={setShowApiKeyInput} mode={mode} setMode={setMode} />
+          <EmptyState
+            onSend={handleSendFromEmpty}
+            apiKey={apiKey}
+            setShowSettings={setShowSettings}
+            mode={mode}
+            setMode={setMode}
+            profileName={getActiveProfileName(profileStore)}
+            profiles={profileStore.profiles}
+            activeProfileId={profileStore.activeId}
+            onSwitchProfile={switchProfile}
+          />
         ) : (
           <>
             {/* Header */}
@@ -525,7 +620,7 @@ export default function App() {
                 <span className="font-semibold text-sm tracking-wide" style={{ color: 'var(--text-default)' }}>FinAgent</span>
               </div>
               <div className="flex items-center gap-4">
-                <button className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm" onClick={() => setShowApiKeyInput(true)}>
+                <button className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm" onClick={() => setShowSettings(true)}>
                   <i className="fas fa-cog mr-1"></i>设置
                 </button>
                 <div className="w-7 h-7 rounded-full" style={{ background: 'var(--bg-overlay-l3)' }}></div>
@@ -580,17 +675,34 @@ export default function App() {
             )}
 
             {/* Fixed input at bottom */}
-            <ChatInputBar onSend={handleSendFromChat} leftInset={leftInset} mode={mode} setMode={setMode} onNewAnalysis={newAnalysis} />
+            <ChatInputBar
+              onSend={handleSendFromChat}
+              leftInset={leftInset}
+              mode={mode}
+              setMode={setMode}
+              onNewAnalysis={newAnalysis}
+              apiKey={apiKey}
+              setShowSettings={setShowSettings}
+              profileName={getActiveProfileName(profileStore)}
+              profiles={profileStore.profiles}
+              activeProfileId={profileStore.activeId}
+              onSwitchProfile={switchProfile}
+            />
           </>
         )}
       </div>
 
-      {/* API Key modal */}
-      {showApiKeyInput && (
-        <ApiKeyModal
-          apiKey={apiKey}
-          setApiKey={setApiKey}
-          onClose={() => setShowApiKeyInput(false)}
+      {/* LLM 设置面板（取代旧版仅 API Key 的弹窗） */}
+      {showSettings && (
+        <SettingsModal
+          config={llmConfig}
+          backendDefaults={backendDefaults}
+          profileStore={profileStore}
+          onSave={handleSaveConfig}
+          onSaveAs={handleSaveAsConfig}
+          onSwitchProfile={switchProfile}
+          onDeleteProfile={handleDeleteProfile}
+          onClose={() => setShowSettings(false)}
         />
       )}
     </>
@@ -743,24 +855,28 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
 }
 
 // ── Empty State ──
-function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyInput, mode, setMode }: {
+function EmptyState({ onSend, apiKey, setShowSettings, mode, setMode, profileName, profiles, activeProfileId, onSwitchProfile }: {
   onSend: (text: string, mode?: string) => void
   apiKey: string
-  setApiKey: (v: string) => void
-  showApiKeyInput: boolean
-  setShowApiKeyInput: (v: boolean) => void
+  setShowSettings: (v: boolean) => void
   mode: 'quick' | 'deep'
   setMode: (m: 'quick' | 'deep') => void
+  profileName: string
+  profiles: LLMProfile[]
+  activeProfileId: string
+  onSwitchProfile: (id: string) => void
 }) {
   const [text, setText] = useState('')
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  // LLM 切换下拉框展开状态（delta Decision 11）
+  const [llmDropdownOpen, setLlmDropdownOpen] = useState(false)
 
   const handleKeydown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       const query = text.trim()
       if (!query) return
-      if (!apiKey) { setShowApiKeyInput(true); return }
+      if (!apiKey) { setShowSettings(true); return }
       onSend(query, mode)
       setText('')
     }
@@ -769,7 +885,7 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
   const handleSend = () => {
     const query = text.trim()
     if (!query) return
-    if (!apiKey) { setShowApiKeyInput(true); return }
+    if (!apiKey) { setShowSettings(true); return }
     onSend(query, mode)
     setText('')
   }
@@ -797,7 +913,7 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
       <div className="w-full max-w-2xl animate-fade-in-up relative z-10" style={{ animationDelay: '0.1s' }}>
         <div className="glass-input rounded-2xl p-2">
           {/* Mode dropdown */}
-          <div className="relative px-4 pt-1 pb-0">
+          <div className="relative flex items-center gap-2 px-4 pt-1 pb-0">
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
               className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
@@ -830,6 +946,33 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
                 ))}
               </div>
             )}
+
+            {/* LLM 切换下拉框（delta Decision 11）；无 profile 时点击引导配置 */}
+            <div className="relative inline-block">
+              <button
+                onClick={() => profiles.length === 0 ? setShowSettings(true) : setLlmDropdownOpen(!llmDropdownOpen)}
+                className="flex items-center gap-1 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+              >
+                <i className="fas fa-microchip text-[var(--text-tertiary)]"></i>
+                <span style={{ color: 'var(--text-secondary)' }}>{profileName}</span>
+                <i className={`fas fa-chevron-${llmDropdownOpen ? 'up' : 'down'} text-[8px] ml-0.5`} style={{ color: 'var(--text-tertiary)' }}></i>
+              </button>
+              {llmDropdownOpen && profiles.length > 0 && (
+                <div className="absolute left-0 top-7 z-[70] w-56 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
+                  {profiles.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => { onSwitchProfile(p.id); setLlmDropdownOpen(false) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
+                      style={{ background: p.id === activeProfileId ? 'var(--bg-overlay-l2)' : 'transparent' }}
+                    >
+                      {p.id === activeProfileId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
+                      <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex items-end gap-2">
             <textarea
@@ -854,14 +997,14 @@ function EmptyState({ onSend, apiKey, setApiKey, showApiKeyInput, setShowApiKeyI
         {!apiKey ? (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-info-circle mr-1"></i>
-            需要配置 API Key 才能开始分析
-            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowApiKeyInput(true)}>去配置</button>
+            请先配置 LLM API 才能开始分析
+            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowSettings(true)}>去配置</button>
           </p>
         ) : (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-check-circle mr-1" style={{ color: 'var(--status-success-default)' }}></i>
-            API Key 已配置
-            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowApiKeyInput(true)}>修改</button>
+            LLM API 已配置
+            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowSettings(true)}>修改</button>
           </p>
         )}
       </div>
@@ -1511,16 +1654,37 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis }: { onSend: (text: string) => void; leftInset: number; mode: 'quick' | 'deep'; setMode: (m: 'quick' | 'deep') => void; onNewAnalysis: () => void }) {
+function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
+  onSend: (text: string) => void
+  leftInset: number
+  mode: 'quick' | 'deep'
+  setMode: (m: 'quick' | 'deep') => void
+  onNewAnalysis: () => void
+  apiKey: string
+  setShowSettings: (v: boolean) => void
+  profileName: string
+  profiles: LLMProfile[]
+  activeProfileId: string
+  onSwitchProfile: (id: string) => void
+}) {
   const [text, setText] = useState('')
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
+  // LLM 切换下拉框展开状态（delta Decision 11）
+  const [llmDropdownOpen, setLlmDropdownOpen] = useState(false)
 
   const handleKeydown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      if (!apiKey) { setShowSettings(true); return }
       onSend(text)
       setText('')
     }
+  }
+
+  const handleSendClick = () => {
+    if (!apiKey) { setShowSettings(true); return }
+    onSend(text)
+    setText('')
   }
 
   const modes = [
@@ -1580,6 +1744,33 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis }: { onS
                 ))}
               </div>
             )}
+
+            {/* LLM 切换（delta Decision 11）；无 profile 时点击引导配置 */}
+            <div className="relative inline-block">
+              <button
+                onClick={() => profiles.length === 0 ? setShowSettings(true) : setLlmDropdownOpen(!llmDropdownOpen)}
+                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+              >
+                <i className="fas fa-microchip text-[10px]" style={{ color: 'var(--text-tertiary)' }}></i>
+                <span style={{ color: 'var(--text-secondary)' }}>{profileName}</span>
+                <i className={`fas fa-chevron-${llmDropdownOpen ? 'down' : 'up'} text-[8px] ml-0.5`} style={{ color: 'var(--text-tertiary)' }}></i>
+              </button>
+              {llmDropdownOpen && profiles.length > 0 && (
+                <div className="absolute left-32 bottom-8 z-[70] w-56 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
+                  {profiles.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => { onSwitchProfile(p.id); setLlmDropdownOpen(false) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
+                      style={{ background: p.id === activeProfileId ? 'var(--bg-overlay-l2)' : 'transparent' }}
+                    >
+                      {p.id === activeProfileId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
+                      <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex items-end gap-2">
             <button
@@ -1599,7 +1790,7 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis }: { onS
             />
             <button
               data-testid="send-button"
-              onClick={() => { onSend(text); setText('') }}
+              onClick={handleSendClick}
               className="w-9 h-9 rounded-xl flex items-center justify-center transition-all mb-0.5 mr-0.5"
               style={{ background: 'var(--bg-brand)' }}
             >
@@ -1615,30 +1806,334 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis }: { onS
   )
 }
 
-// ── API Key Modal ──
-function ApiKeyModal({ apiKey, setApiKey, onClose }: {
-  apiKey: string
-  setApiKey: (v: string) => void
+// ── Settings Modal（LLM 设置面板，取代旧版仅 API Key 的弹窗）──
+// 实现 delta 5.1/5.5（模型/BaseURL/思考开关）、6.1-6.5（Provider 预设 + 模型发现）、7.1-7.4（连通性测试）。
+function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+  config: LLMConfig
+  backendDefaults: { model: string; baseUrl: string; thinking: string }
+  profileStore: ProfileStore
+  onSave: (cfg: LLMConfig) => void
+  onSaveAs: (cfg: LLMConfig, name: string) => void
+  onSwitchProfile: (id: string) => void
+  onDeleteProfile: (id: string) => void
   onClose: () => void
 }) {
-  const [value, setValue] = useState(apiKey)
+  // 本地编辑态：确认时才回写父级并持久化（避免每次按键都写 localStorage）
+  const [apiKey, setApiKey] = useState(config.apiKey)
+  const [model, setModel] = useState(config.model)
+  const [baseUrl, setBaseUrl] = useState(config.baseUrl)
+  // 思考模式：已保存值优先，其次后端默认，最后内置 enabled
+  const [thinking, setThinking] = useState<string>(config.thinking || backendDefaults.thinking || 'enabled')
+  // 配置管理：另存为输入（delta Decision 10）
+  const [profileName, setProfileName] = useState('')
+
+  // 模型自动发现状态
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([])
+  const [discoveryLoading, setDiscoveryLoading] = useState(false)
+  const [discoveryMsg, setDiscoveryMsg] = useState<{ text: string; ok: boolean } | null>(null)
+
+  // 连通性测试状态
+  const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'success' | 'fail'>('idle')
+  const [testLatencyMs, setTestLatencyMs] = useState<number | undefined>(undefined)
+  const [testMessage, setTestMessage] = useState('')
+
+  // 思考模式开关仅在 DeepSeek 模型下展示（delta 5.5）
+  const showThinkingToggle = isDeepSeekModel(model)
+  // 当前值匹配的预设名（手动修改后自动回退为"自定义"）
+  const currentPreset = matchPreset({ model, baseUrl, thinking: showThinkingToggle ? thinking : '' })
+
+  // 选择预设：自动填充 model/baseUrl/thinking（不触发保存）
+  const applyPreset = (name: string) => {
+    const preset = PROVIDER_PRESETS.find((p) => p.name === name)
+    if (!preset) return
+    setModel(preset.model)
+    setBaseUrl(preset.baseUrl)
+    setThinking(preset.thinking || 'enabled')
+  }
+
+  // 刷新模型列表：调用后端代理拉取 {base_url}/models（delta 6.3）
+  const refreshModels = async () => {
+    if (discoveryLoading) return
+    setDiscoveryLoading(true)
+    setDiscoveryMsg(null)
+    try {
+      const resp = await fetch('/api/llm-config/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // 字段名 camelCase 与后端 ModelsRequest(baseUrl/apiKey) 一致，否则被 Pydantic 忽略回退环境变量
+        body: JSON.stringify({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim() }),
+      })
+      const data: { models?: unknown[]; error?: string } = await resp.json().catch(() => ({}))
+      const rawModels = Array.isArray(data?.models) ? data.models : []
+      const models = rawModels.filter((m): m is string => typeof m === 'string')
+      setDiscoveredModels(models)
+      if (models.length === 0) {
+        setDiscoveryMsg({ text: data?.error || '该端点不支持模型自动发现，请手动输入', ok: false })
+      } else {
+        setDiscoveryMsg({ text: `发现 ${models.length} 个可用模型`, ok: true })
+      }
+    } catch {
+      setDiscoveredModels([])
+      setDiscoveryMsg({ text: '连接超时，请检查 Base URL', ok: false })
+    } finally {
+      setDiscoveryLoading(false)
+    }
+  }
+
+  // 从下拉选择模型：拼接 litellm 前缀填入 model 输入框（delta 6.4）
+  const pickDiscoveredModel = (raw: string) => {
+    setModel(buildModelWithPrefix(raw, baseUrl))
+  }
+
+  // 测试连接：后端发送极简 LLM 请求验证配置（delta 7.1）
+  const testConnection = async () => {
+    if (testStatus === 'loading') return
+    setTestStatus('loading')
+    setTestMessage('')
+    setTestLatencyMs(undefined)
+    try {
+      const resp = await fetch('/api/llm-config/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // 字段名 camelCase 与后端 LLMConfigRequest(baseUrl/apiKey) 一致，否则被 Pydantic 忽略回退环境变量
+        body: JSON.stringify({
+          model: model.trim(),
+          baseUrl: baseUrl.trim(),
+          apiKey: apiKey.trim(),
+          thinking: showThinkingToggle ? thinking : '',
+        }),
+      })
+      const data: { success?: boolean; latency_ms?: number; model?: string; error?: string; error_type?: string } = await resp.json().catch(() => ({}))
+      if (data?.success) {
+        setTestStatus('success')
+        setTestLatencyMs(typeof data.latency_ms === 'number' ? data.latency_ms : undefined)
+        setTestMessage(typeof data.model === 'string' ? data.model : '')
+      } else {
+        setTestStatus('fail')
+        setTestMessage(formatTestError(data?.error_type, data?.error))
+      }
+    } catch {
+      setTestStatus('fail')
+      setTestMessage('请求失败，请检查网络或后端服务')
+    }
+  }
+
+  const handleSave = () => {
+    onSave({
+      apiKey: apiKey.trim(),
+      model: model.trim(),
+      baseUrl: baseUrl.trim(),
+      // 非 DeepSeek 模型不持久化 thinking（开关已隐藏）
+      thinking: showThinkingToggle ? thinking : '',
+    })
+    onClose()
+  }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.25)' }} onClick={onClose}>
-      <div className="glass-card rounded-2xl p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-default)' }}>配置 API Key</h3>
-        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>输入 DeepSeek API Key 用于 LLM 调用。Key 保存在浏览器本地，刷新页面不会丢失。</p>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.25)' }} onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="glass-card rounded-2xl p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-default)' }}>LLM 配置</h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>配置模型、API 端点与密钥。配置保存在浏览器本地，刷新页面不会丢失。</p>
+
+        {/* Provider 预设选择器（delta 6.1） */}
+        <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Provider 预设</label>
+        <select
+          value={currentPreset}
+          onChange={e => applyPreset(e.target.value)}
+          className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+          style={{ color: 'var(--text-default)' }}
+        >
+          {PROVIDER_PRESETS.map(p => (
+            <option key={p.name} value={p.name}>{p.name}</option>
+          ))}
+        </select>
+
+        {/* API Key（保留原有密码输入） */}
+        <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Key</label>
         <input
           type="password"
           placeholder="sk-..."
-          value={value}
-          onChange={e => setValue(e.target.value)}
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
           className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         />
+
+        {/* 模型名称 + 刷新按钮（delta 6.3） */}
+        <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>模型名称</label>
+        <div className="flex gap-2 mb-2">
+          <input
+            type="text"
+            placeholder={backendDefaults.model || 'deepseek/deepseek-chat'}
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            className="flex-1 glass-input rounded-xl px-4 py-3 text-sm outline-none"
+            style={{ color: 'var(--text-default)' }}
+          />
+          <button
+            onClick={refreshModels}
+            disabled={discoveryLoading}
+            className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-50"
+            style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+            title="从 Base URL 拉取可用模型列表"
+          >
+            <i className={`fas fa-sync-alt mr-1 ${discoveryLoading ? 'fa-spin' : ''}`}></i>
+            {discoveryLoading ? '加载中' : '刷新模型'}
+          </button>
+        </div>
+
+        {/* 自动发现的模型下拉（delta 6.4） */}
+        {discoveredModels.length > 0 && (
+          <select
+            value=""
+            onChange={e => { if (e.target.value) pickDiscoveredModel(e.target.value) }}
+            className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+            style={{ color: 'var(--text-default)' }}
+          >
+            <option value="">从发现列表选择模型…</option>
+            {discoveredModels.map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        )}
+        {/* 模型发现提示（delta 6.5：失败/空列表提示但不阻塞手动输入） */}
+        {discoveryMsg && (
+          <p className="text-xs mb-4" style={{ color: discoveryMsg.ok ? 'var(--status-success-default)' : 'var(--status-error-default)' }}>
+            <i className={`fas ${discoveryMsg.ok ? 'fa-check-circle' : 'fa-exclamation-circle'} mr-1`}></i>
+            {discoveryMsg.text}
+          </p>
+        )}
+        {discoveredModels.length === 0 && !discoveryMsg && (
+          <p className="text-[11px] mb-4" style={{ color: 'var(--text-tertiary)' }}>
+            <i className="fas fa-info-circle mr-1"></i>
+            litellm 格式：provider/model，如 deepseek/deepseek-chat
+          </p>
+        )}
+
+        {/* API Base URL（delta 5.1） */}
+        <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Base URL</label>
+        <input
+          type="text"
+          placeholder={backendDefaults.baseUrl || 'https://api.deepseek.com/v1（留空使用默认）'}
+          value={baseUrl}
+          onChange={e => setBaseUrl(e.target.value)}
+          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          style={{ color: 'var(--text-default)' }}
+        />
+
+        {/* 思考模式开关（delta 5.5：仅 DeepSeek 模型展示） */}
+        {showThinkingToggle && (
+          <div className="flex items-center justify-between glass-input rounded-xl px-4 py-3 mb-4">
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--text-default)' }}>思考模式</div>
+              <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>DeepSeek 深度推理（enabled / disabled）</div>
+            </div>
+            <button
+              onClick={() => setThinking(thinking === 'enabled' ? 'disabled' : 'enabled')}
+              className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+              style={{ background: thinking === 'enabled' ? 'var(--bg-brand)' : 'var(--bg-overlay-l3)' }}
+              role="switch"
+              aria-checked={thinking === 'enabled'}
+            >
+              <span
+                className="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                style={{ transform: thinking === 'enabled' ? 'translateX(24px)' : 'translateX(4px)' }}
+              />
+            </button>
+          </div>
+        )}
+
+        {/* 连通性测试（delta 7.1-7.4） */}
+        <div className="mb-4">
+          <button
+            onClick={testConnection}
+            disabled={testStatus === 'loading'}
+            className="w-full py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
+            style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+          >
+            <i className={`fas ${testStatus === 'loading' ? 'fa-spinner fa-spin' : 'fa-plug'} mr-1.5`}></i>
+            {testStatus === 'loading' ? '测试中…' : '测试连接'}
+          </button>
+          {testStatus === 'success' && (
+            <p className="text-xs mt-2" style={{ color: 'var(--status-success-default)' }}>
+              <i className="fas fa-check-circle mr-1"></i>
+              连接成功{typeof testLatencyMs === 'number' ? ` · ${testLatencyMs}ms` : ''}{testMessage ? ` · ${testMessage}` : ''}
+            </p>
+          )}
+          {testStatus === 'fail' && (
+            <p className="text-xs mt-2" style={{ color: 'var(--status-error-default)' }}>
+              <i className="fas fa-times-circle mr-1"></i>
+              {testMessage}
+            </p>
+          )}
+        </div>
+
+        {/* 配置管理区（delta Decision 10） */}
+        <div className="mb-4 pt-4" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
+          <label className="block text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+            <i className="fas fa-bookmark mr-1"></i>配置管理
+          </label>
+
+          {/* 另存为新 profile */}
+          <div className="flex gap-2 mb-3">
+            <input
+              type="text"
+              placeholder="输入配置名称，如「DeepSeek 办公」"
+              value={profileName}
+              onChange={e => setProfileName(e.target.value)}
+              className="flex-1 glass-input rounded-xl px-3 py-2 text-xs outline-none"
+              style={{ color: 'var(--text-default)' }}
+            />
+            <button
+              onClick={() => {
+                const name = profileName.trim()
+                if (!name) return
+                // 将当前表单值另存为新 profile
+                onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '' }, name)
+                setProfileName('')
+              }}
+              className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap"
+              style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+            >
+              <i className="fas fa-save mr-1"></i>另存为
+            </button>
+          </div>
+
+          {/* 已有 profile 列表 */}
+          {profileStore.profiles.length > 0 && (
+            <div className="space-y-1">
+              {profileStore.profiles.map(p => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between px-3 py-1.5 rounded-lg text-xs"
+                  style={{
+                    background: p.id === profileStore.activeId ? 'var(--bg-overlay-l2)' : 'transparent',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <button
+                    onClick={() => onSwitchProfile(p.id)}
+                    className="flex items-center gap-1.5 flex-1 text-left"
+                  >
+                    {p.id === profileStore.activeId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
+                    <span>{p.name}</span>
+                  </button>
+                  <button
+                    onClick={() => onDeleteProfile(p.id)}
+                    className="text-[10px] opacity-60 hover:opacity-100 transition-opacity"
+                    style={{ color: 'var(--status-error-default)' }}
+                  >
+                    <i className="fas fa-trash-alt"></i>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="flex gap-3">
           <button
-            onClick={() => { setApiKey(value); onClose() }}
+            onClick={handleSave}
             className="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
             style={{ background: 'var(--bg-brand)', color: 'var(--text-onbrand)' }}
           >
@@ -1655,4 +2150,18 @@ function ApiKeyModal({ apiKey, setApiKey, onClose }: {
       </div>
     </div>
   )
+}
+
+// 连通性测试失败提示：按 error_type 展示针对性文案（delta 7.3）
+function formatTestError(errorType: string | undefined, error: string | undefined): string {
+  switch (errorType) {
+    case 'auth':
+      return 'API Key 无效，请检查密钥配置'
+    case 'network':
+      return '无法连接到 API 端点，请检查 Base URL'
+    case 'model_not_found':
+      return '模型不存在，请检查模型名称'
+    default:
+      return error || '测试失败，请检查配置'
+  }
 }

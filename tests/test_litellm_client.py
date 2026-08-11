@@ -56,3 +56,57 @@ async def test_chat_stream_retries_before_raising(monkeypatch):
 
     # 应该重试 3 次（max_retries）
     assert callCount == 3
+
+
+# ── tasks.md 3.4: LiteLLMClient thinking 配置测试 ──
+
+
+def test_build_kwargs_thinking_default_enabled():
+    """thinking=None 时 DeepSeek 模型默认 enabled（向后兼容）。"""
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
+    assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
+
+
+def test_build_kwargs_thinking_disabled():
+    """thinking='disabled' 时 extra_body 设为 disabled。"""
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake", thinking="disabled")
+    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
+    assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_build_kwargs_thinking_enabled_explicit():
+    """thinking='enabled' 显式传入时 extra_body 设为 enabled。"""
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake", thinking="enabled")
+    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
+    assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
+
+
+def test_build_kwargs_non_deepseek_ignores_thinking():
+    """非 DeepSeek 模型不受 thinking 影响，走 temperature 模式。"""
+    client = LiteLLMClient(model="openai/gpt-4o", api_key="fake", thinking="enabled")
+    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
+    assert "extra_body" not in kwargs
+    assert "temperature" in kwargs
+
+
+def test_build_kwargs_thinking_with_tools():
+    """thinking 配置下带 tools 时仍正确设置 extra_body。"""
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake", thinking="enabled")
+    kwargs = client._build_kwargs(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "f"}}],
+    )
+    assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert kwargs["tools"] == [{"type": "function", "function": {"name": "f"}}]
+
+
+def test_build_kwargs_base_url_from_init():
+    """base_url 构造参数注入 api_base。"""
+    client = LiteLLMClient(
+        model="deepseek/deepseek-chat",
+        api_key="fake",
+        base_url="https://custom.example.com/v1",
+    )
+    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
+    assert kwargs["api_base"] == "https://custom.example.com/v1"

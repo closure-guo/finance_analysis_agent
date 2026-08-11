@@ -7,6 +7,7 @@ test.setTimeout(120_000)
 
 const API_BASE = 'http://localhost:8000'
 const FRONTEND = 'http://localhost:5173'
+const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-testing'
 
 test('SSE 流在切换会话后继续运行，切回后有新内容', async ({ page }) => {
   page.on('console', msg => {
@@ -14,10 +15,10 @@ test('SSE 流在切换会话后继续运行，切回后有新内容', async ({ p
   })
 
   await page.goto(FRONTEND)
-  await page.evaluate(() => {
-    localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2')
+  await page.evaluate((key) => {
+    localStorage.setItem('fa_api_key', key)
     localStorage.setItem('fa_user_id', 'debug-sse-continue')
-  })
+  }, LLM_KEY)
   await page.reload()
   await page.waitForTimeout(500)
 

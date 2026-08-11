@@ -7,6 +7,7 @@ import { test, expect, type Page } from '@playwright/test'
 test.setTimeout(120_000)
 
 const FRONTEND = 'http://localhost:5173'
+const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-testing'
 
 test('调试：切换会话后前端状态', async ({ page }) => {
   // 收集控制台日志
@@ -15,10 +16,10 @@ test('调试：切换会话后前端状态', async ({ page }) => {
 
   // 1. 打开前端，设置 API key
   await page.goto(FRONTEND)
-  await page.evaluate(() => {
-    localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2')
+  await page.evaluate((key) => {
+    localStorage.setItem('fa_api_key', key)
     localStorage.setItem('fa_user_id', 'debug-test')
-  })
+  }, LLM_KEY)
   await page.reload()
   await page.waitForTimeout(1000)
 

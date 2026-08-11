@@ -138,12 +138,15 @@ def call_llm_streaming(
     system: str = "",
     api_key: str | None = None,
     node_name: str = "",
+    llm_config=None,
 ) -> str:
     """Like call_llm but streams thinking tokens via LangGraph custom stream writer.
 
     Uses call_llm_stream to get real LLM reasoning_content (thinking) and answer.
     Thinking tokens are forwarded to the LangGraph stream writer for real-time display.
     Returns the complete answer string (same interface as call_llm).
+
+    llm_config（LLMConfig | None）透传给 call_llm_stream，实现请求级配置注入。
     """
     from finance_agent.llm import call_llm_stream
 
@@ -179,7 +182,9 @@ def call_llm_streaming(
         return _stub_pipeline_answer(node_name)
 
     answer_parts: list[str] = []
-    for kind, text in call_llm_stream(prompt, system=system, api_key=api_key):
+    for kind, text in call_llm_stream(
+        prompt, system=system, api_key=api_key, llm_config=llm_config
+    ):
         if kind == "thinking" and writer:
             writer({"type": "thinking", "node": node_name, "token": text})
         elif kind == "answer":

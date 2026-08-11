@@ -25,7 +25,13 @@ def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "")
         system = system.replace("{perspective}", "中性平衡")
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(context, system=system, api_key=api_key, node_name=node_name)
+    response = call_llm_streaming(
+        context,
+        system=system,
+        api_key=api_key,
+        node_name=node_name,
+        llm_config=state.get("llm_config"),
+    )
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 
@@ -53,7 +59,13 @@ def risk_judge(state: dict) -> dict:
     system = load_prompt("risk_judge")
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(context, system=system, api_key=api_key, node_name="risk_judge")
+    response = call_llm_streaming(
+        context,
+        system=system,
+        api_key=api_key,
+        node_name="risk_judge",
+        llm_config=state.get("llm_config"),
+    )
     data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)
 

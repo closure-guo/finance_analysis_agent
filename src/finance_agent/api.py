@@ -25,6 +25,7 @@ _logger = logging.getLogger("finance_agent.api")
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
 from finance_agent.graph import build_5layer_graph  # noqa: E402
+from finance_agent.llm import LLMConfig  # noqa: E402
 from finance_agent.pipeline_runner import PipelineRunner, build_layer_tree  # noqa: E402
 from finance_agent.react_agent import (  # noqa: E402
     _TIME_SENSITIVE_KEYWORDS as _TIME_SENSITIVE_KEYWORDS_REACT,
@@ -147,6 +148,18 @@ _NODE_THINKING: dict[str, str] = {
 # ── Request models ──
 
 
+class LLMConfigRequest(BaseModel):  # noqa: N815  # 字段 camelCase 为前端 JSON 契约
+    """请求级 LLM 配置（前端设置面板提交），字段为 None 时后端回退环境变量。
+
+    字段用 camelCase 命名，与 LLMConfig dataclass 及前端 JSON 契约一致。
+    """
+
+    model: str | None = None
+    baseUrl: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
+    apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
+    thinking: str | None = None
+
+
 class AnalyzeRequest(BaseModel):
     stock_code: str = ""
     stock_name: str | None = None
@@ -158,6 +171,7 @@ class AnalyzeRequest(BaseModel):
     session_id: str | None = None  # 追问时传入会话 ID
     focus: str = ""  # 深度研究意图澄清环节用户填写的关注点（Kimi 风格反问回答）
     user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
+    llm_config: LLMConfigRequest | None = None  # 请求级 LLM 配置（model/baseUrl/apiKey/thinking）
 
 
 class ChatRequest(BaseModel):
@@ -166,13 +180,40 @@ class ChatRequest(BaseModel):
     context: dict | None = None
     api_key: str | None = None
     user_id: str | None = None  # Langfuse user 聚合（ADR-0015）
+    llm_config: LLMConfigRequest | None = None  # 请求级 LLM 配置（model/baseUrl/apiKey/thinking）
 
 
 class RenameRequest(BaseModel):
     display_name: str
 
 
+class ModelsRequest(BaseModel):
+    """模型发现请求体（POST /api/llm-config/models）。"""
+
+    baseUrl: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
+    apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
+
+
 # ── Helpers ──
+
+
+def _to_llm_config(req: LLMConfigRequest | None) -> LLMConfig | None:
+    """将 Pydantic LLMConfigRequest 转换为内部 LLMConfig dataclass。
+
+    req 为 None 或所有字段均为 None 时返回 None（回退环境变量默认行为）。
+    """
+    if req is None:
+        return None
+    cfg = LLMConfig(
+        model=req.model,
+        baseUrl=req.baseUrl,
+        apiKey=req.apiKey,
+        thinking=req.thinking,
+    )
+    # 全 None 时返回 None，避免无意义的空配置传播
+    if not any([cfg.model, cfg.baseUrl, cfg.apiKey, cfg.thinking]):
+        return None
+    return cfg
 
 
 def _sse(data: dict) -> str:
@@ -671,6 +712,7 @@ def _run_graph_streaming(
     analysis_id: str,
     start_time: float,
     session_id: str | None = None,
+    llm_config: LLMConfig | None = None,
 ) -> Generator[str, None, None]:
     """执行 5 层图分析，流式 yield SSE 事件。
 
@@ -679,6 +721,7 @@ def _run_graph_streaming(
 
     Args:
         session_id: 可选外部传入的 session_id。若未提供，内部创建新 session。
+        llm_config: 请求级 LLM 配置，透传到管线节点的 call_llm_streaming。
     """
     initial_state = {
         "stock_code": stock_code,
@@ -688,6 +731,8 @@ def _run_graph_streaming(
         "enable_web_search": req.enable_web_search,
         "api_key": req.api_key,
         "focus": (req.focus or "").strip(),
+        # 请求级 LLM 配置透传到管线节点（call_llm_streaming / call_llm）
+        "llm_config": llm_config,
     }
 
     stock_name_display = stock_name or stock_code
@@ -1083,6 +1128,7 @@ async def _run_chat_task(
     req: ChatRequest,
     display_name: str | None,
     api_key: str | None,
+    llm_config: LLMConfig | None = None,
 ) -> None:
     """/api/chat 后台生成任务：quick/follow-up ReAct Agent。
 
@@ -1114,7 +1160,9 @@ async def _run_chat_task(
         session = await asyncio.to_thread(get_session, session_id) or {}
         mode = "follow-up" if session.get("session_type") == "analysis" else "quick"
 
-        agent = build_agent(mode=mode, api_key=api_key, session_id=session_id)
+        agent = build_agent(
+            mode=mode, api_key=api_key, session_id=session_id, llm_config=llm_config
+        )
 
         lastPersistTime = time.time()
         PERSIST_INTERVAL = 10
@@ -1161,6 +1209,7 @@ async def _run_react_analysis(
     start_time: float,
     display_name: str | None,
     api_key: str | None,
+    llm_config: LLMConfig | None = None,
 ) -> None:
     """/api/analyze ReAct 路径后台生成任务（无股票代码或追问时的 harness Agent 编排）。
 
@@ -1199,6 +1248,7 @@ async def _run_react_analysis(
             peer_codes=req.peer_codes.split(",") if req.peer_codes else None,
             enable_web_search=req.enable_web_search,
             session_id=session_id,
+            llm_config=llm_config,
         )
 
         def on_metadata_cb(metadata: dict) -> None:
@@ -1387,6 +1437,8 @@ async def analyze(req: AnalyzeRequest):
 
     # API key: 优先用请求中的，无效则回退到环境变量
     api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+    # 请求级 LLM 配置（LLMConfigRequest → LLMConfig），None 时回退环境变量
+    llm_config = _to_llm_config(req.llm_config)
 
     # ── Session 生命周期：从首次输入开始 ──
     session_id = req.session_id
@@ -1443,7 +1495,13 @@ async def analyze(req: AnalyzeRequest):
         PipelineRunner.start(
             session_id,
             lambda: _run_graph_streaming(
-                stock_code, stock_name, req, analysis_id, start_time, session_id=session_id
+                stock_code,
+                stock_name,
+                req,
+                analysis_id,
+                start_time,
+                session_id=session_id,
+                llm_config=llm_config,
             ),
             {
                 "layerTree": build_layer_tree(),
@@ -1473,7 +1531,15 @@ async def analyze(req: AnalyzeRequest):
     # ── ReAct 路径：registry 后台任务 + 订阅转发（生成与连接解耦）──
     started = await registry.start(
         session_id,
-        _run_react_analysis(session_id, req, analysis_id, start_time, display_name, api_key),
+        _run_react_analysis(
+            session_id,
+            req,
+            analysis_id,
+            start_time,
+            display_name,
+            api_key,
+            llm_config=llm_config,
+        ),
     )
     if not started:
         # single-flight：会话已有活跃任务，拒绝新消息（不追加 user 消息）
@@ -1500,6 +1566,8 @@ async def quick_chat(req: ChatRequest):
     """
     # API key: 优先用请求中的，无效则回退到环境变量
     api_key = req.api_key if req.api_key and req.api_key.startswith("sk-") else None
+    # 请求级 LLM 配置（LLMConfigRequest → LLMConfig），None 时回退环境变量
+    llm_config = _to_llm_config(req.llm_config)
 
     # ADR-0015：新对话时先创建 session，使 Langfuse session 聚合可用
     # （session_id 须在 agent 运行前确定，否则 propagate_attributes 拿不到）
@@ -1520,7 +1588,8 @@ async def quick_chat(req: ChatRequest):
     # start 后再取 max_seq 可能跳过该事件，导致前端拿不到 session_id
     afterSeq = await asyncio.to_thread(get_max_event_seq, session_id)
     started = await registry.start(
-        session_id, _run_chat_task(session_id, req, display_name, api_key)
+        session_id,
+        _run_chat_task(session_id, req, display_name, api_key, llm_config=llm_config),
     )
     if not started:
         # single-flight：会话已有活跃任务，拒绝新消息（不追加 user 消息）
@@ -1530,6 +1599,135 @@ async def quick_chat(req: ChatRequest):
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
+
+
+# ── LLM 配置端点（add-custom-llm-api）──
+
+
+@app.get("/api/llm-config")
+async def get_llm_config():
+    """返回后端默认 LLM 配置（环境变量），供前端设置面板展示 placeholder。
+
+    不返回 apiKey（安全：不向后端暴露密钥）。
+    """
+    return {
+        "model": os.getenv("LLM_MODEL", "deepseek/deepseek-v4-pro"),
+        "baseUrl": os.getenv("LLM_BASE_URL", ""),
+        "thinking": os.getenv("LLM_THINKING", "enabled"),
+    }
+
+
+@app.post("/api/llm-config/models")
+async def list_models(req: ModelsRequest):
+    """调用 OpenAI 兼容的 GET {baseUrl}/models 拉取模型列表。
+
+    baseUrl / apiKey 回退环境变量。端点不支持时返回空列表 + error 提示。
+    """
+    import httpx
+
+    baseUrl = (req.baseUrl or "").strip()
+    # apiKey 允许回退环境变量（用户可能只填了 baseUrl 想探测端点，密钥用已配置的）
+    apiKey = req.apiKey or os.getenv("LLM_API_KEY", os.getenv("DEEPSEEK_API_KEY", ""))
+
+    # 模型发现是「探测用户指定端点」的工具：baseUrl 为空时**不回退环境变量**，
+    # 否则会悄悄用环境端点（如 LLM_BASE_URL）返回该端点模型，违背用户直觉（决策 A）。
+    # 分析链路 call_llm 的回退不受影响（仍是 请求配置 → 环境变量 → 默认值）。
+    if not baseUrl:
+        return {"models": [], "error": "请先配置 API Base URL 再刷新模型列表"}
+
+    url = baseUrl.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {apiKey}"} if apiKey else {}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"models": [], "error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+    except Exception as e:
+        return {"models": [], "error": f"{type(e).__name__}: {e}"}
+
+    # OpenAI 兼容格式：{"data": [{"id": "model-name"}, ...]}
+    models = []
+    for item in data.get("data", []):
+        modelId = item.get("id") if isinstance(item, dict) else None
+        if modelId:
+            models.append(modelId)
+
+    return {"models": sorted(models), "error": None}
+
+
+@app.post("/api/llm-config/test")
+async def test_llm_config(req: LLMConfigRequest):
+    """用给定 llm_config 发送极简 LLM 请求（max_tokens=1），返回连通性测试结果。
+
+    返回 success / latencyMs / model 或 success=false + error / errorType。
+    错误分类：auth / network / model_not_found / unknown。
+    """
+    import time as _time
+
+    cfg = _to_llm_config(req)
+    startMs = _time.time()
+
+    try:
+        from finance_agent.llm import call_llm
+
+        call_llm("Hi", max_tokens=1, llm_config=cfg)
+        latencyMs = int((_time.time() - startMs) * 1000)
+        # 解析最终使用的 model（cfg.model 或环境变量）
+        usedModel = (cfg.model if cfg else None) or os.getenv(
+            "LLM_MODEL", "deepseek/deepseek-v4-pro"
+        )
+        return {"success": True, "latencyMs": latencyMs, "model": usedModel}
+    except Exception as e:
+        latencyMs = int((_time.time() - startMs) * 1000)
+        errorType = _classify_llm_error(e)
+        return {
+            "success": False,
+            "latencyMs": latencyMs,
+            "error": f"{type(e).__name__}: {e}",
+            "errorType": errorType,
+        }
+
+
+def _classify_llm_error(e: Exception) -> str:
+    """将 LLM 调用异常分类为 auth / network / model_not_found / unknown。
+
+    当 NotFoundError 的响应体为 HTML（如网站 404 页面）时，判定为 base_url 错误
+    而非模型不存在——请求打到了网页服务器而非 API 端点。
+    """
+    errorName = type(e).__name__
+    errorMessage = str(e).lower()
+
+    # 认证错误
+    if "auth" in errorName.lower() or "authentication" in errorName.lower():
+        return "auth"
+    if "401" in errorMessage or "invalid api key" in errorMessage:
+        return "auth"
+
+    # base_url 错误：NotFoundError 但响应体是 HTML（打到了网页服务器而非 API 端点）
+    if "notfound" in errorName.lower() and ("<!doctype" in errorMessage or "<html" in errorMessage):
+        return "network"
+
+    # 模型不存在
+    if "notfound" in errorName.lower():
+        return "model_not_found"
+    if "model" in errorMessage and "not found" in errorMessage:
+        return "model_not_found"
+
+    # 网络/连接错误
+    if "connection" in errorName.lower() or "timeout" in errorName.lower():
+        return "network"
+    if (
+        "connection" in errorMessage
+        or "timeout" in errorMessage
+        or "unreachable" in errorMessage
+        or "refused" in errorMessage
+    ):
+        return "network"
+
+    return "unknown"
 
 
 @app.get("/api/files/{filename}")

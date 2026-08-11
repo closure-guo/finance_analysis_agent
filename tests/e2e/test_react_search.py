@@ -41,7 +41,7 @@ def test_react_search(browser):
 
         # 1. Configure API key if needed
         body = page.locator("body").inner_text(timeout=3000)
-        if "API Key 已配置" not in body:
+        if "LLM API 已配置" not in body:
             _configure_api_key(page)
 
         # 2. Select deep mode (if not already)

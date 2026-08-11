@@ -107,7 +107,9 @@ def test_followup_api_sends_new_events(isolated_db, monkeypatch):
 
     callCount = {"n": 0}
 
-    async def fake_react_task(session_id, req, analysis_id, start_time, display_name, api_key):
+    async def fake_react_task(
+        session_id, req, analysis_id, start_time, display_name, api_key, llm_config=None
+    ):
         # 等待 subscriber 就绪，避免时序竞争丢失 thinking_token
         await asyncio.sleep(0.05)
         for ev in newEvents:
@@ -163,7 +165,7 @@ def test_quick_chat_followup_sse_not_terminated_by_previous_done(isolated_db, mo
         {"type": "done"},
     ]
 
-    async def fake_chat_task(session_id, req, display_name, api_key):
+    async def fake_chat_task(session_id, req, display_name, api_key, llm_config=None):
         # 等待 subscriber 就绪，避免时序竞争丢失事件
         await asyncio.sleep(0.05)
         for ev in newEvents:

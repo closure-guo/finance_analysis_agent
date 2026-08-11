@@ -29,9 +29,9 @@ const { chromium } = require('playwright');
   await page.goto('http://localhost:5173', { waitUntil: 'networkidle' });
 
   // 设置 API Key 到 localStorage
-  await page.evaluate(() => {
-    localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2');
-  });
+  await page.evaluate((key) => {
+    localStorage.setItem('fa_api_key', key);
+  }, process.env.LLM_API_KEY || 'stub-key-for-testing');
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(2000);
   console.log('页面已加载，API Key 已设置');

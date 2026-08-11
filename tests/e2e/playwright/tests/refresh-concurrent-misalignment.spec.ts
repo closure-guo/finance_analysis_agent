@@ -16,6 +16,7 @@ import { test, expect } from '@playwright/test'
 
 const API_BASE = process.env.E2E_API_BASE ?? 'http://localhost:8001'
 const FRONTEND = process.env.E2E_FRONTEND ?? 'http://localhost:5174'
+const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-testing'
 
 // StubLLMClient 固定输出（src/finance_agent/harness/stub_llm_client.py）
 const STUB_REASONING = '## 分析思路\n用户询问了一个测试问题，我需要给出简短回答。'
@@ -42,10 +43,10 @@ test.describe('刷新后并发流式错乱复现', () => {
   test.beforeEach(async ({ page }) => {
     page.on('pageerror', err => console.log('[PAGE ERROR]', err.message))
     await page.goto(FRONTEND)
-    await page.evaluate(() => {
-      localStorage.setItem('fa_api_key', 'sk-2e9c5078489c4a9abb8d275470a8b4b2')
+    await page.evaluate((key) => {
+      localStorage.setItem('fa_api_key', key)
       localStorage.setItem('fa_user_id', 'e2e-refresh-misalign')
-    })
+    }, LLM_KEY)
     await page.reload()
     await page.waitForTimeout(500)
   })
