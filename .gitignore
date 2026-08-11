@@ -243,6 +243,7 @@ cache.db*
 **/sessions.db-wal
 **/sessions.db-shm
 data/test-e2e-sessions.db*
+data/test-repro.db*
 data/*.corrupt-backup
 
 # Build artifacts
