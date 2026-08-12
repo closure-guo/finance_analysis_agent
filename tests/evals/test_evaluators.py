@@ -25,6 +25,17 @@ class TestFindSection:
         assert find_section("冷门章节", "包含冷门章节四个字") is True
         assert find_section("冷门章节", "完全没有相关内容") is False
 
+    def test_risk_alone_no_longer_matches_risk_warning(self):
+        # 裸 "风险" 已从「风险提示」同义词移除:无风险利率不应误判覆盖
+        assert find_section("风险提示", "无风险利率下行,风险收益比改善") is False
+        assert find_section("风险提示", "风险提示:市场波动加大") is True
+
+    def test_ascii_synonym_uses_word_boundary(self):
+        # 纯 ASCII 词条按词边界匹配:OPENAI/PIPELINE 不含独立 PE
+        assert find_section("估值", "公司与 OPENAI 合作,PIPELINE 自动化") is False
+        assert find_section("估值", "当前 PE 25 倍,PB 3 倍") is True
+        assert find_section("盈利能力", "ROE 维持 25%") is True
+
 
 class TestSectionCoverage:
     def test_full_coverage(self):
@@ -73,3 +84,15 @@ class TestNoLlmCall:
             section_coverage("偿债能力 盈利能力", {"must_cover": ["偿债能力", "盈利能力"]})
             ticker_match("600519", {"ticker": "600519"})
         mock_llm.assert_not_called()
+
+    def test_deterministic_evaluators_source_has_no_llm_import(self):
+        # 源码级守卫:确定性评估器任何 LLM 依赖引入都会变红
+        import inspect
+
+        import evals.evaluators
+        import evals.sections
+
+        for module in (evals.evaluators, evals.sections):
+            source = inspect.getsource(module)
+            assert "litellm" not in source
+            assert "call_llm" not in source
