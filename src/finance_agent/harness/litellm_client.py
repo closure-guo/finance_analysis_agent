@@ -207,6 +207,7 @@ class LiteLLMClient:
                             _accumulated_text,
                             chunk,
                             reasoning=_accumulated_reasoning,
+                            tool_calls=parsed,
                         )
                         yield LLMResponse(tool_calls=parsed, is_finished=True)
                         return
@@ -220,6 +221,7 @@ class LiteLLMClient:
                                 _accumulated_text,
                                 chunk,
                                 reasoning=_accumulated_reasoning,
+                                tool_calls=parsed,
                             )
                             yield LLMResponse(tool_calls=parsed, is_finished=True)
                         else:
@@ -237,7 +239,12 @@ class LiteLLMClient:
                 if current_tool_calls:
                     parsed = self._parse_tool_calls(current_tool_calls)
                     self._finish_langfuse(
-                        _lf_cm, _lf_obs, _accumulated_text, None, reasoning=_accumulated_reasoning
+                        _lf_cm,
+                        _lf_obs,
+                        _accumulated_text,
+                        None,
+                        reasoning=_accumulated_reasoning,
+                        tool_calls=parsed,
                     )
                     yield LLMResponse(tool_calls=parsed, is_finished=True)
                 else:
@@ -263,8 +270,21 @@ class LiteLLMClient:
                     # 重试耗尽：raise 异常而非 yield 错误文本，使 Agent 主循环能正确捕获
                     raise
 
-    def _finish_langfuse(self, cm, obs, text: str, last_chunk, reasoning: str = "") -> None:
-        """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。"""
+    def _finish_langfuse(
+        self,
+        cm,
+        obs,
+        text: str,
+        last_chunk,
+        reasoning: str = "",
+        tool_calls: list | None = None,
+    ) -> None:
+        """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。
+
+        tool_calls 仅在工具调用分支传入（list[ToolCallRequest]），纯文本分支传 None。
+        output 结构：{answer, reasoning, [tool_calls]}；无 tool_calls 时不写该字段，
+        保持 Task 2 已落地的 {answer, reasoning} 结构向后兼容。
+        """
         if not cm or not obs:
             return
         try:
@@ -277,13 +297,23 @@ class LiteLLMClient:
                     "total": getattr(u, "total_tokens", 0),
                 }
             # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
-            obs.update(
-                output={
-                    "answer": truncate_for_trace(text),
-                    "reasoning": truncate_for_trace(reasoning),
-                },
-                usage_details=usage,
-            )
+            output_obj: dict[str, Any] = {
+                "answer": truncate_for_trace(text),
+                "reasoning": truncate_for_trace(reasoning),
+            }
+            # 仅有工具调用时才写入 tool_calls 字段（保持纯文本分支 output 结构不变）
+            if tool_calls:
+                output_obj["tool_calls"] = [
+                    {
+                        "name": tc.name,
+                        # ToolCallRequest.arguments 是 dict，序列化为紧凑 JSON 字符串保留语义
+                        "arguments": truncate_for_trace(
+                            json.dumps(tc.arguments, ensure_ascii=False, separators=(",", ":"))
+                        ),
+                    }
+                    for tc in tool_calls
+                ]
+            obs.update(output=output_obj, usage_details=usage)
             cm.__exit__(None, None, None)
             if self._langfuse:
                 self._langfuse.flush()

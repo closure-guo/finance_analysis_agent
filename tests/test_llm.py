@@ -386,3 +386,73 @@ def test_call_llm_stream_writes_reasoning_to_output(mock_completion, mock_get_la
     call_kwargs = mockObs.update.call_args.kwargs
     assert call_kwargs["output"]["reasoning"] == "思考A思考B"
     assert call_kwargs["output"]["answer"] == "最终答案"
+
+
+# ── agent-trace-content-fidelity Task 3: call_llm_with_tools tool_calls 落 output ──
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_with_tools_writes_tool_calls_to_output(mock_completion, mock_get_langfuse):
+    """call_llm_with_tools 把 message.tool_calls 写入 generation output.tool_calls。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = ""
+    mock_resp.usage = None
+    # litellm completion: message.tool_calls = [{id, type, function: {name, arguments(JSON 字符串)}}]
+    _tc = MagicMock()
+    _tc.function.name = "web_search"
+    _tc.function.arguments = '{"q":"茅台"}'
+    mock_resp.choices[0].message.tool_calls = [_tc]
+    mock_completion.return_value = mock_resp
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm_with_tools
+
+    resp = call_llm_with_tools(
+        "搜一下",
+        api_key="fake",
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+    )
+
+    # 函数仍返回原始 resp（行为契约不变）
+    assert resp is mock_resp
+    mockObs.update.assert_called_once()
+    call_kwargs = mockObs.update.call_args.kwargs
+    assert call_kwargs["output"]["tool_calls"] == [
+        {"name": "web_search", "arguments": '{"q":"茅台"}'}
+    ]
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_with_tools_empty_tool_calls_list(mock_completion, mock_get_langfuse):
+    """无 tool_calls 时 output.tool_calls 为空列表（不破坏 output 结构）。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "纯文本回答"
+    mock_resp.usage = None
+    # 显式声明 message.tool_calls = None
+    mock_resp.choices[0].message.tool_calls = None
+    mock_completion.return_value = mock_resp
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm_with_tools
+
+    call_llm_with_tools("hi", api_key="fake")
+
+    call_kwargs = mockObs.update.call_args.kwargs
+    assert call_kwargs["output"]["tool_calls"] == []
+    assert call_kwargs["output"]["answer"] == "纯文本回答"

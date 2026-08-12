@@ -205,3 +205,98 @@ async def test_chat_stream_reasoning_empty_when_no_thinking(monkeypatch):
     call_kwargs = mockObs.update.call_args.kwargs
     assert call_kwargs["output"]["reasoning"] == ""
     assert call_kwargs["output"]["answer"] == "纯文本答案"
+
+
+# ── agent-trace-content-fidelity Task 3: tool_calls 落 generation output ──
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_writes_tool_calls_to_output(monkeypatch):
+    """带 tool_calls 的流，output 含结构化 tool_calls 字段。"""
+    from types import SimpleNamespace
+
+    from finance_agent.harness.litellm_client import LiteLLMClient
+
+    # litellm tool_call delta：对象含 .index/.id/.function(.name/.arguments JSON 字符串)
+    def _make_tool_delta(idx, name=None, args=None, tid=None):
+        func = SimpleNamespace(name=name, arguments=args)
+        return SimpleNamespace(index=idx, id=tid, function=func)
+
+    def _chunk(content=None, tool_delta=None, finish_reason=None):
+        chunk = MagicMock()
+        chunk.usage = None
+        delta = MagicMock(content=content, reasoning_content=None)
+        delta.tool_calls = tool_delta if tool_delta is not None else []
+        chunk.choices = [MagicMock(delta=delta, finish_reason=finish_reason)]
+        return chunk
+
+    # litellm.acompletion(stream=True) 是 coroutine，await 后返回 async iterator。
+    # 因此 mock 必须是外层 async function 返回内层 async generator（不能直接是 async generator）。
+    async def _mock_acompletion(**kwargs):
+        async def _stream():
+            yield _chunk(
+                tool_delta=[_make_tool_delta(0, name="web_search", args='{"q":"茅台"}', tid="1")]
+            )
+            yield _chunk(finish_reason="tool_calls")
+
+        return _stream()
+
+    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    client = LiteLLMClient(model="deepseek-chat")
+    monkeypatch.setattr(client, "_langfuse", MagicMock())
+    client._langfuse.start_as_current_observation.return_value = mockCm
+
+    async for _ in client.chat_stream(
+        messages=[{"role": "user", "content": "搜一下"}],
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+    ):
+        pass
+
+    call_kwargs = mockObs.update.call_args.kwargs
+    # 纯文本分支不应写入 tool_calls 字段；tool_calls 分支必须有结构化 tool_calls
+    assert call_kwargs["output"]["tool_calls"] == [
+        {"name": "web_search", "arguments": '{"q":"茅台"}'}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_text_branch_has_no_tool_calls_key(monkeypatch):
+    """纯文本流（无 tool_calls）的 output 不应含 tool_calls 字段（保持向后兼容）。"""
+    from finance_agent.harness.litellm_client import LiteLLMClient
+
+    def _chunk(content, finish_reason="stop"):
+        chunk = MagicMock()
+        chunk.usage = None
+        chunk.choices = [
+            MagicMock(
+                delta=MagicMock(content=content, reasoning_content=None, tool_calls=[]),
+                finish_reason=finish_reason,
+            )
+        ]
+        return chunk
+
+    async def _mock_acompletion(**kwargs):
+        async def _stream():
+            yield _chunk("纯文本")
+
+        return _stream()
+
+    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    client = LiteLLMClient(model="deepseek-chat")
+    monkeypatch.setattr(client, "_langfuse", MagicMock())
+    client._langfuse.start_as_current_observation.return_value = mockCm
+
+    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    call_kwargs = mockObs.update.call_args.kwargs
+    assert "tool_calls" not in call_kwargs["output"]
+    assert call_kwargs["output"]["answer"] == "纯文本"

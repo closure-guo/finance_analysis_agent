@@ -422,10 +422,12 @@ def call_llm_with_tools(
                 input={"messages": messages},
             ) as _gen:
                 resp = litellm.completion(**kwargs)
-                _output = ""
+                # 提取 message 对象：tool_calls 在 message.tool_calls（litellm 标准）
+                _message = None
                 _choices = getattr(resp, "choices", [])
                 if _choices:
-                    _output = getattr(_choices[0].message, "content", "") or ""
+                    _message = getattr(_choices[0], "message", None)
+                _output_text = (getattr(_message, "content", "") or "") if _message else ""
                 _usage = getattr(resp, "usage", None)
                 _ud = {}
                 if _usage:
@@ -433,7 +435,24 @@ def call_llm_with_tools(
                         "input": getattr(_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_usage, "completion_tokens", 0) or 0,
                     }
-                _gen.update(output=str(_output), usage_details=_ud)
+                # tool_calls 结构化提取（保留 LLM 原始 JSON arguments 字符串）
+                _output_tool_calls: list[dict] = []
+                if _message is not None:
+                    _tc_list = getattr(_message, "tool_calls", None) or []
+                    for _tc in _tc_list:
+                        _func = getattr(_tc, "function", None)
+                        _tc_name = (getattr(_func, "name", "") or "") if _func else ""
+                        _tc_args = (getattr(_func, "arguments", "") or "") if _func else ""
+                        _output_tool_calls.append(
+                            {"name": _tc_name, "arguments": truncate_for_trace(_tc_args)}
+                        )
+                _gen.update(
+                    output={
+                        "answer": truncate_for_trace(_output_text),
+                        "tool_calls": _output_tool_calls,
+                    },
+                    usage_details=_ud,
+                )
                 return resp
         except Exception:
             _lf = None
