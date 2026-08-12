@@ -8,7 +8,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from finance_agent.langfuse_tracing import open_span
+from finance_agent.langfuse_tracing import open_span, truncate_for_trace, update_current_span
 
 
 class TestOpenSpan:
@@ -71,3 +71,39 @@ class TestOpenSpan:
                 obs.update(output={"result": "echo: hi"})
 
         mockObs.update.assert_called_once_with(output={"result": "echo: hi"})
+
+
+def test_update_current_span_noop_when_unconfigured():
+    """未配置 Langfuse 时 update_current_span 不报错（降级）。"""
+    with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=None):
+        # 不应抛异常
+        update_current_span(metadata={"x": 1}, level="WARNING")
+
+
+def test_update_current_span_calls_client():
+    """已配置时透传 metadata + level 到 client.update_current_span。"""
+    mockClient = MagicMock()
+    with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient):
+        update_current_span(metadata={"degradation": "parse_degraded"}, level="WARNING")
+    mockClient.update_current_span.assert_called_once_with(
+        metadata={"degradation": "parse_degraded"}, level="WARNING"
+    )
+
+
+def test_update_current_span_swallows_exception():
+    """client 抛异常时不冒泡（降级）。"""
+    mockClient = MagicMock()
+    mockClient.update_current_span.side_effect = RuntimeError("boom")
+    with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient):
+        update_current_span(metadata={"x": 1})  # 不抛
+
+
+def test_truncate_for_trace_keeps_head_tail():
+    """超长文本保留首尾 + 中部省略标记；短文本原样返回。"""
+    short = "abc"
+    assert truncate_for_trace(short) == "abc"
+    long = "X" * 20000
+    out = truncate_for_trace(long, max_bytes=8192)
+    assert out.startswith("X") and out.endswith("X")
+    assert "[truncated" in out
+    assert len(out.encode("utf-8")) <= 8192 + 200  # 标记本身占少量

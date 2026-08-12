@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
+from typing import Any
 
 _langfuse_client = None
 _langfuse_checked = False
@@ -106,3 +107,38 @@ def open_span(name: str, input: dict | None = None):
             cm.__exit__(None, None, None)
         except Exception:
             _span_logger.warning("Langfuse span 退出失败: %s", name, exc_info=True)
+
+
+def update_current_span(metadata: dict | None = None, level: str | None = None) -> None:
+    """更新当前 OTel span 的 metadata/level，带优雅降级。
+
+    未配置 Langfuse 或 client 抛异常时不影响业务（对应 spec 降级契约）。
+    用于节点内部子状态上 trace（解析降级 / 重试计数等），不新建 span。
+    """
+    client = get_langfuse()
+    if client is None:
+        return
+    try:
+        kwargs: dict[str, Any] = {}
+        if metadata is not None:
+            kwargs["metadata"] = metadata
+        if level is not None:
+            kwargs["level"] = level
+        if kwargs:
+            client.update_current_span(**kwargs)
+    except Exception as e:  # noqa: BLE001 - 降级不阻断业务
+        _span_logger.warning("update_current_span 失败: %s", e)
+
+
+def truncate_for_trace(text: str, max_bytes: int = 8192) -> str:
+    """超长文本裁剪，保留首尾 + 中部省略标记，避免撑爆 Langfuse span。"""
+    if not text:
+        return text
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    # 首尾各保留约 1/4，中部用省略标记
+    head = encoded[: max_bytes // 4].decode("utf-8", errors="ignore")
+    tail = encoded[-(max_bytes // 4) :].decode("utf-8", errors="ignore")
+    omitted = len(encoded) - len(head.encode("utf-8")) - len(tail.encode("utf-8"))
+    return f"{head}\n...[truncated {omitted} chars]...\n{tail}"
