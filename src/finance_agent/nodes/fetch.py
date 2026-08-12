@@ -170,7 +170,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
         # ── 收集结果（每个调用带 Langfuse span 追踪）──
         for future in as_completed(futures):
             label = futures[future]
-            span_name = f"akshare:{label}"
+            span_name = f"data_source:akshare:{label}"
             with open_span(span_name, input={"code": code, "label": label}) as obs:
                 try:
                     value = future.result()
@@ -178,7 +178,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
                         obs.update(output={"status": "success"})
                 except Exception as e:
                     if obs:
-                        obs.update(output={"status": "error", "error": str(e)})
+                        obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
                     if label in ("balance_sheet", "income_statement", "cash_flow_statement"):
                         raise  # 必需数据异常传播，终止管线
                     logger.warning("%s 拉取失败: %s", label, e)
@@ -232,7 +232,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
 
     # ── Step 2: 依赖 industry_info 的串行调用 ──
     # 关键非财务事件（需要股票名称）
-    with open_span("akshare:key_events", input={"code": code}) as obs:
+    with open_span("data_source:akshare:key_events", input={"code": code}) as obs:
         try:
             from finance_agent.events.pipeline import fetch_key_events
 
@@ -248,12 +248,12 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
                 obs.update(output={"status": "success", "count": len(events)})
         except Exception as e:
             if obs:
-                obs.update(output={"status": "error", "error": str(e)})
+                obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
             logger.warning("关键事件获取失败: %s", e)
             result["key_events"] = []
 
     # 同业数据（依赖行业归属）
-    with open_span("akshare:peer_financials", input={"code": code}) as obs:
+    with open_span("data_source:akshare:peer_financials", input={"code": code}) as obs:
         try:
             peers = _fetch_peers(ak, code, state, result.get("industry_info"))
             if peers is not None:
@@ -265,7 +265,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
                     obs.update(output={"status": "skipped", "reason": "无同业代码"})
         except Exception as e:
             if obs:
-                obs.update(output={"status": "error", "error": str(e)})
+                obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
             logger.warning("同业数据拉取失败: %s", e)
             result["peer_financials"] = None
 

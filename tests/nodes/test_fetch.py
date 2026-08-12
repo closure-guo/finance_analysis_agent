@@ -7,11 +7,13 @@ fetch_data 职责：
 4. 数据降级：三大报表缺失 → 报错终止；同业缺失 → 标记 N/A 继续
 """
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
+import finance_agent.nodes.fetch as fetch_mod
 from finance_agent.nodes.fetch import fetch_data
 
 
@@ -89,3 +91,61 @@ class TestFetchDataDegradation:
         state = {"stock_code": "600519", "peer_codes": ["000858"]}
         result = fetch_data(state, cache=mock_cache, client=mock_client)
         assert result.get("peer_financials") is None
+
+
+class TestFetchDataSpanObservability:
+    """span 命名与失败 level 追踪（spec trace-observability：data_source:{source} 约定）。
+
+    AKShare 子 span SHALL 命名为 `data_source:akshare:{label}`，失败 SHALL 标
+    `level="ERROR"`，使 incident 008 类卡死/失败可定位到具体子调用。
+    """
+
+    def test_span_naming_uses_data_source_prefix(self, monkeypatch):
+        """span 名以 data_source:akshare: 前缀（spec data_source:{source} 约定）。"""
+        mock_client = _setup_client()
+        captured: list[str] = []
+
+        @contextmanager
+        def _spy_span(name, input=None):
+            captured.append(name)
+            yield MagicMock()
+
+        monkeypatch.setattr(fetch_mod, "open_span", _spy_span)
+
+        fetch_mod.fetch_data(
+            {"stock_code": "600519", "stock_name": "贵州茅台"},
+            cache=MagicMock(),
+            client=mock_client,
+        )
+
+        assert any(s.startswith("data_source:akshare:") for s in captured), (
+            f"span 名未用 data_source 前缀: {captured}"
+        )
+
+    def test_span_marked_error_on_subcall_failure(self, monkeypatch):
+        """AKShare 非必需子调用失败时，对应 span 标 level=ERROR。"""
+        mock_client = _setup_client()
+        # 非必需指标拉取抛异常 → 走 warning 降级（不 raise），span 应标 ERROR
+        mock_client.fetch_indicators.side_effect = RuntimeError("timeout")
+
+        updates: list[dict] = []
+
+        class _FakeObs:
+            def update(self, **kwargs):
+                updates.append(kwargs)
+
+        @contextmanager
+        def _spy_span(name, input=None):
+            yield _FakeObs()
+
+        monkeypatch.setattr(fetch_mod, "open_span", _spy_span)
+
+        fetch_mod.fetch_data(
+            {"stock_code": "600519", "stock_name": "贵州茅台"},
+            cache=MagicMock(),
+            client=mock_client,
+        )
+
+        assert any(u.get("level") == "ERROR" for u in updates), (
+            f"失败 span 未标 level=ERROR: {updates}"
+        )
