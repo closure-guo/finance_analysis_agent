@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
+from finance_agent.langfuse_tracing import truncate_for_trace, update_current_span
 from finance_agent.models import AnalystReport
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt_with_meta
@@ -43,11 +44,30 @@ def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
             logger.warning(
                 "分析师 %s 的 claim_type 非法，已改写：%r -> 'entity'", agent_name, claimType
             )
+            # 改写是刻意降级：保证管线不因单个 claim 失败中断，但需在 trace 可见
+            update_current_span(
+                metadata={
+                    "degradation": "sanitize_claims",
+                    "field": "claim_type",
+                    "raw": claimType,
+                    "fixed": "entity",
+                },
+                level="WARNING",
+            )
             claim["claim_type"] = "entity"
         sourceType = claim.get("source_type")
         if sourceType not in _VALID_SOURCE_TYPES:
             logger.warning(
                 "分析师 %s 的 source_type 非法，已改写：%r -> 'data'", agent_name, sourceType
+            )
+            update_current_span(
+                metadata={
+                    "degradation": "sanitize_claims",
+                    "field": "source_type",
+                    "raw": sourceType,
+                    "fixed": "data",
+                },
+                level="WARNING",
             )
             claim["source_type"] = "data"
         # 必填字符串字段的 None 值兜底为空串
@@ -75,6 +95,14 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
             agent_name,
             type(e).__name__,
             e,
+        )
+        # 降级须在 trace 可见（此前完全静默），raw_excerpt 截断避免大文本进 span
+        update_current_span(
+            metadata={
+                "degradation": "parse_degraded",
+                "raw_excerpt": truncate_for_trace(response[:500]),
+            },
+            level="WARNING",
         )
         return AnalystReport(
             agent_name=agent_name,
