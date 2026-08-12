@@ -49,6 +49,14 @@ class TestDeepTask:
         state_arg = mock_graph.invoke.call_args.args[0]
         assert state_arg["stock_code"] == "600519"
         assert state_arg["enable_web_search"] is False
+        # M5:initial_state 多键与 api.py 对齐
+        assert state_arg["analysis_type"] == "comprehensive"
+        assert state_arg["peer_codes"] is None
+        assert state_arg["api_key"] is None
+        assert state_arg["llm_config"] is None
+        assert state_arg["focus"] == "分析茅台"
+        # M4:测试环境无 LANGFUSE 凭据,config 应为 None(零开销,业务无感知)
+        assert mock_graph.invoke.call_args.kwargs.get("config") is None
 
 
 class TestQuickTask:
@@ -75,6 +83,7 @@ class TestSkippedModes:
     def test_follow_up_skipped(self):
         out = run_task(item=_Item({"query": "再分析下", "mode": "follow_up", "session_id": "s1"}))
         assert out["skipped"] is not None
+        assert "follow_up" in out["skipped"]
         assert out["report"] is None
         json.dumps(out)
 
@@ -84,4 +93,42 @@ class TestSkippedModes:
             expected_output={"should_clarify": True},
         )
         assert out["skipped"] is not None
+        assert "意图澄清" in out["skipped"] or "should_clarify" in out["skipped"]
         json.dumps(out)
+
+    def test_should_clarify_skipped_via_dict_expected_output(self):
+        """LocalExperimentItem 把 expected_output 放 dict 键;should_clarify 仍要触发跳过。"""
+        # 不传 expected_output 关键字,塞进 dict(模拟 langfuse LocalExperimentItem)
+        item = {
+            "input": {"query": "帮我分析一下", "mode": "deep"},
+            "expected_output": {"should_clarify": True},
+        }
+        out = run_task(item=item)
+        assert out["skipped"] is not None
+        assert out["report"] is None
+
+
+class TestNestedLoopSafety:
+    def test_quick_task_works_inside_running_loop(self):
+        """langfuse run_experiment 在运行 loop 内同步调 task;quick 分派不能崩溃。"""
+        import asyncio
+
+        from evals.task import run_task
+
+        async def _drive():
+            # 模拟 langfuse 上下文:已在运行 loop 内同步调 run_task
+            with patch("evals.task.build_agent") as mock_build:
+                agent = MagicMock()
+
+                async def _run_sync(query):
+                    return "茅台是好公司"
+
+                agent.run_sync = _run_sync
+                mock_build.return_value = agent
+                return run_task(
+                    item=_Item({"query": "茅台怎么样", "mode": "quick", "ticker": "600519"})
+                )
+
+        out = asyncio.run(_drive())  # 外层 loop
+        assert out["report"] == "茅台是好公司"
+        assert out["skipped"] is None
