@@ -35,7 +35,7 @@
 | 变量名 | trace span 路径 | 使用维度 |
 |---|---|---|
 | `query` | trace input / metadata `focus` | report_relevance |
-| `report` | 末节点输出 `final_report` | report_relevance, consistency |
+| `report` | 末节点输出 `final_report` | report_relevance |
 | `report_conclusion` | `final_report` 结论章节(## 结论/总结/交易建议;缺失取末尾 500 字符,见 `evals/extract.py: extract_conclusion`) | consistency |
 | `analyst_reports` | 4 个分析师节点 span 输出汇总(summary/conclusion 优先) | decision_grounding, consistency |
 | `debate_history` | Bull/Bear 辩论节点 span 输出 `debate_history` | debate_quality |
