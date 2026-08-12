@@ -48,3 +48,14 @@ class TestTraceCapture:
         with patch.object(fm_mod, "get_langfuse", return_value=None):
             update = self._run_fund_manager()
         assert "langfuse_trace_id" not in update  # 降级:不写键
+
+    @patch.object(fm_mod, "call_llm_streaming")
+    def test_trace_id_exception_still_returns_decision(self, mock_llm):
+        """旁路铁律:get_current_trace_id 抛异常不阻断节点,仅 WARNING,不写键。"""
+        mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
+        mock_client = MagicMock()
+        mock_client.get_current_trace_id.side_effect = RuntimeError("otel weird")
+        with patch.object(fm_mod, "get_langfuse", return_value=mock_client):
+            update = self._run_fund_manager()
+        assert update["fund_manager_decision"] == "approve"
+        assert "langfuse_trace_id" not in update
