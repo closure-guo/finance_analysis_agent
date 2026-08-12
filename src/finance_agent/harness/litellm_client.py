@@ -16,6 +16,7 @@ from typing import Any
 
 from finance_agent.harness.llm_client import LLMResponse
 from finance_agent.harness.types import ToolCallRequest
+from finance_agent.langfuse_tracing import truncate_for_trace
 
 logger = logging.getLogger("finance_agent.harness.litellm_client")
 
@@ -121,6 +122,7 @@ class LiteLLMClient:
         kwargs = self._build_kwargs(messages, tools, temperature, tool_choice)
         _start_time = datetime.now(UTC)
         _accumulated_text = ""
+        _accumulated_reasoning = ""  # 累加 DeepSeek reasoning_content（原生思考增量）
 
         # Langfuse 追踪（ADR-0015）- start_as_current_observation 建立父子上下文，
         # 使本 generation 挂到 CallbackHandler 已建好的 react_loop span 下。
@@ -168,6 +170,7 @@ class LiteLLMClient:
                     # 原生思考增量（DeepSeek reasoning_content）-- 先于 content 输出
                     reasoning = getattr(delta, "reasoning_content", None) or ""
                     if reasoning:
+                        _accumulated_reasoning += reasoning  # 累加供 Langfuse 落 trace
                         yield LLMResponse(reasoning_delta=reasoning)
 
                     # 文本增量（content，最终回答）
@@ -198,27 +201,49 @@ class LiteLLMClient:
                     # 检查 finish_reason
                     if finish_reason == "tool_calls" and current_tool_calls:
                         parsed = self._parse_tool_calls(current_tool_calls)
-                        self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, chunk)
+                        self._finish_langfuse(
+                            _lf_cm,
+                            _lf_obs,
+                            _accumulated_text,
+                            chunk,
+                            reasoning=_accumulated_reasoning,
+                        )
                         yield LLMResponse(tool_calls=parsed, is_finished=True)
                         return
 
                     if finish_reason == "stop":
                         if current_tool_calls:
                             parsed = self._parse_tool_calls(current_tool_calls)
-                            self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, chunk)
+                            self._finish_langfuse(
+                                _lf_cm,
+                                _lf_obs,
+                                _accumulated_text,
+                                chunk,
+                                reasoning=_accumulated_reasoning,
+                            )
                             yield LLMResponse(tool_calls=parsed, is_finished=True)
                         else:
-                            self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, chunk)
+                            self._finish_langfuse(
+                                _lf_cm,
+                                _lf_obs,
+                                _accumulated_text,
+                                chunk,
+                                reasoning=_accumulated_reasoning,
+                            )
                             yield LLMResponse(is_finished=True)
                         return
 
                 # 流结束但没有明确的 finish_reason
                 if current_tool_calls:
                     parsed = self._parse_tool_calls(current_tool_calls)
-                    self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, None)
+                    self._finish_langfuse(
+                        _lf_cm, _lf_obs, _accumulated_text, None, reasoning=_accumulated_reasoning
+                    )
                     yield LLMResponse(tool_calls=parsed, is_finished=True)
                 else:
-                    self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, None)
+                    self._finish_langfuse(
+                        _lf_cm, _lf_obs, _accumulated_text, None, reasoning=_accumulated_reasoning
+                    )
                     yield LLMResponse(is_finished=True)
                 return
 
@@ -238,7 +263,7 @@ class LiteLLMClient:
                     # 重试耗尽：raise 异常而非 yield 错误文本，使 Agent 主循环能正确捕获
                     raise
 
-    def _finish_langfuse(self, cm, obs, text: str, last_chunk) -> None:
+    def _finish_langfuse(self, cm, obs, text: str, last_chunk, reasoning: str = "") -> None:
         """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。"""
         if not cm or not obs:
             return
@@ -251,7 +276,14 @@ class LiteLLMClient:
                     "output": getattr(u, "completion_tokens", 0),
                     "total": getattr(u, "total_tokens", 0),
                 }
-            obs.update(output=text, usage_details=usage)
+            # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
+            obs.update(
+                output={
+                    "answer": truncate_for_trace(text),
+                    "reasoning": truncate_for_trace(reasoning),
+                },
+                usage_details=usage,
+            )
             cm.__exit__(None, None, None)
             if self._langfuse:
                 self._langfuse.flush()

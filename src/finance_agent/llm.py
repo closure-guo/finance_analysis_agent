@@ -75,6 +75,7 @@ for _cls_path in (
 # 自动挂到 CallbackHandler 已建好的图节点 span 下。
 # 不再使用 _LangfuseCallback + start_observation（产生孤立 generation，无父子关系）。
 from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse  # noqa: E402
+from finance_agent.langfuse_tracing import truncate_for_trace  # noqa: E402
 
 _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 _QUICK_MODEL = "deepseek/deepseek-chat"
@@ -227,10 +228,12 @@ def call_llm(
                 input={"messages": messages},
             ) as _gen:
                 resp = litellm.completion(**kwargs)
-                content = resp.choices[0].message.content
+                msg = resp.choices[0].message
+                # reasoning_content 独立提取供 trace；content 缺失时 fallback 到 reasoning（保持旧行为）
+                _reasoning_text = getattr(msg, "reasoning_content", "") or ""
+                content = msg.content or ""
                 if not content:
-                    msg = resp.choices[0].message
-                    content = getattr(msg, "reasoning_content", "") or ""
+                    content = _reasoning_text
                 _usage = getattr(resp, "usage", None)
                 _ud = {}
                 if _usage:
@@ -238,7 +241,14 @@ def call_llm(
                         "input": getattr(_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_usage, "completion_tokens", 0) or 0,
                     }
-                _gen.update(output=str(content), usage_details=_ud)
+                # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
+                _gen.update(
+                    output={
+                        "answer": truncate_for_trace(str(content)),
+                        "reasoning": truncate_for_trace(_reasoning_text),
+                    },
+                    usage_details=_ud,
+                )
                 return str(content)
         except Exception:
             _lf = None
@@ -315,12 +325,14 @@ def call_llm_stream(
 
     try:
         _accumulated = ""
+        _accumulated_reasoning_stream = ""  # 累加 DeepSeek reasoning_content（原生思考增量）
         _last_usage = None
         stream = litellm.completion(**kwargs)
         for chunk in stream:
             delta = chunk.choices[0].delta
             # Yield reasoning content (thinking) and answer content separately
             if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                _accumulated_reasoning_stream += str(delta.reasoning_content)
                 yield ("thinking", str(delta.reasoning_content))
             if delta and delta.content:
                 _accumulated += str(delta.content)
@@ -337,7 +349,14 @@ def call_llm_stream(
                         "input": getattr(_last_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_last_usage, "completion_tokens", 0) or 0,
                     }
-                _gen.update(output=_accumulated, usage_details=_ud)
+                # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
+                _gen.update(
+                    output={
+                        "answer": truncate_for_trace(_accumulated),
+                        "reasoning": truncate_for_trace(_accumulated_reasoning_stream),
+                    },
+                    usage_details=_ud,
+                )
                 _gen.end()
             except Exception:  # noqa: S110
                 pass

@@ -308,3 +308,81 @@ def test_build_kwargs_no_auto_prefix_when_no_base_url():
             llm_config=LLMConfig(model="gpt-4o"),
         )
     assert kwargs["model"] == "gpt-4o"
+
+
+# ── agent-trace-content-fidelity Task 2: reasoning 落 generation output ──
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_writes_reasoning_to_output(mock_completion, mock_get_langfuse):
+    """call_llm 把 message.reasoning_content 写入 generation output.reasoning。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "最终答案"
+    mock_resp.choices[0].message.reasoning_content = "思考过程"
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm
+
+    result = call_llm("hi", api_key="fake")
+
+    assert result == "最终答案"
+    mockObs.update.assert_called_once()
+    call_kwargs = mockObs.update.call_args.kwargs
+    assert call_kwargs["output"]["answer"] == "最终答案"
+    assert call_kwargs["output"]["reasoning"] == "思考过程"
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_stream_writes_reasoning_to_output(mock_completion, mock_get_langfuse):
+    """call_llm_stream 累加 reasoning_content 并写入 generation output.reasoning。"""
+
+    def _delta(reasoning=None, content=None):
+        d = MagicMock()
+        d.reasoning_content = reasoning
+        d.content = content
+        return d
+
+    def _chunk(delta):
+        c = MagicMock()
+        c.choices = [MagicMock(delta=delta)]
+        c.usage = None
+        return c
+
+    # litellm.completion(stream=True) 返回同步 iterator（call_llm_stream 用 for 消费）
+    mock_completion.return_value = iter(
+        [
+            _chunk(_delta(reasoning="思考A")),
+            _chunk(_delta(reasoning="思考B")),
+            _chunk(_delta(content="最终答案")),
+        ]
+    )
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm_stream
+
+    results = list(call_llm_stream("hi", api_key="fake"))
+
+    # yield 顺序：thinking x2 + answer x1
+    assert results == [("thinking", "思考A"), ("thinking", "思考B"), ("answer", "最终答案")]
+    mockObs.update.assert_called_once()
+    call_kwargs = mockObs.update.call_args.kwargs
+    assert call_kwargs["output"]["reasoning"] == "思考A思考B"
+    assert call_kwargs["output"]["answer"] == "最终答案"
