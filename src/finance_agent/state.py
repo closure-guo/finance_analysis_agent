@@ -96,6 +96,7 @@ class AnalysisState(TypedDict, total=False):
     # Layer V: Fund Manager
     fund_manager_decision: Literal["approve", "reject", "return"]
     return_count: int  # 退回次数（上限 1）
+    langfuse_trace_id: str  # fund_manager approve 时捕获,decision_log 反向上报用
 
     # 引用校验（ADR-0010 Step 3）
     citation_report: dict  # CitationReport 序列化
