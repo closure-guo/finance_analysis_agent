@@ -126,8 +126,8 @@ def update_current_span(metadata: dict | None = None, level: str | None = None) 
             kwargs["level"] = level
         if kwargs:
             client.update_current_span(**kwargs)
-    except Exception as e:  # noqa: BLE001 - 降级不阻断业务
-        _span_logger.warning("update_current_span 失败: %s", e)
+    except Exception:
+        _span_logger.warning("update_current_span 失败", exc_info=True)
 
 
 def truncate_for_trace(text: str, max_bytes: int = 8192) -> str:
@@ -137,8 +137,9 @@ def truncate_for_trace(text: str, max_bytes: int = 8192) -> str:
     encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
         return text
-    # 首尾各保留约 1/4，中部用省略标记
-    head = encoded[: max_bytes // 4].decode("utf-8", errors="ignore")
-    tail = encoded[-(max_bytes // 4) :].decode("utf-8", errors="ignore")
+    # 首尾各保留约 1/4，中部用省略标记；max_bytes<4 时强制至少 1 字节，避免 [-0:] 退化成全串
+    _quarter = max(1, max_bytes // 4)
+    head = encoded[:_quarter].decode("utf-8", errors="ignore")
+    tail = encoded[-_quarter:].decode("utf-8", errors="ignore")
     omitted = len(encoded) - len(head.encode("utf-8")) - len(tail.encode("utf-8"))
-    return f"{head}\n...[truncated {omitted} chars]...\n{tail}"
+    return f"{head}\n...[truncated {omitted} bytes]...\n{tail}"
