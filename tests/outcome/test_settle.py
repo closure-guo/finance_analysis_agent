@@ -173,3 +173,127 @@ class TestBenchmark:
         assert result.decision_return == 0.05
         assert result.benchmark_return == -0.01  # 基准也取负
         assert abs(result.decision_excess - 0.06) < 1e-9
+
+
+class TestDateDtype:
+    def test_datetime_date_kline_column(self):
+        # 真实 akshare stock_zh_a_hist 的日期列是 datetime.date 对象(回归 C1)
+        import datetime as dt
+
+        kline = _kline(
+            [
+                _day(dt.date(2026, 7, 2), 99, 98),
+                _day(dt.date(2026, 7, 3), 95, 94, low=89),
+            ]
+        )
+        result = evaluate_decision(_decision(), kline, None)
+        assert result.status == "hit_stop"
+        assert result.settle_date == "2026-07-03"
+        assert result.settle_price == 90.0
+
+    def test_pd_timestamp_benchmark_normalized(self):
+        # benchmark 日期为 pd.Timestamp(str() 带时间分量)→ str[:10] 归一后仍正确
+        bench = _kline(
+            [
+                _day(pd.Timestamp("2026-07-01 15:00:00"), 4000, 4000),
+                _day(pd.Timestamp("2026-07-02 15:00:00"), 4040, 4040),
+            ]
+        )
+        kline = _kline([_day("2026-07-02", 101, 110, high=121)])
+        result = evaluate_decision(_decision(), kline, bench)
+        assert result.benchmark_return == 0.01
+
+
+class TestGapThrough:
+    def test_gap_down_through_stop(self):
+        # 开盘 85 已跳空穿越 stop 90 → 按实际可成交价 85 结算,不虚记 90
+        kline = _kline([_day("2026-07-02", 85, 86, low=84)])
+        result = evaluate_decision(_decision(), kline, None)
+        assert result.status == "hit_stop"
+        assert result.settle_price == 85.0
+        assert abs(result.decision_return - (-0.15)) < 1e-9
+
+    def test_gap_up_through_target(self):
+        # 开盘 125 已跳空穿越 target 120 → 按实际可成交价 125 结算
+        kline = _kline([_day("2026-07-02", 125, 126, high=127)])
+        result = evaluate_decision(_decision(), kline, None)
+        assert result.status == "hit_target"
+        assert result.settle_price == 125.0
+        assert result.decision_return == 0.25
+
+
+class TestNumericGuards:
+    def test_zero_entry_price_returns_none(self, caplog):
+        import logging
+
+        kline = _kline([_day("2026-07-02", 99, 98, low=89)])
+        with caplog.at_level(logging.WARNING):
+            result = evaluate_decision(_decision(entry_price=0.0), kline, None)
+        assert result is None  # 数据损坏保持 open,不 ZeroDivisionError
+
+    def test_nan_stop_target_treated_as_none(self):
+        # NaN 触发位按 None 对待(否则比较恒 False 静默失效)
+        kline = _kline([_day("2026-07-02", 99, 95)])
+        result = evaluate_decision(
+            _decision(stop_loss=float("nan"), target_price=float("nan")),
+            kline,
+            None,
+            max_hold_days=1,
+        )
+        assert result.status == "expired"
+        assert result.decision_return == -0.05
+
+    def test_benchmark_all_after_decision_gives_none(self):
+        # 基准全部在决策日/结算日之后 → entry_bench/settle_bench 不可得 → None
+        bench = _kline([_day("2026-07-10", 4000, 4000)])
+        kline = _kline([_day("2026-07-02", 101, 110, high=121)])
+        result = evaluate_decision(_decision(), kline, bench)
+        assert result.benchmark_return is None
+        assert result.decision_excess is None
+        assert result.decision_return == 0.2
+
+
+class TestBoundaryAndOrdering:
+    def test_low_equals_stop_triggers(self):
+        # 恰等触发:low == stop_loss 含边界(<=)
+        kline = _kline([_day("2026-07-02", 95, 94, low=90)])
+        result = evaluate_decision(_decision(), kline, None)
+        assert result.status == "hit_stop"
+        assert result.settle_price == 90.0
+
+    def test_high_equals_target_triggers(self):
+        # 恰等触发:high == target_price 含边界(>=)
+        kline = _kline([_day("2026-07-02", 101, 110, high=120)])
+        result = evaluate_decision(_decision(), kline, None)
+        assert result.status == "hit_target"
+        assert result.settle_price == 120.0
+
+    def test_unsorted_kline_sorted(self):
+        # 乱序输入 → sort_values 守卫,仍按日期升序结算
+        kline = _kline(
+            [
+                _day("2026-07-03", 95, 94, low=89),
+                _day("2026-07-02", 99, 98),
+            ]
+        )
+        result = evaluate_decision(_decision(), kline, None)
+        assert result.status == "hit_stop"
+        assert result.settle_date == "2026-07-03"
+        assert result.hold_days == 2
+
+
+class TestDeferralPastMaxHoldDays:
+    def test_deferral_extends_past_max_hold_days(self):
+        # 递延期间不做超期判定:第 max_hold_days 行恰为一字板 → 递延到打开日,
+        # hold_days 可超过 max_hold_days
+        kline = _kline(
+            [
+                _day("2026-07-02", 88, 88, high=88, low=88),  # 一字触及止损,递延
+                _day("2026-07-03", 88, 88, high=88, low=88),  # 第 2 行(=max_hold_days)仍一字
+                _day("2026-07-04", 85, 86),  # 打开,以开盘价结算
+            ]
+        )
+        result = evaluate_decision(_decision(), kline, None, max_hold_days=2)
+        assert result.status == "hit_stop"
+        assert result.settle_price == 85.0
+        assert result.hold_days == 3  # > max_hold_days
