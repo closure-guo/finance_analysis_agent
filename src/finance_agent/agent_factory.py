@@ -709,9 +709,11 @@ def _make_run_deep_analysis(
 def _stream_graph(initial_state: dict, config: dict | None = None, session_id: str | None = None):
     """执行 5 层管线同步流式迭代。
 
-    ADR-0015：注入 Langfuse CallbackHandler 使图节点自动挂成 span 树（Send 扇出
-    会自动传播 callback）。CallbackHandler 通过 OTel context.attach 设置 current
-    span，使 call_llm 的 generation（start_as_current_observation）能挂到节点 span 下。
+    ADR-0015：手动建 root span + propagate_attributes(session) 包裹 graph.stream，
+    使 5 层管线节点 + call_llm generation + 数据源 span 经 OTel contextvars 挂到
+    root span 下（仿 quick 模式 react_loop）。v4 CallbackHandler 在 LangGraph
+    graph.stream 不建主 trace，必须手动建 root，否则内部 span 各自成孤立 trace。
+    CallbackHandler 仍作 callbacks 注入（增益项，若 v4 后续支持 LangGraph 节点 span）。
     """
     from finance_agent.graph import build_5layer_graph
 
@@ -724,9 +726,26 @@ def _stream_graph(initial_state: dict, config: dict | None = None, session_id: s
     _lf = get_langfuse()
     if _handler is not None:
         config = {**config, "callbacks": [*config.get("callbacks", []), _handler]}
-        # ADR-0015：通过 metadata 传 langfuse_session_id，CallbackHandler 自动聚合到 session
+
+    # 手动 root span + session 聚合（仿 quick react_loop，agent_factory.py:1066）
+    _root_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    _propagate_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    if _lf is not None:
+        _stock = initial_state.get("stock_name") or initial_state.get("stock_code") or "unknown"
+        _root_cm = _lf.start_as_current_observation(
+            as_type="span",
+            name=f"deep_analysis:{_stock}",
+            input={"stock_code": initial_state.get("stock_code")},
+        )
         if session_id:
-            config["metadata"] = {**config.get("metadata", {}), "langfuse_session_id": session_id}
+            try:
+                from langfuse import propagate_attributes
+
+                _propagate_cm = propagate_attributes(session_id=session_id)
+            except Exception:  # noqa: S110
+                pass
+    _root_cm.__enter__()
+    _propagate_cm.__enter__()
 
     graph = build_5layer_graph()
 
@@ -737,6 +756,10 @@ def _stream_graph(initial_state: dict, config: dict | None = None, session_id: s
             stream_mode=["updates", "custom"],
         )
     finally:
+        with contextlib.suppress(Exception):
+            _propagate_cm.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            _root_cm.__exit__(None, None, None)
         if _lf is not None:
             with contextlib.suppress(Exception):
                 _lf.flush()
