@@ -20,9 +20,12 @@ SECTION_SYNONYMS: dict[str, list[str]] = {
 
 
 def _matches(synonym: str, report: str) -> bool:
-    """纯 ASCII 词条按词边界匹配(避免 PE ⊂ OPENAI/PIPELINE),其余子串匹配。"""
+    """纯 ASCII 词条按 ASCII 词字符环视匹配(避免 PE ⊂ OPENAI/PIPELINE,且 CJK 紧贴仍命中),其余子串匹配。"""
     if synonym.isascii():
-        return re.search(r"\b" + re.escape(synonym) + r"\b", report) is not None
+        return (
+            re.search(r"(?<![A-Za-z0-9_])" + re.escape(synonym) + r"(?![A-Za-z0-9_])", report)
+            is not None
+        )
     return synonym in report
 
 

@@ -36,6 +36,14 @@ class TestFindSection:
         assert find_section("估值", "当前 PE 25 倍,PB 3 倍") is True
         assert find_section("盈利能力", "ROE 维持 25%") is True
 
+    def test_ascii_synonym_adjacent_to_cjk_matches(self):
+        # \b 在 Unicode 下把 CJK 当词字符,改用 ASCII 词字符环视后紧贴写法仍命中
+        assert find_section("估值", "PE为25倍") is True
+        assert find_section("盈利能力", "ROE达25%") is True
+        assert find_section("估值", "PB仅1.2倍") is True
+        # 边界语义不退化:OPENAI/PIPELINE 仍不命中
+        assert find_section("估值", "公司与OPENAI合作") is False
+
 
 class TestSectionCoverage:
     def test_full_coverage(self):
