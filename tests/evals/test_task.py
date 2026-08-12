@@ -1,6 +1,7 @@
 # tests/evals/test_task.py
 """run_task:mode 分派、输出可序列化、follow_up 跳过、graph 配置。"""
 
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
@@ -111,9 +112,6 @@ class TestSkippedModes:
 class TestNestedLoopSafety:
     def test_quick_task_works_inside_running_loop(self):
         """langfuse run_experiment 在运行 loop 内同步调 task;quick 分派不能崩溃。"""
-        import asyncio
-
-        from evals.task import run_task
 
         async def _drive():
             # 模拟 langfuse 上下文:已在运行 loop 内同步调 run_task

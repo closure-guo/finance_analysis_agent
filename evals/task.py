@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
+from collections.abc import Coroutine
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -28,20 +30,26 @@ from finance_agent.graph import build_5layer_graph
 from finance_agent.langfuse_tracing import get_callback_handler
 
 
-def _await_sync(coro):
+def _await_sync[T](coro: Coroutine[Any, Any, T]) -> T:
     """运行协程;已在运行 loop 内时迁移到新线程(langfuse run_experiment 上下文兼容)。
 
     langfuse ``run_experiment`` 是同步函数,内部经 ``run_async_safely`` 在运行中的
     loop L1 内同步调 ``_run_task`` → 我们的 ``run_task`` → ``_run_quick``。此时直接
     ``asyncio.run`` 会抛 ``RuntimeError: cannot be called from a running event loop``。
     检测到运行中的 loop 时,把协程丢进单线程池在新线程跑 ``asyncio.run``,绕过嵌套限制。
+
+    线程池分支用 ``contextvars.copy_context()`` 复制提交线程的上下文,使 langfuse SDK
+    靠 contextvars 关联的 experiment → item → 子 span 链在新线程内仍然生效
+    (``ThreadPoolExecutor.submit`` 默认不复制提交线程的 contextvars,会导致 quick item
+    的 LLM span 脱离 item trace 父节点)。
     """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(lambda: asyncio.run(coro)).result()
+        ctx = contextvars.copy_context()
+        return ex.submit(lambda: ctx.run(asyncio.run, coro)).result()
 
 
 def _run_deep(inp: dict) -> dict:
