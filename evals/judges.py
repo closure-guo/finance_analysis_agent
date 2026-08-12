@@ -2,7 +2,7 @@
 """LLM-as-Judge 评估器(spec Requirement「LLM-as-Judge 评估器与 rubric 标准」)。
 
 - 裁判模型 deepseek/deepseek-chat,temperature=0(可复现)
-- rubric 末尾强约束 JSON {score, reason} + 「不以长度论优劣」
+- rubric 末尾强约束 JSON {score, reason} + 「不以篇幅长短论优劣」
 - 解析失败重试一次,仍失败 score=None(计入失败率,不阻塞实验)
 - judge generation 经独立 Langfuse(environment="langfuse-llm-as-a-judge")
   client 包裹,成本 Dashboard 独立核算;无凭据降级为无 trace 直调
@@ -16,6 +16,7 @@ lru_cache 缓存的 None 会令后续「有凭据」用例拿不到 client、不
 from __future__ import annotations
 
 import os
+import re
 from typing import TYPE_CHECKING
 
 from finance_agent.nodes._llm_utils import parse_json_response
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 JUDGE_MODEL = "deepseek/deepseek-chat"
 JUDGE_ENV = "langfuse-llm-as-a-judge"
 
-_JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以报告长度论优劣。'
+_JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以篇幅长短论优劣。'
 
 RUBRICS: dict[str, str] = {
     "report_relevance": """你是投资研究报告评审专家。
@@ -140,11 +141,17 @@ def _call_judge_llm(prompt: str) -> str:
 
 
 def _render(dimension: str, variables: dict[str, str]) -> str:
-    """rubric 模板 + 变量 → prompt;未提供变量保留占位符,缺失值给空串。"""
-    prompt = RUBRICS[dimension]
-    for key, value in variables.items():
-        prompt = prompt.replace("{{" + key + "}}", value or "")
-    return prompt
+    """rubric 模板 {{var}} 单次替换;未提供的变量替换为空串(避免 judge 看到裸占位符)。
+
+    单次扫描(re.sub 回调)而非逐键 str.replace 循环:后者会把变量值里
+    字面 {{another_key}} 二次替换掉。回调内 variables.get(...) 只对原始模板
+    的每个占位符求值一次,值中出现的 {{...}} 不会被重新扫描。
+    """
+    return re.sub(
+        r"\{\{(\w+)\}\}",
+        lambda m: str(variables.get(m.group(1), "")) or "",
+        RUBRICS[dimension],
+    )
 
 
 def run_judge(dimension: str, variables: dict[str, str]) -> dict:

@@ -4,7 +4,22 @@
 import os
 from unittest.mock import MagicMock, patch
 
+import evals.judges as judges_module
+import pytest
 from evals.judges import JUDGE_ENV, JUDGE_MODEL, RUBRICS, run_judge
+
+
+@pytest.fixture(autouse=True)
+def _reset_judge_singleton():
+    """每个用例前后重置模块级 _judge_client 单例,防止跨用例泄露。
+
+    必要性:test_judge_generation_marked_with_env 用 `with patch("_create_judge_client")`
+    包裹工厂;退出 with 只恢复工厂,但 get_judge_langfuse() 已把返回的 mock_client 赋给
+    _judge_client。残留 mock 会让后续用例命中 stale 单例。autouse fixture 兜底清零。
+    """
+    judges_module._judge_client = None
+    yield
+    judges_module._judge_client = None
 
 
 class TestRubricContract:
@@ -19,7 +34,7 @@ class TestRubricContract:
     def test_rubrics_have_json_constraint_and_no_length_bias(self):
         for dim, rubric in RUBRICS.items():
             assert '{"score"' in rubric, f"{dim} rubric 缺 JSON 输出约束"
-            assert "不以" in rubric and "长度" in rubric, f"{dim} rubric 缺「不以长度论优劣」"
+            assert "不以篇幅长短论优劣" in rubric, f"{dim} rubric 缺「不以篇幅长短论优劣」"
 
     def test_consistency_rubric_checks_fund_vs_risk(self):
         # spec consistency Scenario「特别检查 Fund Manager 与 Risk Judge 一致性」
@@ -36,9 +51,9 @@ def _mock_completion(score_json: str):
 
 class TestRunJudge:
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
-    @patch("evals.judges._judge_client", None)  # 重置 lru_cache 用 patch 见实施说明
     @patch("litellm.completion")
     def test_score_parsed(self, mock_llm):
+        # _judge_client 单例由 autouse fixture _reset_judge_singleton 兜底重置
         mock_llm.return_value = _mock_completion('{"score": 4, "reason": "基本切题"}')
         result = run_judge("report_relevance", {"query": "q", "report": "r"})
         assert result == {"name": "report_relevance", "score": 4, "reason": "基本切题"}
@@ -59,6 +74,20 @@ class TestRunJudge:
 
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
     @patch("litellm.completion")
+    def test_llm_exception_retries_then_null(self, mock_llm):
+        """litellm 抛异常(API/网络错误)同样重试一次后 score=None。
+
+        run_judge 的 try/except 覆盖 _call_judge_llm 抛出的异常,与解析失败同路径,
+        不向调用方泄露异常(spec「不阻塞实验」)。
+        """
+        mock_llm.side_effect = RuntimeError("boom")
+        result = run_judge("report_relevance", {"query": "q", "report": "r"})
+        assert result["score"] is None
+        assert result["reason"] == "judge_parse_failed"
+        assert mock_llm.call_count == 2
+
+    @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
+    @patch("litellm.completion")
     def test_score_out_of_range_treated_as_failure(self, mock_llm):
         mock_llm.return_value = _mock_completion('{"score": 9, "reason": "x"}')
         result = run_judge("report_relevance", {"query": "q", "report": "r"})
@@ -72,6 +101,27 @@ class TestRunJudge:
         prompt = mock_llm.call_args.kwargs["messages"][0]["content"]
         assert "茅台怎么样" in prompt and "茅台是好公司" in prompt
         assert "{{query}}" not in prompt
+
+    @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
+    @patch("litellm.completion")
+    def test_render_no_double_substitution(self, mock_llm):
+        """变量值含 {{another_key}} 字面时不被后续迭代二次替换(单次扫描)。"""
+        mock_llm.return_value = _mock_completion('{"score": 5, "reason": "x"}')
+        run_judge("report_relevance", {"query": "见 {{report}}", "report": "机密"})
+        prompt = mock_llm.call_args.kwargs["messages"][0]["content"]
+        # query 值原样保留(含字面 {{report}})或被自身键正确替换,二选一
+        assert "见 {{report}}" in prompt or "见 机密" in prompt
+        # report 槽位只替换一次:无论何种情况「机密」最多出现一次
+        assert prompt.count("机密") == 1
+
+    @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
+    @patch("litellm.completion")
+    def test_render_missing_var_becomes_empty(self, mock_llm):
+        """未提供的变量替换为空串,不残留 {{key}} 占位符。"""
+        mock_llm.return_value = _mock_completion('{"score": 5, "reason": "x"}')
+        run_judge("report_relevance", {"query": "q"})  # 缺 report
+        prompt = mock_llm.call_args.kwargs["messages"][0]["content"]
+        assert "{{report}}" not in prompt
 
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"})
     @patch("litellm.completion")
