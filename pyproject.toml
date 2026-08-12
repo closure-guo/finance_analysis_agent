@@ -70,6 +70,7 @@ convention = "google"
 
 [tool.mypy]
 python_version = "3.12"
+mypy_path = "src"  # src 布局:editable 安装是路径 .pth,mypy 不跟踪,显式声明保证 evals/ 等任意目标可解析 finance_agent
 ignore_missing_imports = true
 warn_return_any = true
 warn_unused_ignores = true
