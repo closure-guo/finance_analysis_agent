@@ -42,13 +42,18 @@ class TestExtractJudgeVars:
         assert all(isinstance(v, str) for v in vars_.values())
 
     def test_values_mapped_from_state(self):
-        vars_ = extract_judge_vars(_state())
+        vars_ = extract_judge_vars(_state(), query="分析茅台")
         assert "基本面强劲" in vars_["analyst_reports"]
         assert "看多理由" in vars_["debate_history"]
         assert vars_["research_manager_decision"] == "综合看多方占优"
         assert "buy" in vars_["trade_decision"]
         assert vars_["fund_manager_decision"] == "approve"
         assert "建议买入" in vars_["report_conclusion"]
+        # review 加固:risk_judgment 拼接契约 + query/report echo
+        assert "buy" in vars_["risk_judgment"], "risk_judgment 应含决策 JSON"
+        assert "激进看法" in vars_["risk_judgment"], "risk_judgment 应含 risk_debate 末条"
+        assert vars_["query"] == "分析茅台", "query 应原样 echo"
+        assert "财务分析" in vars_["report"], "report 应含 final_report 原文"
 
     def test_missing_keys_give_empty_string(self):
         vars_ = extract_judge_vars({})
