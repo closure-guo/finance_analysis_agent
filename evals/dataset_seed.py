@@ -1,0 +1,58 @@
+"""Dataset 建库(spec Requirement「评估 Dataset 与覆盖矩阵」)。
+
+幂等:以 (input.query, input.mode) 为去重键,已存在 item 跳过不覆盖。
+langfuse 未配置时返回 error,不抛异常(CI/本地可无 langfuse 跑 --local)。
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+DATASET_NAME = "a-share-analysis-v1"
+_ITEMS_PATH = Path(__file__).parent / "dataset_items.json"
+
+
+def load_items(path: Path | None = None) -> list[dict]:
+    """读取 dataset items(seed 与 --local 实验共用的 source of truth)。"""
+    items: list[dict] = json.loads((path or _ITEMS_PATH).read_text(encoding="utf-8"))
+    return items
+
+
+def seed(client=None) -> dict:
+    """幂等建库。返回 {created, skipped, error}。"""
+    if client is None:
+        from finance_agent.langfuse_tracing import get_langfuse
+
+        client = get_langfuse()
+    if client is None:
+        return {"created": 0, "skipped": 0, "error": "langfuse 未配置,跳过 seed"}
+    items = load_items()
+    try:
+        dataset = client.get_dataset(DATASET_NAME)
+    except Exception:
+        dataset = client.create_dataset(
+            name=DATASET_NAME,
+            description="A 股分析评估 Dataset v1(覆盖矩阵:deep 典型/边界、quick、follow_up、意图澄清)",
+            metadata={"version": "v1"},
+        )
+    existing = {(it.input.get("query"), it.input.get("mode")) for it in dataset.items}
+    created = skipped = 0
+    for item in items:
+        key = (item["input"]["query"], item["input"]["mode"])
+        if key in existing:
+            skipped += 1
+            continue
+        client.create_dataset_item(
+            dataset_name=DATASET_NAME,
+            input=item["input"],
+            expected_output=item.get("expected_output"),
+            metadata=item.get("metadata"),
+        )
+        created += 1
+    client.flush()
+    return {"created": created, "skipped": skipped, "error": None}
+
+
+if __name__ == "__main__":
+    print(seed())
