@@ -37,7 +37,7 @@ def report_outcome_scores(langfuse: Any, decision: dict[str, Any], settlement: S
         return 0
     comment = (
         f"settle_price={settlement.settle_price} hold_days={settlement.hold_days} "
-        f"benchmark_return={settlement.benchmark_return}"
+        f"benchmark_return={settlement.benchmark_return if settlement.benchmark_return is not None else 'n/a'}"
     )
     scores: list[tuple[str, float, str]] = [
         ("decision_hit", 1.0 if settlement.decision_hit else 0.0, "BOOLEAN"),
@@ -97,24 +97,42 @@ def settle_open_decisions(
     days = kline_days or MAX_HOLD_DAYS + 15
     result = {"settled": 0, "skipped": 0, "stale": 0, "scores_reported": 0, "errors": 0}
 
-    for decision in store.get_open_decisions(db_path):
+    try:
+        open_decisions = store.get_open_decisions(db_path)
+    except Exception as e:
+        # DB 全挂:记一条干净 ERROR 返回,不让 traceback 逃逸(旁路铁律)
+        logger.error("读取 open 决策失败,本批终止: %s", e)
+        result["errors"] += 1
+        return result
+
+    # 基准全批只拉一次(N 决策 N+1 次网络调用,而非 2N);失败 → None 降级:
+    # evaluate_decision 对 benchmark=None 跳过 excess,report 同步跳过 excess score。
+    benchmark: pd.DataFrame | None
+    try:
+        benchmark = client.fetch_index_kline(BENCHMARK_CODE, days=days)
+        if benchmark is not None and not benchmark.empty:
+            benchmark = _normalize_dates(benchmark)
+    except Exception as e:
+        logger.warning("基准行情拉取失败,本批按无基准降级: %s", e)
+        benchmark = None
+
+    for decision in open_decisions:
         try:
             kline = client.fetch_kline(decision["ticker"], days=days)
-            benchmark = client.fetch_index_kline(BENCHMARK_CODE, days=days)
+            decision_date = str(decision["timestamp"])[:10]
+            if kline is not None and not kline.empty:
+                kline = _normalize_dates(kline)
+            has_new_rows = (
+                kline is not None
+                and not kline.empty
+                and not kline[kline["日期"] > decision_date].empty
+            )
         except Exception as e:
             logger.warning("行情拉取失败,本次跳过 %s: %s", decision["decision_id"], e)
             result["errors"] += 1
             continue
 
-        decision_date = str(decision["timestamp"])[:10]
-        if kline is not None and not kline.empty:
-            kline = _normalize_dates(kline)
-        has_new_rows = (
-            kline is not None and not kline.empty and not kline[kline["日期"] > decision_date].empty
-        )
         if not has_new_rows:
-            if benchmark is not None and not benchmark.empty:
-                benchmark = _normalize_dates(benchmark)
             if _is_stale(kline, benchmark):
                 logger.warning(
                     "data_stale: %s(%s)K 线落后基准 ≥ %d 个交易日",
@@ -137,29 +155,35 @@ def settle_open_decisions(
             result["skipped"] += 1
             continue
 
-        # 幂等:落库前再查 settled_at(并发/重复执行防御)
-        current = [
-            d
-            for d in store.get_open_decisions(db_path)
-            if d["decision_id"] == decision["decision_id"]
-        ]
-        if not current:
-            result["skipped"] += 1
+        try:
+            # 幂等:落库前再查 settled_at(并发/重复执行防御)
+            current = [
+                d
+                for d in store.get_open_decisions(db_path)
+                if d["decision_id"] == decision["decision_id"]
+            ]
+            if not current:
+                result["skipped"] += 1
+                continue
+            store.mark_settled(
+                decision["decision_id"],
+                {
+                    "status": settlement.status,
+                    "settled_at": settlement.settle_date,
+                    "settle_price": settlement.settle_price,
+                    "hold_days": settlement.hold_days,
+                    "decision_return": settlement.decision_return,
+                    "benchmark_return": settlement.benchmark_return,
+                    "decision_excess": settlement.decision_excess,
+                },
+                db_path,
+            )
+            result["settled"] += 1
+            result["scores_reported"] += report_outcome_scores(langfuse, decision, settlement)
+        except Exception as e:
+            # sqlite 瞬时写失败(disk full/busy_timeout)仅跳过该决策,不中断整批
+            logger.warning("落库/上报异常,本次跳过 %s: %s", decision["decision_id"], e)
+            result["errors"] += 1
             continue
-        store.mark_settled(
-            decision["decision_id"],
-            {
-                "status": settlement.status,
-                "settled_at": settlement.settle_date,
-                "settle_price": settlement.settle_price,
-                "hold_days": settlement.hold_days,
-                "decision_return": settlement.decision_return,
-                "benchmark_return": settlement.benchmark_return,
-                "decision_excess": settlement.decision_excess,
-            },
-            db_path,
-        )
-        result["settled"] += 1
-        result["scores_reported"] += report_outcome_scores(langfuse, decision, settlement)
 
     return result

@@ -1,7 +1,8 @@
 """结算 job:结算+落库+上报、幂等、行情缺失跳过、data_stale、trace 不可查容错。"""
 
 import logging
-from unittest.mock import MagicMock
+import sqlite3
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -129,6 +130,65 @@ class TestSettleJob:
         assert result["stale"] == 1
         assert any("data_stale" in r.message for r in caplog.records)
 
+    def test_mark_settled_failure_isolated(self, tmp_path):
+        """mark_settled 瞬时写失败仅跳过该决策(errors 计数),不中断整批。"""
+        db = tmp_path / "t.db"
+        store.init_decision_log(db)
+        store.insert_decision(_open_decision(), db)
+        store.insert_decision(_open_decision(decision_id="d2", ticker="000001", name="平安"), db)
+        client = MagicMock()
+        client.fetch_kline.return_value = _kline_hit_target()
+        client.fetch_index_kline.return_value = _bench()
+
+        real_mark = store.mark_settled
+
+        def flaky_mark(decision_id, settled, db_path=None):
+            if decision_id == "d1":
+                raise RuntimeError("disk full")
+            return real_mark(decision_id, settled, db_path)
+
+        with patch("finance_agent.outcome.store.mark_settled", side_effect=flaky_mark):
+            result = settle_open_decisions(client=client, db_path=db, langfuse=MagicMock())
+        assert result["errors"] >= 1  # d1 落库失败被隔离
+        assert result["settled"] == 1  # d2 正常结算,job 不崩
+        remaining = {d["decision_id"] for d in store.get_open_decisions(db)}
+        assert remaining == {"d1"}  # d1 保持 open,下次重试
+
+    def test_benchmark_fetch_failure_degrades_all(self, tmp_path):
+        """基准拉取失败 → benchmark=None 降级:仍按自身 K 线结算,excess 落 NULL、不上报。"""
+        db = tmp_path / "t.db"
+        store.init_decision_log(db)
+        store.insert_decision(_open_decision(), db)
+        client = MagicMock()
+        client.fetch_kline.return_value = _kline_hit_target()
+        client.fetch_index_kline.side_effect = RuntimeError("index api down")
+        langfuse = MagicMock()
+
+        result = settle_open_decisions(client=client, db_path=db, langfuse=langfuse)
+        assert result["settled"] == 1  # 决策仍按自身 kline 结算
+        assert result["scores_reported"] == 2  # excess 跳过,只报 hit/return
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT benchmark_return, decision_excess FROM decision_log WHERE decision_id='d1'"
+        ).fetchone()
+        conn.close()
+        assert row == (None, None)
+
+    def test_evaluate_exception_isolated(self, tmp_path):
+        """evaluate_decision 意外异常 → errors+1,决策保持 open,job 不崩。"""
+        db = tmp_path / "t.db"
+        store.init_decision_log(db)
+        store.insert_decision(_open_decision(), db)
+        client = MagicMock()
+        client.fetch_kline.return_value = _kline_hit_target()
+        client.fetch_index_kline.return_value = _bench()
+
+        with patch("finance_agent.outcome.job.evaluate_decision", side_effect=RuntimeError("boom")):
+            result = settle_open_decisions(client=client, db_path=db, langfuse=MagicMock())
+        assert result["errors"] == 1
+        assert result["settled"] == 0
+        assert len(store.get_open_decisions(db)) == 1  # 保持 open 等下批
+
 
 class TestReportScores:
     def _settlement(self):
@@ -174,3 +234,15 @@ class TestReportScores:
         langfuse = MagicMock()
         count = report_outcome_scores(langfuse, _open_decision(), settlement)
         assert count == 2  # excess 为 None 不上报
+
+    def test_partial_score_failure(self):
+        """单个 score 失败 WARN 继续:excess 挂掉,前 2 个成功 → 返回 2。"""
+        langfuse = MagicMock()
+
+        def flaky_score(**kwargs):
+            if kwargs["name"] == "decision_excess":
+                raise RuntimeError("trace expired")
+
+        langfuse.create_score.side_effect = flaky_score
+        count = report_outcome_scores(langfuse, _open_decision(), self._settlement())
+        assert count == 2
