@@ -1,7 +1,7 @@
 """Dataset:schema 合规、覆盖矩阵、幂等 seed。"""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from evals.dataset_seed import DATASET_NAME, load_items, seed
 
@@ -43,7 +43,7 @@ class TestSeed:
     def test_creates_all_on_empty(self):
         client = self._client()
         result = seed(client=client)
-        assert result["created"] == 16
+        assert result["created"] == len(load_items())
         assert result["skipped"] == 0
 
     def test_idempotent_on_rerun(self):
@@ -52,7 +52,7 @@ class TestSeed:
         client = self._client(existing_keys=keys)
         result = seed(client=client)
         assert result["created"] == 0
-        assert result["skipped"] == 16
+        assert result["skipped"] == len(load_items())
         client.create_dataset_item.assert_not_called()
 
     def test_creates_dataset_when_missing(self):
@@ -64,9 +64,12 @@ class TestSeed:
         result = seed(client=client)
         client.create_dataset.assert_called_once()
         assert client.create_dataset.call_args.kwargs["name"] == DATASET_NAME
-        assert result["created"] == 16
+        assert result["created"] == len(load_items())
 
     def test_no_client_returns_error(self):
-        result = seed(client=None)
+        # 显式隔离 get_langfuse:CI/nightly 注入 LANGFUSE_* 凭据时会返回真实 client,
+        # 导致 client=None 隐式取值联网 seed,测试漂移。强制返回 None 走 error 分支。
+        with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=None):
+            result = seed(client=None)
         assert result["created"] == 0
         assert result["error"] is not None

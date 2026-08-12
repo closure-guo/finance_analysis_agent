@@ -7,7 +7,10 @@ langfuse 未配置时返回 error,不抛异常(CI/本地可无 langfuse 跑 --lo
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DATASET_NAME = "a-share-analysis-v1"
 _ITEMS_PATH = Path(__file__).parent / "dataset_items.json"
@@ -30,7 +33,10 @@ def seed(client=None) -> dict:
     items = load_items()
     try:
         dataset = client.get_dataset(DATASET_NAME)
-    except Exception:
+    except Exception as e:
+        # 过宽兜底:网络抖动/认证过期等异常也会落到此分支。
+        # 记 warning 以便排查被吞掉的异常,再尝试 create_dataset。
+        logger.warning("get_dataset(%s) 失败,尝试 create_dataset: %s", DATASET_NAME, e)
         dataset = client.create_dataset(
             name=DATASET_NAME,
             description="A 股分析评估 Dataset v1(覆盖矩阵:deep 典型/边界、quick、follow_up、意图澄清)",
