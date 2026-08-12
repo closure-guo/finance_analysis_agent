@@ -300,3 +300,89 @@ async def test_chat_stream_text_branch_has_no_tool_calls_key(monkeypatch):
     call_kwargs = mockObs.update.call_args.kwargs
     assert "tool_calls" not in call_kwargs["output"]
     assert call_kwargs["output"]["answer"] == "纯文本"
+
+
+# ── agent-trace-content-fidelity Task 4: prompt metadata 挂 generation ──
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_attaches_prompt_metadata_from_client_fields(monkeypatch):
+    """LiteLLMClient 用构造时传入的 prompt_name/prompt_version 挂到 generation metadata。"""
+    from finance_agent.harness.litellm_client import LiteLLMClient
+
+    def _chunk(content, finish_reason="stop"):
+        chunk = MagicMock()
+        chunk.usage = None
+        chunk.choices = [
+            MagicMock(
+                delta=MagicMock(content=content, reasoning_content=None, tool_calls=[]),
+                finish_reason=finish_reason,
+            )
+        ]
+        return chunk
+
+    async def _mock_acompletion(**kwargs):
+        async def _stream():
+            yield _chunk("答案")
+
+        return _stream()
+
+    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    client = LiteLLMClient(
+        model="deepseek-chat",
+        prompt_name="quick_mode",
+        prompt_version=5,
+    )
+    monkeypatch.setattr(client, "_langfuse", MagicMock())
+    client._langfuse.start_as_current_observation.return_value = mockCm
+
+    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    call_kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
+    assert call_kwargs["metadata"]["prompt_name"] == "quick_mode"
+    assert call_kwargs["metadata"]["prompt_version"] == 5
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_omits_metadata_when_no_prompt_fields(monkeypatch):
+    """LiteLLMClient 未传 prompt 字段时 metadata 不含 prompt_name/version（向后兼容）。"""
+    from finance_agent.harness.litellm_client import LiteLLMClient
+
+    def _chunk(content, finish_reason="stop"):
+        chunk = MagicMock()
+        chunk.usage = None
+        chunk.choices = [
+            MagicMock(
+                delta=MagicMock(content=content, reasoning_content=None, tool_calls=[]),
+                finish_reason=finish_reason,
+            )
+        ]
+        return chunk
+
+    async def _mock_acompletion(**kwargs):
+        async def _stream():
+            yield _chunk("答案")
+
+        return _stream()
+
+    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    client = LiteLLMClient(model="deepseek-chat")  # 不传 prompt 元数据
+    monkeypatch.setattr(client, "_langfuse", MagicMock())
+    client._langfuse.start_as_current_observation.return_value = mockCm
+
+    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    call_kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
+    md = call_kwargs.get("metadata", {})
+    assert "prompt_name" not in md
+    assert "prompt_version" not in md

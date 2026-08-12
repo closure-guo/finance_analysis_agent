@@ -553,3 +553,131 @@ def test_call_llm_with_tools_degraded_noop_without_error(
     # 业务正常返回，未报错（spec「若降级到 no-op 则不报错」）
     assert resp is mock_resp
     mock_open_span.assert_called_once()
+
+
+# ── agent-trace-content-fidelity Task 4: prompt_name/version 挂 generation metadata ──
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
+    """call_llm 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "答案"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm
+
+    call_llm("hi", api_key="fake", prompt_name="trader", prompt_version=3)
+
+    call_kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert call_kwargs["metadata"]["prompt_name"] == "trader"
+    assert call_kwargs["metadata"]["prompt_version"] == 3
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_omits_metadata_when_prompt_unset(mock_completion, mock_get_langfuse):
+    """call_llm 未传 prompt_name/prompt_version 时 metadata 不含这两个键（向后兼容）。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "答案"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm
+
+    call_llm("hi", api_key="fake")
+
+    call_kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    md = call_kwargs.get("metadata", {})
+    assert "prompt_name" not in md
+    assert "prompt_version" not in md
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_stream_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
+    """call_llm_stream 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
+
+    def _delta(content=None):
+        d = MagicMock()
+        d.reasoning_content = None
+        d.content = content
+        return d
+
+    def _chunk(content):
+        c = MagicMock()
+        c.choices = [MagicMock(delta=_delta(content=content))]
+        c.usage = None
+        return c
+
+    mock_completion.return_value = iter([_chunk("答案")])
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm_stream
+
+    list(call_llm_stream("hi", api_key="fake", prompt_name="bull_debater", prompt_version="local"))
+
+    call_kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert call_kwargs["metadata"]["prompt_name"] == "bull_debater"
+    assert call_kwargs["metadata"]["prompt_version"] == "local"
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_with_tools_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
+    """call_llm_with_tools 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "答案"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.choices[0].message.tool_calls = None
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+
+    from finance_agent.llm import call_llm_with_tools
+
+    call_llm_with_tools(
+        "hi",
+        api_key="fake",
+        tools=[{"type": "function", "function": {"name": "f"}}],
+        prompt_name="risk_judge",
+        prompt_version=2,
+    )
+
+    call_kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert call_kwargs["metadata"]["prompt_name"] == "risk_judge"
+    assert call_kwargs["metadata"]["prompt_version"] == 2

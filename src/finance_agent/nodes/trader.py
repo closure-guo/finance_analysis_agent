@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from finance_agent.models import TradeDecision
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import load_prompt_with_meta
 
 
 def trader(state: dict) -> dict:
     """Layer III Trader — 综合分析产出交易决策。"""
     context = _build_trader_context(state)
-    system = load_prompt("trader")
+    _pinfo = load_prompt_with_meta("trader")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -19,6 +20,8 @@ def trader(state: dict) -> dict:
         api_key=api_key,
         node_name="trader",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)

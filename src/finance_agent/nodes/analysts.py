@@ -15,7 +15,7 @@ import logging
 
 from finance_agent.models import AnalystReport
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,8 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
 def technical_analyst(state: dict) -> dict:
     """Layer I 技术面分析师 Agent。"""
     context = _build_technical_context(state)
-    system = load_prompt("technical_analyst")
+    _pinfo = load_prompt_with_meta("technical_analyst")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -98,6 +99,8 @@ def technical_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="technical_analyst",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     report = _parse_analyst_report(response, "technical")
 
@@ -126,7 +129,8 @@ def _build_technical_context(state: dict) -> str:
 def macro_analyst(state: dict) -> dict:
     """Layer I 宏观分析师 Agent。"""
     context = _build_macro_context(state)
-    system = load_prompt("macro_analyst")
+    _pinfo = load_prompt_with_meta("macro_analyst")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -135,6 +139,8 @@ def macro_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="macro_analyst",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     report = _parse_analyst_report(response, "macro")
 
@@ -176,7 +182,8 @@ def _build_macro_context(state: dict) -> str:
 def fundamental_analyst(state: dict) -> dict:
     """Layer I 基本面分析师 Agent。"""
     context = _build_fundamental_context(state)
-    system = load_prompt("fundamental_analyst")
+    _pinfo = load_prompt_with_meta("fundamental_analyst")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -185,6 +192,8 @@ def fundamental_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="fundamental_analyst",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     report = _parse_analyst_report(response, "fundamental")
 
@@ -280,7 +289,8 @@ def _build_fundamental_context(state: dict) -> str:
 def sentiment_analyst(state: dict) -> dict:
     """Layer I 舆情分析师 Agent。"""
     context = _build_sentiment_context(state)
-    system = load_prompt("sentiment_analyst")
+    _pinfo = load_prompt_with_meta("sentiment_analyst")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -289,6 +299,8 @@ def sentiment_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="sentiment_analyst",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     report = _parse_analyst_report(response, "sentiment")
 

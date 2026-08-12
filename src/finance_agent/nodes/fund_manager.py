@@ -6,13 +6,14 @@ import json
 
 from finance_agent.models import FundManagerDecision
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import load_prompt_with_meta
 
 
 def fund_manager(state: dict) -> dict:
     """Layer V Fund Manager — 审批/拒绝/退回。"""
     context = _build_fund_manager_context(state)
-    system = load_prompt("fund_manager")
+    _pinfo = load_prompt_with_meta("fund_manager")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -21,6 +22,8 @@ def fund_manager(state: dict) -> dict:
         api_key=api_key,
         node_name="fund_manager",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     data = parse_json_response(response)
     # 枚举强校验：非法值/缺键抛 ValidationError 中断管线，不静默降级为 approve

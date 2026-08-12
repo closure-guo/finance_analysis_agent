@@ -107,6 +107,20 @@ def _resolve_key(api_key: str | None) -> str:
     return api_key or os.environ.get("LLM_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
 
 
+def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) -> dict:
+    """构造 generation metadata：仅在显式提供 prompt_name/version 时写入对应键。
+
+    ADR-0015 Task 4：prompt 元数据可追溯。未传入时返回空 dict（与历史
+    Langfuse 调用向后兼容，不污染 metadata 命名空间）。
+    """
+    md: dict = {}
+    if prompt_name:
+        md["prompt_name"] = prompt_name
+    if prompt_version is not None:
+        md["prompt_version"] = prompt_version
+    return md
+
+
 def _build_kwargs(
     model: str,
     messages: list[dict],
@@ -191,6 +205,8 @@ def call_llm(
     api_key: str | None = None,
     quick: bool = False,
     llm_config: LLMConfig | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ) -> str:
     """Non-streaming LLM call — returns full response string.
 
@@ -198,6 +214,10 @@ def call_llm(
     Use quick=True for simple tasks like JSON extraction, classification, etc.
 
     llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
+    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键
+    （向后兼容）。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -229,6 +249,7 @@ def call_llm(
                 name=f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
+                metadata=_prompt_metadata(prompt_name, prompt_version),
             ) as _gen:
                 resp = litellm.completion(**kwargs)
                 msg = resp.choices[0].message
@@ -273,6 +294,8 @@ def call_llm_stream(
     messages: list[dict] | None = None,
     quick: bool = False,
     llm_config: LLMConfig | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ):
     """Streaming LLM call — yields tokens one by one.
 
@@ -282,6 +305,9 @@ def call_llm_stream(
     If ``quick=True``, uses LLM_QUICK_MODEL instead of LLM_MODEL.
 
     llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
+    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -320,6 +346,7 @@ def call_llm_stream(
                 name=f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
+                metadata=_prompt_metadata(prompt_name, prompt_version),
             )
             _gen = _gen_cm.__enter__()
         except Exception:
@@ -417,6 +444,8 @@ def call_llm_with_tools(
     messages: list[dict] | None = None,
     model: str | None = None,
     llm_config: LLMConfig | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ):
     """Non-streaming LLM call with tool support.
 
@@ -427,6 +456,9 @@ def call_llm_with_tools(
     (used for ReAct multi-turn dialogue with tool results).
 
     llm_config.model（若提供）覆盖 model 参数的解析。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
+    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -460,6 +492,7 @@ def call_llm_with_tools(
                 name=f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
+                metadata=_prompt_metadata(prompt_name, prompt_version),
             ) as _gen:
                 resp = litellm.completion(**kwargs)
                 _output_obj = _extract_with_tools_output(resp)

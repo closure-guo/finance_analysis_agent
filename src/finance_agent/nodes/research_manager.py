@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import load_prompt_with_meta
 
 
 def research_manager(state: dict) -> dict:
     """Layer II Research Manager - 输出纯文本结论。"""
     context = _build_research_context(state)
-    system = load_prompt("research_manager")
+    _pinfo = load_prompt_with_meta("research_manager")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     conclusion = call_llm_streaming(
@@ -18,6 +19,8 @@ def research_manager(state: dict) -> dict:
         api_key=api_key,
         node_name="research_manager",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
 
     return {"research_manager_conclusion": conclusion}
