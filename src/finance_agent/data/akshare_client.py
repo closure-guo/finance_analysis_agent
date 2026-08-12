@@ -447,10 +447,10 @@ class AKShareClient:
             return f"bj{stock_code}"
         return f"sh{stock_code}"
 
-    def fetch_benchmark_kline(self, days: int = 250) -> pd.DataFrame:
-        """拉取沪深 300 指数日 K 线，返回最近 N 个交易日。
+    def fetch_index_kline(self, index_code: str, days: int = 250) -> pd.DataFrame:
+        """拉取指数日 K 线，返回最近 N 个交易日。
 
-        使用 index_zh_a_hist（东方财富），返回列含 日期, 收盘 等。
+        使用 index_zh_a_hist（东方财富，无 adjust），返回列含 日期, 收盘 等。
         """
         from datetime import datetime, timedelta
 
@@ -459,17 +459,21 @@ class AKShareClient:
 
         df = _call_ak(
             ak.index_zh_a_hist,
-            symbol="000300",
+            symbol=index_code,
             period="daily",
             start_date=start_date,
             end_date=end_date,
         )
         if df is None or df.empty:
-            logger.warning("沪深300 K线拉取失败或为空")
+            logger.warning("指数 K线拉取失败或为空: %s", index_code)
             return pd.DataFrame()
 
         df = df.sort_values("日期").reset_index(drop=True)
         return df.tail(days).reset_index(drop=True)
+
+    def fetch_benchmark_kline(self, days: int = 250) -> pd.DataFrame:
+        """沪深 300 日 K(fetch_index_kline 的 000300 特化,行为与原来一致)。"""
+        return self.fetch_index_kline("000300", days=days)
 
     # ── 宏观指标 ──
 
