@@ -260,12 +260,13 @@ describe('applyPipelineThinkingToken - 管线按 node 分组', () => {
     if (bull[0].type === 'thinking') expect(bull[0].content).toBe('AB')
   })
 
-  it('收到其他节点 thinking_token 时，上一节点未完成 thinking item 收口为 done', () => {
+  it('收到其他节点 thinking_token 时，不收口其他节点（由 node_complete 显式收口，支持 Send 并行）', () => {
     let msg: UIMessage = { id: 'p1', type: 'pipeline', content: '' }
     msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '多头思考', node: 'bull_r1' }))
     msg = applyPipelineThinkingToken(msg, ev({ type: 'thinking_token', token: '空头思考', node: 'bear_r1' }))
     const bull = msg.nodeTimelines!['bull_r1'][0]
-    if (bull.type === 'thinking') expect(bull.done).toBe(true)
+    // 不被 bear token 收口——并行 agent(Send 扇出)与串行辩论均由 node_complete 收口
+    if (bull.type === 'thinking') expect(bull.done).toBe(false)
     const bear = msg.nodeTimelines!['bear_r1'][0]
     if (bear.type === 'thinking') expect(bear.done).toBe(false)
   })
