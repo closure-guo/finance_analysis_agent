@@ -8,9 +8,10 @@
   client 包裹,成本 Dashboard 独立核算;无凭据降级为无 trace 直调
 
 singleton 说明:judge client 用模块级 `_judge_client` 单例(而非 @lru_cache)。
-原因:测试用 `@patch("evals.judges._judge_client", None)` 重置缓存跨用例隔离;
+测试隔离:`tests/evals/test_judges.py` 的 autouse fixture
+`_reset_judge_singleton` 在每个用例前后直接赋值 None 重置单例;
 lru_cache 缓存的 None 会令后续「有凭据」用例拿不到 client、不再调
-`_create_judge_client`,断言失败。模块变量等价于「可 patch 重置的单例」。
+`_create_judge_client`,断言失败。模块变量等价于「可重置的单例」。
 """
 
 from __future__ import annotations
