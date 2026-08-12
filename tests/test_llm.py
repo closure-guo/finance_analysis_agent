@@ -397,6 +397,7 @@ def test_call_llm_with_tools_writes_tool_calls_to_output(mock_completion, mock_g
     """call_llm_with_tools 把 message.tool_calls 写入 generation output.tool_calls。"""
     mock_resp = MagicMock()
     mock_resp.choices[0].message.content = ""
+    mock_resp.choices[0].message.reasoning_content = "为何调用此工具"
     mock_resp.usage = None
     # litellm completion: message.tool_calls = [{id, type, function: {name, arguments(JSON 字符串)}}]
     _tc = MagicMock()
@@ -428,14 +429,17 @@ def test_call_llm_with_tools_writes_tool_calls_to_output(mock_completion, mock_g
     assert call_kwargs["output"]["tool_calls"] == [
         {"name": "web_search", "arguments": '{"q":"茅台"}'}
     ]
+    # Finding 2: reasoning 字段对称写入（与 call_llm / chat_stream 一致）
+    assert call_kwargs["output"]["reasoning"] == "为何调用此工具"
 
 
 @patch("finance_agent.llm._get_langfuse")
 @patch("finance_agent.llm.litellm.completion")
 def test_call_llm_with_tools_empty_tool_calls_list(mock_completion, mock_get_langfuse):
-    """无 tool_calls 时 output.tool_calls 为空列表（不破坏 output 结构）。"""
+    """无 tool_calls 时 output 不含 tool_calls 字段（与 chat_stream 文本分支一致）。"""
     mock_resp = MagicMock()
     mock_resp.choices[0].message.content = "纯文本回答"
+    mock_resp.choices[0].message.reasoning_content = ""
     mock_resp.usage = None
     # 显式声明 message.tool_calls = None
     mock_resp.choices[0].message.tool_calls = None
@@ -454,5 +458,98 @@ def test_call_llm_with_tools_empty_tool_calls_list(mock_completion, mock_get_lan
     call_llm_with_tools("hi", api_key="fake")
 
     call_kwargs = mockObs.update.call_args.kwargs
-    assert call_kwargs["output"]["tool_calls"] == []
+    # Finding 3: 空 tool_calls 统一省略 key（不再写 tool_calls: []）
+    assert "tool_calls" not in call_kwargs["output"]
     assert call_kwargs["output"]["answer"] == "纯文本回答"
+
+
+# ── Task 3 fix: 降级路径经 open_span 记录 tool_calls（spec「降级路径同样记录」）──
+
+
+@patch("finance_agent.llm.open_span")
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_with_tools_degraded_records_via_open_span(
+    mock_completion, mock_get_langfuse, mock_open_span
+):
+    """start_as_current_observation 抛异常时，降级分支经 open_span 记录 tool_calls/reasoning。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "答案"
+    mock_resp.choices[0].message.reasoning_content = "推理过程"
+    mock_resp.usage = None
+    _tc = MagicMock()
+    _tc.function.name = "web_search"
+    _tc.function.arguments = '{"q":"茅台"}'
+    mock_resp.choices[0].message.tool_calls = [_tc]
+    mock_completion.return_value = mock_resp
+
+    # 主观测路径抛异常 → 触发降级
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.side_effect = RuntimeError("langfuse down")
+    mock_get_langfuse.return_value = mockLf
+
+    # open_span yield 一个 mock obs，验证降级路径写入 output
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mock_open_span.return_value = mockCm
+
+    from finance_agent.llm import call_llm_with_tools
+
+    resp = call_llm_with_tools(
+        "搜一下",
+        api_key="fake",
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        model="deepseek/deepseek-chat",
+    )
+
+    # 业务正常返回
+    assert resp is mock_resp
+    # 降级路径经 open_span 记录（spec「降级路径同样记录」）
+    mock_open_span.assert_called_once()
+    _kwargs = mock_open_span.call_args.kwargs
+    assert _kwargs["name"] == "litellm:deepseek/deepseek-chat"
+    assert _kwargs["input"] == {
+        "messages": [
+            {"role": "user", "content": "搜一下"},
+        ]
+    }
+    mockObs.update.assert_called_once()
+    out = mockObs.update.call_args.kwargs["output"]
+    assert out["answer"] == "答案"
+    assert out["reasoning"] == "推理过程"
+    assert out["tool_calls"] == [{"name": "web_search", "arguments": '{"q":"茅台"}'}]
+
+
+@patch("finance_agent.llm.open_span")
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_with_tools_degraded_noop_without_error(
+    mock_completion, mock_get_langfuse, mock_open_span
+):
+    """open_span 降级到 no-op（yield None）时不报错，业务正常返回 resp。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "答案"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.choices[0].message.tool_calls = None
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.side_effect = RuntimeError("langfuse down")
+    mock_get_langfuse.return_value = mockLf
+
+    # open_span 降级：yield None（no-op，对应未配置 Langfuse 的场景）
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=None)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mock_open_span.return_value = mockCm
+
+    from finance_agent.llm import call_llm_with_tools
+
+    resp = call_llm_with_tools("hi", api_key="fake")
+
+    # 业务正常返回，未报错（spec「若降级到 no-op 则不报错」）
+    assert resp is mock_resp
+    mock_open_span.assert_called_once()

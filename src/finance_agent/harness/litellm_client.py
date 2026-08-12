@@ -277,7 +277,7 @@ class LiteLLMClient:
         text: str,
         last_chunk,
         reasoning: str = "",
-        tool_calls: list | None = None,
+        tool_calls: list[ToolCallRequest] | None = None,
     ) -> None:
         """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。
 

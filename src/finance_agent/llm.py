@@ -75,7 +75,10 @@ for _cls_path in (
 # 自动挂到 CallbackHandler 已建好的图节点 span 下。
 # 不再使用 _LangfuseCallback + start_observation（产生孤立 generation，无父子关系）。
 from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse  # noqa: E402
-from finance_agent.langfuse_tracing import truncate_for_trace  # noqa: E402
+from finance_agent.langfuse_tracing import (  # noqa: E402
+    open_span,
+    truncate_for_trace,
+)
 
 _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 _QUICK_MODEL = "deepseek/deepseek-chat"
@@ -366,6 +369,43 @@ def call_llm_stream(
                 _gen_cm.__exit__(None, None, None)
 
 
+def _extract_with_tools_output(resp) -> dict:
+    """从 litellm completion resp 提取结构化 generation output。
+
+    返回 ``{answer, reasoning}``，非空 tool_calls 时追加 ``tool_calls`` 字段。
+    供 ``call_llm_with_tools`` 的 Langfuse 主路径与降级路径共用，保证两路
+    output 结构一致（reasoning 与 call_llm / chat_stream 对称；空 tool_calls
+    省略 key，与 chat_stream 文本分支一致）。
+
+    - answer: ``message.content``（缺失时为空串，不回退 reasoning —— 工具调用场景
+      content 通常为空，回退会把 reasoning 当 answer 误导 trace）。
+    - reasoning: ``message.reasoning_content`` 独立提取（DeepSeek thinking 模式）。
+    - tool_calls: ``message.tool_calls`` 结构化为 ``[{name, arguments}]``，
+      arguments 保留 LLM 原始 JSON 字符串并裁剪。
+    """
+    _message = None
+    _choices = getattr(resp, "choices", [])
+    if _choices:
+        _message = getattr(_choices[0], "message", None)
+    _output_text = (getattr(_message, "content", "") or "") if _message else ""
+    _reasoning_text = (getattr(_message, "reasoning_content", "") or "") if _message else ""
+    _output_tool_calls: list[dict] = []
+    if _message is not None:
+        _tc_list = getattr(_message, "tool_calls", None) or []
+        for _tc in _tc_list:
+            _func = getattr(_tc, "function", None)
+            _tc_name = (getattr(_func, "name", "") or "") if _func else ""
+            _tc_args = (getattr(_func, "arguments", "") or "") if _func else ""
+            _output_tool_calls.append({"name": _tc_name, "arguments": truncate_for_trace(_tc_args)})
+    out: dict = {
+        "answer": truncate_for_trace(_output_text),
+        "reasoning": truncate_for_trace(_reasoning_text),
+    }
+    if _output_tool_calls:
+        out["tool_calls"] = _output_tool_calls
+    return out
+
+
 def call_llm_with_tools(
     prompt: str,
     system: str = "",
@@ -422,12 +462,7 @@ def call_llm_with_tools(
                 input={"messages": messages},
             ) as _gen:
                 resp = litellm.completion(**kwargs)
-                # 提取 message 对象：tool_calls 在 message.tool_calls（litellm 标准）
-                _message = None
-                _choices = getattr(resp, "choices", [])
-                if _choices:
-                    _message = getattr(_choices[0], "message", None)
-                _output_text = (getattr(_message, "content", "") or "") if _message else ""
+                _output_obj = _extract_with_tools_output(resp)
                 _usage = getattr(resp, "usage", None)
                 _ud = {}
                 if _usage:
@@ -435,25 +470,16 @@ def call_llm_with_tools(
                         "input": getattr(_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_usage, "completion_tokens", 0) or 0,
                     }
-                # tool_calls 结构化提取（保留 LLM 原始 JSON arguments 字符串）
-                _output_tool_calls: list[dict] = []
-                if _message is not None:
-                    _tc_list = getattr(_message, "tool_calls", None) or []
-                    for _tc in _tc_list:
-                        _func = getattr(_tc, "function", None)
-                        _tc_name = (getattr(_func, "name", "") or "") if _func else ""
-                        _tc_args = (getattr(_func, "arguments", "") or "") if _func else ""
-                        _output_tool_calls.append(
-                            {"name": _tc_name, "arguments": truncate_for_trace(_tc_args)}
-                        )
-                _gen.update(
-                    output={
-                        "answer": truncate_for_trace(_output_text),
-                        "tool_calls": _output_tool_calls,
-                    },
-                    usage_details=_ud,
-                )
+                _gen.update(output=_output_obj, usage_details=_ud)
                 return resp
         except Exception:
             _lf = None
-    return litellm.completion(**kwargs)
+    # 降级路径：start_as_current_observation 失败或未配置 Langfuse 时，
+    # 经 open_span（自带 no-op 兜底）仍尝试记录 tool_calls/reasoning/answer，
+    # 满足 spec「降级路径同样记录」；open_span 不可用时 yield None，业务不报错。
+    with open_span(name=f"litellm:{model}", input={"messages": messages}) as _obs:
+        resp = litellm.completion(**kwargs)
+        if _obs is not None:
+            with contextlib.suppress(Exception):  # trace 失败不影响业务
+                _obs.update(output=_extract_with_tools_output(resp))
+        return resp
