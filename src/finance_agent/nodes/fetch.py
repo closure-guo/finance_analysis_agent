@@ -136,6 +136,24 @@ def _set_optional_fallback(result: dict, label: str) -> None:
     result[label] = fallbacks.get(label)
 
 
+def _summarize_success_output(value: Any) -> dict:
+    """构造成功 span output：DataFrame → rows/columns 摘要。
+
+    spec trace-observability「DataFrame 返回只记摘要」：AKShare 子调用返回
+    pandas DataFrame 时，span output SHALL 只记 {"rows": N, "columns": [...]}
+    摘要，不尝试序列化完整 DataFrame。列表/字典等非 DataFrame 类型只记 status
+    （count / peer_count 等有用信息由调用方在 output 显式附加）。
+
+    列表过长时（如三大报表几十列）截断到前 20 + "..."，避免 span 体积膨胀。
+    """
+    if isinstance(value, pd.DataFrame):
+        columns = list(value.columns)
+        if len(columns) > 20:
+            columns = columns[:20] + ["..."]
+        return {"status": "success", "rows": len(value), "columns": columns}
+    return {"status": "success"}
+
+
 def fetch_data(state: dict, cache=None, client=None) -> dict:
     # TESTING=1：确定性 stub（不触 AKShare/网络），供管线 E2E 使用
     if os.getenv("TESTING") == "1":
@@ -175,7 +193,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
                 try:
                     value = future.result()
                     if obs:
-                        obs.update(output={"status": "success"})
+                        obs.update(output=_summarize_success_output(value))
                 except Exception as e:
                     if obs:
                         obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
@@ -259,7 +277,7 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
             if peers is not None:
                 result["peer_financials"] = peers
                 if obs:
-                    obs.update(output={"status": "success", "peer_count": len(peers)})
+                    obs.update(output=_summarize_success_output(peers))
             else:
                 if obs:
                     obs.update(output={"status": "skipped", "reason": "无同业代码"})

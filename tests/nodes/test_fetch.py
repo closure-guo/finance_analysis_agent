@@ -118,8 +118,13 @@ class TestFetchDataSpanObservability:
             client=mock_client,
         )
 
+        assert captured, "未捕获任何 span"
+        # 收紧：fetch.py 内所有 span SHALL 都用 data_source: 前缀
+        assert all(s.startswith("data_source:") for s in captured), (
+            f"非所有 span 都用 data_source 前缀: {captured}"
+        )
         assert any(s.startswith("data_source:akshare:") for s in captured), (
-            f"span 名未用 data_source 前缀: {captured}"
+            f"未捕获 data_source:akshare: 前缀 span: {captured}"
         )
 
     def test_span_marked_error_on_subcall_failure(self, monkeypatch):
@@ -148,4 +153,50 @@ class TestFetchDataSpanObservability:
 
         assert any(u.get("level") == "ERROR" for u in updates), (
             f"失败 span 未标 level=ERROR: {updates}"
+        )
+
+    def test_span_output_summarizes_dataframe_returns(self, monkeypatch):
+        """DataFrame 返回时 span output 含 rows + columns 摘要。
+
+        spec trace-observability「DataFrame 返回只记摘要」：AKShare 返回
+        pandas DataFrame 时，span output SHALL 只记 {"rows": N, "columns": [...]}
+        摘要，且不尝试序列化完整 DataFrame。
+        """
+        mock_client = _setup_client()
+        captured: list[tuple[str, dict]] = []
+
+        class _FakeObs:
+            def __init__(self, name):
+                self._name = name
+
+            def update(self, **kwargs):
+                captured.append((self._name, kwargs))
+
+        @contextmanager
+        def _spy_span(name, input=None):
+            yield _FakeObs(name)
+
+        monkeypatch.setattr(fetch_mod, "open_span", _spy_span)
+
+        fetch_mod.fetch_data(
+            {"stock_code": "600519", "stock_name": "贵州茅台"},
+            cache=MagicMock(),
+            client=mock_client,
+        )
+
+        # balance_sheet 经 _setup_client mock 返回 2 行 DataFrame（报告日 + 资产总计）
+        bs_outputs = [
+            kwargs["output"]
+            for (n, kwargs) in captured
+            if n == "data_source:akshare:balance_sheet" and "output" in kwargs
+        ]
+        assert bs_outputs, f"balance_sheet span output 未捕获: {captured}"
+        output = bs_outputs[0]
+        assert output["status"] == "success", f"成功路径 status 应为 success: {output}"
+        assert output["rows"] == 2, f"balance_sheet 行数应为 2: {output}"
+        assert "报告日" in output["columns"], f"columns 缺报告日: {output}"
+        assert "资产总计" in output["columns"], f"columns 缺资产总计: {output}"
+        # 关键约束：不序列化完整 DataFrame（output 不含任何 DataFrame 引用）
+        assert not any(isinstance(v, pd.DataFrame) for v in output.values()), (
+            f"output 误含完整 DataFrame: {output}"
         )
