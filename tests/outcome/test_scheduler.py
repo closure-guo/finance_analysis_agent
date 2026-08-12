@@ -33,6 +33,17 @@ class TestStartGating:
         assert "mon-fri" in str(trigger)
         sched.start.assert_called_once()
 
+    @patch.dict(os.environ, {"TESTING": ""})
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    def test_enabled_by_default_when_env_unset(self, mock_sched_cls):
+        """DECISION_SETTLE_ENABLED 未设置且非 TESTING 时默认启用,返回 scheduler。"""
+        os.environ.pop("DECISION_SETTLE_ENABLED", None)
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        result = start_scheduler()
+        assert result is sched
+        sched.start.assert_called_once()
+
 
 class TestStop:
     def test_stop_none_safe(self):

@@ -69,8 +69,14 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _scheduler = start_scheduler()
     except Exception:
         _logger.exception("decision settle scheduler 启动失败,降级继续运行 API")
-    yield
-    stop_scheduler(_scheduler)
+    try:
+        yield
+    finally:
+        # 旁路铁律:退出时必须尝试关闭 scheduler;关闭失败记 ERROR 不阻断 API 关停
+        try:
+            stop_scheduler(_scheduler)
+        except Exception:
+            _logger.exception("decision settle scheduler 关闭失败(忽略)")
 
 
 app = FastAPI(title="Finance Analysis Agent API", lifespan=_lifespan)

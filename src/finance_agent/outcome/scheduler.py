@@ -51,7 +51,7 @@ def start_scheduler() -> BackgroundScheduler | None:
     scheduler = BackgroundScheduler()
     scheduler.add_job(
         _settle_job,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Shanghai"),
         id="decision_settle_daily",
         replace_existing=True,
     )
