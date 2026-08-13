@@ -246,6 +246,7 @@ export default function App() {
 
   // Auto-scroll to bottom：仅在用户未手动上拉时自动滚动（避免抢占手动滚动）
   const userScrolledUpRef = useRef(false)
+  const scrollTimerRef = useRef<number | null>(null)
   useEffect(() => {
     const onScroll = () => {
       const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 100
@@ -257,7 +258,11 @@ export default function App() {
 
   const scrollToBottom = useCallback(() => {
     if (userScrolledUpRef.current) return
-    setTimeout(() => {
+    // 流式高频更新（chat_token / thinking_token）合并为单一 scroll：clearTimeout
+    // 防多个 smooth scroll 叠加导致页面抖动（多思考窗口展开时尤其明显）
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
+    scrollTimerRef.current = window.setTimeout(() => {
+      scrollTimerRef.current = null
       if (userScrolledUpRef.current) return
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
     }, 100)
