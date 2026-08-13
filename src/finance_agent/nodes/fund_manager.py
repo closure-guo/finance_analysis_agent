@@ -22,6 +22,7 @@ def fund_manager(state: dict) -> dict:
         api_key=api_key,
         node_name="fund_manager",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
