@@ -366,7 +366,9 @@ def _search_with_llm_reasoning(query: str, api_key: str | None = None) -> dict |
 - 对于"龙头"、"最强"等时效性描述，优先标记 need_search=true"""
 
     try:
-        resp = call_llm(query, system=system, api_key=api_key, max_tokens=200, quick=True)
+        resp = call_llm(
+            query, system=system, api_key=api_key, max_tokens=200, quick=True, agent="react_agent"
+        )
         data = _parse_json_safely(resp)
         if data and data.get("stock_code") and data.get("confidence") == "high":
             return {
@@ -427,7 +429,9 @@ def _search_with_web_search(query: str, api_key: str | None = None) -> list[dict
 
         prompt = f"用户查询：{query}\n\n网络搜索结果：\n{search_text}"
 
-        resp = call_llm(prompt, system=system, api_key=api_key, max_tokens=400, quick=True)
+        resp = call_llm(
+            prompt, system=system, api_key=api_key, max_tokens=400, quick=True, agent="react_agent"
+        )
         data = _parse_json_safely(resp)
         if data:
             raw = data.get("candidates", [])
