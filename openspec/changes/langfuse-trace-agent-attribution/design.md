@@ -37,6 +37,7 @@ Langfuse 的 LLM generation 观测在 `llm.py` 三入口（`call_llm`、`call_ll
 generation 的 metadata 增加三字段，供 Langfuse 按维度过滤，无需解析 name。
 - **理由**：过滤是用户排查的实际动作（按 agent 看某类调用、按 session 看一次运行）。
 - session_id / stock_code 从节点 `state` 读取（`state.get("session_id")` / `state.get("stock_code")`）；缺省时省略该字段，不报错。
+- **现状注记**：「按 session 过滤」有待未来调用方传入 `session_id`——当前管线节点 state 无 `session_id` 键，故今日管线 generation 上仅预期 `agent` / `stock_code`。
 
 ### D4: 优雅降级
 

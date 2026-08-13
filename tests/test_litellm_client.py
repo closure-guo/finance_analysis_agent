@@ -429,6 +429,8 @@ async def test_chat_stream_generation_named_by_agent(monkeypatch):
     out = []
     async for r in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
         out.append(r)
+    assert out, "chat_stream 应至少产出一个响应项"
+
     kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
     assert kwargs["name"] == "react_agent"
     assert kwargs["metadata"]["agent"] == "react_agent"
