@@ -75,7 +75,7 @@ _FAKE_CHUNKS: list[tuple[str, dict]] = [
 ]
 
 
-def _stub_stream_graph(initial_state, config=None, session_id=None):
+def _stub_stream_graph(initial_state, config=None, session_id=None, root_obs_sink=None):
     """替换 _stream_graph 的同步生成器，产出受控 (mode, chunk) 序列。"""
     yield from _FAKE_CHUNKS
 
@@ -144,7 +144,7 @@ def test_status_running_during_execution(tmp_path, monkeypatch):
     sid = _make_session(tmp_path, monkeypatch, status="pending")
     observed: list[str] = []
 
-    def _spy_stream_graph(initial_state, config=None, session_id=None):
+    def _spy_stream_graph(initial_state, config=None, session_id=None, root_obs_sink=None):
         # 在管线事件流产出前捕获会话状态
         observed.append(session_store.get_session(sid)["status"])
         yield from _FAKE_CHUNKS
@@ -165,7 +165,7 @@ def test_exception_marks_failed_and_emits_error(tmp_path, monkeypatch):
     """
     sid = _make_session(tmp_path, monkeypatch)
 
-    def _failing_stream_graph(initial_state, config=None, session_id=None):
+    def _failing_stream_graph(initial_state, config=None, session_id=None, root_obs_sink=None):
         yield ("updates", {"check_cache": {}})
         raise RuntimeError("模拟管线异常")
 
@@ -222,7 +222,9 @@ _FAKE_CHUNKS_WITH_THINKING: list[tuple[str, dict]] = [
 ]
 
 
-def _stub_stream_graph_with_thinking(initial_state, config=None, session_id=None):
+def _stub_stream_graph_with_thinking(
+    initial_state, config=None, session_id=None, root_obs_sink=None
+):
     yield from _FAKE_CHUNKS_WITH_THINKING
 
 
