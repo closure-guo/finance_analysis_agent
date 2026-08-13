@@ -688,7 +688,11 @@ async def stream_session(session_id: str, request: Request):
         return Response(status_code=204)
 
     async def sse_stream() -> AsyncGenerator[str, None]:
-        async for event in registry.subscribe(session_id, afterSeq):
+        # 全量重放（afterSeq=0，刷新恢复）时注入合成 user_message，
+        # 恢复 user 气泡的原始交错位置；断点续传（afterSeq>0）不注入
+        async for event in registry.subscribe(
+            session_id, afterSeq, replay_user_messages=(afterSeq == 0)
+        ):
             yield _sse(event)
 
     return StreamingResponse(

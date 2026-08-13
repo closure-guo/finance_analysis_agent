@@ -219,12 +219,10 @@ export function applyPipelineThinkingToken(msg: UIMessage, event: SSEEvent): UIM
   if (event.type !== 'thinking_token') return msg
   const node = event.node || ''
   const nodeTimelines = { ...(msg.nodeTimelines ?? {}) }
-  // 防御性收口：其他节点末尾未完成的 thinking item 置为完成态
-  for (const key of Object.keys(nodeTimelines)) {
-    if (key !== node) {
-      nodeTimelines[key] = closeLastThinking(nodeTimelines[key])
-    }
-  }
+  // 仅追加本 node 的 thinking token;不收口其他 node——deep 模式 Send 扇出时
+  // 多 analyst 并行 thinking,SSE 事件交错,收口其他 node 会错误标记正在流的
+  // 思考为完成(done=true),导致 UI 中途折叠/思考展示混乱。node 完成由
+  // node_complete 事件经 applyPipelineNodeComplete 显式收口。
   const current = nodeTimelines[node] ?? []
   nodeTimelines[node] = appendThinkingToken(current, event.token)
   return { ...msg, nodeTimelines }

@@ -127,7 +127,10 @@ describe('刷新后自动恢复当前会话', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
       if (url.startsWith('/api/sessions/') && url.includes('/stream')) {
+        // 新契约：全量重放（after_seq=0）先注入 user_message 恢复气泡位置，
+        // 再重放 journal 事件；首个事件到达时清除 chat_history user 种子
         return sseResponse([
+          { type: 'user_message', content: '分析中际旭创' },
           { type: 'thinking_token', token: 'replay 重建的思考内容', timestamp: '', seq: 1 },
         ])
       }
