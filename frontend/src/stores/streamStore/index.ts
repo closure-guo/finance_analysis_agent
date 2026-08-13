@@ -462,6 +462,17 @@ export class StreamStore {
           }
         : null
 
+    // 管线/报告插入点：anchor 指向「触发 user 之后」，但实时流中本轮 ReAct
+    // agent 气泡（澄清思考/工具调用）先于 run_deep_analysis 触发的管线出现。
+    // 若 anchor 处紧跟 assistant 条目，插入点顺延过连续的非 user 条目，
+    // 与实时顺序 [user, agent气泡, 管线, 报告] 对齐（澄清气泡错位修复）。
+    let insertAfter: number | null = anchor
+    if (insertAfter !== null) {
+      while (insertAfter < history.length && history[insertAfter].role !== 'user') {
+        insertAfter++
+      }
+    }
+
     for (let i = 0; i < history.length; i++) {
       const h = history[i]
       if (h.role === 'user') {
@@ -478,7 +489,7 @@ export class StreamStore {
         })
       }
 
-      if (anchor !== null && i + 1 === anchor && reportMsg && !reportInserted) {
+      if (anchor !== null && i + 1 === insertAfter && reportMsg && !reportInserted) {
         if (pipelineDoneMsg) messages.push(pipelineDoneMsg)
         messages.push(reportMsg)
         reportInserted = true

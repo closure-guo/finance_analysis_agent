@@ -318,6 +318,46 @@ describe('StreamStore - rebuild completed 会话追问新建 chat', () => {
   })
 })
 
+describe('StreamStore - completed 会话管线/报告锚点插入', () => {
+  // 实时渲染顺序：user → 本轮 ReAct agent 气泡（澄清思考/工具调用先流出）
+  // → run_deep_analysis 触发管线 → 报告。终态重建必须与之对齐：
+  // anchor（最后 user 索引+1）若紧跟 assistant 条目，插入点顺延到它之后。
+  const completedMultiRound = {
+    session_id: 's1', status: 'completed', session_type: 'analysis', last_seq: 10,
+    pipeline_anchor: 3,
+    pipeline_snapshot: JSON.stringify({ layerTree: '[]', currentNodeId: '', progress: 1, updatedAt: 0 }),
+    report_markdown: '# 报告', chart_data: {},
+    chat_history: [
+      { role: 'user', content: '今日股票', ts: '2026-08-13T10:00:00' },
+      { role: 'assistant', content: '热门标的', ts: '2026-08-13T10:00:30', thinking: '', tool_calls: [] },
+      { role: 'user', content: '万邦医药', ts: '2026-08-13T10:01:00' },
+      {
+        role: 'assistant', content: '', ts: '2026-08-13T10:01:30',
+        thinking: '澄清思考',
+        tool_calls: [{ name: 'run_deep_analysis', args: '{}', result_text: 'r', done: true }],
+      },
+    ],
+  } as unknown as SessionDetail
+
+  it('管线+报告插在本轮 agent 气泡之后（与实时顺序一致，不错位）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', completedMultiRound)
+    const types = store.getSnapshot('s1').messages.map((m) => m.type)
+    expect(types).toEqual(['user', 'chat', 'user', 'chat', 'pipeline', 'report'])
+  })
+
+  it('fast path（无本轮 assistant 条目）：管线+报告仍在 user 之后', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', {
+      ...completedMultiRound,
+      pipeline_anchor: 1,
+      chat_history: [{ role: 'user', content: '分析万邦医药', ts: '2026-08-13T10:00:00' }],
+    } as unknown as SessionDetail)
+    const types = store.getSnapshot('s1').messages.map((m) => m.type)
+    expect(types).toEqual(['user', 'pipeline', 'report'])
+  })
+})
+
 describe('StreamStore - 防御性清理', () => {
   it('pump 结束后清除 streaming 标志', async () => {
     const store = new StreamStore()
