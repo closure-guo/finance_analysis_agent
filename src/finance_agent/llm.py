@@ -121,6 +121,28 @@ def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) 
     return md
 
 
+def _generation_metadata(
+    prompt_name: str | None,
+    prompt_version: str | int | None,
+    agent: str = "",
+    session_id: str | None = None,
+    stock_code: str | None = None,
+) -> dict:
+    """构造 generation metadata：prompt 元数据 + agent/session/stock 过滤字段。
+
+    agent/session_id/stock_code 仅在显式提供时写入（与 _prompt_metadata 相同的
+    向后兼容约定，不污染 metadata 命名空间）。
+    """
+    md = _prompt_metadata(prompt_name, prompt_version)
+    if agent:
+        md["agent"] = agent
+    if session_id:
+        md["session_id"] = session_id
+    if stock_code:
+        md["stock_code"] = stock_code
+    return md
+
+
 def _build_kwargs(
     model: str,
     messages: list[dict],
@@ -207,6 +229,9 @@ def call_llm(
     llm_config: LLMConfig | None = None,
     prompt_name: str | None = None,
     prompt_version: str | int | None = None,
+    agent: str = "",
+    session_id: str | None = None,
+    stock_code: str | None = None,
 ) -> str:
     """Non-streaming LLM call — returns full response string.
 
@@ -218,6 +243,10 @@ def call_llm(
     prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
     generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键
     （向后兼容）。
+
+    agent / session_id / stock_code：Langfuse generation 命名与过滤字段。
+    agent 非空时 observation name 用 agent 名（而非 litellm:{model}）；
+    三者仅在显式提供时写入 metadata（向后兼容）。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -246,10 +275,12 @@ def call_llm(
         try:
             with _lf.start_as_current_observation(
                 as_type="generation",
-                name=f"litellm:{model}",
+                name=agent or f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
-                metadata=_prompt_metadata(prompt_name, prompt_version),
+                metadata=_generation_metadata(
+                    prompt_name, prompt_version, agent, session_id, stock_code
+                ),
             ) as _gen:
                 resp = litellm.completion(**kwargs)
                 msg = resp.choices[0].message
@@ -296,6 +327,9 @@ def call_llm_stream(
     llm_config: LLMConfig | None = None,
     prompt_name: str | None = None,
     prompt_version: str | int | None = None,
+    agent: str = "",
+    session_id: str | None = None,
+    stock_code: str | None = None,
 ):
     """Streaming LLM call — yields tokens one by one.
 
@@ -308,6 +342,10 @@ def call_llm_stream(
 
     prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
     generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
+
+    agent / session_id / stock_code：Langfuse generation 命名与过滤字段。
+    agent 非空时 observation name 用 agent 名（而非 litellm:{model}）；
+    三者仅在显式提供时写入 metadata（向后兼容）。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -343,10 +381,12 @@ def call_llm_stream(
         try:
             _gen_cm = _lf.start_as_current_observation(
                 as_type="generation",
-                name=f"litellm:{model}",
+                name=agent or f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
-                metadata=_prompt_metadata(prompt_name, prompt_version),
+                metadata=_generation_metadata(
+                    prompt_name, prompt_version, agent, session_id, stock_code
+                ),
             )
             _gen = _gen_cm.__enter__()
         except Exception:
@@ -446,6 +486,9 @@ def call_llm_with_tools(
     llm_config: LLMConfig | None = None,
     prompt_name: str | None = None,
     prompt_version: str | int | None = None,
+    agent: str = "",
+    session_id: str | None = None,
+    stock_code: str | None = None,
 ):
     """Non-streaming LLM call with tool support.
 
@@ -459,6 +502,10 @@ def call_llm_with_tools(
 
     prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
     generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
+
+    agent / session_id / stock_code：Langfuse generation 命名与过滤字段。
+    agent 非空时 observation name 用 agent 名（而非 litellm:{model}）；
+    三者仅在显式提供时写入 metadata（向后兼容）。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -489,10 +536,12 @@ def call_llm_with_tools(
         try:
             with _lf.start_as_current_observation(
                 as_type="generation",
-                name=f"litellm:{model}",
+                name=agent or f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
-                metadata=_prompt_metadata(prompt_name, prompt_version),
+                metadata=_generation_metadata(
+                    prompt_name, prompt_version, agent, session_id, stock_code
+                ),
             ) as _gen:
                 resp = litellm.completion(**kwargs)
                 _output_obj = _extract_with_tools_output(resp)
