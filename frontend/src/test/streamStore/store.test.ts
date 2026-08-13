@@ -239,7 +239,10 @@ describe('StreamStore - rebuild 进行中会话走 journal replay', () => {
   it('replay 后 journal 事件重建完整 assistant：reduce 从空累积出思考+工具+文本', () => {
     const store = new StreamStore()
     store.rebuildSession('s1', runningDetail)
-    // 模拟 resume(after_seq=0) 收到的 journal 事件（全量重放）
+    // 模拟 resume(after_seq=0) 收到的 journal 事件（全量重放）。
+    // 回放首个事件是后端按 chat_history ts 注入的 user_message；到达时
+    // 清除 chat_history 种子（种子只是预览/204 兜底），由回放重建有序消息。
+    store['applyEvent']('s1', { type: 'user_message', content: '分析热门股票' } as SSEEvent)
     store['applyEvent']('s1', { type: 'thinking_token', token: '日志里的完整思考', timestamp: '', seq: 1 } as SSEEvent)
     store['applyEvent']('s1', { type: 'tool_call', name: 'web_search', args: {}, iteration: 0, timestamp: '', seq: 2 } as SSEEvent)
     store['applyEvent']('s1', { type: 'chat_token', token: '完整回答', timestamp: '', seq: 3 } as SSEEvent)
@@ -247,12 +250,42 @@ describe('StreamStore - rebuild 进行中会话走 journal replay', () => {
     const msgs = store.getSnapshot('s1').messages
     // user + replay 重建的 chat
     expect(msgs).toHaveLength(2)
+    expect(msgs[0].type).toBe('user')
     expect(msgs[1].type).toBe('chat')
     // 思考、工具、文本都完整（来自 journal 全量重放，非残缺快照）
     const timeline = msgs[1].agentTimeline ?? []
     const thinkingTexts = timeline.filter((t) => t.type === 'thinking').map((t) => t.content)
     expect(thinkingTexts.join('')).toContain('日志里的完整思考')
     expect(msgs[1].chatResponse).toBe('完整回答')
+  })
+
+  it('多轮会话全量回放恢复原始交错顺序（种子在首个回放事件清除）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', {
+      ...runningDetail,
+      chat_history: [
+        { role: 'user', content: '今日股票', ts: '2026-08-13T10:00:00' },
+        { role: 'assistant', content: '热门标的', ts: '2026-08-13T10:00:30', thinking: '', tool_calls: [] },
+        { role: 'user', content: '万邦医药', ts: '2026-08-13T10:01:00' },
+      ],
+    } as unknown as SessionDetail)
+    // 种子：两条 user 堆在一起（预览/204 兜底）
+    expect(store.getSnapshot('s1').messages.map((m) => m.type)).toEqual(['user', 'user'])
+
+    // 全量回放：user_message 注入 + 第一轮 chat + done + 第二轮 user + 管线
+    store['applyEvent']('s1', { type: 'user_message', content: '今日股票' } as SSEEvent)
+    store['applyEvent']('s1', { type: 'chat_token', token: '热门标的', timestamp: '', seq: 1 } as SSEEvent)
+    store['applyEvent']('s1', { type: 'done', seq: 2 } as SSEEvent)
+    store['applyEvent']('s1', { type: 'user_message', content: '万邦医药' } as SSEEvent)
+    store['applyEvent']('s1', {
+      type: 'tool_call', name: 'run_deep_analysis', args: {}, iteration: 0, timestamp: '', seq: 3,
+    } as SSEEvent)
+
+    const msgs = store.getSnapshot('s1').messages
+    // 交错顺序恢复：user → chat → user → pipeline（管线 UI 不再丢失）
+    expect(msgs.map((m) => m.type)).toEqual(['user', 'chat', 'user', 'pipeline'])
+    expect(msgs[0].content).toBe('今日股票')
+    expect(msgs[2].content).toBe('万邦医药')
   })
 })
 
@@ -282,6 +315,46 @@ describe('StreamStore - rebuild completed 会话追问新建 chat', () => {
     const chats = store.getSnapshot('s1').messages.filter((m) => m.type === 'chat')
     expect(chats).toHaveLength(2)
     expect(chats[0].chatResponse).toBe('第一轮完整回复') // 第一轮不被污染
+  })
+})
+
+describe('StreamStore - completed 会话管线/报告锚点插入', () => {
+  // 实时渲染顺序：user → 本轮 ReAct agent 气泡（澄清思考/工具调用先流出）
+  // → run_deep_analysis 触发管线 → 报告。终态重建必须与之对齐：
+  // anchor（最后 user 索引+1）若紧跟 assistant 条目，插入点顺延到它之后。
+  const completedMultiRound = {
+    session_id: 's1', status: 'completed', session_type: 'analysis', last_seq: 10,
+    pipeline_anchor: 3,
+    pipeline_snapshot: JSON.stringify({ layerTree: '[]', currentNodeId: '', progress: 1, updatedAt: 0 }),
+    report_markdown: '# 报告', chart_data: {},
+    chat_history: [
+      { role: 'user', content: '今日股票', ts: '2026-08-13T10:00:00' },
+      { role: 'assistant', content: '热门标的', ts: '2026-08-13T10:00:30', thinking: '', tool_calls: [] },
+      { role: 'user', content: '万邦医药', ts: '2026-08-13T10:01:00' },
+      {
+        role: 'assistant', content: '', ts: '2026-08-13T10:01:30',
+        thinking: '澄清思考',
+        tool_calls: [{ name: 'run_deep_analysis', args: '{}', result_text: 'r', done: true }],
+      },
+    ],
+  } as unknown as SessionDetail
+
+  it('管线+报告插在本轮 agent 气泡之后（与实时顺序一致，不错位）', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', completedMultiRound)
+    const types = store.getSnapshot('s1').messages.map((m) => m.type)
+    expect(types).toEqual(['user', 'chat', 'user', 'chat', 'pipeline', 'report'])
+  })
+
+  it('fast path（无本轮 assistant 条目）：管线+报告仍在 user 之后', () => {
+    const store = new StreamStore()
+    store.rebuildSession('s1', {
+      ...completedMultiRound,
+      pipeline_anchor: 1,
+      chat_history: [{ role: 'user', content: '分析万邦医药', ts: '2026-08-13T10:00:00' }],
+    } as unknown as SessionDetail)
+    const types = store.getSnapshot('s1').messages.map((m) => m.type)
+    expect(types).toEqual(['user', 'pipeline', 'report'])
   })
 })
 

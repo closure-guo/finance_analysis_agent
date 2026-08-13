@@ -110,6 +110,10 @@ async def test_subscribe_terminal_when_no_active(tmp_path, monkeypatch):
     event2 = await asyncio.wait_for(gen.__anext__(), timeout=2.0)
     assert event2["type"] == "done"
 
-    # 流应结束
+    # 重放不再因历史终态截断（多轮会话修复）：journal 真实 done 之后，
+    # 无活跃任务会再补一个合成 done，随后流结束
+    remaining = []
     with pytest.raises(StopAsyncIteration):
-        await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+        while True:
+            remaining.append(await asyncio.wait_for(gen.__anext__(), timeout=2.0))
+    assert all(e["type"] in ("done", "interrupted", "error") for e in remaining)

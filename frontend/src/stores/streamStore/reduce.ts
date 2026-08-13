@@ -217,6 +217,14 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
     case 'session_created':
       return state
 
+    // ── 合成用户消息（刷新全量回放注入）：按回放位置追加 user 气泡，
+    // 恢复原始交错顺序（修复多轮会话刷新后 user 气泡堆叠错位）──
+    case 'user_message':
+      return {
+        ...state,
+        messages: [...messages, { id: genMsgId(), type: 'user', content: event.content }],
+      }
+
     // ── 解析与识别 ──
     case 'parsing':
     case 'resolved':
