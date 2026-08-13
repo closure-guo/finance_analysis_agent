@@ -59,7 +59,9 @@ async def test_react_snapshot_includes_pipeline_start_ts(isolated_db, monkeypatc
     sid = session_store.create_session(stock_code="600449", stock_name="宁夏建材", status="running")
     monkeypatch.setattr(
         "finance_agent.agent_factory._stream_graph",
-        lambda initial_state, config=None, session_id=None: _mock_stream_with_node(),
+        lambda initial_state, config=None, session_id=None, root_obs_sink=None: (
+            _mock_stream_with_node()
+        ),
     )
 
     run_deep_analysis = _make_run_deep_analysis(api_key="fake", session_id=sid)

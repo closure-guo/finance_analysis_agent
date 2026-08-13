@@ -380,6 +380,9 @@ def _make_run_deep_analysis(
         accumulated: dict = dict(initial_state)
         completed: set[str] = set()
         started_nodes: set[str] = set()  # 已发 node_start 的节点（去重）
+        # root span 句柄容器：_stream_graph 进入根 span 后写入，
+        # 供事件循环侧（_background_consume）在管线完成点写 output（会话内容可见）
+        _root_obs_sink: dict = {}
 
         # 状态兜底：工具入口置 running（管线本体已在 executor 线程运行）
         if _track_snapshot:
@@ -398,7 +401,9 @@ def _make_run_deep_analysis(
 
         def _run_graph():
             try:
-                for mode, chunk in _stream_graph(initial_state, session_id=session_id):
+                for mode, chunk in _stream_graph(
+                    initial_state, session_id=session_id, root_obs_sink=_root_obs_sink
+                ):
                     asyncio.run_coroutine_threadsafe(chunk_queue.put((mode, chunk)), loop)
             except Exception as e:
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(e), loop)
@@ -632,6 +637,11 @@ def _make_run_deep_analysis(
                     )
                 )
             else:
+                # 管线完成: 根 span 写 agent 产出（会话内容可见，不再 output=null）
+                _root_obs = _root_obs_sink.get("obs")
+                if _root_obs is not None:
+                    with contextlib.suppress(Exception):
+                        _root_obs.update(output=_build_trace_output(accumulated))
                 # 正常结束：写最终快照并置 completed（组装 report metadata 前）
                 if _track_snapshot:
                     await asyncio.to_thread(_persist_snapshot, _tree, _now_ms())
@@ -706,7 +716,37 @@ def _make_run_deep_analysis(
     return run_deep_analysis
 
 
-def _stream_graph(initial_state: dict, config: dict | None = None, session_id: str | None = None):
+def _build_trace_output(accumulated: dict) -> dict:
+    """从管线 accumulated 状态构建根 span output 摘要（会话内容可见）。
+
+    只放摘要级内容防 trace 体积膨胀：各 agent 产出摘要 + 最终报告前 500 字符。
+    """
+    out: dict = {}
+    for key in ("stock_code", "stock_name", "analysis_type"):
+        if accumulated.get(key):
+            out[key] = accumulated[key]
+    final_report = accumulated.get("final_report")
+    if final_report:
+        out["final_report_summary"] = final_report[:500] + ("…" if len(final_report) > 500 else "")
+    reports = accumulated.get("analyst_reports") or {}
+    if reports:
+        out["analyst_reports"] = {
+            k: (v.get("summary", "")[:200] if isinstance(v, dict) else str(v)[:200])
+            for k, v in reports.items()
+        }
+    for key in ("trader_plan", "final_trade_decision", "fund_manager_decision"):
+        v = accumulated.get(key)
+        if v:
+            out[key] = v if isinstance(v, dict) else str(v)[:300]
+    return out
+
+
+def _stream_graph(
+    initial_state: dict,
+    config: dict | None = None,
+    session_id: str | None = None,
+    root_obs_sink: dict | None = None,
+):
     """执行 5 层管线同步流式迭代。
 
     ADR-0015：手动建 root span + propagate_attributes(session) 包裹 graph.stream，
@@ -744,7 +784,9 @@ def _stream_graph(initial_state: dict, config: dict | None = None, session_id: s
                 _propagate_cm = propagate_attributes(session_id=session_id)
             except Exception:  # noqa: S110
                 pass
-    _root_cm.__enter__()
+    _root_obs = _root_cm.__enter__()
+    if root_obs_sink is not None:
+        root_obs_sink["obs"] = _root_obs
     _propagate_cm.__enter__()
 
     graph = build_5layer_graph()
@@ -1076,6 +1118,7 @@ async def stream_agent_to_sse(
     from finance_agent.harness import ActionType
 
     last_web_search_query = ""  # 追踪 web_search 的查询参数
+    _final_answer_parts: list[str] = []  # ANSWER 事件内容累积（退出 react_loop 时写入 span output）
 
     # ADR-0015: react_loop span 包裹 ReAct 执行，使顶层 trace 结构为
     # [react_loop] -> [search_stock] / [run_deep_analysis span -> 5 层]。
@@ -1099,7 +1142,7 @@ async def stream_agent_to_sse(
                 _propagate_cm = propagate_attributes(session_id=session_id, user_id=user_id)
             except Exception:  # noqa: S110
                 pass
-    _react_cm.__enter__()
+    _react_obs = _react_cm.__enter__()
     _propagate_cm.__enter__()
     agentGen = agent.run(user_input, force_tool=force_tool)
     nextTask = asyncio.create_task(agentGen.__anext__())
@@ -1117,6 +1160,7 @@ async def stream_agent_to_sse(
             ts = _now()
 
             if event.event_type == ActionType.ANSWER:
+                _final_answer_parts.append(event.content)
                 yield _sse({"type": "chat_token", "token": event.content, "timestamp": ts})
 
             elif event.event_type == ActionType.THINK:
@@ -1336,6 +1380,11 @@ async def stream_agent_to_sse(
 
             # 准备下一次迭代
             nextTask = asyncio.create_task(agentGen.__anext__())
+
+        # ADR-0015: 退出 react_loop span 前记录 agent 最终回复（会话内容可见）
+        if _react_obs is not None and _final_answer_parts:
+            with contextlib.suppress(Exception):
+                _react_obs.update(output={"answer": "".join(_final_answer_parts)})
 
         # ADR-0015: 退出 react_loop span 与 session 聚合上下文
         _propagate_cm.__exit__(None, None, None)
