@@ -386,3 +386,51 @@ async def test_chat_stream_omits_metadata_when_no_prompt_fields(monkeypatch):
     md = call_kwargs.get("metadata", {})
     assert "prompt_name" not in md
     assert "prompt_version" not in md
+
+
+# ── agent-trace-agent-attribution Task 4: generation observation 用 agent 名 ──
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_generation_named_by_agent(monkeypatch):
+    """LiteLLMClient 设 agent 时 generation observation 用 agent 名。"""
+    from finance_agent.harness.litellm_client import LiteLLMClient
+
+    # 与 test_chat_stream_writes_reasoning_to_langfuse_output 同款流式 mock
+    def _delta(reasoning=None, content=None):
+        d = MagicMock()
+        d.reasoning_content = reasoning
+        d.content = content
+        return d
+
+    def _chunk(deltas, finish_reason=None):
+        chunk = MagicMock()
+        chunk.usage = None
+        chunk.choices = [MagicMock(delta=deltas, finish_reason=finish_reason)]
+        return chunk
+
+    async def _mock_acompletion(**kwargs):
+        async def _stream():
+            yield _chunk(_delta(content="ok"), finish_reason="stop")
+
+        return _stream()
+
+    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+
+    client = LiteLLMClient(model="deepseek-chat", agent="react_agent")
+    monkeypatch.setattr(client, "_langfuse", MagicMock())
+    client._langfuse.start_as_current_observation.return_value = mockCm
+
+    out = []
+    async for r in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        out.append(r)
+    assert out, "chat_stream 应至少产出一个响应项"
+
+    kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
+    assert kwargs["name"] == "react_agent"
+    assert kwargs["metadata"]["agent"] == "react_agent"

@@ -950,6 +950,9 @@ def _make_llm_client(
         thinking=thinking,
         prompt_name=prompt_name,
         prompt_version=prompt_version,
+        # agent 标签（Task 4）：harness ReAct 链路的 generation observation 用
+        # react_agent 命名，使 trace 可按 agent 归属/过滤。
+        agent="react_agent",
     )
 
 

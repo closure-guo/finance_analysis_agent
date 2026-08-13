@@ -74,7 +74,9 @@ def _resolve_with_llm(query: str, api_key: str | None = None) -> dict | None:
 - 不要编造不存在的股票代码"""
 
     try:
-        resp = call_llm(query, system=system, api_key=api_key, max_tokens=100)
+        resp = call_llm(
+            query, system=system, api_key=api_key, max_tokens=100, agent="intent_parser"
+        )
         # Extract JSON from response
         json_match = re.search(r"\{[^}]+\}", resp)
         if json_match:

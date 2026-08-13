@@ -127,6 +127,7 @@ def technical_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="technical_analyst",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
@@ -167,6 +168,7 @@ def macro_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="macro_analyst",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
@@ -220,6 +222,7 @@ def fundamental_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="fundamental_analyst",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
@@ -327,6 +330,7 @@ def sentiment_analyst(state: dict) -> dict:
         api_key=api_key,
         node_name="sentiment_analyst",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
