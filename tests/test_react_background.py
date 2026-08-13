@@ -29,7 +29,9 @@ async def test_generator_close_does_not_abort_pipeline(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "finance_agent.agent_factory._stream_graph",
-        lambda initial_state, config=None, session_id=None: _mock_stream_events(),
+        lambda initial_state, config=None, session_id=None, root_obs_sink=None: (
+            _mock_stream_events()
+        ),
     )
 
     run_deep_analysis = _make_run_deep_analysis(api_key="fake", session_id=sid)
@@ -62,7 +64,9 @@ async def test_generator_close_pipeline_snapshot_persisted(tmp_path, monkeypatch
 
     monkeypatch.setattr(
         "finance_agent.agent_factory._stream_graph",
-        lambda initial_state, config=None, session_id=None: _mock_stream_events(),
+        lambda initial_state, config=None, session_id=None, root_obs_sink=None: (
+            _mock_stream_events()
+        ),
     )
 
     run_deep_analysis = _make_run_deep_analysis(api_key="fake", session_id=sid)
@@ -91,7 +95,7 @@ async def test_pipeline_failure_sets_failure_reason(tmp_path, monkeypatch):
     session_store.init_db()
     sid = session_store.create_session(stock_code="600519", stock_name="贵州茅台", status="running")
 
-    def _failing_stream(initial_state, config=None, session_id=None):
+    def _failing_stream(initial_state, config=None, session_id=None, root_obs_sink=None):
         yield ("custom", {"type": "node_start", "node": "check_cache", "ts": 1000})
         raise RuntimeError("模拟管线异常")
 

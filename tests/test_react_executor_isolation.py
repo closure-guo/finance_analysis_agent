@@ -36,7 +36,7 @@ async def test_react_pipeline_runs_in_dedicated_executor(tmp_path, monkeypatch):
 
     thread_names: list[str] = []
 
-    def _spy_stream_graph(initial_state, config=None, session_id=None):
+    def _spy_stream_graph(initial_state, config=None, session_id=None, root_obs_sink=None):
         # 记录 _run_graph 实际运行的线程名
         thread_names.append(threading.current_thread().name)
         return _mock_stream_events()

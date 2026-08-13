@@ -20,3 +20,12 @@
 
 - [ ] 3.1 `uv run pytest`、`uv run ruff check`、`uv run mypy` 全绿；现有 `call_llm*` 测试不回归
 - [ ] 3.2 实跑一次深度分析，Langfuse 对账：generation 以子 agent 命名、可按 agent/session/stock 过滤；人工验证报告落 `tests/validation/`
+
+## 4. trace 级输出（根 span output = agent 产出）
+
+- [ ] 4.1 task 0 验证：Langfuse v4 `obs.update` 在 span 退出后跨线程/异步是否生效、flush 时序；据结果定 D4 落地方式（共享 sink + id 更新 或 退出前 output_provider 同步写）并回填 design.md
+- [ ] 4.2 失败测试：mock Langfuse，`deep_analysis` 根 span 完成时 output 含管线产出摘要（各 agent 产出 + 报告摘要）
+- [ ] 4.3 失败测试：`react_loop` span 退出时 output 含 agent 最终回复/总结
+- [ ] 4.4 实现：`_stream_graph` 捕获 `_root_obs`；管线完成后按 4.1 结论写 output（数据源 `accumulated`，摘要级）
+- [ ] 4.5 实现：`react_loop` 捕获 `_react_obs`，循环中追踪最终回复（TEXT/ANSWER 事件），退出前 `update(output=...)`
+- [ ] 4.6 验证：pytest/ruff/mypy 全绿 + 实跑 Langfuse 对账（session/trace 级可见 agent 输出，不再 output=null）
