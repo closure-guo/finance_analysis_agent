@@ -75,6 +75,10 @@ for _cls_path in (
 # 自动挂到 CallbackHandler 已建好的图节点 span 下。
 # 不再使用 _LangfuseCallback + start_observation（产生孤立 generation，无父子关系）。
 from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse  # noqa: E402
+from finance_agent.langfuse_tracing import (  # noqa: E402
+    open_span,
+    truncate_for_trace,
+)
 
 _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 _QUICK_MODEL = "deepseek/deepseek-chat"
@@ -101,6 +105,20 @@ def _is_deepseek(model: str) -> bool:
 def _resolve_key(api_key: str | None) -> str:
     """Resolve API key from explicit param or environment."""
     return api_key or os.environ.get("LLM_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
+
+
+def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) -> dict:
+    """构造 generation metadata：仅在显式提供 prompt_name/version 时写入对应键。
+
+    ADR-0015 Task 4：prompt 元数据可追溯。未传入时返回空 dict（与历史
+    Langfuse 调用向后兼容，不污染 metadata 命名空间）。
+    """
+    md: dict = {}
+    if prompt_name:
+        md["prompt_name"] = prompt_name
+    if prompt_version is not None:
+        md["prompt_version"] = prompt_version
+    return md
 
 
 def _build_kwargs(
@@ -187,6 +205,8 @@ def call_llm(
     api_key: str | None = None,
     quick: bool = False,
     llm_config: LLMConfig | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ) -> str:
     """Non-streaming LLM call — returns full response string.
 
@@ -194,6 +214,10 @@ def call_llm(
     Use quick=True for simple tasks like JSON extraction, classification, etc.
 
     llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
+    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键
+    （向后兼容）。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -225,12 +249,15 @@ def call_llm(
                 name=f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
+                metadata=_prompt_metadata(prompt_name, prompt_version),
             ) as _gen:
                 resp = litellm.completion(**kwargs)
-                content = resp.choices[0].message.content
+                msg = resp.choices[0].message
+                # reasoning_content 独立提取供 trace；content 缺失时 fallback 到 reasoning（保持旧行为）
+                _reasoning_text = getattr(msg, "reasoning_content", "") or ""
+                content = msg.content or ""
                 if not content:
-                    msg = resp.choices[0].message
-                    content = getattr(msg, "reasoning_content", "") or ""
+                    content = _reasoning_text
                 _usage = getattr(resp, "usage", None)
                 _ud = {}
                 if _usage:
@@ -238,7 +265,14 @@ def call_llm(
                         "input": getattr(_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_usage, "completion_tokens", 0) or 0,
                     }
-                _gen.update(output=str(content), usage_details=_ud)
+                # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
+                _gen.update(
+                    output={
+                        "answer": truncate_for_trace(str(content)),
+                        "reasoning": truncate_for_trace(_reasoning_text),
+                    },
+                    usage_details=_ud,
+                )
                 return str(content)
         except Exception:
             _lf = None
@@ -260,6 +294,8 @@ def call_llm_stream(
     messages: list[dict] | None = None,
     quick: bool = False,
     llm_config: LLMConfig | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ):
     """Streaming LLM call — yields tokens one by one.
 
@@ -269,6 +305,9 @@ def call_llm_stream(
     If ``quick=True``, uses LLM_QUICK_MODEL instead of LLM_MODEL.
 
     llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
+    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -307,6 +346,7 @@ def call_llm_stream(
                 name=f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
+                metadata=_prompt_metadata(prompt_name, prompt_version),
             )
             _gen = _gen_cm.__enter__()
         except Exception:
@@ -315,12 +355,14 @@ def call_llm_stream(
 
     try:
         _accumulated = ""
+        _accumulated_reasoning_stream = ""  # 累加 DeepSeek reasoning_content（原生思考增量）
         _last_usage = None
         stream = litellm.completion(**kwargs)
         for chunk in stream:
             delta = chunk.choices[0].delta
             # Yield reasoning content (thinking) and answer content separately
             if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                _accumulated_reasoning_stream += str(delta.reasoning_content)
                 yield ("thinking", str(delta.reasoning_content))
             if delta and delta.content:
                 _accumulated += str(delta.content)
@@ -337,7 +379,14 @@ def call_llm_stream(
                         "input": getattr(_last_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_last_usage, "completion_tokens", 0) or 0,
                     }
-                _gen.update(output=_accumulated, usage_details=_ud)
+                # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
+                _gen.update(
+                    output={
+                        "answer": truncate_for_trace(_accumulated),
+                        "reasoning": truncate_for_trace(_accumulated_reasoning_stream),
+                    },
+                    usage_details=_ud,
+                )
                 _gen.end()
             except Exception:  # noqa: S110
                 pass
@@ -345,6 +394,43 @@ def call_llm_stream(
         if _gen_cm is not None:
             with contextlib.suppress(Exception):
                 _gen_cm.__exit__(None, None, None)
+
+
+def _extract_with_tools_output(resp) -> dict:
+    """从 litellm completion resp 提取结构化 generation output。
+
+    返回 ``{answer, reasoning}``，非空 tool_calls 时追加 ``tool_calls`` 字段。
+    供 ``call_llm_with_tools`` 的 Langfuse 主路径与降级路径共用，保证两路
+    output 结构一致（reasoning 与 call_llm / chat_stream 对称；空 tool_calls
+    省略 key，与 chat_stream 文本分支一致）。
+
+    - answer: ``message.content``（缺失时为空串，不回退 reasoning —— 工具调用场景
+      content 通常为空，回退会把 reasoning 当 answer 误导 trace）。
+    - reasoning: ``message.reasoning_content`` 独立提取（DeepSeek thinking 模式）。
+    - tool_calls: ``message.tool_calls`` 结构化为 ``[{name, arguments}]``，
+      arguments 保留 LLM 原始 JSON 字符串并裁剪。
+    """
+    _message = None
+    _choices = getattr(resp, "choices", [])
+    if _choices:
+        _message = getattr(_choices[0], "message", None)
+    _output_text = (getattr(_message, "content", "") or "") if _message else ""
+    _reasoning_text = (getattr(_message, "reasoning_content", "") or "") if _message else ""
+    _output_tool_calls: list[dict] = []
+    if _message is not None:
+        _tc_list = getattr(_message, "tool_calls", None) or []
+        for _tc in _tc_list:
+            _func = getattr(_tc, "function", None)
+            _tc_name = (getattr(_func, "name", "") or "") if _func else ""
+            _tc_args = (getattr(_func, "arguments", "") or "") if _func else ""
+            _output_tool_calls.append({"name": _tc_name, "arguments": truncate_for_trace(_tc_args)})
+    out: dict = {
+        "answer": truncate_for_trace(_output_text),
+        "reasoning": truncate_for_trace(_reasoning_text),
+    }
+    if _output_tool_calls:
+        out["tool_calls"] = _output_tool_calls
+    return out
 
 
 def call_llm_with_tools(
@@ -358,6 +444,8 @@ def call_llm_with_tools(
     messages: list[dict] | None = None,
     model: str | None = None,
     llm_config: LLMConfig | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ):
     """Non-streaming LLM call with tool support.
 
@@ -368,6 +456,9 @@ def call_llm_with_tools(
     (used for ReAct multi-turn dialogue with tool results).
 
     llm_config.model（若提供）覆盖 model 参数的解析。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
+    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
     """
     if llm_config and llm_config.model:
         model = llm_config.model
@@ -401,12 +492,10 @@ def call_llm_with_tools(
                 name=f"litellm:{model}",
                 model=model,
                 input={"messages": messages},
+                metadata=_prompt_metadata(prompt_name, prompt_version),
             ) as _gen:
                 resp = litellm.completion(**kwargs)
-                _output = ""
-                _choices = getattr(resp, "choices", [])
-                if _choices:
-                    _output = getattr(_choices[0].message, "content", "") or ""
+                _output_obj = _extract_with_tools_output(resp)
                 _usage = getattr(resp, "usage", None)
                 _ud = {}
                 if _usage:
@@ -414,8 +503,16 @@ def call_llm_with_tools(
                         "input": getattr(_usage, "prompt_tokens", 0) or 0,
                         "output": getattr(_usage, "completion_tokens", 0) or 0,
                     }
-                _gen.update(output=str(_output), usage_details=_ud)
+                _gen.update(output=_output_obj, usage_details=_ud)
                 return resp
         except Exception:
             _lf = None
-    return litellm.completion(**kwargs)
+    # 降级路径：start_as_current_observation 失败或未配置 Langfuse 时，
+    # 经 open_span（自带 no-op 兜底）仍尝试记录 tool_calls/reasoning/answer，
+    # 满足 spec「降级路径同样记录」；open_span 不可用时 yield None，业务不报错。
+    with open_span(name=f"litellm:{model}", input={"messages": messages}) as _obs:
+        resp = litellm.completion(**kwargs)
+        if _obs is not None:
+            with contextlib.suppress(Exception):  # trace 失败不影响业务
+                _obs.update(output=_extract_with_tools_output(resp))
+        return resp

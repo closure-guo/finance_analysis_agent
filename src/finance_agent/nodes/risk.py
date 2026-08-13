@@ -10,13 +10,14 @@ import json
 
 from finance_agent.models import DebateMessage, TradeDecision
 from finance_agent.nodes._llm_utils import call_llm_streaming, parse_json_response
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import load_prompt_with_meta
 
 
 def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "") -> dict:
     """风险辩论者通用逻辑。"""
     context = _build_risk_context(state)
-    system = load_prompt(prompt_name).replace("{role}", role)
+    _pinfo = load_prompt_with_meta(prompt_name)
+    system = _pinfo.template.replace("{role}", role)
     if role == "aggressive":
         system = system.replace("{perspective}", "激进收益")
     elif role == "conservative":
@@ -31,6 +32,8 @@ def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "")
         api_key=api_key,
         node_name=node_name,
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
@@ -56,7 +59,8 @@ def neutral_debater(state: dict) -> dict:
 def risk_judge(state: dict) -> dict:
     """Layer IV Risk Judge — 最终交易决策。"""
     context = _build_risk_context(state)
-    system = load_prompt("risk_judge")
+    _pinfo = load_prompt_with_meta("risk_judge")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -65,6 +69,8 @@ def risk_judge(state: dict) -> dict:
         api_key=api_key,
         node_name="risk_judge",
         llm_config=state.get("llm_config"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)

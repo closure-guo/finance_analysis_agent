@@ -139,6 +139,8 @@ def call_llm_streaming(
     api_key: str | None = None,
     node_name: str = "",
     llm_config=None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ) -> str:
     """Like call_llm but streams thinking tokens via LangGraph custom stream writer.
 
@@ -147,6 +149,9 @@ def call_llm_streaming(
     Returns the complete answer string (same interface as call_llm).
 
     llm_config（LLMConfig | None）透传给 call_llm_stream，实现请求级配置注入。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：透传给 call_llm_stream，
+    经 metadata 挂到 Langfuse generation，兑现「Prompt 元数据可追溯」。
     """
     from finance_agent.llm import call_llm_stream
 
@@ -183,7 +188,12 @@ def call_llm_streaming(
 
     answer_parts: list[str] = []
     for kind, text in call_llm_stream(
-        prompt, system=system, api_key=api_key, llm_config=llm_config
+        prompt,
+        system=system,
+        api_key=api_key,
+        llm_config=llm_config,
+        prompt_name=prompt_name,
+        prompt_version=prompt_version,
     ):
         if kind == "thinking" and writer:
             writer({"type": "thinking", "node": node_name, "token": text})

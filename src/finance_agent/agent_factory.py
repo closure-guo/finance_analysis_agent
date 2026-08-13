@@ -23,23 +23,41 @@ from typing import Any
 
 from finance_agent.harness import Agent, PermissionMode
 from finance_agent.llm import LLMConfig
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import PromptInfo, load_prompt_with_meta
 
 # ───────────────────────────────────────────────
 # System Prompts（ADR-0016：从 prompts/*.md 加载，Langfuse 优先 + 本地兜底）
 # ───────────────────────────────────────────────
 
 
-def _quick_mode_prompt() -> str:
-    return load_prompt("quick_mode").strip()
+def _quick_mode_prompt() -> PromptInfo:
+    """快速模式 prompt + 元数据；template 已 strip 便于 .format 渲染。"""
+    _info = load_prompt_with_meta("quick_mode")
+    return PromptInfo(
+        template=_info.template.strip(),
+        prompt_name=_info.prompt_name,
+        prompt_version=_info.prompt_version,
+    )
 
 
-def _deep_mode_prompt() -> str:
-    return load_prompt("deep_mode").strip()
+def _deep_mode_prompt() -> PromptInfo:
+    """深度模式 prompt + 元数据；template 已 strip 便于 .format 渲染。"""
+    _info = load_prompt_with_meta("deep_mode")
+    return PromptInfo(
+        template=_info.template.strip(),
+        prompt_name=_info.prompt_name,
+        prompt_version=_info.prompt_version,
+    )
 
 
-def _follow_up_mode_prompt() -> str:
-    return load_prompt("follow_up_mode").strip()
+def _follow_up_mode_prompt() -> PromptInfo:
+    """追问模式 prompt + 元数据；template 已 strip 便于 .format 渲染。"""
+    _info = load_prompt_with_meta("follow_up_mode")
+    return PromptInfo(
+        template=_info.template.strip(),
+        prompt_name=_info.prompt_name,
+        prompt_version=_info.prompt_version,
+    )
 
 
 # ───────────────────────────────────────────────
@@ -691,9 +709,11 @@ def _make_run_deep_analysis(
 def _stream_graph(initial_state: dict, config: dict | None = None, session_id: str | None = None):
     """执行 5 层管线同步流式迭代。
 
-    ADR-0015：注入 Langfuse CallbackHandler 使图节点自动挂成 span 树（Send 扇出
-    会自动传播 callback）。CallbackHandler 通过 OTel context.attach 设置 current
-    span，使 call_llm 的 generation（start_as_current_observation）能挂到节点 span 下。
+    ADR-0015：手动建 root span + propagate_attributes(session) 包裹 graph.stream，
+    使 5 层管线节点 + call_llm generation + 数据源 span 经 OTel contextvars 挂到
+    root span 下（仿 quick 模式 react_loop）。v4 CallbackHandler 在 LangGraph
+    graph.stream 不建主 trace，必须手动建 root，否则内部 span 各自成孤立 trace。
+    CallbackHandler 仍作 callbacks 注入（增益项，若 v4 后续支持 LangGraph 节点 span）。
     """
     from finance_agent.graph import build_5layer_graph
 
@@ -706,9 +726,26 @@ def _stream_graph(initial_state: dict, config: dict | None = None, session_id: s
     _lf = get_langfuse()
     if _handler is not None:
         config = {**config, "callbacks": [*config.get("callbacks", []), _handler]}
-        # ADR-0015：通过 metadata 传 langfuse_session_id，CallbackHandler 自动聚合到 session
+
+    # 手动 root span + session 聚合（仿 quick react_loop，agent_factory.py:1066）
+    _root_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    _propagate_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    if _lf is not None:
+        _stock = initial_state.get("stock_name") or initial_state.get("stock_code") or "unknown"
+        _root_cm = _lf.start_as_current_observation(
+            as_type="span",
+            name=f"deep_analysis:{_stock}",
+            input={"stock_code": initial_state.get("stock_code")},
+        )
         if session_id:
-            config["metadata"] = {**config.get("metadata", {}), "langfuse_session_id": session_id}
+            try:
+                from langfuse import propagate_attributes
+
+                _propagate_cm = propagate_attributes(session_id=session_id)
+            except Exception:  # noqa: S110
+                pass
+    _root_cm.__enter__()
+    _propagate_cm.__enter__()
 
     graph = build_5layer_graph()
 
@@ -719,6 +756,10 @@ def _stream_graph(initial_state: dict, config: dict | None = None, session_id: s
             stream_mode=["updates", "custom"],
         )
     finally:
+        with contextlib.suppress(Exception):
+            _propagate_cm.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            _root_cm.__exit__(None, None, None)
         if _lf is not None:
             with contextlib.suppress(Exception):
                 _lf.flush()
@@ -764,15 +805,28 @@ def build_agent(
     effectiveBaseUrl = llm_config.baseUrl if llm_config and llm_config.baseUrl else None
     effectiveThinking = llm_config.thinking if llm_config and llm_config.thinking else None
 
+    # 提前解析 mode prompt 元数据（ADR-0015 Task 4）：prompt_name/prompt_version
+    # 注入 LLM client 实例字段，使 ReAct 链路每次 chat_stream 都挂到 generation metadata。
+    if mode == "quick":
+        _mode_pinfo = _quick_mode_prompt()
+    elif mode == "deep":
+        _mode_pinfo = _deep_mode_prompt()
+    elif mode == "follow-up":
+        _mode_pinfo = _follow_up_mode_prompt()
+    else:
+        _mode_pinfo = None
+
     llm_client = _make_llm_client(
         model,
         api_key=effectiveApiKey,
         base_url=effectiveBaseUrl,
         thinking=effectiveThinking,
+        prompt_name=_mode_pinfo.prompt_name if _mode_pinfo else None,
+        prompt_version=_mode_pinfo.prompt_version if _mode_pinfo else None,
     )
 
     if mode == "quick":
-        prompt = _quick_mode_prompt().format(now=_now())
+        prompt = _mode_pinfo.template.format(now=_now()) if _mode_pinfo else ""
         agent = Agent(
             model=model,
             api_key=api_key,
@@ -792,7 +846,7 @@ def build_agent(
         return agent
 
     if mode == "deep":
-        prompt = _deep_mode_prompt().format(now=_now())
+        prompt = _mode_pinfo.template.format(now=_now()) if _mode_pinfo else ""
         agent = Agent(
             model=model,
             api_key=api_key,
@@ -836,7 +890,9 @@ def build_agent(
             raise ValueError("follow-up 模式需要 session_id")
 
         session = _load_session(session_id)
-        system_prompt = _build_follow_up_prompt(session)
+        system_prompt = _build_follow_up_prompt(
+            session, template=_mode_pinfo.template if _mode_pinfo else None
+        )
 
         agent = Agent(
             model=model,
@@ -864,11 +920,16 @@ def _make_llm_client(
     api_key: str | None = None,
     base_url: str | None = None,
     thinking: str | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
 ):
     """创建 litellm 适配的 LLM 客户端。
 
     TESTING=1 时返回 StubLLMClient（按固定节奏吐文本 delta），不连真 LLM。
     见 docs/superpowers/plans/2026-07-26-f3a-e2e-core-specs.md Task 1。
+
+    prompt_name / prompt_version（ADR-0015 Task 4）：透传给 LiteLLMClient 实例字段，
+    使 ReAct 链路 chat_stream 的 generation metadata 含 prompt 元数据。
     """
     from finance_agent.api import TESTING
 
@@ -882,7 +943,14 @@ def _make_llm_client(
 
     from finance_agent.harness.litellm_client import LiteLLMClient
 
-    return LiteLLMClient(model=model, api_key=api_key, base_url=base_url, thinking=thinking)
+    return LiteLLMClient(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        thinking=thinking,
+        prompt_name=prompt_name,
+        prompt_version=prompt_version,
+    )
 
 
 def _inject_chat_history(agent: Agent, session_id: str) -> None:
@@ -920,8 +988,14 @@ def _load_session(session_id: str) -> dict:
     return session
 
 
-def _build_follow_up_prompt(session: dict) -> str:
-    """构建追问模式的 system prompt，注入报告上下文。"""
+def _build_follow_up_prompt(session: dict, template: str | None = None) -> str:
+    """构建追问模式的 system prompt，注入报告上下文。
+
+    Args:
+        session: session 数据
+        template: 可选 prompt 模板文本。显式传入避免重复拉取 Langfuse
+            （caller build_agent 已持有 PromptInfo）。None 时内部拉取。
+    """
     import json
 
     report_md = session.get("report_markdown", "")
@@ -954,7 +1028,8 @@ def _build_follow_up_prompt(session: dict) -> str:
         history_lines.append(f"{label}: {content}")
     history_text = "\n".join(history_lines) if history_lines else "（无历史对话）"
 
-    return _follow_up_mode_prompt().format(
+    tmpl = template if template is not None else _follow_up_mode_prompt().template
+    return tmpl.format(
         now=_now(),
         report_excerpt=report_excerpt,
         analyst_summaries=json.dumps(analyst_summaries, ensure_ascii=False),
