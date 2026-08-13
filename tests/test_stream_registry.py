@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -189,3 +190,149 @@ async def test_subscribe_no_active_task_sends_terminal(tmp_path, monkeypatch):
     # 应收到终态事件（interrupted 或 done）
     terminal = await _next_event(gen)
     assert terminal["type"] in ("interrupted", "done")
+
+
+# ── 多轮会话全量回放（刷新恢复）──
+
+
+def _insert_event(sid: str, seq: int, event: dict, created_at: str) -> None:
+    """以确定的 created_at 直接写 journal（测试时间戳注入排序用）。"""
+    conn = session_store._get_db()  # noqa: SLF001
+    conn.execute(
+        "INSERT INTO session_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+        (sid, seq, json.dumps(event, ensure_ascii=False), created_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _set_chat_history(sid: str, entries: list[dict]) -> None:
+    conn = session_store._get_db()  # noqa: SLF001
+    conn.execute(
+        "UPDATE sessions SET chat_history = ? WHERE session_id = ?",
+        (json.dumps(entries, ensure_ascii=False), sid),
+    )
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_subscribe_replay_continues_past_historical_terminal(tmp_path, monkeypatch):
+    """多轮会话 journal 含历史 done：全量回放不得在历史终态处截断。
+
+    复现「刷新后管线 UI 消失」：第一轮快速问答的 done 在 journal 中段，
+    回放若在此 return，第二轮的 run_deep_analysis/node_start/report_ready
+    永远送不到前端。
+    """
+    _setup_db(tmp_path, monkeypatch)
+    reg = stream_registry.StreamRegistry()
+    sid = session_store.create_session(status="completed")
+
+    # 第一轮：token → done；第二轮：run_deep_analysis → report_ready
+    session_store.append_session_event(sid, {"type": "chat_token", "token": "r1"})
+    session_store.append_session_event(sid, {"type": "done"})
+    session_store.append_session_event(sid, {"type": "tool_call", "name": "run_deep_analysis"})
+    session_store.append_session_event(sid, {"type": "report_ready", "report_markdown": "# r"})
+
+    gen = reg.subscribe(sid, after_seq=0)
+    received = []
+    async for event in gen:
+        received.append(event["type"])
+
+    # 历史 done 后的事件必须送达；无活跃任务时末尾补一个合成 done
+    assert received[:4] == ["chat_token", "done", "tool_call", "report_ready"]
+    assert received[-1] == "done"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_full_replay_injects_user_messages_in_order(tmp_path, monkeypatch):
+    """全量回放按 chat_history 的 ts 注入 user_message，恢复原始交错顺序。
+
+    journal 不含 user_message 事件（用户消息只落 chat_history），刷新后
+    全量回放必须合成 user_message，否则前端无法把 user 气泡插回原位。
+    """
+    _setup_db(tmp_path, monkeypatch)
+    reg = stream_registry.StreamRegistry()
+    sid = session_store.create_session(status="completed")
+
+    _set_chat_history(
+        sid,
+        [
+            {"role": "user", "content": "今日股票", "ts": "2026-08-13T10:00:00"},
+            {"role": "assistant", "content": "热门标的...", "ts": "2026-08-13T10:00:30"},
+            {"role": "user", "content": "万邦医药", "ts": "2026-08-13T10:01:00"},
+        ],
+    )
+    _insert_event(sid, 1, {"type": "chat_token", "token": "热门"}, "2026-08-13T10:00:10")
+    _insert_event(sid, 2, {"type": "done"}, "2026-08-13T10:00:40")
+    _insert_event(sid, 3, {"type": "tool_call", "name": "run_deep_analysis"}, "2026-08-13T10:01:10")
+
+    gen = reg.subscribe(sid, after_seq=0, replay_user_messages=True)
+    received = []
+    async for event in gen:
+        received.append((event["type"], event.get("content") or event.get("name") or ""))
+
+    assert received[:5] == [
+        ("user_message", "今日股票"),
+        ("chat_token", ""),
+        ("done", ""),
+        ("user_message", "万邦医药"),
+        ("tool_call", "run_deep_analysis"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_injects_users_after_all_events(tmp_path, monkeypatch):
+    """用户消息 ts 晚于全部 journal 事件（已提交尚无事件）时，在回放末尾注入。"""
+    _setup_db(tmp_path, monkeypatch)
+    reg = stream_registry.StreamRegistry()
+    sid = session_store.create_session(status="completed")
+
+    _set_chat_history(
+        sid,
+        [
+            {"role": "user", "content": "第一问", "ts": "2026-08-13T10:00:00"},
+            {"role": "user", "content": "第二问", "ts": "2026-08-13T10:05:00"},
+        ],
+    )
+    _insert_event(sid, 1, {"type": "chat_token", "token": "答"}, "2026-08-13T10:00:10")
+
+    gen = reg.subscribe(sid, after_seq=0, replay_user_messages=True)
+    received = [e["type"] async for e in gen]
+
+    assert received[0] == "user_message"
+    assert received[1] == "chat_token"
+    assert received[2] == "user_message"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_no_injection_when_after_seq_positive(tmp_path, monkeypatch):
+    """断点续传（after_seq>0）不注入 user_message——前端已有历史消息。"""
+    _setup_db(tmp_path, monkeypatch)
+    reg = stream_registry.StreamRegistry()
+    sid = session_store.create_session(status="completed")
+
+    _set_chat_history(sid, [{"role": "user", "content": "今日股票", "ts": "2026-08-13T10:00:00"}])
+    _insert_event(sid, 1, {"type": "chat_token", "token": "a"}, "2026-08-13T10:00:10")
+    _insert_event(sid, 2, {"type": "chat_token", "token": "b"}, "2026-08-13T10:00:20")
+
+    gen = reg.subscribe(sid, after_seq=1, replay_user_messages=True)
+    received = [e["type"] async for e in gen]
+
+    assert "user_message" not in received
+
+
+@pytest.mark.asyncio
+async def test_subscribe_no_injection_by_default(tmp_path, monkeypatch):
+    """默认（实时路径）不注入 user_message——避免与前端乐观气泡重复。"""
+    _setup_db(tmp_path, monkeypatch)
+    reg = stream_registry.StreamRegistry()
+    sid = session_store.create_session(status="completed")
+
+    _set_chat_history(sid, [{"role": "user", "content": "今日股票", "ts": "2026-08-13T10:00:00"}])
+    _insert_event(sid, 1, {"type": "chat_token", "token": "a"}, "2026-08-13T10:00:10")
+
+    gen = reg.subscribe(sid, after_seq=0)
+    received = [e["type"] async for e in gen]
+
+    assert "user_message" not in received

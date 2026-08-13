@@ -380,12 +380,14 @@ export class StreamStore {
 
   // 从 SessionDetail 重建会话消息（供组件调用）
   rebuildMessagesFromDetail(data: SessionDetail): UIMessage[] {
-    // 进行中会话（running/clarifying）走 journal replay：只保留 user 消息，
-    // assistant/pipeline 完全交给 resume(after_seq=0) 全量重放 journal 重建。
+    // 进行中会话（running/clarifying）走 journal replay：rebuild 只播种 user 消息
+    // 作为预览/204 兜底（seededFromHistory，首个回放事件到达即清除），
+    // assistant/pipeline/user 全部由 resume(after_seq=0) 全量重放 journal 重建。
     // 原因：chat_history 是事后汇总快照（只含最终 thinking/tool_calls），不含中间
     // 流式事件（thinking_token 逐步累积、节点实时进度），用它重建会残缺；
     // 而 last_seq 续传又跳过已 journal 事件 → 刷新后内容永久丢失（三次刷新 bug 根因）。
-    // journal 不含 user_message 事件，user 消息必须从 chat_history 补。
+    // journal 不落用户消息，后端全量重放时按 chat_history 的 ts 注入合成
+    // user_message 事件，恢复 user 气泡的原始交错顺序（气泡错位 bug 修复）。
     if (data.status === 'running' || data.status === 'clarifying') {
       const history = Array.isArray(data.chat_history) ? data.chat_history : []
       return history
@@ -533,6 +535,9 @@ export class StreamStore {
       messages,
       lastSeq,
       origin: 'rebuilt',
+      // 进行中会话的 messages 只是 user 种子（预览/204 兜底）；首个回放事件
+      // 到达时清除，由全量回放（含 user_message 注入）按原始顺序重建
+      ...(isInFlight && messages.length > 0 ? { seededFromHistory: true } : {}),
     })
     this.emit()
   }
@@ -599,7 +604,14 @@ export class StreamStore {
   }
 
   private applyEvent(sessionId: string, event: SSEEvent): void {
-    const prev = this.streams.get(sessionId) ?? IDLE_STATE
+    let prev = this.streams.get(sessionId) ?? IDLE_STATE
+
+    // 首个回放/实时事件到达：丢弃 chat_history user 种子（堆叠失序的预览），
+    // 从空开始按事件顺序重建——回放流含后端注入的 user_message，顺序正确
+    if (prev.seededFromHistory) {
+      prev = { ...prev, messages: [], seededFromHistory: false }
+      this.streams.set(sessionId, prev)
+    }
 
     // session_created 特殊处理：把临时 key（''）或旧 key 的提交态迁移到实际 sessionId。
     // 视图意图判断：提交后用户未切换视图（pendingView 为空/未变）时保留预提交

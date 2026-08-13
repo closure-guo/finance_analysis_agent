@@ -155,7 +155,12 @@ class StreamRegistry:
                     q.put_nowait(event)
         return seq
 
-    async def subscribe(self, session_id: str, after_seq: int = 0) -> AsyncGenerator[dict, None]:
+    async def subscribe(
+        self,
+        session_id: str,
+        after_seq: int = 0,
+        replay_user_messages: bool = False,
+    ) -> AsyncGenerator[dict, None]:
         """订阅会话事件流：先注册队列，再重放 journal，最后接续实时事件。
 
         步骤顺序（先注册再读日志，消除重放缝合竞态）：
@@ -167,6 +172,17 @@ class StreamRegistry:
 
         seq 去重消解重放与补漏的重叠段。
         对应 delta spec Task 2.4。
+
+        重放/补漏不停于历史终态：多轮会话 journal 中段含上一轮的
+        done/interrupted/error，若在此截断，刷新恢复（after_seq=0 全量重放）
+        会丢失后续轮次的全部事件（管线 UI 消失 bug 根因）。仅实时尾部
+        （步骤 5）在终态事件后结束——那才代表当前任务真正结束。
+
+        replay_user_messages=True 且 after_seq=0（刷新全量重放）时，按
+        chat_history 中 user 消息的 ts 在对应位置注入合成的 user_message
+        事件：journal 不落用户消息，否则前端无法把 user 气泡插回原始
+        交错位置（气泡错位 bug 根因）。实时路径保持默认 False，避免与
+        前端提交时的乐观气泡重复。
         """
         # 1. 检查活跃任务并注册实时队列
         stream = self._streams.get(session_id)
@@ -201,18 +217,28 @@ class StreamRegistry:
             events = await asyncio.to_thread(
                 session_store.list_session_events, session_id, after_seq
             )
+            # 全量重放时准备待注入的 user 消息（ts 升序）
+            pendingUsers: list[tuple[str, str]] = []
+            if replay_user_messages and after_seq == 0:
+                pendingUsers = await asyncio.to_thread(
+                    _load_pending_user_messages, session_id, events
+                )
             replayedSeq = after_seq
             for row in events:
                 try:
                     event = json.loads(row["event_json"])
                 except (json.JSONDecodeError, TypeError):
                     continue
+                # 注入 ts 早于当前事件的用户消息，恢复原始交错顺序
+                createdAt = row.get("created_at") or ""
+                while pendingUsers and pendingUsers[0][0] <= createdAt:
+                    yield {"type": "user_message", "content": pendingUsers.pop(0)[1]}
                 replayedSeq = row["seq"]
                 event["seq"] = replayedSeq
-                if event.get("type") in ("done", "interrupted", "error"):
-                    yield event
-                    return
                 yield event
+            # 尾部注入：已提交但尚无 journal 事件的用户消息（ts 晚于全部事件）
+            while pendingUsers:
+                yield {"type": "user_message", "content": pendingUsers.pop(0)[1]}
 
             # 3. 无活跃任务：下发终态事件
             if not hasActive:
@@ -223,7 +249,8 @@ class StreamRegistry:
                     yield {"type": "done"}
                 return
 
-            # 4. 补漏：重放期间产生的新事件（lastSeq > replayedSeq）
+            # 4. 补漏：重放期间产生的新事件（lastSeq > replayedSeq）。
+            # 与重放同理：不停于历史终态，终态只结束实时尾部（步骤 5）。
             assert stream is not None  # noqa: S101  # hasActive 为 True 时 stream 必非 None
             if stream.lastSeq > replayedSeq:
                 missed = await asyncio.to_thread(
@@ -235,9 +262,6 @@ class StreamRegistry:
                     except (json.JSONDecodeError, TypeError):
                         continue
                     event["seq"] = row["seq"]
-                    if event.get("type") in ("done", "interrupted", "error"):
-                        yield event
-                        return
                     yield event
 
             # 5. 消费实时队列
@@ -283,6 +307,38 @@ class StreamRegistry:
         """检查会话是否有活跃生成任务。"""
         stream = self._streams.get(session_id)
         return stream is not None and stream.task is not None and not stream.task.done()
+
+
+def _load_pending_user_messages(session_id: str, events: list[dict]) -> list[tuple[str, str]]:
+    """读取 chat_history 中的 user 消息（ts, content），供全量重放注入。
+
+    跳过已以 user_message 事件落在 journal 中的前 N 条（防御：若未来改为
+    提交时直接落 journal，避免重复注入）。ts 缺失按空串处理（排到最前）。
+    """
+    session = session_store.get_session(session_id)
+    if not session:
+        return []
+    raw = session.get("chat_history")
+    # get_session 可能已反序列化为 list（也可能仍是 JSON 字符串），两种都兼容
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    history = raw if isinstance(raw, list) else []
+    users = [
+        (str(h.get("ts") or ""), str(h.get("content") or ""))
+        for h in history
+        if isinstance(h, dict) and h.get("role") == "user"
+    ]
+    journaled = 0
+    for row in events:
+        try:
+            if json.loads(row["event_json"]).get("type") == "user_message":
+                journaled += 1
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return users[journaled:]
 
 
 # 全局单例
