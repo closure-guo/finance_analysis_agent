@@ -49,6 +49,22 @@ def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) 
     return md
 
 
+def _generation_metadata(
+    prompt_name: str | None,
+    prompt_version: str | int | None,
+    agent: str | None = None,
+) -> dict:
+    """构造 generation metadata：prompt 元数据 + agent 过滤字段。
+
+    agent 仅在显式提供时写入（与 _prompt_metadata 相同的向后兼容约定，
+    不污染 metadata 命名空间）。与 llm.py 中同名 helper 同构，避免跨模块依赖。
+    """
+    md = _prompt_metadata(prompt_name, prompt_version)
+    if agent:
+        md["agent"] = agent
+    return md
+
+
 class LiteLLMClient:
     """用 litellm 实现的 LLM 客户端，接口与 harness LLMClient 一致。"""
 
@@ -62,6 +78,7 @@ class LiteLLMClient:
         retry_delay: float = 1.0,
         prompt_name: str | None = None,
         prompt_version: str | int | None = None,
+        agent: str | None = None,
     ):
         self.model = model
         self.api_key = _resolve_key(api_key)
@@ -82,6 +99,9 @@ class LiteLLMClient:
         # prompt_version 来自 Langfuse BasePrompt.version（int），本地兜底 "local"。
         self.prompt_name = prompt_name
         self.prompt_version = prompt_version
+        # agent 标签（Task 4）：harness 侧 generation observation 用 agent 名命名
+        # （如 react_agent），使其在 Langfuse trace 中可按 agent 归属/过滤。
+        self.agent = agent
 
         # Langfuse 可观测性（可选，ADR-0015）- 复用统一单例
         self._langfuse = None
@@ -150,16 +170,20 @@ class LiteLLMClient:
         # 使本 generation 挂到 CallbackHandler 已建好的 react_loop span 下。
         # 保留 CM 引用以便 __exit__ 恢复 OTel 上下文（否则下次 chat_stream 会误挂父级）。
         # prompt_name/prompt_version（Task 4）：来自 client 实例字段，每次都挂到 metadata。
+        # agent 标签（Task 4）：设 agent 时 observation 以 agent 命名（如 react_agent），
+        # 否则回退 litellm:{model}。
         _lf_cm = None
         _lf_obs = None
         if self._langfuse:
             try:
                 _lf_cm = self._langfuse.start_as_current_observation(
-                    name=f"litellm:{self.model}",
+                    name=self.agent or f"litellm:{self.model}",
                     as_type="generation",
                     input={"messages": messages},
                     model=self.model,
-                    metadata=_prompt_metadata(self.prompt_name, self.prompt_version),
+                    metadata=_generation_metadata(
+                        self.prompt_name, self.prompt_version, self.agent
+                    ),
                 )
                 _lf_obs = _lf_cm.__enter__()
             except Exception as e:

@@ -32,6 +32,7 @@ def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "")
         api_key=api_key,
         node_name=node_name,
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
@@ -69,6 +70,7 @@ def risk_judge(state: dict) -> dict:
         api_key=api_key,
         node_name="risk_judge",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )

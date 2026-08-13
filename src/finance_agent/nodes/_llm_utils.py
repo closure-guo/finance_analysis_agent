@@ -141,6 +141,7 @@ def call_llm_streaming(
     llm_config=None,
     prompt_name: str | None = None,
     prompt_version: str | int | None = None,
+    stock_code: str | None = None,
 ) -> str:
     """Like call_llm but streams thinking tokens via LangGraph custom stream writer.
 
@@ -152,6 +153,9 @@ def call_llm_streaming(
 
     prompt_name / prompt_version（ADR-0015 Task 4）：透传给 call_llm_stream，
     经 metadata 挂到 Langfuse generation，兑现「Prompt 元数据可追溯」。
+
+    node_name 透传给 call_llm_stream 的 agent 参数（Langfuse generation 命名），
+    stock_code 原样透传（Langfuse 过滤字段）。
     """
     from finance_agent.llm import call_llm_stream
 
@@ -194,6 +198,8 @@ def call_llm_streaming(
         llm_config=llm_config,
         prompt_name=prompt_name,
         prompt_version=prompt_version,
+        agent=node_name,
+        stock_code=stock_code,
     ):
         if kind == "thinking" and writer:
             writer({"type": "thinking", "node": node_name, "token": text})

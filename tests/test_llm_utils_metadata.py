@@ -43,3 +43,19 @@ def test_call_llm_streaming_prompt_metadata_defaults_none(mock_call_llm_stream):
     call_kwargs = mock_call_llm_stream.call_args.kwargs
     assert call_kwargs["prompt_name"] is None
     assert call_kwargs["prompt_version"] is None
+
+
+@patch("finance_agent.llm.call_llm_stream")
+def test_call_llm_streaming_forwards_agent_and_stock(mock_stream):
+    """call_llm_streaming 把 node_name 作为 agent、stock_code 原样透传给 call_llm_stream。"""
+    mock_stream.return_value = iter([("thinking", "t"), ("answer", "a")])
+
+    from finance_agent.nodes._llm_utils import call_llm_streaming
+
+    result = call_llm_streaming(
+        "prompt", system="s", node_name="technical_analyst", stock_code="300308"
+    )
+    assert result == "a"
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs["agent"] == "technical_analyst"
+    assert kwargs["stock_code"] == "300308"

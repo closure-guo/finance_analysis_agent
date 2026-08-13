@@ -136,6 +136,7 @@ def fetch_events_from_web(stock_code: str, stock_name: str) -> list[dict] | None
             _EXTRACTION_PROMPT.replace("{content}", content),
             system="你是财经信息提取专家。只输出 JSON 数组，不要 Markdown 代码块标记。",
             temperature=0.1,
+            agent="web_fetcher",
         )
 
         # 解析 JSON
