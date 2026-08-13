@@ -137,7 +137,13 @@ export function RoeChart({ data }: { data: ChartData }) {
       itemStyle: { color: _colors.amber },
       areaStyle: { opacity: 0.15 },
       symbol: 'circle', symbolSize: 6,
-      markLine: { data: [{ yAxis: 15, label: { formatter: '优秀线 15%', color: _axisLabelColor } }, { lineStyle: { color: '#A3A3A3', type: 'dashed' } }] },
+      markLine: {
+        // lineStyle 属于 markLine 层级（应用到所有标线）；放进 data 会被 ECharts
+        // 当作无坐标的数据点 → 读 coord of undefined → MarkLineView 崩溃
+        // "Cannot read properties of undefined (reading 'coord')"，ROE 图渲染失败。
+        data: [{ yAxis: 15, label: { formatter: '优秀线 15%', color: _axisLabelColor } }],
+        lineStyle: { color: '#A3A3A3', type: 'dashed' },
+      },
     }],
   }
 
