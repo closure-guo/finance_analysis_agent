@@ -1058,8 +1058,23 @@ async def stream_agent_to_sse(
                 if tc:
                     name = tc.name or ""
                     args = tc.arguments if tc else {}
+                    # web_search / batch_web_search 都发 search_start，驱动前端搜索横幅。
+                    # batch_web_search 改为默认搜索工具后必须同样覆盖，否则前端把该
+                    # tool_call 当搜索类丢弃（等 search_* 驱动），结果搜索无任何渲染。
                     if name == "web_search":
                         last_web_search_query = str(args.get("query", ""))
+                        yield _sse(
+                            {
+                                "type": "search_start",
+                                "query": last_web_search_query,
+                                "timestamp": ts,
+                            }
+                        )
+                    elif name == "batch_web_search":
+                        queries = args.get("queries") or []
+                        last_web_search_query = (
+                            "；".join(str(q) for q in queries) if queries else "批量搜索"
+                        )
                         yield _sse(
                             {
                                 "type": "search_start",
@@ -1186,8 +1201,11 @@ async def stream_agent_to_sse(
                         with contextlib.suppress(json.JSONDecodeError, TypeError):
                             result_data = json.loads(tr.output)
 
-                        # web_search: 解析纯文本结果，发送结构化搜索来源
-                        if tr.name == "web_search" and isinstance(result_data, str):
+                        # web_search / batch_web_search: 解析纯文本结果，
+                        # 发送结构化搜索来源（驱动前端搜索横幅转「已搜索 N 个网页」）
+                        if tr.name in ("web_search", "batch_web_search") and isinstance(
+                            result_data, str
+                        ):
                             from finance_agent.web_search import parse_search_output
 
                             search_results = parse_search_output(result_data)

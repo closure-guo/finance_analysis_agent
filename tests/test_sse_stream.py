@@ -280,3 +280,68 @@ class TestStreamAgentToSse:
         # 由于 mock_analysis 不是流式工具，不会产生 TOOL_METADATA 事件
         # 这个测试验证 on_metadata 回调机制存在且不报错
         assert sse_strings is not None
+
+    @pytest.mark.asyncio
+    async def test_batch_web_search_emits_search_events(self):
+        """batch_web_search 工具调用必须发 search_start/search_result（与 web_search 一致）。
+
+        复现 bug：agent 改用 batch_web_search 后，前端搜索横幅不渲染——
+        流式处理器只在 name == 'web_search' 时发 search_start/search_result，
+        batch_web_search 被漏掉。前端把 batch_web_search 也归类为搜索工具
+        （reduce 中 isSearchToolName 直接丢弃 tool_call，等 search_* 驱动 UI），
+        结果 tool_call 被丢 + search_* 不发 → 搜索无任何渲染。
+        """
+
+        async def batch_web_search(queries: list[str]) -> str:
+            """批量搜索
+
+            Args:
+                queries: 关键词列表
+            """
+            # 模拟 format_batch_for_llm 输出（parse_search_output 可解析）
+            lines: list[str] = []
+            for q in queries:
+                lines.append(f"## 搜索: {q}")
+                lines.append("[1] 测试来源标题")
+                lines.append("https://example.com/test")
+                lines.append("测试内容片段")
+                lines.append("")
+            return "\n".join(lines)
+
+        mock_llm = MockLLMClient(
+            [
+                [
+                    LLMResponse(
+                        text_delta="我来搜索",
+                        tool_calls=[
+                            ToolCallRequest(
+                                id="1",
+                                name="batch_web_search",
+                                arguments={"queries": ["A股热门", "龙头股"]},
+                            )
+                        ],
+                        is_finished=True,
+                    )
+                ],
+                [LLMResponse(text_delta="根据搜索结果...", is_finished=True)],
+            ]
+        )
+
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=5,
+            llm=mock_llm,
+        )
+        agent.tools.register(batch_web_search, name="batch_web_search")
+
+        from finance_agent.agent_factory import stream_agent_to_sse
+
+        events = _parse_sse_events(await _collect_sse(stream_agent_to_sse(agent, "分析一下股票")))
+
+        search_starts = [e for e in events if e.get("type") == "search_start"]
+        search_results = [e for e in events if e.get("type") == "search_result"]
+        assert len(search_starts) >= 1, "batch_web_search 必须发 search_start"
+        assert len(search_results) >= 1, "batch_web_search 必须发 search_result"
+        assert search_results[0]["count"] >= 1
