@@ -500,3 +500,151 @@ Expected: ruff 0 error；mypy 无新增错误
 git add tests/validation/langfuse-trace-agent-attribution-validation.md
 git commit -m "docs: [trace] agent 命名人工验证报告"
 ```
+
+---
+
+### Task 7: 根 trace 记录会话内容（deep_analysis root output + react_loop output）
+
+**Files:**
+- Modify: `src/finance_agent/agent_factory.py`（`_stream_graph` 捕获 root obs + 新 helper；`_make_run_deep_analysis` 传 sink + `_background_consume` 完成点写 output；`stream_agent_to_sse` 捕获 react obs + 追踪 ANSWER + 退出写 output）
+- Test: `tests/test_deep_trace_root.py`（追加）+ 新 `tests/test_trace_output.py`
+
+**Interfaces:**
+- `_stream_graph(initial_state, config=None, session_id=None, root_obs_sink: dict | None = None)` → 进入根 span 后写 `root_obs_sink["obs"] = _root_obs`（供事件循环侧写 output）。
+- `_build_trace_output(accumulated: dict) -> dict`：纯函数，从 accumulated 提取摘要级 agent 产出。
+- `stream_agent_to_sse`：退出 react_loop span 前 `_react_obs.update(output={"answer": <最终回复>})`。
+
+- [ ] **Step 1: 写失败测试（新 tests/test_trace_output.py）**
+
+```python
+from unittest.mock import MagicMock, patch
+
+# ── 纯函数: 从 accumulated 构建根 span output 摘要 ──
+def test_build_trace_output_summarizes_agent_outputs():
+    from finance_agent.agent_factory import _build_trace_output
+
+    accumulated = {
+        "stock_code": "600519",
+        "stock_name": "贵州茅台",
+        "final_report": "## 投资分析\n完整报告…" + "x" * 600,
+        "analyst_reports": {"technical": {"summary": "技术面摘要"}, "fundamental": {"summary": "基本面摘要"}},
+        "trader_decision": {"decision": "buy", "confidence": 0.8},
+    }
+    out = _build_trace_output(accumulated)
+    assert out["stock_code"] == "600519"
+    assert out["stock_name"] == "贵州茅台"
+    assert out["final_report_summary"].startswith("## 投资分析")
+    assert len(out["final_report_summary"]) <= 600  # 摘要截断防体积膨胀
+    assert out["analyst_reports"]["technical"] == "技术面摘要"
+    assert out["trader_decision"]["decision"] == "buy"
+
+
+# ── _stream_graph: root_obs_sink 透传根 obs 句柄 ──
+def test_stream_graph_exposes_root_obs_via_sink():
+    from finance_agent.agent_factory import _stream_graph
+
+    mock_lf = MagicMock()
+    mock_root = MagicMock()
+    mock_lf.start_as_current_observation.return_value = mock_root
+    sink: dict = {}
+    with (
+        patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+        patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+        patch("finance_agent.graph.build_5layer_graph", lambda: iter([MagicMock()])),
+    ):
+        from types import SimpleNamespace
+
+        g = SimpleNamespace(stream=lambda *a, **k: iter([]))
+        with patch("finance_agent.agent_factory.build_5layer_graph", return_value=g):
+            list(_stream_graph({"stock_code": "600519"}, session_id="sess-1", root_obs_sink=sink))
+    assert sink.get("obs") is mock_root.__enter__.return_value
+```
+
+（`build_5layer_graph` 的 patch 路径以现有 `tests/test_deep_trace_root.py` 的写法为准——`finance_agent.graph.build_5layer_graph` 或 `finance_agent.agent_factory.build_5layer_graph`，实现时按实际 import 修正一处即可。）
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `uv run pytest tests/test_trace_output.py -q`
+Expected: FAIL——`ImportError: cannot import name '_build_trace_output'` / `TypeError: _stream_graph() got an unexpected keyword argument 'root_obs_sink'`
+
+- [ ] **Step 3: 实现（agent_factory.py）**
+
+(1) 新增纯函数（`_stream_graph` 前）：
+
+```python
+def _build_trace_output(accumulated: dict) -> dict:
+    """从管线 accumulated 状态构建根 span output 摘要（会话内容可见）。
+
+    只放摘要级内容防 trace 体积膨胀：各 agent 产出摘要 + 最终报告前 500 字符。
+    """
+    out: dict = {}
+    for key in ("stock_code", "stock_name", "analysis_type"):
+        if accumulated.get(key):
+            out[key] = accumulated[key]
+    final_report = accumulated.get("final_report")
+    if final_report:
+        out["final_report_summary"] = final_report[:500] + ("…" if len(final_report) > 500 else "")
+    reports = accumulated.get("analyst_reports") or {}
+    if reports:
+        out["analyst_reports"] = {
+            k: (v.get("summary", "")[:200] if isinstance(v, dict) else str(v)[:200])
+            for k, v in reports.items()
+        }
+    for key in ("trader_decision", "risk_decision", "fund_manager_decision"):
+        v = accumulated.get(key)
+        if v:
+            out[key] = v if isinstance(v, dict) else str(v)[:300]
+    return out
+```
+
+(2) `_stream_graph` 签名加 `root_obs_sink: dict | None = None`；进入 root span 处（原 `_root_cm.__enter__()`）改为：
+
+```python
+    _root_obs = _root_cm.__enter__()
+    if root_obs_sink is not None:
+        root_obs_sink["obs"] = _root_obs
+```
+
+(3) `_make_run_deep_analysis`：`_run_graph` 调 `_stream_graph(initial_state, session_id=session_id, root_obs_sink=_root_obs_sink)`；定义 `_root_obs_sink: dict = {}`。`_background_consume` 的 `if item is None: break` 之后、函数收尾处：
+
+```python
+        # 管线完成: 根 span 写 agent 产出（会话内容可见，不再 output=null）
+        _root_obs = _root_obs_sink.get("obs")
+        if _root_obs is not None:
+            with contextlib.suppress(Exception):
+                _root_obs.update(output=_build_trace_output(accumulated))
+```
+
+(4) `stream_agent_to_sse`：`_react_obs = _react_cm.__enter__()`（原 1102 行捕获返回）；循环内 ANSWER 分支追加 `_final_answer_parts.append(event.content)`（需先在函数顶部初始化 `_final_answer_parts: list[str] = []`）；退出处（`_react_cm.__exit__` 前）：
+
+```python
+        # ADR-0015: 退出 react_loop span 前记录 agent 最终回复（会话内容可见）
+        if _react_obs is not None and _final_answer_parts:
+            with contextlib.suppress(Exception):
+                _react_obs.update(output={"answer": "".join(_final_answer_parts)})
+```
+
+- [ ] **Step 4: 运行确认通过**
+
+Run: `uv run pytest tests/test_trace_output.py tests/test_deep_trace_root.py -q`
+Expected: PASS
+
+- [ ] **Step 5: 回归**
+
+Run: `uv run pytest tests/test_agent_factory.py tests/test_react_loop.py tests/test_deep_analysis_tool.py -q`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/finance_agent/agent_factory.py tests/test_trace_output.py tests/test_deep_trace_root.py
+git commit -m "feat: [trace] 根 trace 记录会话内容 — root/react_loop span 写 agent 产出"
+```
+
+---
+
+### Task 8: 验证与收尾
+
+- [ ] 8.1 全量 `uv run pytest tests/ --ignore=tests/e2e -m "not live"` + `ruff check` + `mypy`（基线对比）
+- [ ] 8.2 实跑深度分析，Langfuse 对账：session/trace 级可见 agent 输出（deep_analysis root span 与 react_loop span 的 output 非 null，含产出摘要/最终回复）；更新验证报告 `tests/validation/langfuse-trace-agent-attribution-validation.md`
+- [ ] 8.3 commit 验证报告

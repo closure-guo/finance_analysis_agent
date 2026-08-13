@@ -2,6 +2,20 @@
 
 ## ADDED Requirements
 
+### Requirement: trace 记录会话内容（根 span output）
+
+系统 SHALL 在管线根 span（`deep_analysis:{股票}`）与 ReAct `react_loop` span 退出前，将 agent 产出写入 span 的 output，使 Langfuse trace/session 层级直接可见 agent 输出，而非仅有 user input。
+
+#### Scenario: deep_analysis 根 span 记录 agent 产出
+
+- **WHEN** 5 层分析管线完成（`deep_analysis:{股票}` 根 span 退出）
+- **THEN** 系统 SHALL 将根 span 的 output 更新为管线产出摘要（各 agent 节点产出 + 最终报告摘要）
+
+#### Scenario: react_loop span 记录 agent 最终回复
+
+- **WHEN** ReAct Agent 完成一轮执行（`react_loop` span 退出）
+- **THEN** 系统 SHALL 更新 `react_loop` span 的 output 为 agent 最终回复/总结
+
 ### Requirement: LLM generation 按子 agent 归因
 
 系统 SHALL 在创建 LLM generation 观测时，以发起该调用的子 agent 名命名 observation（如 `technical_analyst`、`bull_debater`、`risk_judge`、`trader`、`fund_manager`)，使 Langfuse 观测列表可直接区分每次调用归属的子 agent。
