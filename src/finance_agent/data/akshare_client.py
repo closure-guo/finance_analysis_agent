@@ -131,11 +131,11 @@ def _add_prefix(code: str) -> str:
 
 class AKShareClient:
     def _filter_annual(self, df: pd.DataFrame) -> pd.DataFrame:
-        """只保留年报（报告日以 1231 结尾）。"""
+        """只保留年报（报告日以 1231 结尾），并按报告日降序（最新在前）对齐契约。"""
         if df.empty:
             return df
         mask = df["报告日"].astype(str).str.endswith("1231")
-        return df[mask].reset_index(drop=True)
+        return df[mask].sort_values("报告日", ascending=False).reset_index(drop=True)
 
     def _normalize_nan(self, df: pd.DataFrame) -> pd.DataFrame:
         return df.where(df.notna(), other=None)  # pyrefly: ignore[no-matching-overload]
