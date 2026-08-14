@@ -211,6 +211,9 @@ class AKShareClient:
         if "日期" in df.columns:
             mask = df["日期"].astype(str).str.endswith("12-31")
             df = df[mask].reset_index(drop=True)
+            # 该接口内部按日期升序排序（sort_values 默认 ascending=True），
+            # 显式降序对齐「index 0 = 最新」契约，head(N) = 最新 N 年。
+            df = df.sort_values("日期", ascending=False).reset_index(drop=True)
         return df
 
     def _fetch_name_fallback(self, stock_code: str) -> dict:
@@ -484,7 +487,11 @@ class AKShareClient:
         def _safe_macro(key: str, func):
             df = _call_ak(func)
             if df is not None and not df.empty:
-                records = df.tail(6).to_dict(orient="records")
+                # akshare 宏观接口为降序（最新在前）；显式按首列（月份/日期）降序排序，
+                # 保证 index 0 = 最新，对齐财务数据「降序、head=最新」约定
+                # （不依赖 akshare 隐藏顺序）。
+                df = df.sort_values(df.columns[0], ascending=False).reset_index(drop=True)
+                records = df.head(6).to_dict(orient="records")
                 # 序列化 date/datetime 对象，避免 JSON 编码失败
                 for r in records:
                     for k, v in r.items():

@@ -194,10 +194,12 @@ def _build_macro_context(state: dict) -> str:
     macro = state.get("macro_indicators") or {}
     if macro:
         # 只取最近 3 个月数据，减少 token 消耗
+        # 宏观数据降序（index 0 = 最新），从 0 开始取 → 子集与 claim 的
+        # `cpi.0` 引用对齐（此前 records[-3:] 假设升序取到最老 3 期）。
         trimmed = {}
         for key, records in macro.items():
             if isinstance(records, list):
-                trimmed[key] = records[-3:]
+                trimmed[key] = records[:3]
             else:
                 trimmed[key] = records
         sections.append(
@@ -243,7 +245,7 @@ def _build_fundamental_context(state: dict) -> str:
     if hint:
         sections.append(hint)
 
-    # 三大报表（近 3 年，减少 token）
+    # 三大报表（近 3 年，减少 token）——财报降序（最新在前），head = 最新 3 年
     for name, key in [
         ("资产负债表", "balance_sheet"),
         ("利润表", "income_statement"),
@@ -251,13 +253,13 @@ def _build_fundamental_context(state: dict) -> str:
     ]:
         df = state.get(key)
         if df is not None and not df.empty:
-            recent = df.tail(3) if len(df) > 3 else df
+            recent = df.head(3) if len(df) > 3 else df
             sections.append(f"{name}（近3年）:\n{recent.to_string(index=False)}")
 
-    # 预计算指标
+    # 预计算指标（由降序财报计算，继承降序；head = 最新 3 年）
     indicators = state.get("financial_indicators")
     if indicators is not None and not indicators.empty:
-        recent = indicators.tail(3) if len(indicators) > 3 else indicators
+        recent = indicators.head(3) if len(indicators) > 3 else indicators
         sections.append(f"预计算财务指标:\n{recent.to_string(index=False)}")
 
     # 四维度指标
