@@ -46,9 +46,7 @@ async def test_react_pipeline_persists_report_to_sessions(tmp_path, monkeypatch)
 
     monkeypatch.setattr(
         "finance_agent.agent_factory._stream_graph",
-        lambda initial_state, config=None, session_id=None, root_obs_sink=None: (
-            _mock_stream_events()
-        ),
+        lambda initial_state, config=None, session_id=None: _mock_stream_events(),
     )
 
     run_deep_analysis = _make_run_deep_analysis(api_key="fake", session_id=sid)

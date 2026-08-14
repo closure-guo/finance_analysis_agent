@@ -50,9 +50,7 @@ async def test_pipeline_thinking_writes_do_not_block_event_loop(tmp_path, monkey
     monkeypatch.setattr(session_store, "update_pipeline_timelines", slow_write)
     monkeypatch.setattr(
         "finance_agent.agent_factory._stream_graph",
-        lambda initial_state, config=None, session_id=None, root_obs_sink=None: (
-            _thinking_heavy_stream()
-        ),
+        lambda initial_state, config=None, session_id=None: _thinking_heavy_stream(),
     )
 
     # 事件循环响应性探针：每 5ms 唤醒计数
