@@ -35,6 +35,20 @@ def _is_deepseek(model: str) -> bool:
     return "deepseek" in model.lower()
 
 
+def _normalize_tool_args(args: dict) -> dict:
+    """模型偶发返回嵌套 {"arguments": X} 格式，解包为真正参数。"""
+    if len(args) == 1 and "arguments" in args:
+        inner = args["arguments"]
+        if isinstance(inner, str):
+            try:
+                inner = json.loads(inner)
+            except (json.JSONDecodeError, TypeError):
+                return args
+        if isinstance(inner, dict):
+            return inner
+    return args
+
+
 def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) -> dict:
     """构造 generation metadata：仅在显式提供 prompt_name/version 时写入对应键。
 
@@ -377,6 +391,7 @@ class LiteLLMClient:
                 args = (
                     json.loads(raw["function"]["arguments"]) if raw["function"]["arguments"] else {}
                 )
+                args = _normalize_tool_args(args)
             except json.JSONDecodeError:
                 args = {}
             results.append(
