@@ -57,6 +57,14 @@ def test_root_span_output_written_before_exit():
                     }
                 },
             ),
+            (
+                "updates",
+                {
+                    "fundamental_analyst": {
+                        "analyst_reports": {"fundamental": {"summary": "基本面摘要"}}
+                    }
+                },
+            ),
             ("updates", {"generate_report": {"final_report": "## 投资分析\n正文内容"}}),
         ]
     )
@@ -76,7 +84,7 @@ def test_root_span_output_written_before_exit():
             )
         )
     # 事件流透传不丢失
-    assert len(chunks) == 2
+    assert len(chunks) == 3
     assert chunks[0][0] == "updates"
 
     # 根 obs 收到 output(修复前 _stream_graph 不写 → 本断言红)
@@ -86,7 +94,11 @@ def test_root_span_output_written_before_exit():
     assert output["stock_code"] == "600519"
     assert output["stock_name"] == "贵州茅台"
     assert output["analysis_type"] == "comprehensive"
+    # analyst_reports 跨分析师节点 dict 合并：两个分析师 chunk 都须保留
+    # （若退化为普通赋值，output 只会留下最后一名分析师 → 本断言红）
+    assert set(output["analyst_reports"]) == {"technical", "fundamental"}
     assert output["analyst_reports"]["technical"] == "技术面摘要"
+    assert output["analyst_reports"]["fundamental"] == "基本面摘要"
     assert output["final_report_summary"].startswith("## 投资分析")
 
     # 写入发生在根 span 退出前(finally 内 __exit__ 之前)
