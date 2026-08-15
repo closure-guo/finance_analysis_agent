@@ -148,6 +148,7 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
             max_tokens=400,
             quick=True,
             llm_config=state.get("llm_config"),
+            agent="report",
         )
         resp = (resp or "").strip()
         if resp:

@@ -11,6 +11,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,23 @@ from finance_agent.timeline_builder import apply_chat_event  # noqa: E402
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """启动时清扫悬挂 running 会话：后端重启后 PipelineRunner 内存态已丢失，置 failed 供前端恢复展示。"""
     PipelineRunner.mark_swept_failed()
-    yield
+    # 决策结算日批 scheduler(旁路;TESTING/DECISION_SETTLE_ENABLED=0 返回 None)
+    # 旁路铁律:scheduler 任何失败不得影响 API 启动,记 ERROR 降级继续
+    from finance_agent.outcome.scheduler import start_scheduler, stop_scheduler
+
+    _scheduler = None
+    try:
+        _scheduler = start_scheduler()
+    except Exception:
+        _logger.exception("decision settle scheduler 启动失败,降级继续运行 API")
+    try:
+        yield
+    finally:
+        # 旁路铁律:退出时必须尝试关闭 scheduler;关闭失败记 ERROR 不阻断 API 关停
+        try:
+            stop_scheduler(_scheduler)
+        except Exception:
+            _logger.exception("decision settle scheduler 关闭失败(忽略)")
 
 
 app = FastAPI(title="Finance Analysis Agent API", lifespan=_lifespan)
@@ -84,6 +101,11 @@ REPORTS_DIR.mkdir(exist_ok=True)
 
 # Initialize session DB
 init_db()
+
+# 决策日志表(幂等建表,decision_log 与 sessions 同库;decision-outcome-tracking)
+from finance_agent.outcome.store import init_decision_log, insert_decision  # noqa: E402
+
+init_decision_log()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -526,6 +548,50 @@ def _safe_dump(obj: Any) -> Any:
     return obj
 
 
+def _persist_decision_log(
+    accumulated: dict, session_id: str, stock_code: str, stock_name: str
+) -> None:
+    """批准的 TradeDecision 落 decision_log(旁路:任何失败仅 ERROR,不阻断报告)。"""
+    try:
+        if accumulated.get("fund_manager_decision") != "approve":
+            return
+        decision = accumulated.get("final_trade_decision") or {}
+        if not decision.get("action"):
+            return
+        # entry_price 代码回填:quote 优先,kline 收盘兜底
+        entry_price = (accumulated.get("stock_quote") or {}).get("price")
+        if entry_price is None:
+            kline = accumulated.get("kline")
+            if kline is not None and len(kline) > 0:
+                last = kline.iloc[-1] if hasattr(kline, "iloc") else kline[-1]
+                entry_price = float(last["收盘"])
+        if entry_price is None:
+            _logger.warning("decision_log 跳过: %s 无可靠 entry_price", stock_code)
+            return
+        position_size = decision.get("position_size")
+        insert_decision(
+            {
+                "decision_id": None,  # store 生成
+                "session_id": session_id,
+                "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
+                "timestamp": datetime.now().isoformat(),
+                "ticker": stock_code,
+                "name": stock_name,
+                "action": decision["action"],
+                "entry_price": float(entry_price),
+                "stop_loss": decision.get("stop_loss"),
+                "target_price": decision.get("target_price"),
+                "confidence": decision.get("confidence"),
+                "position_size": float(position_size)
+                if isinstance(position_size, (int, float))
+                else None,
+            }
+        )
+        _logger.info("decision_log 已落库: %s %s", stock_code, decision["action"])
+    except Exception:
+        _logger.exception("decision_log 落库失败(不阻断业务)")
+
+
 def _stream_report_chunks(markdown: str, chunk_size: int = 200) -> list[str]:
     """Split markdown into chunks for progressive rendering."""
     chunks: list[str] = []
@@ -688,7 +754,11 @@ async def stream_session(session_id: str, request: Request):
         return Response(status_code=204)
 
     async def sse_stream() -> AsyncGenerator[str, None]:
-        async for event in registry.subscribe(session_id, afterSeq):
+        # 全量重放（afterSeq=0，刷新恢复）时注入合成 user_message，
+        # 恢复 user 气泡的原始交错位置；断点续传（afterSeq>0）不注入
+        async for event in registry.subscribe(
+            session_id, afterSeq, replay_user_messages=(afterSeq == 0)
+        ):
             yield _sse(event)
 
     return StreamingResponse(
@@ -772,21 +842,38 @@ def _run_graph_streaming(
     accumulated: dict = dict(initial_state)
     report_sent = False
 
+    # ADR-0015：手动 root span + session 聚合(仿 quick react_loop / _stream_graph)。
+    # v4 CallbackHandler 在 LangGraph graph.stream 不建主 trace,必须手动建 root,
+    # 否则内部 generation/数据源 span 各自成孤立 trace。
+    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+
+    _handler = get_callback_handler()
+    _lf = get_langfuse()
+    _root_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    _propagate_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    if _lf is not None:
+        with contextlib.suppress(Exception):
+            _root_cm = _lf.start_as_current_observation(
+                as_type="span",
+                name=f"deep_analysis:{stock_name_display}",
+                input={"stock_code": stock_code},
+            )
+        try:
+            from langfuse import propagate_attributes
+
+            _propagate_cm = propagate_attributes(
+                session_id=session_id, user_id=(req.user_id or None)
+            )
+        except Exception:  # noqa: S110
+            pass
+    _root_cm.__enter__()
+    _propagate_cm.__enter__()
+
+    _config: dict = {"recursion_limit": 100}
+    if _handler is not None:
+        _config["callbacks"] = [_handler]
+
     try:
-        # ADR-0015：注入 Langfuse CallbackHandler 使 5 层管线节点自动挂成 span 树
-        from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
-
-        _handler = get_callback_handler()
-        _lf = get_langfuse()
-        _config: dict = {"recursion_limit": 100}
-        if _handler is not None:
-            _config["callbacks"] = [_handler]
-            # ADR-0015：通过 metadata 传 langfuse_session_id / langfuse_user_id，
-            # CallbackHandler 在根 chain 自动调用 propagate_attributes 聚合
-            _config["metadata"] = {"langfuse_session_id": session_id}
-            if req.user_id:
-                _config["metadata"]["langfuse_user_id"] = req.user_id
-
         for mode, chunk in graph.stream(
             initial_state,
             config=_config,
@@ -907,6 +994,8 @@ def _run_graph_streaming(
                     duration_ms=duration_ms,
                     status="completed",
                 )
+                # 旁路落库批准的 TradeDecision(失败仅 ERROR,不阻断报告)
+                _persist_decision_log(accumulated, session_id, stock_code, stock_name_final)
 
                 yield _sse(
                     {
@@ -922,10 +1011,6 @@ def _run_graph_streaming(
                     }
                 )
 
-        if _lf is not None:
-            with contextlib.suppress(Exception):
-                _lf.flush()
-
     except Exception as e:
         update_session_status(session_id, "failed")
         yield _sse(
@@ -938,6 +1023,14 @@ def _run_graph_streaming(
                 "timestamp": _now(),
             }
         )
+    finally:
+        with contextlib.suppress(Exception):
+            _propagate_cm.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            _root_cm.__exit__(None, None, None)
+        if _lf is not None:
+            with contextlib.suppress(Exception):
+                _lf.flush()
 
 
 # ── Analyze (harness-based ReAct) ──

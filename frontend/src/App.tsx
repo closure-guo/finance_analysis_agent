@@ -192,6 +192,11 @@ export default function App() {
   // Session state
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  // 刷新加载骨架：/api/sessions 首次成功前为 true 取反（侧边栏显示骨架而非闪「暂无历史会话」）
+  const [sessionsLoaded, setSessionsLoaded] = useState(false)
+  // 刷新恢复指示：有持久化会话且恢复未落定前，主区显示「恢复会话中」而非闪首页空态。
+  // 初值直接读 localStorage，避免首帧就闪空态落地。
+  const [bootRestoring, setBootRestoring] = useState(() => !!localStorage.getItem('fa_current_session_id'))
   // 包装 setCurrentSessionId：同步持久化到 localStorage（fa_current_session_id），
   // 供刷新后自动恢复当前会话（delta spec: restore-session-on-refresh）
   const setAndPersistSession = useCallback((id: string | null) => {
@@ -246,6 +251,7 @@ export default function App() {
 
   // Auto-scroll to bottom：仅在用户未手动上拉时自动滚动（避免抢占手动滚动）
   const userScrolledUpRef = useRef(false)
+  const scrollTimerRef = useRef<number | null>(null)
   useEffect(() => {
     const onScroll = () => {
       const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 100
@@ -257,7 +263,11 @@ export default function App() {
 
   const scrollToBottom = useCallback(() => {
     if (userScrolledUpRef.current) return
-    setTimeout(() => {
+    // 流式高频更新（chat_token / thinking_token）合并为单一 scroll：clearTimeout
+    // 防多个 smooth scroll 叠加导致页面抖动（多思考窗口展开时尤其明显）
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
+    scrollTimerRef.current = window.setTimeout(() => {
+      scrollTimerRef.current = null
       if (userScrolledUpRef.current) return
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
     }, 100)
@@ -289,18 +299,30 @@ export default function App() {
         setTimeout(loadWithRetry, delay)
         return
       }
+      // 列表加载成功：侧边栏骨架退场
+      setSessionsLoaded(true)
       // 列表加载成功：刷新后自动恢复此前查看的会话（delta spec: restore-session-on-refresh）
       if (!restoredRef.current) {
         restoredRef.current = true
         const persistedId = localStorage.getItem('fa_current_session_id')
         if (persistedId) {
           if (loaded.some(s => s.session_id === persistedId)) {
-            // 会话仍存在：复用 selectSession 恢复（含 running 时 SSE 重连）
-            void selectSessionRef.current?.(persistedId)
+            // 会话仍存在：复用 selectSession 恢复（含 running 时 SSE 重连）。
+            // 恢复落定后退出「恢复会话中」指示；失败也要退场避免卡死。
+            const p = selectSessionRef.current?.(persistedId)
+            if (p) {
+              p.finally(() => { if (!cancelled) setBootRestoring(false) })
+            } else {
+              setBootRestoring(false)
+            }
           } else {
             // 持久化会话已被删除：清除并停留空态首页
             localStorage.removeItem('fa_current_session_id')
+            setBootRestoring(false)
           }
+        } else {
+          // 无持久化会话：本就不在恢复中（防御，初值已为 false）
+          setBootRestoring(false)
         }
       }
     }
@@ -586,9 +608,16 @@ export default function App() {
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
         runningSessionIds={runningSessionIds}
+        loading={!sessionsLoaded}
       />
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
-        {appState === 'empty' ? (
+        {bootRestoring && appState === 'empty' ? (
+          // 刷新恢复中：有持久化会话但尚未重建消息，显示恢复指示而非闪首页空态
+          <div data-testid="restoring-state" className="flex flex-col items-center justify-center h-screen gap-3">
+            <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
+            <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>恢复会话中…</p>
+          </div>
+        ) : appState === 'empty' ? (
           <EmptyState
             onSend={handleSendFromEmpty}
             apiKey={apiKey}
@@ -710,7 +739,7 @@ export default function App() {
 }
 
 // ── Sidebar ──
-function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, runningSessionIds }: {
+function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, runningSessionIds, loading = false }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
@@ -720,6 +749,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   isOpen: boolean
   onToggle: () => void
   runningSessionIds: Set<string>
+  loading?: boolean
 }) {
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -779,7 +809,17 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {filtered.length === 0 ? (
+        {loading && sessions.length === 0 ? (
+          // 加载骨架：/api/sessions 首次返回前显示占位行，避免闪「暂无历史会话」
+          <div data-testid="sidebar-skeleton" className="space-y-2 px-1 pt-1">
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="rounded-lg px-3 py-2 animate-pulse" style={{ background: 'var(--bg-overlay-l1)' }}>
+                <div className="h-3 rounded w-2/3 mb-1.5" style={{ background: 'var(--bg-overlay-l2)' }} />
+                <div className="h-2 rounded w-1/3" style={{ background: 'var(--bg-overlay-l2)' }} />
+              </div>
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
           <p className="text-center text-xs py-4" style={{ color: 'var(--text-tertiary)' }}>暂无历史会话</p>
         ) : (
           filtered.map(s => (

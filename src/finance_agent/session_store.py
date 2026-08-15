@@ -336,16 +336,20 @@ def append_session_event(session_id: str, event: dict) -> int:
 def list_session_events(session_id: str, after_seq: int = 0) -> list[dict]:
     """返回会话中 seq > after_seq 的事件列表，按 seq 升序。
 
-    每行包含 seq 和 event_json 字段。对应 delta spec Task 1.2。
+    每行包含 seq、event_json、created_at 字段（created_at 供回放时按
+    chat_history 的 ts 注入 user_message 排序）。对应 delta spec Task 1.2。
     """
     conn = _get_db()
     rows = conn.execute(
-        "SELECT seq, event_json FROM session_events "
+        "SELECT seq, event_json, created_at FROM session_events "
         "WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
         (session_id, after_seq),
     ).fetchall()
     conn.close()
-    return [{"seq": r["seq"], "event_json": r["event_json"]} for r in rows]
+    return [
+        {"seq": r["seq"], "event_json": r["event_json"], "created_at": r["created_at"]}
+        for r in rows
+    ]
 
 
 def has_terminal_event(session_id: str) -> bool:

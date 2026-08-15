@@ -706,12 +706,43 @@ def _make_run_deep_analysis(
     return run_deep_analysis
 
 
-def _stream_graph(initial_state: dict, config: dict | None = None, session_id: str | None = None):
+def _build_trace_output(accumulated: dict) -> dict:
+    """从管线 accumulated 状态构建根 span output 摘要（会话内容可见）。
+
+    只放摘要级内容防 trace 体积膨胀：各 agent 产出摘要 + 最终报告前 500 字符。
+    """
+    out: dict = {}
+    for key in ("stock_code", "stock_name", "analysis_type"):
+        if accumulated.get(key):
+            out[key] = accumulated[key]
+    final_report = accumulated.get("final_report")
+    if final_report:
+        out["final_report_summary"] = final_report[:500] + ("…" if len(final_report) > 500 else "")
+    reports = accumulated.get("analyst_reports") or {}
+    if reports:
+        out["analyst_reports"] = {
+            k: (v.get("summary", "")[:200] if isinstance(v, dict) else str(v)[:200])
+            for k, v in reports.items()
+        }
+    for key in ("trader_plan", "final_trade_decision", "fund_manager_decision"):
+        v = accumulated.get(key)
+        if v:
+            out[key] = v if isinstance(v, dict) else str(v)[:300]
+    return out
+
+
+def _stream_graph(
+    initial_state: dict,
+    config: dict | None = None,
+    session_id: str | None = None,
+):
     """执行 5 层管线同步流式迭代。
 
-    ADR-0015：注入 Langfuse CallbackHandler 使图节点自动挂成 span 树（Send 扇出
-    会自动传播 callback）。CallbackHandler 通过 OTel context.attach 设置 current
-    span，使 call_llm 的 generation（start_as_current_observation）能挂到节点 span 下。
+    ADR-0015：手动建 root span + propagate_attributes(session) 包裹 graph.stream，
+    使 5 层管线节点 + call_llm generation + 数据源 span 经 OTel contextvars 挂到
+    root span 下（仿 quick 模式 react_loop）。v4 CallbackHandler 在 LangGraph
+    graph.stream 不建主 trace，必须手动建 root，否则内部 span 各自成孤立 trace。
+    CallbackHandler 仍作 callbacks 注入（增益项，若 v4 后续支持 LangGraph 节点 span）。
     """
     from finance_agent.graph import build_5layer_graph
 
@@ -724,19 +755,71 @@ def _stream_graph(initial_state: dict, config: dict | None = None, session_id: s
     _lf = get_langfuse()
     if _handler is not None:
         config = {**config, "callbacks": [*config.get("callbacks", []), _handler]}
-        # ADR-0015：通过 metadata 传 langfuse_session_id，CallbackHandler 自动聚合到 session
+
+    # 手动 root span + session 聚合（仿 quick react_loop，agent_factory.py:1066）
+    _root_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    _propagate_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    if _lf is not None:
+        _stock = initial_state.get("stock_name") or initial_state.get("stock_code") or "unknown"
+        _root_cm = _lf.start_as_current_observation(
+            as_type="span",
+            name=f"deep_analysis:{_stock}",
+            input={"stock_code": initial_state.get("stock_code")},
+        )
         if session_id:
-            config["metadata"] = {**config.get("metadata", {}), "langfuse_session_id": session_id}
+            try:
+                from langfuse import propagate_attributes
+
+                _propagate_cm = propagate_attributes(session_id=session_id)
+            except Exception:  # noqa: S110
+                pass
+    # 本地累计摘要字段（同线程）：进入 root span 后从 initial_state 与 updates
+    # chunk 累计 agent 产出，finally 内、根 span 退出前写 output——
+    # 修复 #67「跨线程 post-exit update 被 Langfuse v4 丢弃 → output=null」。
+    _local_acc: dict = {}
+    for _k in ("stock_code", "stock_name", "analysis_type"):
+        if initial_state.get(_k):
+            _local_acc[_k] = initial_state[_k]
+    _root_obs = _root_cm.__enter__()
+    _propagate_cm.__enter__()
 
     graph = build_5layer_graph()
 
     try:
-        yield from graph.stream(  # type: ignore[call-overload]
+        for _mode, _chunk in graph.stream(  # type: ignore[call-overload]
             initial_state,
             config=config,
             stream_mode=["updates", "custom"],
-        )
+        ):
+            if _mode == "updates" and isinstance(_chunk, dict):
+                for _node_name, _update in _chunk.items():
+                    if isinstance(_update, dict):
+                        for _key in (
+                            "analyst_reports",
+                            "final_report",
+                            "trader_plan",
+                            "final_trade_decision",
+                            "fund_manager_decision",
+                        ):
+                            if _key not in _update:
+                                continue
+                            # analyst_reports 跨分析师节点 dict 合并（对齐
+                            # _merge_update 语义，保证 trace output 含全部分析师）
+                            if _key == "analyst_reports" and isinstance(_update[_key], dict):
+                                _local_acc.setdefault("analyst_reports", {})
+                                _local_acc["analyst_reports"].update(_update[_key])
+                            else:
+                                _local_acc[_key] = _update[_key]
+            yield _mode, _chunk
     finally:
+        # 在 root span 退出前写入 output（保证不被 Langfuse 丢弃）
+        if _root_obs is not None:
+            with contextlib.suppress(Exception):
+                _root_obs.update(output=_build_trace_output(_local_acc))
+        with contextlib.suppress(Exception):
+            _propagate_cm.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            _root_cm.__exit__(None, None, None)
         if _lf is not None:
             with contextlib.suppress(Exception):
                 _lf.flush()
@@ -927,6 +1010,9 @@ def _make_llm_client(
         thinking=thinking,
         prompt_name=prompt_name,
         prompt_version=prompt_version,
+        # agent 标签（Task 4）：harness ReAct 链路的 generation observation 用
+        # react_agent 命名，使 trace 可按 agent 归属/过滤。
+        agent="react_agent",
     )
 
 
@@ -1050,6 +1136,7 @@ async def stream_agent_to_sse(
     from finance_agent.harness import ActionType
 
     last_web_search_query = ""  # 追踪 web_search 的查询参数
+    _final_answer_parts: list[str] = []  # ANSWER 事件内容累积（退出 react_loop 时写入 span output）
 
     # ADR-0015: react_loop span 包裹 ReAct 执行，使顶层 trace 结构为
     # [react_loop] -> [search_stock] / [run_deep_analysis span -> 5 层]。
@@ -1073,7 +1160,7 @@ async def stream_agent_to_sse(
                 _propagate_cm = propagate_attributes(session_id=session_id, user_id=user_id)
             except Exception:  # noqa: S110
                 pass
-    _react_cm.__enter__()
+    _react_obs = _react_cm.__enter__()
     _propagate_cm.__enter__()
     agentGen = agent.run(user_input, force_tool=force_tool)
     nextTask = asyncio.create_task(agentGen.__anext__())
@@ -1091,6 +1178,7 @@ async def stream_agent_to_sse(
             ts = _now()
 
             if event.event_type == ActionType.ANSWER:
+                _final_answer_parts.append(event.content)
                 yield _sse({"type": "chat_token", "token": event.content, "timestamp": ts})
 
             elif event.event_type == ActionType.THINK:
@@ -1110,8 +1198,23 @@ async def stream_agent_to_sse(
                 if tc:
                     name = tc.name or ""
                     args = tc.arguments if tc else {}
+                    # web_search / batch_web_search 都发 search_start，驱动前端搜索横幅。
+                    # batch_web_search 改为默认搜索工具后必须同样覆盖，否则前端把该
+                    # tool_call 当搜索类丢弃（等 search_* 驱动），结果搜索无任何渲染。
                     if name == "web_search":
                         last_web_search_query = str(args.get("query", ""))
+                        yield _sse(
+                            {
+                                "type": "search_start",
+                                "query": last_web_search_query,
+                                "timestamp": ts,
+                            }
+                        )
+                    elif name == "batch_web_search":
+                        queries = args.get("queries") or []
+                        last_web_search_query = (
+                            "；".join(str(q) for q in queries) if queries else "批量搜索"
+                        )
                         yield _sse(
                             {
                                 "type": "search_start",
@@ -1238,8 +1341,11 @@ async def stream_agent_to_sse(
                         with contextlib.suppress(json.JSONDecodeError, TypeError):
                             result_data = json.loads(tr.output)
 
-                        # web_search: 解析纯文本结果，发送结构化搜索来源
-                        if tr.name == "web_search" and isinstance(result_data, str):
+                        # web_search / batch_web_search: 解析纯文本结果，
+                        # 发送结构化搜索来源（驱动前端搜索横幅转「已搜索 N 个网页」）
+                        if tr.name in ("web_search", "batch_web_search") and isinstance(
+                            result_data, str
+                        ):
                             from finance_agent.web_search import parse_search_output
 
                             search_results = parse_search_output(result_data)
@@ -1292,6 +1398,11 @@ async def stream_agent_to_sse(
 
             # 准备下一次迭代
             nextTask = asyncio.create_task(agentGen.__anext__())
+
+        # ADR-0015: 退出 react_loop span 前记录 agent 最终回复（会话内容可见）
+        if _react_obs is not None and _final_answer_parts:
+            with contextlib.suppress(Exception):
+                _react_obs.update(output={"answer": "".join(_final_answer_parts)})
 
         # ADR-0015: 退出 react_loop span 与 session 聚合上下文
         _propagate_cm.__exit__(None, None, None)

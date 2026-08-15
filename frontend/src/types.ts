@@ -224,6 +224,14 @@ export interface InterruptedEvent {
   timestamp?: string
 }
 
+// 合成用户消息事件：journal 不落用户消息，刷新全量回放（after_seq=0）时
+// 后端按 chat_history 的 ts 在对应位置注入，恢复 user 气泡的原始交错顺序。
+// 仅出现在回放流中（实时路径不注入），无 seq。
+export interface UserMessageEvent {
+  type: 'user_message'
+  content: string
+}
+
 // ── Session types ──
 // seq 字段：事件日志架构核心，后端 session_events journal 中每个事件按 session 内
 // 单调递增 seq 落库。前端用 seq 做断点续传（after_seq）和去重（跳过 seq <= lastSeq）。
@@ -253,6 +261,7 @@ export type SSEEvent = (
   | SessionCreatedEvent
   | AwaitingInputEvent
   | InterruptedEvent
+  | UserMessageEvent
 ) & { seq?: number }
 
 // ── Session types ──

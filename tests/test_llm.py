@@ -681,3 +681,118 @@ def test_call_llm_with_tools_attaches_prompt_metadata(mock_completion, mock_get_
     call_kwargs = mockLf.start_as_current_observation.call_args.kwargs
     assert call_kwargs["metadata"]["prompt_name"] == "risk_judge"
     assert call_kwargs["metadata"]["prompt_version"] == 2
+
+
+def _mock_langfuse_for_naming(mock_get_langfuse):
+    """构造 mock Langfuse：start_as_current_observation 返回可 enter/exit 的 CM。"""
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.return_value = mockCm
+    mock_get_langfuse.return_value = mockLf
+    return mockLf
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_named_by_agent(mock_completion, mock_get_langfuse):
+    """call_llm 传 agent 时 observation name 用 agent 名而非 litellm:{model}。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "ok"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+    mockLf = _mock_langfuse_for_naming(mock_get_langfuse)
+
+    from finance_agent.llm import call_llm
+
+    call_llm("hi", api_key="fake", agent="technical_analyst")
+    kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert kwargs["name"] == "technical_analyst"
+    assert kwargs["metadata"]["agent"] == "technical_analyst"
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_default_name_without_agent(mock_completion, mock_get_langfuse):
+    """未传 agent 时 observation name 退化为 litellm:{model}（向后兼容）。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "ok"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+    mockLf = _mock_langfuse_for_naming(mock_get_langfuse)
+
+    from finance_agent.llm import call_llm
+
+    call_llm("hi", api_key="fake")
+    kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert kwargs["name"].startswith("litellm:")
+    assert "agent" not in kwargs["metadata"]
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_metadata_omits_missing_fields(mock_completion, mock_get_langfuse):
+    """session_id/stock_code 未提供时 metadata 省略对应键；提供时写入。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "ok"
+    mock_resp.choices[0].message.reasoning_content = ""
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+    mockLf = _mock_langfuse_for_naming(mock_get_langfuse)
+
+    from finance_agent.llm import call_llm
+
+    call_llm("hi", api_key="fake", agent="trader", session_id="sess-1", stock_code="300308")
+    md = mockLf.start_as_current_observation.call_args.kwargs["metadata"]
+    assert md == {"agent": "trader", "session_id": "sess-1", "stock_code": "300308"}
+
+    mock_get_langfuse.reset_mock()
+    call_llm("hi", api_key="fake", agent="trader")
+    md2 = mockLf.start_as_current_observation.call_args.kwargs["metadata"]
+    assert md2 == {"agent": "trader"}
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_stream_named_by_agent(mock_completion, mock_get_langfuse):
+    """call_llm_stream 传 agent 时 observation name 用 agent 名。"""
+
+    def _chunk(text):
+        c = MagicMock()
+        d = MagicMock()
+        d.reasoning_content = None
+        d.content = text
+        c.choices = [MagicMock(delta=d)]
+        c.usage = None
+        return c
+
+    mock_completion.return_value = iter([_chunk("a"), _chunk("b")])
+    mockLf = _mock_langfuse_for_naming(mock_get_langfuse)
+
+    from finance_agent.llm import call_llm_stream
+
+    list(call_llm_stream("hi", api_key="fake", agent="trader"))
+    kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert kwargs["name"] == "trader"
+
+
+@patch("finance_agent.llm._get_langfuse")
+@patch("finance_agent.llm.litellm.completion")
+def test_call_llm_with_tools_named_by_agent(mock_completion, mock_get_langfuse):
+    """call_llm_with_tools 传 agent 时 observation name 用 agent 名。"""
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = "ok"
+    mock_resp.choices[0].message.tool_calls = []
+    mock_resp.usage = None
+    mock_completion.return_value = mock_resp
+    mockLf = _mock_langfuse_for_naming(mock_get_langfuse)
+
+    from finance_agent.llm import call_llm_with_tools
+
+    call_llm_with_tools("hi", api_key="fake", agent="bull_debater")
+    kwargs = mockLf.start_as_current_observation.call_args.kwargs
+    assert kwargs["name"] == "bull_debater"

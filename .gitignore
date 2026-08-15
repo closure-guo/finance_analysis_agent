@@ -260,3 +260,6 @@ tests/e2e/playwright/test-results/
 
 # Superpowers SDD 工作流临时产物
 .superpowers/
+
+# SDD 隔离 worktree（superpowers:using-git-worktrees）
+.worktrees/

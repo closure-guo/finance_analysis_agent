@@ -22,6 +22,10 @@ export interface SessionStreamState {
   lastSeq: number              // 已应用的最大 seq，去重与续传游标
   origin?: StateOrigin          // pending 时组件需触发 rebuildSession（缺省视为 live）
   error?: string               // phase === 'error' 时的信息
+  // 进行中会话 rebuild 的 messages 只是 chat_history user 种子（预览/204 兜底），
+  // 首个回放事件到达时清除——种子里 user 气泡堆叠失序，真正的有序消息由
+  // 全量回放（含后端注入的 user_message）重建。
+  seededFromHistory?: boolean
 }
 
 // 共享的 IDLE 常量（引用稳定，useSyncExternalStore 不触发重渲染）

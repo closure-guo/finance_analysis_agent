@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 
+from finance_agent.langfuse_tracing import get_langfuse
 from finance_agent.models import FundManagerDecision
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt_with_meta
+
+logger = logging.getLogger("finance_agent.fund_manager")
 
 
 def fund_manager(state: dict) -> dict:
@@ -22,6 +26,7 @@ def fund_manager(state: dict) -> dict:
         api_key=api_key,
         node_name="fund_manager",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
@@ -33,6 +38,15 @@ def fund_manager(state: dict) -> dict:
     result: dict = {"fund_manager_decision": decision}
     if decision == "return":
         result["return_count"] = state.get("return_count", 0) + 1
+    if decision == "approve":
+        # 决策落库需要 trace 关联:节点内 OTel 上下文可用(citation_node 同款 get_langfuse 模式)
+        try:
+            client = get_langfuse()
+            trace_id = client.get_current_trace_id() if client else None
+            if trace_id:
+                result["langfuse_trace_id"] = trace_id
+        except Exception:
+            logger.warning("trace_id 捕获失败,decision_log 将无 trace 关联", exc_info=True)
 
     return result
 
