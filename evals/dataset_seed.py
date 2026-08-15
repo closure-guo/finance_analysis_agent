@@ -31,18 +31,21 @@ def seed(client=None) -> dict:
     if client is None:
         return {"created": 0, "skipped": 0, "error": "langfuse 未配置,跳过 seed"}
     items = load_items()
+    existing: set = set()
     try:
         dataset = client.get_dataset(DATASET_NAME)
+        existing = {(it.input.get("query"), it.input.get("mode")) for it in dataset.items}
     except Exception as e:
         # 过宽兜底:网络抖动/认证过期等异常也会落到此分支。
         # 记 warning 以便排查被吞掉的异常,再尝试 create_dataset。
         logger.warning("get_dataset(%s) 失败,尝试 create_dataset: %s", DATASET_NAME, e)
-        dataset = client.create_dataset(
+        client.create_dataset(
             name=DATASET_NAME,
             description="A 股分析评估 Dataset v1(覆盖矩阵:deep 典型/边界、quick、follow_up、意图澄清)",
             metadata={"version": "v1"},
         )
-    existing = {(it.input.get("query"), it.input.get("mode")) for it in dataset.items}
+        # create_dataset 返回原始 Dataset API 类型(无 .items);新建库必为空,
+        # existing 保持空集即可,勿迭代其返回值。
     created = skipped = 0
     for item in items:
         key = (item["input"]["query"], item["input"]["mode"])
@@ -61,4 +64,8 @@ def seed(client=None) -> dict:
 
 
 if __name__ == "__main__":
+    # 与 api.py 一致：CLI 入口加载 .env（否则 shell 无 LANGFUSE/LLM key，误判「未配置」）
+    from dotenv import load_dotenv
+
+    load_dotenv()
     print(seed())
