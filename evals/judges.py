@@ -25,7 +25,10 @@ from finance_agent.nodes._llm_utils import parse_json_response
 if TYPE_CHECKING:
     from langfuse import Langfuse
 
-JUDGE_MODEL = "deepseek/deepseek-chat"
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/deepseek-v4-flash")
+# 裁判默认复用主 LLM 中转(opencode)；DEEPSEEK 官方等独立端点用 JUDGE_BASE_URL/JUDGE_API_KEY 覆盖
+JUDGE_BASE_URL = os.getenv("JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL", "")
+JUDGE_API_KEY = os.getenv("JUDGE_API_KEY") or os.getenv("LLM_API_KEY", "")
 JUDGE_ENV = "langfuse-llm-as-a-judge"
 
 _JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以篇幅长短论优劣。'
@@ -128,6 +131,10 @@ def _call_judge_llm(prompt: str) -> str:
         "temperature": 0.0,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if JUDGE_BASE_URL:
+        kwargs["api_base"] = JUDGE_BASE_URL
+    if JUDGE_API_KEY:
+        kwargs["api_key"] = JUDGE_API_KEY
     client = get_judge_langfuse()
     if client is None:
         resp = litellm.completion(**kwargs)
