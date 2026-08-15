@@ -380,9 +380,6 @@ def _make_run_deep_analysis(
         accumulated: dict = dict(initial_state)
         completed: set[str] = set()
         started_nodes: set[str] = set()  # 已发 node_start 的节点（去重）
-        # root span 句柄容器：_stream_graph 进入根 span 后写入，
-        # 供事件循环侧（_background_consume）在管线完成点写 output（会话内容可见）
-        _root_obs_sink: dict = {}
 
         # 状态兜底：工具入口置 running（管线本体已在 executor 线程运行）
         if _track_snapshot:
@@ -401,9 +398,7 @@ def _make_run_deep_analysis(
 
         def _run_graph():
             try:
-                for mode, chunk in _stream_graph(
-                    initial_state, session_id=session_id, root_obs_sink=_root_obs_sink
-                ):
+                for mode, chunk in _stream_graph(initial_state, session_id=session_id):
                     asyncio.run_coroutine_threadsafe(chunk_queue.put((mode, chunk)), loop)
             except Exception as e:
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(e), loop)
@@ -637,11 +632,6 @@ def _make_run_deep_analysis(
                     )
                 )
             else:
-                # 管线完成: 根 span 写 agent 产出（会话内容可见，不再 output=null）
-                _root_obs = _root_obs_sink.get("obs")
-                if _root_obs is not None:
-                    with contextlib.suppress(Exception):
-                        _root_obs.update(output=_build_trace_output(accumulated))
                 # 正常结束：写最终快照并置 completed（组装 report metadata 前）
                 if _track_snapshot:
                     await asyncio.to_thread(_persist_snapshot, _tree, _now_ms())
@@ -745,7 +735,6 @@ def _stream_graph(
     initial_state: dict,
     config: dict | None = None,
     session_id: str | None = None,
-    root_obs_sink: dict | None = None,
 ):
     """执行 5 层管线同步流式迭代。
 
@@ -784,20 +773,49 @@ def _stream_graph(
                 _propagate_cm = propagate_attributes(session_id=session_id)
             except Exception:  # noqa: S110
                 pass
+    # 本地累计摘要字段（同线程）：进入 root span 后从 initial_state 与 updates
+    # chunk 累计 agent 产出，finally 内、根 span 退出前写 output——
+    # 修复 #67「跨线程 post-exit update 被 Langfuse v4 丢弃 → output=null」。
+    _local_acc: dict = {}
+    for _k in ("stock_code", "stock_name", "analysis_type"):
+        if initial_state.get(_k):
+            _local_acc[_k] = initial_state[_k]
     _root_obs = _root_cm.__enter__()
-    if root_obs_sink is not None:
-        root_obs_sink["obs"] = _root_obs
     _propagate_cm.__enter__()
 
     graph = build_5layer_graph()
 
     try:
-        yield from graph.stream(  # type: ignore[call-overload]
+        for _mode, _chunk in graph.stream(  # type: ignore[call-overload]
             initial_state,
             config=config,
             stream_mode=["updates", "custom"],
-        )
+        ):
+            if _mode == "updates" and isinstance(_chunk, dict):
+                for _node_name, _update in _chunk.items():
+                    if isinstance(_update, dict):
+                        for _key in (
+                            "analyst_reports",
+                            "final_report",
+                            "trader_plan",
+                            "final_trade_decision",
+                            "fund_manager_decision",
+                        ):
+                            if _key not in _update:
+                                continue
+                            # analyst_reports 跨分析师节点 dict 合并（对齐
+                            # _merge_update 语义，保证 trace output 含全部分析师）
+                            if _key == "analyst_reports" and isinstance(_update[_key], dict):
+                                _local_acc.setdefault("analyst_reports", {})
+                                _local_acc["analyst_reports"].update(_update[_key])
+                            else:
+                                _local_acc[_key] = _update[_key]
+            yield _mode, _chunk
     finally:
+        # 在 root span 退出前写入 output（保证不被 Langfuse 丢弃）
+        if _root_obs is not None:
+            with contextlib.suppress(Exception):
+                _root_obs.update(output=_build_trace_output(_local_acc))
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):
