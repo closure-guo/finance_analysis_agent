@@ -1,0 +1,82 @@
+# evals/extract.py
+"""state → judge 变量提取(spec consistency/decision_grounding 变量映射)。
+
+所有值截断到 4096 字节(truncate_for_trace 头尾保留),控制 judge prompt 体积。
+state 缺失键一律给空字符串,judge 输入永不 KeyError。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+from finance_agent.langfuse_tracing import truncate_for_trace
+
+_JUDGE_MAX_BYTES = 4096
+_CONCLUSION_HEADERS = ("结论", "总结", "交易建议")
+
+
+def _trunc(text: str) -> str:
+    return truncate_for_trace(text, _JUDGE_MAX_BYTES)
+
+
+def extract_conclusion(report: str) -> str:
+    """提取报告结论章节:行首 ## 结论/总结/交易建议 起,到下一 ## 或文末。
+
+    找不到章节标题时取末尾 500 字符(design Open Question:首版启发式)。
+    """
+    if not report:
+        return ""
+    pattern = re.compile(
+        r"^#{1,4}\s*(?:" + "|".join(_CONCLUSION_HEADERS) + r")[^\n]*\n(.*?)(?=^#{1,4}\s|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(report)
+    if match:
+        return match.group(1).strip()
+    return report[-500:]
+
+
+def _summarize_analyst_reports(reports: dict) -> str:
+    parts: list[str] = []
+    for name, rep in reports.items():
+        if not isinstance(rep, dict):
+            continue
+        text = rep.get("summary") or rep.get("conclusion") or ""
+        if not text:
+            text = json.dumps(rep, ensure_ascii=False)[:500]
+        parts.append(f"【{name}】{text}")
+    return "\n".join(parts)
+
+
+def _summarize_debate(history: list) -> str:
+    parts: list[str] = []
+    for msg in history:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "?")
+        content = msg.get("content", "")
+        parts.append(f"【{role}】{content}")
+    return "\n".join(parts)
+
+
+def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
+    """提取 9 个 judge 变量,全字符串,缺失给 ""。"""
+    report = state.get("final_report") or ""
+    decision = state.get("final_trade_decision") or {}
+    risk_debate = state.get("risk_debate_history") or []
+    risk_tail = _summarize_debate(risk_debate[-2:]) if risk_debate else ""
+    return {
+        "query": query,
+        "report": _trunc(report),
+        "report_conclusion": _trunc(extract_conclusion(report)),
+        "analyst_reports": _trunc(_summarize_analyst_reports(state.get("analyst_reports") or {})),
+        "debate_history": _trunc(_summarize_debate(state.get("debate_history") or [])),
+        "research_manager_decision": _trunc(state.get("research_manager_conclusion") or ""),
+        "trade_decision": _trunc(json.dumps(decision, ensure_ascii=False) if decision else ""),
+        "risk_judgment": _trunc(
+            (json.dumps(decision, ensure_ascii=False) if decision else "")
+            + ("\n" + risk_tail if risk_tail else "")
+        ),
+        "fund_manager_decision": state.get("fund_manager_decision") or "",
+    }
