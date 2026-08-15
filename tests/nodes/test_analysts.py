@@ -10,7 +10,7 @@ Agent 行为：
 
 import json
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from finance_agent.nodes.analysts import technical_analyst
 
@@ -141,3 +141,62 @@ class TestAnalystDegradationObservability:
         assert report.claims[0].source_type == "data"  # 保留既有改写行为
         messages = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
         assert "hearsay" in messages and "data" in messages, f"WARNING 未含原值与改写值：{messages}"
+
+
+class TestAnalystSpanMetadata:
+    """解析降级 / 枚举改写路径的 span metadata（trace-observability Task 6）。
+
+    降级与改写此前只记日志，trace 不可见；本组测试锁定 update_current_span
+    写入的 metadata 与 level，使静默修复在 Langfuse trace 可见。
+    """
+
+    def test_parse_degraded_marks_span(self, monkeypatch):
+        """JSON 解析失败降级时，span metadata 记 parse_degraded，level=WARNING。"""
+        from finance_agent.nodes.analysts import _parse_analyst_report
+
+        captured = {}
+
+        def _fake_update(metadata=None, level=None):
+            captured["metadata"] = metadata
+            captured["level"] = level
+
+        monkeypatch.setattr("finance_agent.nodes.analysts.update_current_span", _fake_update)
+
+        # 喂非法 JSON 触发降级
+        report = _parse_analyst_report("not a json {{{", "technical")
+        assert report.parse_degraded is True
+        assert captured["metadata"]["degradation"] == "parse_degraded"
+        assert captured["level"] == "WARNING"
+
+    def test_sanitize_claims_marks_span(self, monkeypatch):
+        """非法枚举被改写时，span metadata 记 sanitize_claims。"""
+        from finance_agent.nodes.analysts import _sanitize_claims
+
+        captured = []
+
+        def _fake_update(metadata=None, level=None):
+            captured.append({"metadata": metadata, "level": level})
+
+        monkeypatch.setattr("finance_agent.nodes.analysts.update_current_span", _fake_update)
+
+        _sanitize_claims(
+            {"claims": [{"claim_type": "非法类型", "source_type": "data"}]}, "technical"
+        )
+        # 断言至少一次 sanitize_claims 记录
+        assert any(
+            c["metadata"] and c["metadata"].get("degradation") == "sanitize_claims"
+            for c in captured
+        )
+        assert all(c["level"] == "WARNING" for c in captured if c["metadata"])
+
+    def test_trace_errors_do_not_block_degradation(self):
+        """Langfuse client 抛异常时，解析降级流程仍正常完成（降级不阻断业务）。"""
+        from finance_agent.nodes.analysts import _parse_analyst_report
+
+        mockClient = MagicMock()
+        mockClient.update_current_span.side_effect = RuntimeError("langfuse down")
+        with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient):
+            report = _parse_analyst_report("坏响应", "technical")
+        # 埋点失败被 update_current_span 吞掉，业务照常降级产出报告
+        assert report.parse_degraded is True
+        assert report.claims == []

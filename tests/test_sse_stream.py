@@ -5,12 +5,30 @@
 
 import asyncio
 import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from finance_agent.harness import Agent, PermissionMode
 from finance_agent.harness.llm_client import LLMResponse
 from finance_agent.harness.types import ToolCallRequest
+
+
+class _FakeObservationCM:
+    """伪造 `start_as_current_observation` 返回的上下文管理器。
+
+    每次 `__enter__` 返回一个独立的 obs mock，避免 react_loop 与工具 span
+    共用同一 obs 造成断言串扰。
+    """
+
+    def __init__(self):
+        self.obs = MagicMock()
+
+    def __enter__(self):
+        return self.obs
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 class MockLLMClient:
@@ -280,3 +298,173 @@ class TestStreamAgentToSse:
         # 由于 mock_analysis 不是流式工具，不会产生 TOOL_METADATA 事件
         # 这个测试验证 on_metadata 回调机制存在且不报错
         assert sse_strings is not None
+
+    @pytest.mark.asyncio
+    async def test_batch_web_search_emits_search_events(self):
+        """batch_web_search 工具调用必须发 search_start/search_result（与 web_search 一致）。
+
+        复现 bug：agent 改用 batch_web_search 后，前端搜索横幅不渲染——
+        流式处理器只在 name == 'web_search' 时发 search_start/search_result，
+        batch_web_search 被漏掉。前端把 batch_web_search 也归类为搜索工具
+        （reduce 中 isSearchToolName 直接丢弃 tool_call，等 search_* 驱动 UI），
+        结果 tool_call 被丢 + search_* 不发 → 搜索无任何渲染。
+        """
+
+        async def batch_web_search(queries: list[str]) -> str:
+            """批量搜索
+
+            Args:
+                queries: 关键词列表
+            """
+            # 模拟 format_batch_for_llm 输出（parse_search_output 可解析）
+            lines: list[str] = []
+            for q in queries:
+                lines.append(f"## 搜索: {q}")
+                lines.append("[1] 测试来源标题")
+                lines.append("https://example.com/test")
+                lines.append("测试内容片段")
+                lines.append("")
+            return "\n".join(lines)
+
+        mock_llm = MockLLMClient(
+            [
+                [
+                    LLMResponse(
+                        text_delta="我来搜索",
+                        tool_calls=[
+                            ToolCallRequest(
+                                id="1",
+                                name="batch_web_search",
+                                arguments={"queries": ["A股热门", "龙头股"]},
+                            )
+                        ],
+                        is_finished=True,
+                    )
+                ],
+                [LLMResponse(text_delta="根据搜索结果...", is_finished=True)],
+            ]
+        )
+
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=5,
+            llm=mock_llm,
+        )
+        agent.tools.register(batch_web_search, name="batch_web_search")
+
+        from finance_agent.agent_factory import stream_agent_to_sse
+
+        events = _parse_sse_events(await _collect_sse(stream_agent_to_sse(agent, "分析一下股票")))
+
+        search_starts = [e for e in events if e.get("type") == "search_start"]
+        search_results = [e for e in events if e.get("type") == "search_result"]
+        assert len(search_starts) >= 1, "batch_web_search 必须发 search_start"
+        assert len(search_results) >= 1, "batch_web_search 必须发 search_result"
+        assert search_results[0]["count"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_react_loop_span_writes_answer_output(self):
+        """react_loop span 退出前把累积的 ANSWER 内容写入 output（ADR-0015 直接单测）。
+
+        最终 review 发现 react_loop 写 output 的行（agent_factory.py 退出 react_loop
+        span 前的 `_react_obs.update(output={"answer": ...})`）在既有测试里从不执行——
+        Langfuse 未配置时 `_react_obs` 恒为 None。本测试直接驱动真实
+        `stream_agent_to_sse` 走到正常退出路径，断言写入了累积的 answer。
+
+        注意 patch 路径：`stream_agent_to_sse` 在函数体内
+        `from finance_agent.langfuse_tracing import get_langfuse as _get_langfuse`，
+        须 patch 模块级 `finance_agent.langfuse_tracing.get_langfuse`（patch
+        `finance_agent.agent_factory.get_langfuse` 不生效）。
+        """
+        mock_llm = MockLLMClient([[LLMResponse(text_delta="你好世界", is_finished=True)]])
+
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=3,
+            llm=mock_llm,
+        )
+
+        created_cms: list[_FakeObservationCM] = []
+
+        def _fake_obs_cm(**kwargs):
+            cm = _FakeObservationCM()
+            created_cms.append(cm)
+            return cm
+
+        mock_lf = MagicMock()
+        mock_lf.start_as_current_observation.side_effect = _fake_obs_cm
+
+        from finance_agent.agent_factory import stream_agent_to_sse
+
+        with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf):
+            await _collect_sse(stream_agent_to_sse(agent, "测试"))
+
+        # stream_agent_to_sse 入口处先建 react_loop span 再驱动 agent.run
+        # （工具 span 在其后），故第一个创建的观测即 react_loop span obs。
+        react_obs = created_cms[0].obs
+        react_obs.update.assert_called_once_with(output={"answer": "你好世界"})
+
+    @pytest.mark.asyncio
+    async def test_react_loop_span_skips_output_when_no_answer(self):
+        """空答案守卫：全程无 ANSWER 事件时 react_loop span 不写 output。
+
+        覆盖 `if _react_obs is not None and _final_answer_parts:` 中
+        `_final_answer_parts` 为空的分支，保证不产生空 answer 覆盖。
+        """
+
+        async def echo(text: str) -> str:
+            """回显
+
+            Args:
+                text: 文本
+            """
+            return f"echo: {text}"
+
+        # 只调工具无文本，max_iterations=1 触发"达到最大迭代次数"错误路径，
+        # 全程无 ANSWER 事件 -> _final_answer_parts 为空 -> 不写 output
+        mock_llm = MockLLMClient(
+            [
+                [
+                    LLMResponse(
+                        tool_calls=[ToolCallRequest(id="1", name="echo", arguments={"text": "x"})],
+                        is_finished=True,
+                    )
+                ],
+            ]
+        )
+
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=1,
+            llm=mock_llm,
+        )
+        agent.tools.register(echo, name="echo")
+
+        created_cms: list[_FakeObservationCM] = []
+
+        def _fake_obs_cm(**kwargs):
+            cm = _FakeObservationCM()
+            created_cms.append(cm)
+            return cm
+
+        mock_lf = MagicMock()
+        mock_lf.start_as_current_observation.side_effect = _fake_obs_cm
+
+        from finance_agent.agent_factory import stream_agent_to_sse
+
+        with patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf):
+            sse_strings = await _collect_sse(stream_agent_to_sse(agent, "测试"))
+
+        # 事件流走到正常结束（error 事件 = max_iterations 分支已执行，非超时截断）
+        events = _parse_sse_events(sse_strings)
+        assert any(e.get("type") == "error" for e in events), "生成器未走到结束路径"
+
+        # react_loop obs 不得写 output（守卫分支）；工具 span 的 obs 是独立 mock，不受影响
+        react_obs = created_cms[0].obs
+        react_obs.update.assert_not_called()

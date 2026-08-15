@@ -754,7 +754,11 @@ async def stream_session(session_id: str, request: Request):
         return Response(status_code=204)
 
     async def sse_stream() -> AsyncGenerator[str, None]:
-        async for event in registry.subscribe(session_id, afterSeq):
+        # 全量重放（afterSeq=0，刷新恢复）时注入合成 user_message，
+        # 恢复 user 气泡的原始交错位置；断点续传（afterSeq>0）不注入
+        async for event in registry.subscribe(
+            session_id, afterSeq, replay_user_messages=(afterSeq == 0)
+        ):
             yield _sse(event)
 
     return StreamingResponse(
@@ -838,21 +842,38 @@ def _run_graph_streaming(
     accumulated: dict = dict(initial_state)
     report_sent = False
 
+    # ADR-0015：手动 root span + session 聚合(仿 quick react_loop / _stream_graph)。
+    # v4 CallbackHandler 在 LangGraph graph.stream 不建主 trace,必须手动建 root,
+    # 否则内部 generation/数据源 span 各自成孤立 trace。
+    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+
+    _handler = get_callback_handler()
+    _lf = get_langfuse()
+    _root_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    _propagate_cm: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
+    if _lf is not None:
+        with contextlib.suppress(Exception):
+            _root_cm = _lf.start_as_current_observation(
+                as_type="span",
+                name=f"deep_analysis:{stock_name_display}",
+                input={"stock_code": stock_code},
+            )
+        try:
+            from langfuse import propagate_attributes
+
+            _propagate_cm = propagate_attributes(
+                session_id=session_id, user_id=(req.user_id or None)
+            )
+        except Exception:  # noqa: S110
+            pass
+    _root_cm.__enter__()
+    _propagate_cm.__enter__()
+
+    _config: dict = {"recursion_limit": 100}
+    if _handler is not None:
+        _config["callbacks"] = [_handler]
+
     try:
-        # ADR-0015：注入 Langfuse CallbackHandler 使 5 层管线节点自动挂成 span 树
-        from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
-
-        _handler = get_callback_handler()
-        _lf = get_langfuse()
-        _config: dict = {"recursion_limit": 100}
-        if _handler is not None:
-            _config["callbacks"] = [_handler]
-            # ADR-0015：通过 metadata 传 langfuse_session_id / langfuse_user_id，
-            # CallbackHandler 在根 chain 自动调用 propagate_attributes 聚合
-            _config["metadata"] = {"langfuse_session_id": session_id}
-            if req.user_id:
-                _config["metadata"]["langfuse_user_id"] = req.user_id
-
         for mode, chunk in graph.stream(
             initial_state,
             config=_config,
@@ -990,10 +1011,6 @@ def _run_graph_streaming(
                     }
                 )
 
-        if _lf is not None:
-            with contextlib.suppress(Exception):
-                _lf.flush()
-
     except Exception as e:
         update_session_status(session_id, "failed")
         yield _sse(
@@ -1006,6 +1023,14 @@ def _run_graph_streaming(
                 "timestamp": _now(),
             }
         )
+    finally:
+        with contextlib.suppress(Exception):
+            _propagate_cm.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            _root_cm.__exit__(None, None, None)
+        if _lf is not None:
+            with contextlib.suppress(Exception):
+                _lf.flush()
 
 
 # ── Analyze (harness-based ReAct) ──

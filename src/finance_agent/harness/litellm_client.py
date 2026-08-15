@@ -16,6 +16,7 @@ from typing import Any
 
 from finance_agent.harness.llm_client import LLMResponse
 from finance_agent.harness.types import ToolCallRequest
+from finance_agent.langfuse_tracing import truncate_for_trace
 
 logger = logging.getLogger("finance_agent.harness.litellm_client")
 
@@ -34,6 +35,50 @@ def _is_deepseek(model: str) -> bool:
     return "deepseek" in model.lower()
 
 
+def _normalize_tool_args(args: dict) -> dict:
+    """模型偶发返回嵌套 {"arguments": X} 格式，解包为真正参数。"""
+    if len(args) == 1 and "arguments" in args:
+        inner = args["arguments"]
+        if isinstance(inner, str):
+            try:
+                inner = json.loads(inner)
+            except (json.JSONDecodeError, TypeError):
+                return args
+        if isinstance(inner, dict):
+            return inner
+    return args
+
+
+def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) -> dict:
+    """构造 generation metadata：仅在显式提供 prompt_name/version 时写入对应键。
+
+    ADR-0015 Task 4：prompt 元数据可追溯。未传入时返回空 dict（与历史
+    Langfuse 调用向后兼容）。与 llm.py 中同名 helper 对称，避免跨模块依赖。
+    """
+    md: dict = {}
+    if prompt_name:
+        md["prompt_name"] = prompt_name
+    if prompt_version is not None:
+        md["prompt_version"] = prompt_version
+    return md
+
+
+def _generation_metadata(
+    prompt_name: str | None,
+    prompt_version: str | int | None,
+    agent: str | None = None,
+) -> dict:
+    """构造 generation metadata：prompt 元数据 + agent 过滤字段。
+
+    agent 仅在显式提供时写入（与 _prompt_metadata 相同的向后兼容约定，
+    不污染 metadata 命名空间）。与 llm.py 中同名 helper 同构，避免跨模块依赖。
+    """
+    md = _prompt_metadata(prompt_name, prompt_version)
+    if agent:
+        md["agent"] = agent
+    return md
+
+
 class LiteLLMClient:
     """用 litellm 实现的 LLM 客户端，接口与 harness LLMClient 一致。"""
 
@@ -45,6 +90,9 @@ class LiteLLMClient:
         thinking: str | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        prompt_name: str | None = None,
+        prompt_version: str | int | None = None,
+        agent: str | None = None,
     ):
         self.model = model
         self.api_key = _resolve_key(api_key)
@@ -59,6 +107,15 @@ class LiteLLMClient:
         self.thinking = thinking
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        # prompt 元数据（ADR-0015 Task 4）：ReAct 链路的 system_prompt 来自单一
+        # mode prompt（quick_mode / deep_mode / follow_up_mode），整个 agent 生命周期
+        # 固定，故作为 client 实例字段；chat_stream 每次都挂到 generation metadata。
+        # prompt_version 来自 Langfuse BasePrompt.version（int），本地兜底 "local"。
+        self.prompt_name = prompt_name
+        self.prompt_version = prompt_version
+        # agent 标签（Task 4）：harness 侧 generation observation 用 agent 名命名
+        # （如 react_agent），使其在 Langfuse trace 中可按 agent 归属/过滤。
+        self.agent = agent
 
         # Langfuse 可观测性（可选，ADR-0015）- 复用统一单例
         self._langfuse = None
@@ -121,19 +178,26 @@ class LiteLLMClient:
         kwargs = self._build_kwargs(messages, tools, temperature, tool_choice)
         _start_time = datetime.now(UTC)
         _accumulated_text = ""
+        _accumulated_reasoning = ""  # 累加 DeepSeek reasoning_content（原生思考增量）
 
         # Langfuse 追踪（ADR-0015）- start_as_current_observation 建立父子上下文，
         # 使本 generation 挂到 CallbackHandler 已建好的 react_loop span 下。
         # 保留 CM 引用以便 __exit__ 恢复 OTel 上下文（否则下次 chat_stream 会误挂父级）。
+        # prompt_name/prompt_version（Task 4）：来自 client 实例字段，每次都挂到 metadata。
+        # agent 标签（Task 4）：设 agent 时 observation 以 agent 命名（如 react_agent），
+        # 否则回退 litellm:{model}。
         _lf_cm = None
         _lf_obs = None
         if self._langfuse:
             try:
                 _lf_cm = self._langfuse.start_as_current_observation(
-                    name=f"litellm:{self.model}",
+                    name=self.agent or f"litellm:{self.model}",
                     as_type="generation",
                     input={"messages": messages},
                     model=self.model,
+                    metadata=_generation_metadata(
+                        self.prompt_name, self.prompt_version, self.agent
+                    ),
                 )
                 _lf_obs = _lf_cm.__enter__()
             except Exception as e:
@@ -168,6 +232,7 @@ class LiteLLMClient:
                     # 原生思考增量（DeepSeek reasoning_content）-- 先于 content 输出
                     reasoning = getattr(delta, "reasoning_content", None) or ""
                     if reasoning:
+                        _accumulated_reasoning += reasoning  # 累加供 Langfuse 落 trace
                         yield LLMResponse(reasoning_delta=reasoning)
 
                     # 文本增量（content，最终回答）
@@ -198,27 +263,56 @@ class LiteLLMClient:
                     # 检查 finish_reason
                     if finish_reason == "tool_calls" and current_tool_calls:
                         parsed = self._parse_tool_calls(current_tool_calls)
-                        self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, chunk)
+                        self._finish_langfuse(
+                            _lf_cm,
+                            _lf_obs,
+                            _accumulated_text,
+                            chunk,
+                            reasoning=_accumulated_reasoning,
+                            tool_calls=parsed,
+                        )
                         yield LLMResponse(tool_calls=parsed, is_finished=True)
                         return
 
                     if finish_reason == "stop":
                         if current_tool_calls:
                             parsed = self._parse_tool_calls(current_tool_calls)
-                            self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, chunk)
+                            self._finish_langfuse(
+                                _lf_cm,
+                                _lf_obs,
+                                _accumulated_text,
+                                chunk,
+                                reasoning=_accumulated_reasoning,
+                                tool_calls=parsed,
+                            )
                             yield LLMResponse(tool_calls=parsed, is_finished=True)
                         else:
-                            self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, chunk)
+                            self._finish_langfuse(
+                                _lf_cm,
+                                _lf_obs,
+                                _accumulated_text,
+                                chunk,
+                                reasoning=_accumulated_reasoning,
+                            )
                             yield LLMResponse(is_finished=True)
                         return
 
                 # 流结束但没有明确的 finish_reason
                 if current_tool_calls:
                     parsed = self._parse_tool_calls(current_tool_calls)
-                    self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, None)
+                    self._finish_langfuse(
+                        _lf_cm,
+                        _lf_obs,
+                        _accumulated_text,
+                        None,
+                        reasoning=_accumulated_reasoning,
+                        tool_calls=parsed,
+                    )
                     yield LLMResponse(tool_calls=parsed, is_finished=True)
                 else:
-                    self._finish_langfuse(_lf_cm, _lf_obs, _accumulated_text, None)
+                    self._finish_langfuse(
+                        _lf_cm, _lf_obs, _accumulated_text, None, reasoning=_accumulated_reasoning
+                    )
                     yield LLMResponse(is_finished=True)
                 return
 
@@ -238,8 +332,21 @@ class LiteLLMClient:
                     # 重试耗尽：raise 异常而非 yield 错误文本，使 Agent 主循环能正确捕获
                     raise
 
-    def _finish_langfuse(self, cm, obs, text: str, last_chunk) -> None:
-        """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。"""
+    def _finish_langfuse(
+        self,
+        cm,
+        obs,
+        text: str,
+        last_chunk,
+        reasoning: str = "",
+        tool_calls: list[ToolCallRequest] | None = None,
+    ) -> None:
+        """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。
+
+        tool_calls 仅在工具调用分支传入（list[ToolCallRequest]），纯文本分支传 None。
+        output 结构：{answer, reasoning, [tool_calls]}；无 tool_calls 时不写该字段，
+        保持 Task 2 已落地的 {answer, reasoning} 结构向后兼容。
+        """
         if not cm or not obs:
             return
         try:
@@ -251,7 +358,24 @@ class LiteLLMClient:
                     "output": getattr(u, "completion_tokens", 0),
                     "total": getattr(u, "total_tokens", 0),
                 }
-            obs.update(output=text, usage_details=usage)
+            # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
+            output_obj: dict[str, Any] = {
+                "answer": truncate_for_trace(text),
+                "reasoning": truncate_for_trace(reasoning),
+            }
+            # 仅有工具调用时才写入 tool_calls 字段（保持纯文本分支 output 结构不变）
+            if tool_calls:
+                output_obj["tool_calls"] = [
+                    {
+                        "name": tc.name,
+                        # ToolCallRequest.arguments 是 dict，序列化为紧凑 JSON 字符串保留语义
+                        "arguments": truncate_for_trace(
+                            json.dumps(tc.arguments, ensure_ascii=False, separators=(",", ":"))
+                        ),
+                    }
+                    for tc in tool_calls
+                ]
+            obs.update(output=output_obj, usage_details=usage)
             cm.__exit__(None, None, None)
             if self._langfuse:
                 self._langfuse.flush()
@@ -267,6 +391,7 @@ class LiteLLMClient:
                 args = (
                     json.loads(raw["function"]["arguments"]) if raw["function"]["arguments"] else {}
                 )
+                args = _normalize_tool_args(args)
             except json.JSONDecodeError:
                 args = {}
             results.append(

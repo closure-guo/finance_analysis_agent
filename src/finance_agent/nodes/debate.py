@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from finance_agent.models import DebateMessage
 from finance_agent.nodes._llm_utils import call_llm_streaming, parse_json_response
-from finance_agent.prompts.loader import load_prompt
+from finance_agent.prompts.loader import load_prompt_with_meta
 
 
 def bull_debater(state: dict) -> dict:
     """Layer II Bull（看多）辩论者。"""
     context = _build_debate_context(state)
-    system = load_prompt("bull_debater")
+    _pinfo = load_prompt_with_meta("bull_debater")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -25,6 +26,9 @@ def bull_debater(state: dict) -> dict:
         api_key=api_key,
         node_name="bull_debater",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
@@ -35,7 +39,8 @@ def bull_debater(state: dict) -> dict:
 def bear_debater(state: dict) -> dict:
     """Layer II Bear（看空）辩论者。"""
     context = _build_debate_context(state)
-    system = load_prompt("bear_debater")
+    _pinfo = load_prompt_with_meta("bear_debater")
+    system = _pinfo.template
     api_key = state.get("api_key")
 
     response = call_llm_streaming(
@@ -44,6 +49,9 @@ def bear_debater(state: dict) -> dict:
         api_key=api_key,
         node_name="bear_debater",
         llm_config=state.get("llm_config"),
+        stock_code=state.get("stock_code"),
+        prompt_name=_pinfo.prompt_name,
+        prompt_version=_pinfo.prompt_version,
     )
     data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)

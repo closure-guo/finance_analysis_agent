@@ -52,7 +52,7 @@ from finance_agent.harness.types import (
     ToolCallRequest,
     ToolResult,
 )
-from finance_agent.langfuse_tracing import open_span
+from finance_agent.langfuse_tracing import open_span, update_current_span
 
 logger = logging.getLogger("finance_agent.harness.loop")
 
@@ -309,6 +309,7 @@ class Agent:
         max_empty_retries = 3  # 最大空输出重试次数
         text_only_retries = 0  # LLM 纯文本无工具调用重试计数
         max_text_only_retries = 2  # 最大纯文本重试次数
+        dsml_count = 0  # DSML 防御性解析命中计数（trace 上报用）
 
         # 1. 触发会话开始钩子
         await self.hooks.emit(
@@ -402,6 +403,7 @@ class Agent:
                 if not pending_tool_calls and assistant_text:
                     dsml_calls, dsml_cleaned = _parse_dsml_from_text(assistant_text)
                     if dsml_calls:
+                        dsml_count += 1  # 命中 DSML 防御性解析，循环结束上报 span metadata
                         pending_tool_calls = dsml_calls
                         assistant_text = dsml_cleaned
                         # DSML 清理后，把未流式的安全部分下发给消费者
@@ -594,6 +596,17 @@ class Agent:
                     yield StreamEvent.for_tool_result(result)
 
             # 循环结束
+            # 重试与降级路径上 trace（react_loop span 经 OTel contextvar 自动定位，
+            # 无需显式传 span 引用；计数全为 0 时不打扰 trace）
+            _meta: dict[str, Any] = {}
+            if empty_retries > 0 or text_only_retries > 0:
+                _meta["retries"] = {"empty": empty_retries, "text_only": text_only_retries}
+            if dsml_count > 0:
+                _meta["degradation"] = "dsml_fallback"
+                _meta["count"] = dsml_count
+            if _meta:
+                update_current_span(metadata=_meta, level="WARNING")
+
             if iterations >= self.max_iterations:
                 # 不直接报错，让 LLM 基于已有上下文生成回复
                 answered = False

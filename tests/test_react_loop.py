@@ -3,6 +3,8 @@
 用 mock LLM 验证 Agent.run() 的事件流：TOOL_CALL -> TOOL_RESULT -> ANSWER。
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from finance_agent.harness import ActionType, Agent, PermissionMode
@@ -262,6 +264,92 @@ class TestReactLoop:
 
         event_types = [e.event_type for e in events]
         assert ActionType.ERROR in event_types, f"缺少 ERROR，实际: {event_types}"
+
+
+class TestReactLoopSpanMetadata:
+    """重试 / DSML 防御性解析路径的 span metadata（trace-observability Task 6）。
+
+    react_loop span 在 agent_factory 创建，loop.py 内经 OTel contextvar 自动定位；
+    本组测试锁定 update_current_span 写入的 metadata 与 level。
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_retry_reports_counts(self):
+        """空输出重试触发后，span metadata 记 retries 计数，level=WARNING。"""
+        captured = {}
+
+        def _fake_update(metadata=None, level=None):
+            captured["metadata"] = metadata
+            captured["level"] = level
+
+        # 第一次调用返回空输出（触发空输出重试），第二次返回最终回答
+        mock_llm = MockLLMClient(
+            [
+                [LLMResponse(text_delta="", is_finished=True)],
+                [LLMResponse(text_delta="完成", is_finished=True)],
+            ]
+        )
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=3,
+            llm=mock_llm,
+        )
+
+        with patch("finance_agent.harness.loop.update_current_span", new=_fake_update):
+            events = []
+            async for event in agent.run("测试"):
+                events.append(event)
+
+        # 重试后业务正常完成，且 metadata 记录重试计数
+        assert ActionType.ANSWER in [e.event_type for e in events]
+        assert captured["metadata"]["retries"]["empty"] == 1
+        assert captured["metadata"]["retries"]["text_only"] == 0
+        assert captured["level"] == "WARNING"
+
+    @pytest.mark.asyncio
+    async def test_dsml_fallback_reported(self, echo_tool):
+        """DSML 防御性解析命中后，span metadata 记 dsml_fallback 与 count。"""
+        captured = {}
+
+        def _fake_update(metadata=None, level=None):
+            captured["metadata"] = metadata
+            captured["level"] = level
+
+        bar = "\uff5c"  # 全角竖线 ｜
+        dsml = (
+            f"<{bar}{bar}DSML{bar}{bar}tool_calls>"
+            f'<{bar}{bar}DSML{bar}{bar}invoke name="echo">'
+            f'<{bar}{bar}DSML{bar}{bar}parameter name="text">hi</{bar}{bar}DSML{bar}{bar}parameter>'
+            f"</{bar}{bar}DSML{bar}{bar}invoke>"
+            f"</{bar}{bar}DSML{bar}{bar}tool_calls>"
+        )
+        mock_llm = MockLLMClient(
+            [
+                [LLMResponse(text_delta=dsml, is_finished=True)],
+                [LLMResponse(text_delta="完成", is_finished=True)],
+            ]
+        )
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=5,
+            llm=mock_llm,
+        )
+        agent.tools.register(echo_tool, name="echo")
+
+        with patch("finance_agent.harness.loop.update_current_span", new=_fake_update):
+            events = []
+            async for event in agent.run("测试"):
+                events.append(event)
+
+        # DSML 被还原为工具调用（业务正常），且 metadata 记录降级事件
+        assert ActionType.TOOL_CALL in [e.event_type for e in events]
+        assert captured["metadata"]["degradation"] == "dsml_fallback"
+        assert captured["metadata"]["count"] == 1
+        assert captured["level"] == "WARNING"
 
 
 def _make_tool_call(name: str, arguments: dict):
