@@ -193,6 +193,10 @@ def _write_report(rows: list[dict], means: dict, name: str, prompt_versions: dic
 
 
 def main() -> None:
+    # 与 api.py 一致：CLI 入口加载 .env（否则 shell 无 LANGFUSE/LLM key，误判「未配置」）
+    from dotenv import load_dotenv
+
+    load_dotenv()
     parser = argparse.ArgumentParser(description="evals 实验回归")
     parser.add_argument("name", help="实验名(如 baseline-v1)")
     parser.add_argument("--local", action="store_true", help="无 langfuse 本地循环")
