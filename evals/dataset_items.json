@@ -1,0 +1,175 @@
+[
+  {
+    "input": {
+      "query": "全面分析贵州茅台(600519)的投资价值",
+      "mode": "deep",
+      "stock_code": "600519",
+      "stock_name": "贵州茅台"
+    },
+    "expected_output": {
+      "ticker": "600519",
+      "must_cover": ["宏观环境", "基本面", "技术面", "市场情绪", "风险提示"]
+    },
+    "metadata": {"category": "deep_typical", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "全面分析宁德时代(300750)的投资价值",
+      "mode": "deep",
+      "stock_code": "300750",
+      "stock_name": "宁德时代"
+    },
+    "expected_output": {
+      "ticker": "300750",
+      "must_cover": ["基本面", "技术面", "风险提示"]
+    },
+    "metadata": {"category": "deep_typical", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "全面分析平安银行(000001)的投资价值",
+      "mode": "deep",
+      "stock_code": "000001",
+      "stock_name": "平安银行"
+    },
+    "expected_output": {
+      "ticker": "000001",
+      "must_cover": ["基本面", "估值", "风险提示"]
+    },
+    "metadata": {"category": "deep_typical", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "全面分析比亚迪(002594)的投资价值",
+      "mode": "deep",
+      "stock_code": "002594",
+      "stock_name": "比亚迪"
+    },
+    "expected_output": {
+      "ticker": "002594",
+      "must_cover": ["基本面", "技术面", "风险提示"]
+    },
+    "metadata": {"category": "deep_typical", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "全面分析招商银行(600036)的投资价值",
+      "mode": "deep",
+      "stock_code": "600036",
+      "stock_name": "招商银行"
+    },
+    "expected_output": {
+      "ticker": "600036",
+      "must_cover": ["基本面", "估值", "风险提示"]
+    },
+    "metadata": {"category": "deep_typical", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "贵州茅台的现金流健康吗?重点看经营性现金流",
+      "mode": "deep",
+      "stock_code": "600519",
+      "stock_name": "贵州茅台"
+    },
+    "expected_output": {
+      "ticker": "600519",
+      "must_cover": ["基本面"]
+    },
+    "metadata": {"category": "deep_edge", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "全面分析中芯国际(688981)的投资价值",
+      "mode": "deep",
+      "stock_code": "688981",
+      "stock_name": "中芯国际"
+    },
+    "expected_output": {
+      "ticker": "688981",
+      "must_cover": ["基本面", "风险提示"]
+    },
+    "metadata": {"category": "deep_edge", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "茅台现在能买吗",
+      "mode": "quick",
+      "ticker": "600519"
+    },
+    "expected_output": {
+      "ticker": "600519"
+    },
+    "metadata": {"category": "quick", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "宁德时代今天怎么样",
+      "mode": "quick",
+      "ticker": "300750"
+    },
+    "expected_output": {
+      "ticker": "300750"
+    },
+    "metadata": {"category": "quick", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "比亚迪和特斯拉哪个更值得买",
+      "mode": "quick",
+      "ticker": "002594"
+    },
+    "expected_output": {},
+    "metadata": {"category": "quick", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "银行股现在估值贵吗",
+      "mode": "quick"
+    },
+    "expected_output": {},
+    "metadata": {"category": "quick", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "那它的风险呢",
+      "mode": "follow_up",
+      "session_id": "fixture-session-1"
+    },
+    "expected_output": {},
+    "metadata": {"category": "follow_up", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "和目标价比还差多少",
+      "mode": "follow_up",
+      "session_id": "fixture-session-1"
+    },
+    "expected_output": {},
+    "metadata": {"category": "follow_up", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "换个角度再看看",
+      "mode": "follow_up",
+      "session_id": "fixture-session-2"
+    },
+    "expected_output": {},
+    "metadata": {"category": "follow_up", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "帮我分析一下这只股票",
+      "mode": "deep"
+    },
+    "expected_output": {"should_clarify": true},
+    "metadata": {"category": "clarify", "source": "hand_authored"}
+  },
+  {
+    "input": {
+      "query": "现在适合入场吗",
+      "mode": "quick"
+    },
+    "expected_output": {"should_clarify": true},
+    "metadata": {"category": "clarify", "source": "hand_authored"}
+  }
+]
