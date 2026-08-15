@@ -24,7 +24,7 @@ async def test_pipeline_timeout_sets_failed(tmp_path, monkeypatch):
     sid = session_store.create_session(stock_code="600519", stock_name="贵州茅台", status="running")
 
     # Mock：第一个事件后 sleep 2 秒，超过 0.5 秒超时
-    def _slow_stream(initial_state, config=None, session_id=None, root_obs_sink=None):
+    def _slow_stream(initial_state, config=None, session_id=None):
         yield ("custom", {"type": "node_start", "node": "check_cache", "ts": 1000})
         time.sleep(2)  # 模拟慢速节点，超过超时
         yield ("updates", {"check_cache": {"cached": True}})
