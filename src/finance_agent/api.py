@@ -11,6 +11,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,23 @@ from finance_agent.timeline_builder import apply_chat_event  # noqa: E402
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """启动时清扫悬挂 running 会话：后端重启后 PipelineRunner 内存态已丢失，置 failed 供前端恢复展示。"""
     PipelineRunner.mark_swept_failed()
-    yield
+    # 决策结算日批 scheduler(旁路;TESTING/DECISION_SETTLE_ENABLED=0 返回 None)
+    # 旁路铁律:scheduler 任何失败不得影响 API 启动,记 ERROR 降级继续
+    from finance_agent.outcome.scheduler import start_scheduler, stop_scheduler
+
+    _scheduler = None
+    try:
+        _scheduler = start_scheduler()
+    except Exception:
+        _logger.exception("decision settle scheduler 启动失败,降级继续运行 API")
+    try:
+        yield
+    finally:
+        # 旁路铁律:退出时必须尝试关闭 scheduler;关闭失败记 ERROR 不阻断 API 关停
+        try:
+            stop_scheduler(_scheduler)
+        except Exception:
+            _logger.exception("decision settle scheduler 关闭失败(忽略)")
 
 
 app = FastAPI(title="Finance Analysis Agent API", lifespan=_lifespan)
@@ -84,6 +101,11 @@ REPORTS_DIR.mkdir(exist_ok=True)
 
 # Initialize session DB
 init_db()
+
+# 决策日志表(幂等建表,decision_log 与 sessions 同库;decision-outcome-tracking)
+from finance_agent.outcome.store import init_decision_log, insert_decision  # noqa: E402
+
+init_decision_log()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -526,6 +548,50 @@ def _safe_dump(obj: Any) -> Any:
     return obj
 
 
+def _persist_decision_log(
+    accumulated: dict, session_id: str, stock_code: str, stock_name: str
+) -> None:
+    """批准的 TradeDecision 落 decision_log(旁路:任何失败仅 ERROR,不阻断报告)。"""
+    try:
+        if accumulated.get("fund_manager_decision") != "approve":
+            return
+        decision = accumulated.get("final_trade_decision") or {}
+        if not decision.get("action"):
+            return
+        # entry_price 代码回填:quote 优先,kline 收盘兜底
+        entry_price = (accumulated.get("stock_quote") or {}).get("price")
+        if entry_price is None:
+            kline = accumulated.get("kline")
+            if kline is not None and len(kline) > 0:
+                last = kline.iloc[-1] if hasattr(kline, "iloc") else kline[-1]
+                entry_price = float(last["收盘"])
+        if entry_price is None:
+            _logger.warning("decision_log 跳过: %s 无可靠 entry_price", stock_code)
+            return
+        position_size = decision.get("position_size")
+        insert_decision(
+            {
+                "decision_id": None,  # store 生成
+                "session_id": session_id,
+                "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
+                "timestamp": datetime.now().isoformat(),
+                "ticker": stock_code,
+                "name": stock_name,
+                "action": decision["action"],
+                "entry_price": float(entry_price),
+                "stop_loss": decision.get("stop_loss"),
+                "target_price": decision.get("target_price"),
+                "confidence": decision.get("confidence"),
+                "position_size": float(position_size)
+                if isinstance(position_size, (int, float))
+                else None,
+            }
+        )
+        _logger.info("decision_log 已落库: %s %s", stock_code, decision["action"])
+    except Exception:
+        _logger.exception("decision_log 落库失败(不阻断业务)")
+
+
 def _stream_report_chunks(markdown: str, chunk_size: int = 200) -> list[str]:
     """Split markdown into chunks for progressive rendering."""
     chunks: list[str] = []
@@ -928,6 +994,8 @@ def _run_graph_streaming(
                     duration_ms=duration_ms,
                     status="completed",
                 )
+                # 旁路落库批准的 TradeDecision(失败仅 ERROR,不阻断报告)
+                _persist_decision_log(accumulated, session_id, stock_code, stock_name_final)
 
                 yield _sse(
                     {
