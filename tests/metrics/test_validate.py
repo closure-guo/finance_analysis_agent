@@ -276,3 +276,34 @@ class TestReturnStructure:
         result = validate_financials(_bs(), _is(), _cf())
         assert isinstance(result["details"], list)
         assert len(result["details"]) > 0
+
+
+# ── 银行结构兼容（无「所有者权益合计」列，用 负债及股东权益总计 - 负债 推导）──
+def test_trial_balance_bank_structure_passes():
+    """银行资产负债表无「所有者权益(或股东权益)合计」列，但有「负债及股东权益总计」。
+
+    权益应从 负债及股东权益总计 - 负债合计 推导，试算平衡应 PASS。
+    （真实案例：招商银行 600036，缺失该列导致权益按 0 算、差 ~10% 误判 FAIL）
+    """
+    bs = _bs(
+        [
+            {
+                "报告日": "20241231",
+                "资产总计": 1000.0,
+                "负债合计": 400.0,
+                "负债及股东权益总计": 1000.0,  # 银行结构：无 所有者权益合计
+                "未分配利润": 200.0,
+            },
+            {
+                "报告日": "20231231",
+                "资产总计": 900.0,
+                "负债合计": 350.0,
+                "负债及股东权益总计": 900.0,
+                "未分配利润": 170.0,
+            },
+        ]
+    )
+    result = validate_financials(bs, _is(), _cf())
+    # 修复前：权益=0 → 负债+权益=400 ≠ 1000 → FAIL（红）
+    # 修复后：权益=1000-400=600 → PASS（绿）
+    assert result["result"] == "PASS", result["warnings"]
