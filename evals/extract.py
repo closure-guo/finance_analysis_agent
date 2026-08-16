@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import cast
 
 from finance_agent.langfuse_tracing import truncate_for_trace
 
@@ -37,10 +38,20 @@ def extract_conclusion(report: str) -> str:
     return report[-500:]
 
 
+def _as_dict(obj: object) -> dict:
+    """state 元素可能是 dict 或 pydantic（LangGraph reducer 原样保留），统一转 dict。"""
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        return cast(dict, obj.model_dump())
+    return {}
+
+
 def _summarize_analyst_reports(reports: dict) -> str:
     parts: list[str] = []
     for name, rep in reports.items():
-        if not isinstance(rep, dict):
+        rep = _as_dict(rep)
+        if not rep:
             continue
         text = rep.get("summary") or rep.get("conclusion") or ""
         if not text:
@@ -52,7 +63,8 @@ def _summarize_analyst_reports(reports: dict) -> str:
 def _summarize_debate(history: list) -> str:
     parts: list[str] = []
     for msg in history:
-        if not isinstance(msg, dict):
+        msg = _as_dict(msg)
+        if not msg:
             continue
         role = msg.get("role", "?")
         content = msg.get("content", "")

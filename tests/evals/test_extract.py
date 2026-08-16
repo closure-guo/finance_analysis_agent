@@ -81,3 +81,38 @@ class TestExtractConclusion:
 
     def test_empty_report(self):
         assert extract_conclusion("") == ""
+
+
+class TestPydanticStateCompat:
+    """管线 state 中 debate/analyst 为 pydantic 对象时须正常提取。
+
+    跑批实测：graph.invoke 返回的 state 里 DebateMessage 是 pydantic 实例，
+    _summarize_debate 的 isinstance(dict) 静默跳过 → judge 拿到空辩论打 1 分
+    （debate_quality 全 1.0 的根因，混在真实分数中不可察觉）。
+    """
+
+    def test_pydantic_debate_messages_extracted(self):
+        from finance_agent.models import DebateMessage
+
+        state = {
+            "debate_history": [
+                DebateMessage(
+                    role="bull", round=1, content="看多：净息差改善", key_arguments=["a"]
+                ),
+                DebateMessage(role="bear", round=1, content="看空：不良抬头", key_arguments=["b"]),
+            ],
+        }
+        vars_ = extract_judge_vars(state, query="q")
+        assert "看多：净息差改善" in vars_["debate_history"]
+        assert "看空：不良抬头" in vars_["debate_history"]
+
+    def test_pydantic_risk_debate_extracted(self):
+        from finance_agent.models import DebateMessage
+
+        state = {
+            "risk_debate_history": [
+                DebateMessage(role="aggressive", round=1, content="加仓", key_arguments=[])
+            ]
+        }
+        vars_ = extract_judge_vars(state, query="q")
+        assert "加仓" in vars_["risk_judgment"]
