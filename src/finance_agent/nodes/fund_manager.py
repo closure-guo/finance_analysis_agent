@@ -7,7 +7,7 @@ import logging
 
 from finance_agent.langfuse_tracing import get_langfuse
 from finance_agent.models import FundManagerDecision
-from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger("finance_agent.fund_manager")
@@ -20,7 +20,7 @@ def fund_manager(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    data = call_llm_for_json(
         context,
         system=system,
         api_key=api_key,
@@ -30,7 +30,6 @@ def fund_manager(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    data = parse_json_response(response)
     # 枚举强校验：非法值/缺键抛 ValidationError 中断管线，不静默降级为 approve
     # （加固前为 data["decision"] 裸取键，非法值经 routing 的 else 分支被当作批准放行）
     decision = FundManagerDecision.model_validate(data).decision

@@ -138,6 +138,50 @@ def parse_json_response(text: str) -> dict:
     raise json.JSONDecodeError("No JSON object found", text, 0)
 
 
+_JSON_RETRY_SUFFIX = (
+    "\n\n[系统提示] 上一次响应为空或不是合法 JSON。请直接输出一个合法的 JSON 对象，"
+    "不要输出 JSON 以外的任何文字。"
+)
+
+
+def call_llm_for_json(
+    prompt: str,
+    system: str = "",
+    api_key: str | None = None,
+    node_name: str = "",
+    llm_config=None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
+    stock_code: str | None = None,
+) -> dict:
+    """call_llm_streaming + parse_json_response 收口：坏输出带强化指令重试一次。
+
+    方舟 GLM-5.2 在部分 prompt 下稳定触发「thinking 后即止」（incident 017
+    实测：aggressive_debater 连续多次 reasoning 正常而 content 为空，
+    与 max_tokens 配额无关）。下游节点（debate/risk/trader/fund_manager）
+    解析无降级，单次空输出即炸整行 —— 统一经本函数调用并重试。
+
+    重试一次后仍失败向上抛 JSONDecodeError：保留 fund_manager
+    「非法输出中断管线、不静默降级」的既有设计（重试 ≠ 降级）。
+    其余参数与 call_llm_streaming 一致，原样透传。
+    """
+    kwargs: dict = {
+        "system": system,
+        "api_key": api_key,
+        "node_name": node_name,
+        "llm_config": llm_config,
+        "prompt_name": prompt_name,
+        "prompt_version": prompt_version,
+        "stock_code": stock_code,
+    }
+    response = call_llm_streaming(prompt, **kwargs)
+    try:
+        return parse_json_response(response)
+    except json.JSONDecodeError:
+        response = call_llm_streaming(prompt + _JSON_RETRY_SUFFIX, **kwargs)
+        return parse_json_response(response)
+
+
 def focus_hint(state: dict) -> str:
     """从 state 提取用户关注点（深度研究意图澄清环节收集），返回 LLM context 注入行。
 

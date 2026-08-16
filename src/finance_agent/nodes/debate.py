@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from finance_agent.models import DebateMessage
-from finance_agent.nodes._llm_utils import call_llm_streaming, parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_for_json
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -20,7 +20,7 @@ def bull_debater(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    data = call_llm_for_json(
         context,
         system=system,
         api_key=api_key,
@@ -30,7 +30,6 @@ def bull_debater(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 
     return {"debate_history": [msg]}
@@ -43,7 +42,7 @@ def bear_debater(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    data = call_llm_for_json(
         context,
         system=system,
         api_key=api_key,
@@ -53,7 +52,6 @@ def bear_debater(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 
     return {"debate_history": [msg]}

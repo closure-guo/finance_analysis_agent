@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import finance_agent.nodes._llm_utils as _llm_utils_mod
 import finance_agent.nodes.fund_manager as fm_mod
 
 
@@ -23,7 +24,7 @@ class TestTraceCapture:
         }
         return fm_mod.fund_manager(state)
 
-    @patch.object(fm_mod, "call_llm_streaming")
+    @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_approve_captures_trace_id(self, mock_llm):
         mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
         mock_client = MagicMock()
@@ -33,7 +34,7 @@ class TestTraceCapture:
         assert update["fund_manager_decision"] == "approve"
         assert update["langfuse_trace_id"] == "trace-xyz"
 
-    @patch.object(fm_mod, "call_llm_streaming")
+    @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_reject_no_trace_capture(self, mock_llm):
         mock_llm.return_value = '{"decision": "reject", "feedback": "no"}'
         with patch.object(fm_mod, "get_langfuse") as mock_get:
@@ -42,14 +43,14 @@ class TestTraceCapture:
         assert "langfuse_trace_id" not in update
         mock_get.assert_not_called()
 
-    @patch.object(fm_mod, "call_llm_streaming")
+    @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_langfuse_unconfigured_no_key(self, mock_llm):
         mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
         with patch.object(fm_mod, "get_langfuse", return_value=None):
             update = self._run_fund_manager()
         assert "langfuse_trace_id" not in update  # 降级:不写键
 
-    @patch.object(fm_mod, "call_llm_streaming")
+    @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_trace_id_exception_still_returns_decision(self, mock_llm):
         """旁路铁律:get_current_trace_id 抛异常不阻断节点,仅 WARNING,不写键。"""
         mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
