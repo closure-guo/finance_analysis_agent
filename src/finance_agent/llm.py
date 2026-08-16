@@ -179,6 +179,10 @@ def _build_kwargs(
         "model": effectiveModel,
         "messages": messages,
         "max_tokens": max_tokens,
+        # 整体请求超时（秒）：防 streaming 响应无限卡死（实测 GLM 端点
+        # 偶发挂起 15min+ 冻结整个基线/管线）。thinking 模式慢，默认 300s，
+        # LLM_TIMEOUT_SECONDS 可调；harness 路径 litellm_client 已有 120s。
+        "timeout": float(os.environ.get("LLM_TIMEOUT_SECONDS", "300")),
     }
 
     if stream:

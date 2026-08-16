@@ -130,6 +130,7 @@ def _call_judge_llm(prompt: str) -> str:
         "model": JUDGE_MODEL,
         "temperature": 0.0,
         "messages": [{"role": "user", "content": prompt}],
+        "timeout": 120,  # 防 judge 调用无限挂起（与 harness 路径一致）
     }
     if JUDGE_BASE_URL:
         kwargs["api_base"] = JUDGE_BASE_URL
