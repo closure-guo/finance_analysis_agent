@@ -26,6 +26,13 @@ import litellm
 
 litellm.drop_params = True
 
+# 流式 logging 线程死锁防护（incident 016）：litellm 每个 chunk 向全局线程池提交
+# success logging，worker 内 asyncio.run 新建 ProactorEventLoop，Windows/Py3.14 的
+# _fallback_socketpair 并发竞态令线程永久卡在 accept() → 100 worker 全灭、退出时
+# join 挂死。项目 Langfuse 观测走自研 SDK（见下方 ADR-0015 段），未注册任何
+# litellm callback，禁用零功能损失。
+litellm.disable_streaming_logging = True
+
 # ── Langfuse 兼容性修复 ─────────────────────────────────────────────
 # litellm 1.85.x 与 langfuse 4.x 深度不兼容（version 属性、sdk_integration 参数、
 # langfuse_sdk_version 属性等多处不匹配）。未配置 LANGFUSE key 时 litellm 仍会在
@@ -178,6 +185,10 @@ def _build_kwargs(
     kwargs: dict = {
         "model": effectiveModel,
         "messages": messages,
+        # max_tokens 默认 16384（incident 016 遗留问题）：方舟 GLM-5.2 强制
+        # thinking 且 reasoning 与正文共享 max_tokens 配额（实测简单问题
+        # reasoning 即 ~2500 token），4096 会截断正文或令 content 为空。
+        # 上限不影响计费（按实际用量），仅移动截断点。
         "max_tokens": max_tokens,
         # 整体请求超时（秒）：防 streaming 响应无限卡死（实测 GLM 端点
         # 偶发挂起 15min+ 冻结整个基线/管线）。thinking 模式慢，默认 300s，
@@ -227,7 +238,7 @@ def call_llm(
     prompt: str,
     system: str = "",
     temperature: float = 0.3,
-    max_tokens: int = 4096,
+    max_tokens: int = 16384,
     api_key: str | None = None,
     quick: bool = False,
     llm_config: LLMConfig | None = None,
@@ -324,7 +335,7 @@ def call_llm_stream(
     prompt: str,
     system: str = "",
     temperature: float = 0.3,
-    max_tokens: int = 4096,
+    max_tokens: int = 16384,
     api_key: str | None = None,
     messages: list[dict] | None = None,
     quick: bool = False,
@@ -482,7 +493,7 @@ def call_llm_with_tools(
     system: str = "",
     tools: list[dict] | None = None,
     temperature: float = 0.3,
-    max_tokens: int = 4096,
+    max_tokens: int = 16384,
     api_key: str | None = None,
     tool_choice: str = "auto",
     messages: list[dict] | None = None,

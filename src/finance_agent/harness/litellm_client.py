@@ -20,6 +20,13 @@ from finance_agent.langfuse_tracing import truncate_for_trace
 
 logger = logging.getLogger("finance_agent.harness.litellm_client")
 
+# 流式 logging 线程死锁防护（incident 016，与 finance_agent/llm.py 同源）：
+# 本模块可被独立导入（不经过 llm.py），须自带同一全局开关，防止 harness/quick
+# 独立入口漏防。项目未注册 litellm callback，禁用零功能损失。
+import litellm  # noqa: E402
+
+litellm.disable_streaming_logging = True
+
 
 def _resolve_key(api_key: str | None) -> str:
     """Resolve API key from explicit param or environment."""
@@ -136,6 +143,10 @@ class LiteLLMClient:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            # 16384 与 llm.py 默认对齐：方舟 GLM-5.2 强制 thinking，reasoning
+            # 与正文共享 max_tokens 配额，不传（依赖端点默认 4096）会截断正文
+            # 或令 content 为空（quick/follow_up 空输出的根因之一）。
+            "max_tokens": 16384,
             "timeout": 120,  # 整体请求超时（秒），防止 streaming 响应卡死
         }
 

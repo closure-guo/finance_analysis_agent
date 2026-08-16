@@ -23,6 +23,8 @@
 | 013  | 2026-08-04 | [流式输出概率性文字错乱 — 三轮静态推理失败 + 并发写 DB 数据丢失](013-sse-concurrent-text-corruption-20260804.md) | 已修复 |
 | 014  | 2026-07-16 | [刷新页面导致历史会话清空 — 事件循环被高频同步 SQLite 写冻结](014-refresh-clears-session-list-20260716.md) | 已修复 |
 | 015  | 2026-08-05 | [E2E timeline suite report_ready 丢失 — REPORTS_DIR 递归创建缺失](015-reports-dir-mkdir-parents.md) | 已修复 |
+| 016  | 2026-08-16 | [litellm 流式 logging 线程在 Windows socketpair 竞态死锁 — 跑批挂死](016-litellm-stream-logging-deadlock.md) | 已修复 |
+| 017  | 2026-08-16 | [方舟 GLM-5.2 reasoning 吃满 max_tokens 配额 — 截断/空输出炸行](017-ark-glm-reasoning-token-starvation.md) | 已修复 |
 
 ---
 

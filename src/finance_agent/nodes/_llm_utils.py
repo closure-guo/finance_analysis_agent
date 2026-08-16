@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import cast
 
 # ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
 #
@@ -103,22 +104,37 @@ def _is_testing() -> bool:
 
 
 def parse_json_response(text: str) -> dict:
-    """从 LLM 响应中提取 JSON，处理 markdown 代码块包裹和尾部多余文本。"""
+    """从 LLM 响应中提取 JSON，处理 markdown 代码块包裹和尾部多余文本。
+
+    容错（incident 016 遗留行失败）：方舟 GLM-5.2 概率性输出尾逗号
+    （"Illegal trailing comma before end of array"），下游节点解析无
+    try/except，此处必须自行消化常见格式瑕疵，避免单次坏输出炸整行。
+    """
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:
         text = match.group(1)
     text = text.strip()
     # Try direct parse first
     try:
-        return json.loads(text)
+        return cast(dict, json.loads(text))
     except json.JSONDecodeError:
         pass
     # Fallback: extract first JSON object using raw_decode
     decoder = json.JSONDecoder()
     idx = text.find("{")
     if idx >= 0:
-        obj, _ = decoder.raw_decode(text[idx:])
-        return obj
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            return cast(dict, obj)
+        except json.JSONDecodeError:
+            pass
+        # 尾逗号清理后重试：`,]` / `,}`（含空白/换行）→ 删逗号
+        cleaned = re.sub(r",(\s*[}\]])", r"\1", text[idx:])
+        try:
+            obj, _ = decoder.raw_decode(cleaned)
+            return cast(dict, obj)
+        except json.JSONDecodeError:
+            pass
     raise json.JSONDecodeError("No JSON object found", text, 0)
 
 
