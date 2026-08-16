@@ -91,3 +91,43 @@ class TestRetryOnBadOutput:
         assert calls[0]["node_name"] == "aggressive_debater"
         assert calls[0]["prompt_name"] == "risk_debater"
         assert calls[0]["stock_code"] == "600519"
+
+
+class TestRetryOnApiError:
+    def test_api_error_then_valid_retries(self):
+        """方舟偶发服务端 500（r4 实测 MidStreamFallbackError）重试一次即恢复。"""
+        import litellm
+
+        calls: list[dict] = []
+
+        def fake(prompt: str, **kwargs):
+            calls.append({"prompt": prompt})
+            if len(calls) == 1:
+                raise litellm.exceptions.APIConnectionError(
+                    message="service internal error", llm_provider="openai"
+                )
+            return '{"ok": true}'
+
+        with patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake):
+            result = call_llm_for_json("x")
+        assert result == {"ok": True}
+        assert len(calls) == 2
+
+    def test_api_error_twice_raises(self):
+        """连续两次 API 错误仍向上抛（不静默吞错）。"""
+        import litellm
+
+        calls: list[dict] = []
+
+        def fake(prompt: str, **kwargs):
+            calls.append({"prompt": prompt})
+            raise litellm.exceptions.APIConnectionError(
+                message="still down", model="openai/glm-5.2", llm_provider="openai"
+            )
+
+        with (
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+            pytest.raises(litellm.exceptions.APIConnectionError),
+        ):
+            call_llm_for_json("x")
+        assert len(calls) == 2

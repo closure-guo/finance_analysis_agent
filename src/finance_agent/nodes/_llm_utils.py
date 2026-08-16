@@ -174,7 +174,11 @@ def call_llm_for_json(
         "prompt_version": prompt_version,
         "stock_code": stock_code,
     }
-    response = call_llm_streaming(prompt, **kwargs)
+    try:
+        response = call_llm_streaming(prompt, **kwargs)
+    except Exception:
+        # 服务瞬时故障（方舟偶发 500 / 流式中断，r4 实测）重试一次
+        response = call_llm_streaming(prompt, **kwargs)
     try:
         return parse_json_response(response)
     except json.JSONDecodeError:
