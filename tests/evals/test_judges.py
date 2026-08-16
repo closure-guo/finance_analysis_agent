@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import evals.judges as judges_module
 import pytest
-from evals.judges import JUDGE_ENV, JUDGE_MODEL, RUBRICS, run_judge
+from evals.judges import JUDGE_ENV, RUBRICS, _judge_model, run_judge
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +59,7 @@ class TestRunJudge:
         assert result == {"name": "report_relevance", "score": 4, "reason": "基本切题"}
         # 裁判模型与温度
         _, kwargs = mock_llm.call_args
-        assert kwargs["model"] == JUDGE_MODEL
+        assert kwargs["model"] == _judge_model()
         assert kwargs["temperature"] == 0.0
 
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
@@ -85,6 +85,33 @@ class TestRunJudge:
         assert result["score"] is None
         assert result["reason"] == "judge_parse_failed"
         assert mock_llm.call_count == 2
+
+
+class TestLazyEnvRead:
+    """judge 配置必须调用时读环境（python -m evals.run 时序 bug 回归防护）。
+
+    实况：模块 import（judges.py 固化常量）先于 main() 的 load_dotenv 执行，
+    import 时 JUDGE_* 为空 → 跑批 judge 28 项全败而单测（先 dotenv 后 import）
+    全通。修复：常量改函数，每次调用读环境。
+    """
+
+    @patch.dict(
+        os.environ,
+        {
+            "LANGFUSE_PUBLIC_KEY": "",
+            "LANGFUSE_SECRET_KEY": "",
+            "JUDGE_BASE_URL": "https://judge-lazy.test/v1",
+            "JUDGE_API_KEY": "sk-lazy-test",
+        },
+    )
+    @patch("litellm.completion")
+    def test_env_set_after_import_is_effective(self, mock_llm):
+        mock_llm.return_value = _mock_completion('{"score": 3, "reason": "x"}')
+        result = run_judge("report_relevance", {"query": "q", "report": "r"})
+        assert result["score"] == 3
+        _, kwargs = mock_llm.call_args
+        assert kwargs["api_base"] == "https://judge-lazy.test/v1"
+        assert kwargs["api_key"] == "sk-lazy-test"
 
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
     @patch("litellm.completion")
