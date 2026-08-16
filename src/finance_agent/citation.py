@@ -115,8 +115,13 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
         if current is None:
             return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
 
-    ground_truth = float(current)
-    stated = float(claim.stated_value)
+    if not isinstance(current, int | float | str):
+        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
+    try:
+        ground_truth = float(current)
+        stated = float(claim.stated_value)
+    except (TypeError, ValueError):
+        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
     delta = abs(ground_truth - stated)
 
     # 相对容差 0.5%（FinGround 标准）
@@ -131,12 +136,19 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
 
 
 def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
-    """数值型 claim：直接读 state 字段，绝对容差 0.01 比对。"""
+    """数值型 claim：直接读 state 字段，绝对容差 0.01 比对。
+
+    field_ref 解析结果非数值（dict/list 等，LLM 偶发指到容器节点）时按
+    FAIL 处理而非抛 TypeError 炸管线（baseline-v2 r3 回归）。
+    """
     ground_truth = _resolve_field_ref(claim.field_ref, state)
-    if ground_truth is None:
+    if not isinstance(ground_truth, int | float | str):
         return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
-    gt_float = float(ground_truth)
-    sv_float = float(claim.stated_value)
+    try:
+        gt_float = float(ground_truth)
+        sv_float = float(claim.stated_value)
+    except (TypeError, ValueError):
+        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
     delta = abs(gt_float - sv_float)
     status: Literal["PASS", "FAIL"] = "PASS" if delta < 0.01 else "FAIL"
     return CitationResult(status=status, claim=claim, ground_truth=gt_float, delta=delta)
@@ -146,11 +158,14 @@ def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
     """比较型 claim：验证两侧数值 + 比较方向。"""
     val_a = _resolve_field_ref(claim.field_ref, state)
     val_b = _resolve_field_ref(claim.field_ref_b, state) if claim.field_ref_b else None
-    if val_a is None or val_b is None:
+    if not isinstance(val_a, int | float | str) or not isinstance(val_b, int | float | str):
         return CitationResult(status="FAIL", claim=claim, ground_truth=None)
 
-    a = float(val_a)
-    b = float(val_b)
+    try:
+        a = float(val_a)
+        b = float(val_b)
+    except (TypeError, ValueError):
+        return CitationResult(status="FAIL", claim=claim, ground_truth=None)
     delta = abs(a - b)
     direction = str(claim.stated_value)
 
