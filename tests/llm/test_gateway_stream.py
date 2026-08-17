@@ -1,0 +1,61 @@
+# tests/llm/test_gateway_stream.py
+"""gateway 流式/工具入口测试（delta 5.1 后半）。
+
+complete_stream / complete_with_tools 是 legacy 转调 gateway 的前提。
+用 mock raw_stream/raw_completion 验证归一事件流与工具守卫。
+"""
+
+from __future__ import annotations
+
+from finance_agent.llm.gateway import complete_stream
+
+
+class _FakeChunk:
+    def __init__(self, delta: str, reasoning: str = "", tool_calls=None, finish: str | None = None):
+        self.delta = delta
+        self.reasoning = reasoning
+        self.tool_calls = tool_calls
+        self.finish = finish
+
+
+def _fake_stream(chunks: list[_FakeChunk]):
+    async def _agen():
+        for c in chunks:
+            yield c
+
+    return _agen()
+
+
+class TestCompleteStream:
+    def test_yields_text_events(self, monkeypatch):
+
+        captured = []
+
+        def fake_stream(**kwargs):  # noqa: ARG001
+            captured.append(kwargs)
+            yield _FakeChunk(delta="你")
+            yield _FakeChunk(delta="好")
+            yield _FakeChunk(delta="", finish="stop")
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+        events = []
+        for ev in complete_stream(
+            [{"role": "user", "content": "hi"}],
+            llm_config={"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+        ):
+            events.append(ev)
+            # raw_stream 内部固定 stream=True，此处仅验证请求构造已下发
+            assert captured[0]["model"] == "openai/glm-5.2"
+        kinds = [e["kind"] for e in events]
+        assert "text" in kinds
+        assert "finished" in kinds
+
+    def test_yields_reasoning_events(self, monkeypatch):
+        def fake_stream(**kwargs):  # noqa: ARG001
+            yield _FakeChunk(delta="", reasoning="思考过程")
+            yield _FakeChunk(delta="答", finish="stop")
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+        kinds = [e["kind"] for e in complete_stream([{"role": "user", "content": "hi"}])]
+        assert "reasoning" in kinds
+        assert "text" in kinds
