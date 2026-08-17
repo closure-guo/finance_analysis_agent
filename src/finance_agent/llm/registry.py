@@ -62,6 +62,8 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_field="reasoning_content",
             reasoning_must_echo_on_tool=False,
             reasoning_forced=True,
+            # reasoning 与正文共享配额，预算必须覆盖 reasoning 峰值（incident 017）
+            max_output=16384,
         ),
         default_params={"max_tokens": 16384},
     ),

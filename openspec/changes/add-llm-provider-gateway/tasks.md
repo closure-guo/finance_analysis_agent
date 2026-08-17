@@ -8,11 +8,11 @@
 
 ## 2. 阶段二：adapter 行为合同
 
-- [ ] 2.1 消息序列化收口：`_sanitize_messages_for_openai_compat` + `_normalize_arguments_str`（含「模型下发 arguments」规范化）迁入 adapter，按 `capability.reasoning_must_echo_on_tool` 决定 reasoning 字段回传
-- [ ] 2.2 finish_reason 归一化：`length/content_filter/empty/unknown` 分型 → OutputTruncated / ContentFiltered / EmptyLLMOutput typed errors；`length` 触发预算复核钩子
-- [ ] 2.3 max_tokens 预算派生：按 `capability.max_output` + `reasoning_forced` 派生（替换 16384 硬编码），trace 标记派生来源
-- [ ] 2.4 错误归一化：AuthError / RateLimitError / TimeoutError / ModelNotFound / ContextOverflow / ContentFiltered / UnsupportedCapability / UnknownLLMError 映射与可重试分类（含 PR #74 的服务错误重试语义）
-- [ ] 2.5 关键参数不静默丢弃：移除全局 `drop_params=True` 直通（adapter 白名单化），不支持的关键参数抛 UnsupportedCapabilityError
+- [x] 2.1 消息序列化收口：`_sanitize_messages_for_openai_compat` + `_normalize_arguments_str`（含「模型下发 arguments」规范化）迁入 adapter，按 `capability.reasoning_must_echo_on_tool` 决定 reasoning 字段回传
+- [x] 2.2 finish_reason 归一化：`length/content_filter/empty/unknown` 分型 → OutputTruncated / ContentFiltered / EmptyLLMOutput typed errors；`length` 触发预算复核钩子
+- [x] 2.3 max_tokens 预算派生：按 `capability.max_output` + `reasoning_forced` 派生（替换 16384 硬编码），trace 标记派生来源
+- [x] 2.4 错误归一化：AuthError / RateLimitError / TimeoutError / ModelNotFound / ContextOverflow / ContentFiltered / UnsupportedCapability / UnknownLLMError 映射与可重试分类（含 PR #74 的服务错误重试语义）
+- [x] 2.5 关键参数不静默丢弃：移除全局 `drop_params=True` 直通（adapter 白名单化），不支持的关键参数抛 UnsupportedCapabilityError
 
 ## 3. 阶段三：输出合同统一
 
