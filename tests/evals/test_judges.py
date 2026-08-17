@@ -142,12 +142,11 @@ class TestLazyEnvRead:
         assert prompt.count("机密") == 1
 
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
-    @patch("litellm.completion")
-    def test_render_missing_var_becomes_empty(self, mock_llm):
-        """未提供的变量替换为空串,不残留 {{key}} 占位符。"""
-        mock_llm.return_value = _mock_completion('{"score": 5, "reason": "x"}')
-        run_judge("report_relevance", {"query": "q"})  # 缺 report
-        prompt = mock_llm.call_args.kwargs["messages"][0]["content"]
+    def test_render_missing_var_becomes_empty(self):
+        """未提供的变量替换为空串,不残留 {{key}} 占位符（直接测 _render）。"""
+        from evals.judges import _render
+
+        prompt = _render("report_relevance", {"query": "q"})  # 缺 report
         assert "{{report}}" not in prompt
 
     @patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"})
@@ -162,3 +161,42 @@ class TestLazyEnvRead:
         mock_client.start_as_current_observation.assert_called_once()
         _, kwargs = mock_client.start_as_current_observation.call_args
         assert kwargs.get("as_type") == "generation"
+
+
+class TestInputMissingGuard:
+    """评估链路输入合同（delta 3.4）：关键维度变量为空 → input_missing 跳过。
+
+    实战教训（baseline r5 校准）：空辩论静默打 1 分混入真实分数，
+    「自信但失真」。空输入不得出具看似正常的数字分数。
+    """
+
+    @patch("litellm.completion")
+    def test_debate_empty_marks_input_missing(self, mock_llm):
+        from evals.judges import run_judge
+
+        mock_llm.return_value = _mock_completion('{"score": 1, "reason": "x"}')
+        result = run_judge("debate_quality", {"query": "q", "debate_history": "", "report": "r"})
+        assert result["score"] is None
+        assert result["reason"] == "input_missing:debate_history"
+        mock_llm.assert_not_called()  # 关键：空输入根本不打分
+
+    @patch("litellm.completion")
+    def test_report_empty_marks_input_missing(self, mock_llm):
+        from evals.judges import run_judge
+
+        result = run_judge("report_relevance", {"query": "q", "report": ""})
+        assert result["score"] is None
+        assert result["reason"] == "input_missing:report"
+        mock_llm.assert_not_called()
+
+    @patch("litellm.completion")
+    def test_non_empty_inputs_normal_scoring(self, mock_llm):
+        from evals.judges import run_judge
+
+        mock_llm.return_value = _mock_completion('{"score": 4, "reason": "ok"}')
+        result = run_judge(
+            "debate_quality",
+            {"query": "q", "debate_history": "【bull】看多\n【bear】看空", "report": "r"},
+        )
+        assert result["score"] == 4
+        mock_llm.assert_called_once()

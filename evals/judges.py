@@ -36,12 +36,12 @@ def _judge_model() -> str:
 
 def _judge_base_url() -> str:
     """裁判端点：JUDGE_BASE_URL 优先，回退主 LLM 中转（LLM_BASE_URL）。"""
-    return os.getenv("JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL", "")
+    return os.getenv("JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL", "") or ""
 
 
 def _judge_api_key() -> str:
     """裁判凭据：JUDGE_API_KEY 优先，回退主 LLM（LLM_API_KEY）。"""
-    return os.getenv("JUDGE_API_KEY") or os.getenv("LLM_API_KEY", "")
+    return os.getenv("JUDGE_API_KEY") or os.getenv("LLM_API_KEY", "") or ""
 
 
 JUDGE_ENV = "langfuse-llm-as-a-judge"
@@ -178,11 +178,36 @@ def _render(dimension: str, variables: dict[str, str]) -> str:
     )
 
 
+# 各维度依赖的关键输入变量（评估链路输入合同，delta 3.4）：
+# 缺失/为空时该维度记 input_missing 跳过，不得对空输入出具正常分数
+# （r5 校准教训：空辩论静默打 1 分混入均值，「自信但失真」）。
+_DIMENSION_REQUIRED_VARS: dict[str, tuple[str, ...]] = {
+    "report_relevance": ("report",),
+    "debate_quality": ("debate_history",),
+    "decision_grounding": ("analyst_reports", "research_manager_decision"),
+    "consistency": ("analyst_reports", "report_conclusion"),
+}
+
+
+def _input_missing(dimension: str, variables: dict[str, str]) -> str | None:
+    """返回首个缺失的变量名；齐全返回 None。"""
+    for var in _DIMENSION_REQUIRED_VARS.get(dimension, ()):
+        if not str(variables.get(var, "")).strip():
+            return var
+    return None
+
+
 def run_judge(dimension: str, variables: dict[str, str]) -> dict:
     """跑一个 Judge 维度;解析失败重试一次,仍失败 score=None。
 
+    输入合同：维度关键变量缺失 → score=None + reason="input_missing"
+    （不调 LLM、不评分），保证评估结果不被空输入污染。
+
     Returns: {"name": dimension, "score": int 1-5 | None, "reason": str}
     """
+    missing = _input_missing(dimension, variables)
+    if missing is not None:
+        return {"name": dimension, "score": None, "reason": f"input_missing:{missing}"}
     prompt = _render(dimension, variables)
     for _attempt in range(2):
         try:

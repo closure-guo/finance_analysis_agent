@@ -115,7 +115,7 @@ class TestCallLlmStreamingStub:
 
     def test_stub_returns_answer_without_real_llm(self, testing_env):
         """TESTING=1 下不得调用真实 call_llm_stream（否则连真实 LLM）。"""
-        with patch("finance_agent.llm.call_llm_stream") as mock_stream:
+        with patch("finance_agent.llm.legacy.call_llm_stream") as mock_stream:
             answer = self._run_stub("trader")
         mock_stream.assert_not_called()
         assert answer.strip()
