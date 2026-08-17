@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from finance_agent.llm.errors import LLMError
@@ -252,3 +252,22 @@ def guard_params_supported(
         raise UnsupportedCapabilityError(
             f"provider 不支持 strict schema（capability.json_schema={capability.json_schema}）"
         )
+
+
+def raw_completion(**kwargs: Any) -> Any:
+    """adapter 内暴露 litellm.completion（gateway/probes 唯一入口）。
+
+    确保 litellm 的 import 与运行时防护只存在于 adapter；业务/gateway/
+    probe 经本函数调用，保证门禁（adapters 外禁 import litellm）可执行。
+    """
+    import litellm
+
+    ensure_litellm_runtime()
+    return litellm.completion(**kwargs)
+
+
+def raw_stream(**kwargs: Any) -> Any:
+    import litellm
+
+    ensure_litellm_runtime()
+    return litellm.completion(**kwargs, stream=True)

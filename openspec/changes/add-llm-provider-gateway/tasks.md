@@ -20,14 +20,14 @@
 - [x] 3.2 并入现有收口：`parse_json_response` / `call_llm_for_json` 的能力并入 contracts（保持对外函数签名兼容或迁移调用点），管线六节点与 citation 数值校验走合同
 - [x] 3.3 ReAct action 文本协议兜底：`<action>`/`<observation>` 协议、CanonicalToolCall 归一、capability.tools=none 时启用，trace 记 degradation
 - [x] 3.4 评估链路输入合同：judge 输入变量提取非空断言，空维度记 `input_missing`（score=null + 原因），pydantic 兼容用例迁移；judge 配置改走 resolver
-- [ ] 3.5 ReAct loop 消费 CanonicalEvent：harness/loop.py 改造为消费归一事件流（reasoning/tool delta 合并移入 adapter）
+- [x] 3.5 ReAct loop 消费 CanonicalEvent：harness/loop.py 改造为消费归一事件流（reasoning/tool delta 合并移入 adapter）
 
 ## 4. 阶段四：probe、前端与门禁
 
-- [ ] 4.1 `probes.py` 五项探测（non_stream/stream/tool_call/tool_followup/json_output）+ 能力表修正（probe 事实覆盖静态默认 + warnings）
-- [ ] 4.2 `/api/llm-config/test` 升级：返回 effective 配置 + capability 矩阵 + warnings；前端设置页展示能力矩阵，capability 不满足时禁用对应模式入口
-- [ ] 4.3 `tests/llm_contracts/` 合同测试组（12 用例模板）接入 CI：litellm 升级 / 模型 alias 变更 / prompt 变更触发；未过工具合同的 profile 禁入深度模式（下拉过滤或标红）
-- [ ] 4.4 trace 契约字段：generation metadata 增加 profile/provider/purpose/capability/finish_reason/repair_count/fallback_from/degradation；judge 独立 environment 审计（维度/输入断言/分数）
+- [x] 4.1 `probes.py` 五项探测（non_stream/stream/tool_call/tool_followup/json_output）+ 能力表修正（probe 事实覆盖静态默认 + warnings）
+- [x] 4.2 `/api/llm-config/test` 升级：返回 effective 配置 + capability 矩阵 + warnings；前端设置页展示能力矩阵，capability 不满足时禁用对应模式入口
+- [x] 4.3 `tests/llm_contracts/` 合同测试组（12 用例模板）接入 CI：litellm 升级 / 模型 alias 变更 / prompt 变更触发；未过工具合同的 profile 禁入深度模式（下拉过滤或标红）
+- [x] 4.4 trace 契约字段：generation metadata 增加 profile/provider/purpose/capability/finish_reason/repair_count/fallback_from/degradation；judge 独立 environment 审计（维度/输入断言/分数）
 
 ## 5. 阶段五：迁移收尾与治理
 
