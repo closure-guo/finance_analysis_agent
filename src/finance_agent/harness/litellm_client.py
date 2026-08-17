@@ -197,7 +197,9 @@ class LiteLLMClient:
         """流式聊天请求，yield LLMResponse 对象。"""
         from datetime import datetime
 
-        import litellm
+        # litellm 仅经 adapter 收口（delta 5.1）：acompletion 由 adapter 暴露，
+        # 使 grep 门禁（adapters 外禁 import litellm）可收紧 harness allowlist
+        from finance_agent.llm.adapters.litellm_adapter import raw_acompletion
 
         kwargs = self._build_kwargs(messages, tools, temperature, tool_choice)
         _start_time = datetime.now(UTC)
@@ -233,7 +235,7 @@ class LiteLLMClient:
             try:
                 current_tool_calls: dict[int, dict[str, Any]] = {}
 
-                response = await litellm.acompletion(**kwargs)
+                response = await raw_acompletion(**kwargs)
 
                 # per-chunk 超时保护：单个 chunk 超过 60 秒未到达则终止流
                 _chunk_iter = response.__aiter__()

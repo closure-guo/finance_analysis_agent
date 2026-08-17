@@ -271,3 +271,11 @@ def raw_stream(**kwargs: Any) -> Any:
 
     ensure_litellm_runtime()
     return litellm.completion(**kwargs, stream=True)
+
+
+async def raw_acompletion(**kwargs: Any) -> Any:
+    """adapter 内暴露异步 litellm.acompletion（harness 唯一入口）。"""
+    import litellm
+
+    ensure_litellm_runtime()
+    return await litellm.acompletion(**kwargs)

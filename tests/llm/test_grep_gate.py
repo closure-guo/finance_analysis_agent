@@ -16,8 +16,9 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "finance_agent"
 # 阶段一白名单：adapter（唯一正式入口）+ 兼容薄壳存量
 _ALLOWLIST = {
     Path("llm/adapters/litellm_adapter.py"),
-    Path("llm/legacy.py"),  # 旧 llm.py 薄壳（Task 5.1 转调后收紧）
-    Path("harness/litellm_client.py"),  # 存量 ReAct 客户端（Task 5.1 迁入 adapter）
+    # legacy.py（旧 llm.py）薄壳：流式/工具主链路逻辑尚在，含直接 litellm，
+    # 待 complete_stream/with_tools 在 gateway 实现后转调收紧（Task 5.1 收口）
+    Path("llm/legacy.py"),
 }
 
 _IMPORT_RE = re.compile(r"^\s*(import litellm|from litellm)", re.MULTILINE)
