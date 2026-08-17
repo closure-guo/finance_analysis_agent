@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import cast
 
 from finance_agent.langfuse_tracing import truncate_for_trace
 
@@ -37,10 +38,20 @@ def extract_conclusion(report: str) -> str:
     return report[-500:]
 
 
+def _as_dict(obj: object) -> dict:
+    """state 元素可能是 dict 或 pydantic（LangGraph reducer 原样保留），统一转 dict。"""
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        return cast(dict, obj.model_dump())
+    return {}
+
+
 def _summarize_analyst_reports(reports: dict) -> str:
     parts: list[str] = []
     for name, rep in reports.items():
-        if not isinstance(rep, dict):
+        rep = _as_dict(rep)
+        if not rep:
             continue
         text = rep.get("summary") or rep.get("conclusion") or ""
         if not text:
@@ -52,7 +63,8 @@ def _summarize_analyst_reports(reports: dict) -> str:
 def _summarize_debate(history: list) -> str:
     parts: list[str] = []
     for msg in history:
-        if not isinstance(msg, dict):
+        msg = _as_dict(msg)
+        if not msg:
             continue
         role = msg.get("role", "?")
         content = msg.get("content", "")
@@ -66,6 +78,7 @@ def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
     decision = state.get("final_trade_decision") or {}
     risk_debate = state.get("risk_debate_history") or []
     risk_tail = _summarize_debate(risk_debate[-2:]) if risk_debate else ""
+    decision_txt = _serialize_decision(decision)
     return {
         "query": query,
         "report": _trunc(report),
@@ -73,10 +86,24 @@ def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
         "analyst_reports": _trunc(_summarize_analyst_reports(state.get("analyst_reports") or {})),
         "debate_history": _trunc(_summarize_debate(state.get("debate_history") or [])),
         "research_manager_decision": _trunc(state.get("research_manager_conclusion") or ""),
-        "trade_decision": _trunc(json.dumps(decision, ensure_ascii=False) if decision else ""),
-        "risk_judgment": _trunc(
-            (json.dumps(decision, ensure_ascii=False) if decision else "")
-            + ("\n" + risk_tail if risk_tail else "")
-        ),
+        "trade_decision": _trunc(decision_txt),
+        "risk_judgment": _trunc(decision_txt + ("\n" + risk_tail if risk_tail else "")),
         "fund_manager_decision": state.get("fund_manager_decision") or "",
     }
+
+
+def _serialize_decision(decision: object) -> str:
+    """把决策对象安全序列化为字符串。
+
+    TradeDecision 为 pydantic 模型,json.dumps 直传会抛
+    'Object of type TradeDecision is not JSON serializable'。
+    pydantic 用 model_dump();dict 直传;其余 str() 兜底。
+    """
+    if not decision:
+        return ""
+    try:
+        if hasattr(decision, "model_dump"):
+            return json.dumps(decision.model_dump(), ensure_ascii=False)
+        return json.dumps(decision, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(decision)

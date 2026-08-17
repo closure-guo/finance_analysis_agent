@@ -27,6 +27,28 @@ def _safe(val, default=0.0):
     return float(val)
 
 
+def _equity_total(row) -> float:
+    """从资产负债表行推导所有者权益合计（兼容银行等无该列的结构）。
+
+    优先标准列；银行表无「所有者权益(或股东权益)合计」，但有
+    「负债及股东权益总计」——用 总计 - 负债 推导（恒等式 资产=负债+权益）。
+    最后兜底 归母所有者权益 + 少数股东权益。均缺失返回 0（保持旧行为）。
+    """
+    for col in ("所有者权益(或股东权益)合计", "所有者权益合计", "股东权益合计"):
+        v = row.get(col)
+        if v is not None and not (isinstance(v, float) and pd.isna(v)):
+            return float(v)
+    balance_total = row.get("负债及股东权益总计")
+    liabilities = row.get("负债合计")
+    if balance_total is not None and liabilities is not None:
+        return float(balance_total) - float(liabilities)
+    parent = row.get("归母所有者权益") or row.get("归属于母公司股东的权益")
+    minority = row.get("少数股东权益")
+    if parent is not None:
+        return float(parent) + (float(minority) if minority is not None else 0.0)
+    return 0.0
+
+
 def _soft_threshold(base: float) -> float:
     """软等式阈值：max(基准值 × 5%, 100万)。"""
     return max(abs(base) * SOFT_TOLERANCE_PCT, SOFT_TOLERANCE_ABS)
@@ -53,7 +75,7 @@ def validate_financials(
         year = _year(row["报告日"])
         assets = _safe(row.get("资产总计"))
         liabilities = _safe(row.get("负债合计"))
-        equity = _safe(row.get("所有者权益(或股东权益)合计"))
+        equity = _equity_total(row)
 
         if assets <= 0:
             details.append(f"[{year}] 规则1跳过：资产总计为空或<=0")

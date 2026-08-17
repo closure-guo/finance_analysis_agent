@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from finance_agent.models import TradeDecision
-from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -14,7 +14,7 @@ def trader(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    data = call_llm_for_json(
         context,
         system=system,
         api_key=api_key,
@@ -24,7 +24,6 @@ def trader(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)
 
     return {"trader_plan": decision}

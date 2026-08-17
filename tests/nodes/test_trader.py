@@ -24,7 +24,7 @@ def _mock_trader_response() -> str:
 class TestTrader:
     """Layer III Trader Agent。"""
 
-    @patch("finance_agent.nodes.trader.call_llm_streaming")
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_produces_trade_decision(self, mock_llm):
         mock_llm.return_value = _mock_trader_response()
         state = {

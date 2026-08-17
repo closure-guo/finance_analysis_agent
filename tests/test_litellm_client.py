@@ -434,3 +434,70 @@ async def test_chat_stream_generation_named_by_agent(monkeypatch):
     kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
     assert kwargs["name"] == "react_agent"
     assert kwargs["metadata"]["agent"] == "react_agent"
+
+
+# ── 方舟 GLM reasoning_content 回传 400 修复（quick 空 report 根因）──
+
+
+def test_build_kwargs_strips_reasoning_for_non_deepseek():
+    """非 DeepSeek 端点（如方舟 GLM）拒绝 messages 里的 reasoning_content 字段。
+
+    实测方舟 plan/v3 返回 400 Invalid request body → harness ReAct 多轮
+    工具调用全部失败 → quick/follow_up report 为空。DeepSeek 官方行为相反
+    （工具调用轮次必须回传 reasoning_content），按 provider 区分。
+    """
+    client = LiteLLMClient(model="openai/glm-5.2", api_key="fake")
+    messages = [
+        {"role": "user", "content": "茅台现在能买吗"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "t1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+            ],
+            "reasoning_content": "思考中...",
+        },
+    ]
+    kwargs = client._build_kwargs(messages=messages)
+    for m in kwargs["messages"]:
+        assert "reasoning_content" not in m
+
+
+def test_build_kwargs_keeps_reasoning_for_deepseek():
+    """DeepSeek 官方端点保留 reasoning_content 回传（缺失触发 400）。"""
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "t1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+            ],
+            "reasoning_content": "r",
+        }
+    ]
+    kwargs = client._build_kwargs(messages=messages)
+    assert kwargs["messages"][0]["reasoning_content"] == "r"
+
+
+def test_build_kwargs_normalizes_single_quote_tool_args():
+    """GLM 输出的单引号 arguments 回传方舟 400 → 必须规范化为合法 JSON。"""
+    client = LiteLLMClient(model="openai/glm-5.2", api_key="fake")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": "{'query': '贵州茅台 股价'}"},
+                }
+            ],
+        }
+    ]
+    kwargs = client._build_kwargs(messages=messages)
+    args = kwargs["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    import json as _json
+
+    assert _json.loads(args) == {"query": "贵州茅台 股价"}

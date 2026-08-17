@@ -25,10 +25,25 @@ from finance_agent.nodes._llm_utils import parse_json_response
 if TYPE_CHECKING:
     from langfuse import Langfuse
 
-JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/deepseek-v4-flash")
-# 裁判默认复用主 LLM 中转(opencode)；DEEPSEEK 官方等独立端点用 JUDGE_BASE_URL/JUDGE_API_KEY 覆盖
-JUDGE_BASE_URL = os.getenv("JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL", "")
-JUDGE_API_KEY = os.getenv("JUDGE_API_KEY") or os.getenv("LLM_API_KEY", "")
+
+def _judge_model() -> str:
+    """调用时读环境（时序 bug 防护）：``python -m evals.run`` 的模块 import
+    先于 main() 的 load_dotenv 执行，import 时固化常量会拿到空值 → 跑批
+    judge 全败而「先 dotenv 后 import」的单测全通（baseline-v2 28 项全败根因）。
+    """
+    return os.getenv("JUDGE_MODEL", "openai/deepseek-v4-flash")
+
+
+def _judge_base_url() -> str:
+    """裁判端点：JUDGE_BASE_URL 优先，回退主 LLM 中转（LLM_BASE_URL）。"""
+    return os.getenv("JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL", "")
+
+
+def _judge_api_key() -> str:
+    """裁判凭据：JUDGE_API_KEY 优先，回退主 LLM（LLM_API_KEY）。"""
+    return os.getenv("JUDGE_API_KEY") or os.getenv("LLM_API_KEY", "")
+
+
 JUDGE_ENV = "langfuse-llm-as-a-judge"
 
 _JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以篇幅长短论优劣。'
@@ -127,20 +142,21 @@ def _call_judge_llm(prompt: str) -> str:
     import litellm
 
     kwargs = {
-        "model": JUDGE_MODEL,
+        "model": _judge_model(),
         "temperature": 0.0,
         "messages": [{"role": "user", "content": prompt}],
+        "timeout": 120,  # 防 judge 调用无限挂起（与 harness 路径一致）
     }
-    if JUDGE_BASE_URL:
-        kwargs["api_base"] = JUDGE_BASE_URL
-    if JUDGE_API_KEY:
-        kwargs["api_key"] = JUDGE_API_KEY
+    if _judge_base_url():
+        kwargs["api_base"] = _judge_base_url()
+    if _judge_api_key():
+        kwargs["api_key"] = _judge_api_key()
     client = get_judge_langfuse()
     if client is None:
         resp = litellm.completion(**kwargs)
         return resp.choices[0].message.content or ""
     with client.start_as_current_observation(
-        name="judge", as_type="generation", model=JUDGE_MODEL, input=prompt
+        name="judge", as_type="generation", model=_judge_model(), input=prompt
     ) as gen:
         resp = litellm.completion(**kwargs)
         text = resp.choices[0].message.content or ""

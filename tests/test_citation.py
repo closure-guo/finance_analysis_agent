@@ -226,3 +226,36 @@ class TestCitationReport:
         results = verify_claims([claim], state)
         assert len(results) == 1
         assert results[0].status == "PASS"
+
+
+class TestNumericalRobustness:
+    """数值 claim 解析鲁棒性（baseline-v2 r3 炸行回归）。
+
+    GLM 生成的 field_ref 可能指到 dict/list 等非数值字段，
+    float(dict) 抛 TypeError 炸整条管线 → 应按 FAIL（无法核验）处理。
+    """
+
+    def test_field_ref_resolves_to_dict_fails_gracefully(self):
+        state = {"solvency_metrics": {"资产负债率": {"2024": 40.0}}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率",  # 指到 dict 而非叶子数值
+            stated_value=40.0,
+            interpretation="x",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "FAIL"
+        assert results[0].ground_truth is None
+
+    def test_field_ref_resolves_to_list_fails_gracefully(self):
+        state = {"kline": [1700.0, 1710.0]}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="kline",
+            stated_value=1700.0,
+            interpretation="x",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "FAIL"

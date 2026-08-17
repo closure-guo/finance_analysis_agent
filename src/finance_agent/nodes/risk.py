@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from finance_agent.models import DebateMessage, TradeDecision
-from finance_agent.nodes._llm_utils import call_llm_streaming, parse_json_response
+from finance_agent.nodes._llm_utils import call_llm_for_json
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -26,7 +26,7 @@ def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "")
         system = system.replace("{perspective}", "中性平衡")
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    data = call_llm_for_json(
         context,
         system=system,
         api_key=api_key,
@@ -36,7 +36,6 @@ def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "")
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    data = parse_json_response(response)
     msg = DebateMessage.model_validate(data)
 
     return {"risk_debate_history": [msg]}
@@ -64,7 +63,7 @@ def risk_judge(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    data = call_llm_for_json(
         context,
         system=system,
         api_key=api_key,
@@ -74,7 +73,6 @@ def risk_judge(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    data = parse_json_response(response)
     decision = TradeDecision.model_validate(data)
 
     return {"final_trade_decision": decision}

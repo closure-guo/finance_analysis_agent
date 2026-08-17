@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import cast
 
 # ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
 #
@@ -103,23 +104,86 @@ def _is_testing() -> bool:
 
 
 def parse_json_response(text: str) -> dict:
-    """从 LLM 响应中提取 JSON，处理 markdown 代码块包裹和尾部多余文本。"""
+    """从 LLM 响应中提取 JSON，处理 markdown 代码块包裹和尾部多余文本。
+
+    容错（incident 016 遗留行失败）：方舟 GLM-5.2 概率性输出尾逗号
+    （"Illegal trailing comma before end of array"），下游节点解析无
+    try/except，此处必须自行消化常见格式瑕疵，避免单次坏输出炸整行。
+    """
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:
         text = match.group(1)
     text = text.strip()
     # Try direct parse first
     try:
-        return json.loads(text)
+        return cast(dict, json.loads(text))
     except json.JSONDecodeError:
         pass
     # Fallback: extract first JSON object using raw_decode
     decoder = json.JSONDecoder()
     idx = text.find("{")
     if idx >= 0:
-        obj, _ = decoder.raw_decode(text[idx:])
-        return obj
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            return cast(dict, obj)
+        except json.JSONDecodeError:
+            pass
+        # 尾逗号清理后重试：`,]` / `,}`（含空白/换行）→ 删逗号
+        cleaned = re.sub(r",(\s*[}\]])", r"\1", text[idx:])
+        try:
+            obj, _ = decoder.raw_decode(cleaned)
+            return cast(dict, obj)
+        except json.JSONDecodeError:
+            pass
     raise json.JSONDecodeError("No JSON object found", text, 0)
+
+
+_JSON_RETRY_SUFFIX = (
+    "\n\n[系统提示] 上一次响应为空或不是合法 JSON。请直接输出一个合法的 JSON 对象，"
+    "不要输出 JSON 以外的任何文字。"
+)
+
+
+def call_llm_for_json(
+    prompt: str,
+    system: str = "",
+    api_key: str | None = None,
+    node_name: str = "",
+    llm_config=None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
+    stock_code: str | None = None,
+) -> dict:
+    """call_llm_streaming + parse_json_response 收口：坏输出带强化指令重试一次。
+
+    方舟 GLM-5.2 在部分 prompt 下稳定触发「thinking 后即止」（incident 017
+    实测：aggressive_debater 连续多次 reasoning 正常而 content 为空，
+    与 max_tokens 配额无关）。下游节点（debate/risk/trader/fund_manager）
+    解析无降级，单次空输出即炸整行 —— 统一经本函数调用并重试。
+
+    重试一次后仍失败向上抛 JSONDecodeError：保留 fund_manager
+    「非法输出中断管线、不静默降级」的既有设计（重试 ≠ 降级）。
+    其余参数与 call_llm_streaming 一致，原样透传。
+    """
+    kwargs: dict = {
+        "system": system,
+        "api_key": api_key,
+        "node_name": node_name,
+        "llm_config": llm_config,
+        "prompt_name": prompt_name,
+        "prompt_version": prompt_version,
+        "stock_code": stock_code,
+    }
+    try:
+        response = call_llm_streaming(prompt, **kwargs)
+    except Exception:
+        # 服务瞬时故障（方舟偶发 500 / 流式中断，r4 实测）重试一次
+        response = call_llm_streaming(prompt, **kwargs)
+    try:
+        return parse_json_response(response)
+    except json.JSONDecodeError:
+        response = call_llm_streaming(prompt + _JSON_RETRY_SUFFIX, **kwargs)
+        return parse_json_response(response)
 
 
 def focus_hint(state: dict) -> str:
