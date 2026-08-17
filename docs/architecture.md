@@ -421,8 +421,8 @@ def after_fund_manager(state):
 | --------- | ----------------- | --------------- | ------------------------------- |
 | 前端      | React 18 + Vite   | Gradio          | 组件生态 + 状态管理(zustand) + ECharts 图表   |
 | Agent     | LangGraph         | CrewAI          | Supervisor + Sub-graph 原生支持 |
-| LLM(开发) | deepseek-v4-pro / deepseek-chat | Qwen2.5         | 成本 4元/M tokens，中文财务更优；深度模式用 v4-pro，快速模式用 chat |
-| LLM 路由  | LiteLLM           | 自定义          | 100+ 模型统一接口               |
+| LLM(开发) | GLM-5.2 (方舟) / deepseek-v4-flash (judge) | Qwen 系列 | 经 LLM Provider Gateway 切换；方舟 GLM-5.2 深度，opencode flash 判 分 |
+| LLM 路由  | LiteLLM（关在 llm/adapters/**） | 自定义          | 100+ 模型统一接口               |
 | PDF       | pdfplumber        | Unstructured.io | 表格准确率 98.3%，速度快 6x     |
 | 数据      | AKShare           | Tushare         | 免费无 API Key                  |
 | 向量      | Chroma            | FAISS           | 本地零配置                      |
@@ -431,7 +431,21 @@ def after_fund_manager(state):
 | Word      | python-docx       | —               | 程序化生成                      |
 | PPT       | python-pptx       | —               | 程序化生成                      |
 
+### 8.1 LLM Provider Gateway（防腐层）
+
+> 依据 `docs/design/LLM Provider Gateway 设计档案.md` 落地（delta `add-llm-provider-gateway`）。
+> 目标：换 provider 从「全身手术」变为受控配置变更，由 capability 契约 + 合同测试证明可用。
+
+- **能力契约**（`llm/types.py`）：`Capability`（tools/json_schema/reasoning_field/`reasoning_forced` 等）+ `ModelProfile`（原子配置）+ `CanonicalRequest/Event`（核心与 provider 解耦）
+- **唯一解析入口**（`llm/resolver.py`）：请求级 → preset → 环境变量 → registry 默认；半套配置显式报错、judge 不静默回退 LLM_*、未知前缀拒绝、调用时读环境
+- **adapter 收口**（`llm/adapters/litellm_adapter.py`）：唯一允许 import litellm 处；消息序列化/arguments 规范化/finish_reason 分型/错误归一/参数守卫；litellm 运行时防护（incident 016 死锁开关）统一设置
+- **结构化输出合同**（`llm/contracts.py`）：extract → validate → repair → OutputContractError，管线节点与 evals judge 输入统一过合同
+- **能力探测与门禁**（`llm/probes.py` + `tests/llm_contracts/`）：五项 probe 区分「能聊天/能跑 Agent」；未过工具合同的 profile 禁入深度模式
+- **旧路径**：`llm.py` 迁为 `llm/legacy.py` 薄壳 re-export，`harness/litellm_client.py` 存量保留，grep 门禁（adapters 外禁 import litellm）随 5.1 薄壳转调逐步收紧
+
 ---
+
+
 
 ## 九、未决定项
 
