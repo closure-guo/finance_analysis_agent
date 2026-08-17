@@ -116,7 +116,7 @@ def test_node_without_llm_config_passes_none(mock_stream):
 # ── 端到端：llm_config 注入后使用正确模型 ──
 
 
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_pipeline_llm_config_uses_correct_model(mock_completion):
     """llm_config.model 注入后，call_llm_stream 内部 litellm.completion 收到正确 model。
 

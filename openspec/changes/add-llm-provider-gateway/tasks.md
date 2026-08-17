@@ -1,10 +1,10 @@
 ## 1. 阶段一：gateway 骨架与能力契约
 
-- [ ] 1.1 新建 `src/finance_agent/llm/` 包：`types.py` 定义 Capability（含 `reasoning_forced`）/ ModelProfile / CanonicalRequest / CanonicalEvent / typed errors，TDD 先行（tests/llm/test_types.py）
-- [ ] 1.2 `registry.py` 内置最小能力表（DeepSeek 官方 / OpenAI / Anthropic / Gemini / Ollama-vLLM / 自定义 OpenAI 兼容），静态表数据驱动测试
-- [ ] 1.3 `resolver.py` 唯一配置解析入口：请求级 → profile → 环境变量 → 默认的优先级、半套配置显式报错、`openai/<model>` 前缀规则、judge purpose 纳入解析；覆盖 PR #74 的「调用时读环境」语义
-- [ ] 1.4 `adapters/litellm_adapter.py` 初始化收口：迁移 `disable_streaming_logging`、请求级 timeout、litellm-langfuse 兼容补丁到 adapter；泄漏守护测试（线程/端口稳定性）迁入
-- [ ] 1.5 CI grep 门禁：`src/finance_agent/**` 除 `llm/adapters/**` 与薄壳外禁止 `import litellm`（先允许存量、按阶段收紧）
+- [x] 1.1 新建 `src/finance_agent/llm/` 包：`types.py` 定义 Capability（含 `reasoning_forced`）/ ModelProfile / CanonicalRequest / CanonicalEvent / typed errors，TDD 先行（tests/llm/test_types.py）
+- [x] 1.2 `registry.py` 内置最小能力表（DeepSeek 官方 / OpenAI / Anthropic / Gemini / Ollama-vLLM / 自定义 OpenAI 兼容），静态表数据驱动测试
+- [x] 1.3 `resolver.py` 唯一配置解析入口：请求级 → profile → 环境变量 → 默认的优先级、半套配置显式报错、`openai/<model>` 前缀规则、judge purpose 纳入解析；覆盖 PR #74 的「调用时读环境」语义
+- [x] 1.4 `adapters/litellm_adapter.py` 初始化收口：迁移 `disable_streaming_logging`、请求级 timeout、litellm-langfuse 兼容补丁到 adapter；泄漏守护测试（线程/端口稳定性）迁入
+- [x] 1.5 CI grep 门禁：`src/finance_agent/**` 除 `llm/adapters/**` 与薄壳外禁止 `import litellm`（先允许存量、按阶段收紧）
 
 ## 2. 阶段二：adapter 行为合同
 

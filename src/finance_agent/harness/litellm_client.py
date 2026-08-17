@@ -21,12 +21,13 @@ from finance_agent.langfuse_tracing import truncate_for_trace
 
 logger = logging.getLogger("finance_agent.harness.litellm_client")
 
-# 流式 logging 线程死锁防护（incident 016，与 finance_agent/llm.py 同源）：
-# 本模块可被独立导入（不经过 llm.py），须自带同一全局开关，防止 harness/quick
-# 独立入口漏防。项目未注册 litellm callback，禁用零功能损失。
-import litellm  # noqa: E402
+# litellm 运行时防护收口 adapter（delta Task 1.4）：本模块可被独立导入
+# （不经过 llm.py），经 adapter 幂等初始化保证 harness/quick 独立入口不漏防。
+from finance_agent.llm.adapters.litellm_adapter import (  # noqa: E402
+    ensure_litellm_runtime,
+)
 
-litellm.disable_streaming_logging = True
+ensure_litellm_runtime()
 
 
 def _resolve_key(api_key: str | None) -> str:
