@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
 import logging
@@ -21,12 +20,13 @@ from finance_agent.langfuse_tracing import truncate_for_trace
 
 logger = logging.getLogger("finance_agent.harness.litellm_client")
 
-# 流式 logging 线程死锁防护（incident 016，与 finance_agent/llm.py 同源）：
-# 本模块可被独立导入（不经过 llm.py），须自带同一全局开关，防止 harness/quick
-# 独立入口漏防。项目未注册 litellm callback，禁用零功能损失。
-import litellm  # noqa: E402
+# litellm 运行时防护收口 adapter（delta Task 1.4）：本模块可被独立导入
+# （不经过 llm.py），经 adapter 幂等初始化保证 harness/quick 独立入口不漏防。
+from finance_agent.llm.adapters.litellm_adapter import (  # noqa: E402
+    ensure_litellm_runtime,
+)
 
-litellm.disable_streaming_logging = True
+ensure_litellm_runtime()
 
 
 def _resolve_key(api_key: str | None) -> str:
@@ -41,49 +41,6 @@ def _resolve_key(api_key: str | None) -> str:
 
 def _is_deepseek(model: str) -> bool:
     return "deepseek" in model.lower()
-
-
-def _normalize_arguments_str(raw: Any) -> Any:
-    """把 tool_calls.arguments 规范化为合法 JSON 字符串。
-
-    GLM 等模型偶发输出单引号 Python 字面量（\"{'q': 'x'}\"），方舟等严格
-    端点回传时 400。合法 JSON 原样返回；Python 字面量经 literal_eval 重 dumps；
-    解析失败保留原值（不因清洗破坏请求）。
-    """
-    if not isinstance(raw, str):
-        return raw
-    try:
-        json.loads(raw)
-        return raw
-    except (json.JSONDecodeError, ValueError):
-        pass
-    try:
-        return json.dumps(ast.literal_eval(raw), ensure_ascii=False)
-    except (ValueError, SyntaxError):
-        return raw
-
-
-def _sanitize_messages_for_openai_compat(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """非 DeepSeek OpenAI 兼容端点的消息清洗：剥 reasoning_content + 规范化
-    tool_calls.arguments（详见 _build_kwargs 调用处注释）。"""
-    cleaned: list[dict[str, Any]] = []
-    for m in messages:
-        m = {k: v for k, v in m.items() if k != "reasoning_content"}
-        if m.get("tool_calls"):
-            m["tool_calls"] = [
-                {
-                    **tc,
-                    "function": {
-                        **tc.get("function", {}),
-                        "arguments": _normalize_arguments_str(
-                            tc.get("function", {}).get("arguments")
-                        ),
-                    },
-                }
-                for tc in m["tool_calls"]
-            ]
-        cleaned.append(m)
-    return cleaned
 
 
 def _normalize_tool_args(args: dict) -> dict:
@@ -215,13 +172,18 @@ class LiteLLMClient:
             kwargs["extra_body"] = {"thinking": {"type": effectiveThinking}}
         else:
             kwargs["temperature"] = temperature
-            # 非 DeepSeek 端点兼容清洗（方舟 GLM 实测）：
-            # 1) 拒绝 messages 里的 reasoning_content 字段 → 400；
-            # 2) tool_calls.arguments 必须是合法 JSON 字符串——GLM 自己会输出
-            #    单引号 Python 风格（\"{'query': ...}\"），原样回传被方舟自己的
-            #    严格校验拒收 → ReAct 多轮全灭 → quick/follow_up 空 report。
-            # DeepSeek 官方行为相反（要求原样回传），故仅非 DeepSeek 清洗。
-            kwargs["messages"] = _sanitize_messages_for_openai_compat(kwargs["messages"])
+            # 消息清洗收口 adapter（delta Task 2.1）：按 capability 决定
+            # reasoning 字段回传（方舟拒收 400 / DeepSeek 要求回传）+
+            # arguments 规范化（GLM 单引号字面量回传被拒 → ReAct 全灭，
+            # quick/follow_up 空 report 根因，见 incident 017）。
+            from finance_agent.llm.adapters.litellm_adapter import (
+                capability_for_model,
+                sanitize_messages_for_profile,
+            )
+
+            kwargs["messages"] = sanitize_messages_for_profile(
+                kwargs["messages"], capability_for_model(self.model)
+            )
 
         return kwargs
 
@@ -235,7 +197,9 @@ class LiteLLMClient:
         """流式聊天请求，yield LLMResponse 对象。"""
         from datetime import datetime
 
-        import litellm
+        # litellm 仅经 adapter 收口（delta 5.1）：acompletion 由 adapter 暴露，
+        # 使 grep 门禁（adapters 外禁 import litellm）可收紧 harness allowlist
+        from finance_agent.llm.adapters.litellm_adapter import raw_acompletion
 
         kwargs = self._build_kwargs(messages, tools, temperature, tool_choice)
         _start_time = datetime.now(UTC)
@@ -271,7 +235,7 @@ class LiteLLMClient:
             try:
                 current_tool_calls: dict[int, dict[str, Any]] = {}
 
-                response = await litellm.acompletion(**kwargs)
+                response = await raw_acompletion(**kwargs)
 
                 # per-chunk 超时保护：单个 chunk 超过 60 秒未到达则终止流
                 _chunk_iter = response.__aiter__()

@@ -1753,32 +1753,47 @@ async def list_models(req: ModelsRequest):
 
 @app.post("/api/llm-config/test")
 async def test_llm_config(req: LLMConfigRequest):
-    """用给定 llm_config 发送极简 LLM 请求（max_tokens=1），返回连通性测试结果。
+    """五项 capability probe（delta 4.2，设计档案 §16）：返回能力矩阵。
 
-    返回 success / latencyMs / model 或 success=false + error / errorType。
-    错误分类：auth / network / model_not_found / unknown。
+    升级自「极简 Hi 连通性」：同时探测 non_stream/stream/tool_call/
+    tool_followup/json_output，区分「能聊天」与「能跑 Agent」的假可用
+    profile。返回 capability + effective 配置 + warnings。
     """
     import time as _time
 
+    from finance_agent.llm.probes import run_live_probes
+
     cfg = _to_llm_config(req)
     startMs = _time.time()
-
+    usedModel = (cfg.model if cfg else None) or os.getenv("LLM_MODEL", "deepseek/deepseek-v4-pro")
     try:
-        from finance_agent.llm import call_llm
-
-        call_llm("Hi", max_tokens=1, llm_config=cfg)
-        latencyMs = int((_time.time() - startMs) * 1000)
-        # 解析最终使用的 model（cfg.model 或环境变量）
-        usedModel = (cfg.model if cfg else None) or os.getenv(
-            "LLM_MODEL", "deepseek/deepseek-v4-pro"
+        report = run_live_probes(
+            model=usedModel,
+            api_key=(cfg.apiKey if cfg else None) or None,
+            base_url=(cfg.baseUrl if cfg else None) or None,
         )
-        return {"success": True, "latencyMs": latencyMs, "model": usedModel}
-    except Exception as e:
+        latencyMs = int((_time.time() - startMs) * 1000)
+        return {
+            "success": (report.non_stream or report.error is None),
+            "latencyMs": latencyMs or report.latency_ms,
+            "model": usedModel,
+            "capability": {
+                "non_stream": report.non_stream,
+                "stream": report.stream,
+                "tool_call": report.tool_call,
+                "tool_followup": report.tool_followup,
+                "json_output": report.json_output,
+            },
+            "warnings": report.warnings,
+            "error": report.error,
+        }
+    except Exception as e:  # noqa: BLE001
         latencyMs = int((_time.time() - startMs) * 1000)
         errorType = _classify_llm_error(e)
         return {
             "success": False,
             "latencyMs": latencyMs,
+            "model": usedModel,
             "error": f"{type(e).__name__}: {e}",
             "errorType": errorType,
         }

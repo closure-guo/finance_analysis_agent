@@ -24,58 +24,12 @@ from dataclasses import dataclass
 
 import litellm
 
-litellm.drop_params = True
+# litellm 运行时防护收口 adapter（delta add-llm-provider-gateway Task 1.4）：
+# drop_params / disable_streaming_logging（incident 016 死锁防护）/
+# litellm-langfuse 兼容补丁统一在 adapter 初始化设置，本模块不再各自配置。
+from finance_agent.llm.adapters.litellm_adapter import ensure_litellm_runtime  # noqa: E402
 
-# 流式 logging 线程死锁防护（incident 016）：litellm 每个 chunk 向全局线程池提交
-# success logging，worker 内 asyncio.run 新建 ProactorEventLoop，Windows/Py3.14 的
-# _fallback_socketpair 并发竞态令线程永久卡在 accept() → 100 worker 全灭、退出时
-# join 挂死。项目 Langfuse 观测走自研 SDK（见下方 ADR-0015 段），未注册任何
-# litellm callback，禁用零功能损失。
-litellm.disable_streaming_logging = True
-
-# ── Langfuse 兼容性修复 ─────────────────────────────────────────────
-# litellm 1.85.x 与 langfuse 4.x 深度不兼容（version 属性、sdk_integration 参数、
-# langfuse_sdk_version 属性等多处不匹配）。未配置 LANGFUSE key 时 litellm 仍会在
-# function_setup / log_event 中尝试初始化，导致异常阻塞 LLM 调用。
-# 此处补丁：添加 version 属性 + 把所有 Langfuse logger 方法变成空操作。
-try:
-    import importlib.metadata
-
-    import langfuse
-
-    if not hasattr(langfuse, "version"):
-        _lf_ver = importlib.metadata.version("langfuse")
-        langfuse.version = type("version", (), {"__version__": _lf_ver})()
-except Exception:  # noqa: S110
-    pass
-
-
-def _lf_noop(self, *a, **kw):  # noqa: ARG001
-    """空操作 — 替换 Langfuse logger 的所有方法。"""
-    pass
-
-
-def _lf_noop_init(self, *a, **kw):  # noqa: ARG001
-    """空操作 __init__ — 设置必要属性避免其他方法报 AttributeError。"""
-    self.langfuse_sdk_version = "4.13.0"
-    self.Langfuse = None
-    self.langfuse_client = None
-
-
-for _cls_path in (
-    "litellm.integrations.langfuse.langfuse.LangFuseLogger",
-    "litellm.integrations.langfuse.langfuse_prompt_management.LangfusePromptManagement",
-):
-    try:
-        _parts = _cls_path.rsplit(".", 1)
-        _mod = __import__(_parts[0], fromlist=[_parts[1]])
-        _cls = getattr(_mod, _parts[1])
-        _cls.__init__ = _lf_noop_init
-        for _method in ("log_event_on_langfuse", "_log_langfuse_v2", "_log_langfuse_v1"):
-            if hasattr(_cls, _method):
-                setattr(_cls, _method, _lf_noop)
-    except Exception:  # noqa: S110
-        pass
+ensure_litellm_runtime()
 
 # ── Langfuse 可观测性（ADR-0015）───────────────────────────────────
 # LLM 调用细节改由 start_as_current_observation 在 call_llm 三入口包裹，

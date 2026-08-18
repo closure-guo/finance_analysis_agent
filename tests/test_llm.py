@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_basic(mock_completion):
     mock_resp = MagicMock()
     mock_resp.choices[0].message.content = "分析结果"
@@ -20,7 +20,7 @@ def test_call_llm_basic(mock_completion):
     assert call_kwargs["messages"][1]["content"] == "测试 prompt"
 
 
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_no_system(mock_completion):
     mock_resp = MagicMock()
     mock_resp.choices[0].message.content = "ok"
@@ -34,7 +34,7 @@ def test_call_llm_no_system(mock_completion):
     assert call_kwargs["messages"][0]["role"] == "user"
 
 
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_env_model(mock_completion):
     mock_resp = MagicMock()
     mock_resp.choices[0].message.content = "ok"
@@ -51,7 +51,7 @@ def test_call_llm_env_model(mock_completion):
     assert call_kwargs["api_key"] == "sk-test"
 
 
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_param_api_key_overrides_env(mock_completion):
     """传入 api_key 参数时优先使用，忽略环境变量。"""
     mock_resp = MagicMock()
@@ -66,7 +66,7 @@ def test_call_llm_param_api_key_overrides_env(mock_completion):
     assert call_kwargs["api_key"] == "sk-param-value"
 
 
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_no_api_key_no_env(mock_completion):
     """api_key 参数和 env 都没有时，不传 api_key 给 litellm。"""
     mock_resp = MagicMock()
@@ -260,7 +260,7 @@ def test_build_kwargs_none_config_with_tools():
 
 def test_call_llm_llm_config_model_override():
     """call_llm 的 llm_config.model 覆盖 quick/非 quick model 解析。"""
-    with patch("finance_agent.llm.litellm.completion") as mock_completion:
+    with patch("finance_agent.llm.legacy.litellm.completion") as mock_completion:
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "ok"
         mock_completion.return_value = mock_resp
@@ -313,8 +313,8 @@ def test_build_kwargs_no_auto_prefix_when_no_base_url():
 # ── agent-trace-content-fidelity Task 2: reasoning 落 generation output ──
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_writes_reasoning_to_output(mock_completion, mock_get_langfuse):
     """call_llm 把 message.reasoning_content 写入 generation output.reasoning。"""
     mock_resp = MagicMock()
@@ -342,8 +342,8 @@ def test_call_llm_writes_reasoning_to_output(mock_completion, mock_get_langfuse)
     assert call_kwargs["output"]["reasoning"] == "思考过程"
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_stream_writes_reasoning_to_output(mock_completion, mock_get_langfuse):
     """call_llm_stream 累加 reasoning_content 并写入 generation output.reasoning。"""
 
@@ -391,8 +391,8 @@ def test_call_llm_stream_writes_reasoning_to_output(mock_completion, mock_get_la
 # ── agent-trace-content-fidelity Task 3: call_llm_with_tools tool_calls 落 output ──
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_with_tools_writes_tool_calls_to_output(mock_completion, mock_get_langfuse):
     """call_llm_with_tools 把 message.tool_calls 写入 generation output.tool_calls。"""
     mock_resp = MagicMock()
@@ -433,8 +433,8 @@ def test_call_llm_with_tools_writes_tool_calls_to_output(mock_completion, mock_g
     assert call_kwargs["output"]["reasoning"] == "为何调用此工具"
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_with_tools_empty_tool_calls_list(mock_completion, mock_get_langfuse):
     """无 tool_calls 时 output 不含 tool_calls 字段（与 chat_stream 文本分支一致）。"""
     mock_resp = MagicMock()
@@ -466,9 +466,9 @@ def test_call_llm_with_tools_empty_tool_calls_list(mock_completion, mock_get_lan
 # ── Task 3 fix: 降级路径经 open_span 记录 tool_calls（spec「降级路径同样记录」）──
 
 
-@patch("finance_agent.llm.open_span")
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.open_span")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_with_tools_degraded_records_via_open_span(
     mock_completion, mock_get_langfuse, mock_open_span
 ):
@@ -522,9 +522,9 @@ def test_call_llm_with_tools_degraded_records_via_open_span(
     assert out["tool_calls"] == [{"name": "web_search", "arguments": '{"q":"茅台"}'}]
 
 
-@patch("finance_agent.llm.open_span")
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy.open_span")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_with_tools_degraded_noop_without_error(
     mock_completion, mock_get_langfuse, mock_open_span
 ):
@@ -558,8 +558,8 @@ def test_call_llm_with_tools_degraded_noop_without_error(
 # ── agent-trace-content-fidelity Task 4: prompt_name/version 挂 generation metadata ──
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
     """call_llm 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
     mock_resp = MagicMock()
@@ -585,8 +585,8 @@ def test_call_llm_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
     assert call_kwargs["metadata"]["prompt_version"] == 3
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_omits_metadata_when_prompt_unset(mock_completion, mock_get_langfuse):
     """call_llm 未传 prompt_name/prompt_version 时 metadata 不含这两个键（向后兼容）。"""
     mock_resp = MagicMock()
@@ -613,8 +613,8 @@ def test_call_llm_omits_metadata_when_prompt_unset(mock_completion, mock_get_lan
     assert "prompt_version" not in md
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_stream_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
     """call_llm_stream 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
 
@@ -649,8 +649,8 @@ def test_call_llm_stream_attaches_prompt_metadata(mock_completion, mock_get_lang
     assert call_kwargs["metadata"]["prompt_version"] == "local"
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_with_tools_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
     """call_llm_with_tools 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
     mock_resp = MagicMock()
@@ -695,8 +695,8 @@ def _mock_langfuse_for_naming(mock_get_langfuse):
     return mockLf
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_named_by_agent(mock_completion, mock_get_langfuse):
     """call_llm 传 agent 时 observation name 用 agent 名而非 litellm:{model}。"""
     mock_resp = MagicMock()
@@ -714,8 +714,8 @@ def test_call_llm_named_by_agent(mock_completion, mock_get_langfuse):
     assert kwargs["metadata"]["agent"] == "technical_analyst"
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_default_name_without_agent(mock_completion, mock_get_langfuse):
     """未传 agent 时 observation name 退化为 litellm:{model}（向后兼容）。"""
     mock_resp = MagicMock()
@@ -733,8 +733,8 @@ def test_call_llm_default_name_without_agent(mock_completion, mock_get_langfuse)
     assert "agent" not in kwargs["metadata"]
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_metadata_omits_missing_fields(mock_completion, mock_get_langfuse):
     """session_id/stock_code 未提供时 metadata 省略对应键；提供时写入。"""
     mock_resp = MagicMock()
@@ -756,8 +756,8 @@ def test_call_llm_metadata_omits_missing_fields(mock_completion, mock_get_langfu
     assert md2 == {"agent": "trader"}
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_stream_named_by_agent(mock_completion, mock_get_langfuse):
     """call_llm_stream 传 agent 时 observation name 用 agent 名。"""
 
@@ -780,8 +780,8 @@ def test_call_llm_stream_named_by_agent(mock_completion, mock_get_langfuse):
     assert kwargs["name"] == "trader"
 
 
-@patch("finance_agent.llm._get_langfuse")
-@patch("finance_agent.llm.litellm.completion")
+@patch("finance_agent.llm.legacy._get_langfuse")
+@patch("finance_agent.llm.legacy.litellm.completion")
 def test_call_llm_with_tools_named_by_agent(mock_completion, mock_get_langfuse):
     """call_llm_with_tools 传 agent 时 observation name 用 agent 名。"""
     mock_resp = MagicMock()

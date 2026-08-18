@@ -382,6 +382,12 @@ class Agent:
                             _safe_end, _dsml_found = _safe_think_len(
                                 assistant_text, _streamed_answer_len
                             )
+                            # action 文本协议块（delta 3.5）同样不流式：
+                            # 留待 parsing 阶段经 _parse_action_from_text 还原后清理下发
+                            _act_start = assistant_text.find("<action", _streamed_answer_len)
+                            if _act_start != -1:
+                                _safe_end = min(_safe_end, _act_start)
+                                _dsml_found = _dsml_found or True
                             if _safe_end > _streamed_answer_len:
                                 yield StreamEvent.answer(
                                     assistant_text[_streamed_answer_len:_safe_end]
@@ -410,6 +416,17 @@ class Agent:
                         if _streamed_answer_len < len(assistant_text):
                             yield StreamEvent.answer(assistant_text[_streamed_answer_len:])
                         _streamed_answer_len = len(assistant_text)
+                    else:
+                        # action 文本协议兜底（delta 3.5）：弱工具 provider 用
+                        # <action name=...> 输出工具调用，native/DSML 均未命中时解析
+                        action_calls, action_cleaned = _parse_action_from_text(assistant_text)
+                        if action_calls:
+                            dsml_count += 1  # 复用「文本还原工具调用」计数/上报
+                            pending_tool_calls = action_calls
+                            assistant_text = action_cleaned
+                            if _streamed_answer_len < len(assistant_text):
+                                yield StreamEvent.answer(assistant_text[_streamed_answer_len:])
+                            _streamed_answer_len = len(assistant_text)
 
                 # ── 无工具调用但有文本 -> 检查是否应该继续调用工具 ──
                 if assistant_text and not pending_tool_calls:
@@ -742,3 +759,27 @@ def create_agent(
         agent.tools.register_all_builtins()
 
     return agent
+
+
+def _parse_action_from_text(text: str) -> tuple[list[ToolCallRequest], str]:
+    """从文本防御性解析 action 文本协议工具调用（delta 3.5，设计档案 §12）。
+
+    弱工具 provider（capability.tools=none）降级协议：
+    <action name="search_stock">{"query":"茅台"}</action> → ToolCallRequest。
+    与 DSML 解析并列：native tool_calls → DSML → action 三级兜底。
+    若无 action 标记，返回 ([], 原文本)。
+    """
+    from finance_agent.llm.action_protocol import extract_action, is_action_block
+
+    if not is_action_block(text):
+        return [], text
+    tc = extract_action(text)
+    if tc is None:
+        return [], text
+    # 清理 action 块，避免协议标记泄漏给用户
+    import re as _re
+
+    cleaned = _re.sub(
+        r"<action\s+name=[\"'][^\"']+[\"']\s*>.*?</action>", "", text, flags=_re.DOTALL
+    )
+    return [tc], cleaned.strip()

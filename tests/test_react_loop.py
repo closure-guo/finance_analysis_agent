@@ -357,3 +357,53 @@ def _make_tool_call(name: str, arguments: dict):
     from finance_agent.harness.types import ToolCallRequest
 
     return ToolCallRequest(id="mock-1", name=name, arguments=arguments)
+
+
+class TestActionProtocolIntegration:
+    """action 文本协议集成（delta 3.5）：弱工具 provider 的 <action> 兜底。
+
+    与 DSML 并列的第三级兜底：native tool_calls → DSML → action。
+    标记不泄漏给用户；工具真实执行。
+    """
+
+    @pytest.mark.asyncio
+    async def test_action_block_parsed_and_executed(self, echo_tool):
+        """LLM 输出 <action name="echo"> 块 → 解析为工具调用并执行。"""
+        from finance_agent.harness.loop import _parse_action_from_text
+
+        action = '<action name="echo">{"text": "你好"}</action>'
+        calls, cleaned = _parse_action_from_text(f"让我先测试一下 {action}")
+        assert len(calls) == 1
+        assert calls[0].name == "echo"
+        assert calls[0].arguments == {"text": "你好"}
+        assert "action" not in cleaned  # 标记清理，不泄漏
+
+    @pytest.mark.asyncio
+    async def test_action_roundtrip_in_agent_loop(self, echo_tool):
+        """agent 全流程：action 块执行工具 → 第二轮正常回答。"""
+        from finance_agent.harness.llm_client import LLMResponse
+        from finance_agent.harness.loop import ActionType
+
+        action = '<action name="echo">{"text": "你好"}</action>'
+        mock_llm = MockLLMClient(
+            [
+                [LLMResponse(text_delta=action, is_finished=True)],
+                [LLMResponse(text_delta="已执行完成", is_finished=True)],
+            ]
+        )
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=5,
+            llm=mock_llm,
+        )
+        agent.tools.register(echo_tool, name="echo")
+        events = [e async for e in agent.run("请测试")]
+
+        # 工具真实执行（echo 返回参数）
+        assert any(e.event_type == ActionType.TOOL_CALL for e in events)
+        final_answer = "".join(e.content for e in events if e.event_type == ActionType.ANSWER)
+        assert "已执行完成" in final_answer
+        # action 块本身不泄漏为答案
+        assert "<action" not in final_answer

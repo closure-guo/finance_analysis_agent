@@ -138,10 +138,26 @@ def test_list_models_connection_error():
 # ── 4.12: POST /api/llm-config/test ──
 
 
+def _mock_probe_report(*, error=None, **cap):
+    from finance_agent.llm.probes import ProbeReport
+
+    defaults = {
+        "non_stream": True,
+        "stream": True,
+        "tool_call": True,
+        "tool_followup": True,
+        "json_output": True,
+        "latency_ms": 50,
+        "warnings": [],
+    }
+    defaults.update(cap)
+    return ProbeReport(error=error, **defaults)
+
+
 def test_test_llm_config_success():
-    """POST /api/llm-config/test 成功返回 success + latencyMs + model。"""
-    with patch("finance_agent.llm.call_llm") as mock_call:
-        mock_call.return_value = "ok"
+    """POST /api/llm-config/test 升级后返回 capability 矩阵。"""
+    with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+        mock_probe.return_value = _mock_probe_report()
         with TestClient(app) as client:
             resp = client.post(
                 "/api/llm-config/test",
@@ -156,82 +172,37 @@ def test_test_llm_config_success():
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True
-    assert data["latencyMs"] >= 0
+    assert data["capability"]["tool_call"] is True
+    assert data["capability"]["json_output"] is True
     assert data["model"] == "deepseek/deepseek-chat"
-    # 验证 call_llm 被调用且传入 llm_config
-    mock_call.assert_called_once()
-    call_kwargs = mock_call.call_args[1]
-    assert call_kwargs["llm_config"] is not None
-    assert call_kwargs["llm_config"].model == "deepseek/deepseek-chat"
+    mock_probe.assert_called_once()
+    kw = mock_probe.call_args[1]
+    assert kw["model"] == "deepseek/deepseek-chat"
 
 
-def test_test_llm_config_auth_error():
-    """认证失败时返回 success=false + errorType=auth。"""
-    with patch("finance_agent.llm.call_llm") as mock_call:
-        mock_call.side_effect = AuthenticationError("Invalid API key")
+def test_test_llm_config_chat_only_capability():
+    """能聊天但无工具能力 → success 但 capability.tool_call=false。"""
+    with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+        mock_probe.return_value = _mock_probe_report(
+            tool_call=False, tool_followup=False, warnings=["tool_choice_required_unsupported"]
+        )
         with TestClient(app) as client:
-            resp = client.post(
-                "/api/llm-config/test",
-                json={"apiKey": "sk-invalid"},
-            )
+            data = client.post("/api/llm-config/test", json={"apiKey": "sk-test"}).json()
+    assert data["success"] is True
+    assert data["capability"]["tool_call"] is False
+    assert "tool_choice_required_unsupported" in data["warnings"]
 
-    assert resp.status_code == 200
-    data = resp.json()
+
+def test_test_llm_config_error_report():
+    """probe 内部错误 → success=false + error 字段。"""
+    with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+        mock_probe.return_value = _mock_probe_report(
+            error="openai.AuthenticationError: Invalid API key", non_stream=False
+        )
+        with TestClient(app) as client:
+            data = client.post("/api/llm-config/test", json={"apiKey": "sk-invalid"}).json()
     assert data["success"] is False
-    assert data["errorType"] == "auth"
     assert "AuthenticationError" in data["error"]
-
-
-def test_test_llm_config_network_error():
-    """网络错误时返回 success=false + errorType=network。"""
-    with patch("finance_agent.llm.call_llm") as mock_call:
-        mock_call.side_effect = ConnectionError("Connection refused")
-        with TestClient(app) as client:
-            resp = client.post("/api/llm-config/test", json={"baseUrl": "https://invalid.com"})
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["errorType"] == "network"
-
-
-def test_test_llm_config_timeout_error():
-    """超时错误时返回 success=false + errorType=network。"""
-    with patch("finance_agent.llm.call_llm") as mock_call:
-        mock_call.side_effect = TimeoutError("Request timed out")
-        with TestClient(app) as client:
-            resp = client.post("/api/llm-config/test", json={})
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["errorType"] == "network"
-
-
-def test_test_llm_config_model_not_found():
-    """模型不存在时返回 success=false + errorType=model_not_found。"""
-    with patch("finance_agent.llm.call_llm") as mock_call:
-        mock_call.side_effect = NotFoundError("Model not found")
-        with TestClient(app) as client:
-            resp = client.post("/api/llm-config/test", json={"model": "invalid/model"})
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["errorType"] == "model_not_found"
-
-
-def test_test_llm_config_unknown_error():
-    """未知错误时返回 success=false + errorType=unknown。"""
-    with patch("finance_agent.llm.call_llm") as mock_call:
-        mock_call.side_effect = RuntimeError("Unexpected error")
-        with TestClient(app) as client:
-            resp = client.post("/api/llm-config/test", json={})
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["errorType"] == "unknown"
 
 
 # ── 4.9: AnalyzeRequest / ChatRequest 携带 llm_config 不报错 ──
