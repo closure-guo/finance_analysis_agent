@@ -20,8 +20,9 @@
 
 [ ] 全部通过，可 archive — 须待端到端跑批结果 + 5.1 薄壳转调收口
 [x] 待确认项：
-1. **5.1 薄壳转调**（legacy/harness → gateway 完整流转调 + 门禁收窄）未完成——
-   涉及生产主链路（quick/follow_up）大改，需独立验证轮 + 真实调用对拍
+1. **5.1 薄壳转调**：A（complete_stream Canonical 对接）+ B1（Langfuse 观测收口）已完成；
+   剩 B2（`call_llm_streaming` 转调，牵动全部管线节点调用 + 受影响测试迁移 mock 目标 + 双路径对拍）
+   与 C（harness loop → CanonicalEvent），需独立验证轮 + 真实 quick 调用对拍
 2. **4.2 前端设置页能力矩阵展示** 未实现（仅后端端点升级返回 capability 矩阵；
    前端消费为增量）
 3. 端到端评估跑批（后台执行中）结果待核对（judge_failures=0 + 四 rubric 不回退）
