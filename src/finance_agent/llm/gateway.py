@@ -92,12 +92,17 @@ def complete_stream(
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
     llm_config: dict[str, Any] | None = None,
+    trace: dict[str, Any] | None = None,
 ):
     """统一流式 complete 入口（delta 5.1）：yield CanonicalEvent。
 
     Agent 核心消费归一事件流（reasoning/text/finished/error），不感知
     provider 细节。对接 litellm 同步流 chunk（choices[0].delta:
     reasoning_content -> reasoning；content -> text）。
+
+    ``trace``（可选）开启 Langfuse generation 观测：``{"name","metadata"}``。
+    观测收口在 gateway（自 legacy.call_llm_stream 移植），调用方传入
+    观测元数据，core 不直接触 Langfuse；不传则不观测（纯净接口）。
     """
     from finance_agent.llm.types import CanonicalEvent
 
@@ -110,6 +115,29 @@ def complete_stream(
         normalize_exception,
         raw_stream,
     )
+
+    # Langfuse observation（可选）：观测收口（B1），结束前 update 根 span
+    # output（incident #67：root span output 必须在 span exit/flush 前写）。
+    _lf = None
+    _gen_cm = None
+    _gen = None
+    if trace:
+        from finance_agent.langfuse_tracing import get_langfuse
+
+        _lf = get_langfuse()
+        if _lf is not None:
+            try:
+                _gen_cm = _lf.start_as_current_observation(
+                    as_type="generation",
+                    name=trace.get("name") or f"litellm:{profile.model}",
+                    model=profile.model,
+                    input={"messages": messages},
+                    metadata=trace.get("metadata") or {},
+                )
+                _gen = _gen_cm.__enter__()
+            except Exception:  # noqa: S110 -- 观测失败不阻断业务
+                _gen = None
+                _gen_cm = None
 
     budget = derive_output_budget(profile.capability, requested=max_tokens)
     try:
@@ -124,15 +152,25 @@ def complete_stream(
         )
         saw_text = False
         finish = None
+        _answer = ""
+        _reasoning = ""
+        _last_usage = None
         for chunk in stream:
             choice = chunk.choices[0]
             delta = choice.delta
             finish = getattr(choice, "finish_reason", None) or finish
             if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                yield CanonicalEvent(kind="reasoning", reasoning=str(delta.reasoning_content))
+                rc = str(delta.reasoning_content)
+                _reasoning += rc
+                yield CanonicalEvent(kind="reasoning", reasoning=rc)
             if delta and getattr(delta, "content", None):
+                ct = str(delta.content)
+                _answer += ct
                 saw_text = True
-                yield CanonicalEvent(kind="text", text=str(delta.content))
+                yield CanonicalEvent(kind="text", text=ct)
+            if getattr(chunk, "usage", None):
+                _last_usage = chunk.usage
+        _finalize_observation(_gen, _answer, _reasoning, _last_usage)
         try:
             classify_outcome(finish, saw_text_delta=saw_text)
         except Exception as exc:  # noqa: BLE001
@@ -142,7 +180,41 @@ def complete_stream(
             return
         yield CanonicalEvent(kind="finished", finish_reason=finish)
     except Exception as exc:  # noqa: BLE001
+        _finalize_observation(_gen, _answer, _reasoning, _last_usage)
         err = normalize_exception(exc)
         yield CanonicalEvent(
             kind="error", finish_reason=type(err).__name__, raw={"error": str(err)}
         )
+    finally:
+        if _gen_cm is not None:
+            from contextlib import suppress
+
+            with suppress(Exception):
+                _gen_cm.__exit__(None, None, None)
+
+
+def _finalize_observation(gen, answer: str, reasoning: str, last_usage) -> None:
+    """写 Langfuse generation output/usage（自 legacy 移植；无观测则 no-op）。
+
+    incident #67：root span output 必须在 span exit/flush 前写，否则被丢弃。
+    """
+    if gen is None:
+        return
+    try:
+        from finance_agent.langfuse_tracing import truncate_for_trace
+
+        _ud = {}
+        if last_usage is not None:
+            _ud = {
+                "input": getattr(last_usage, "prompt_tokens", 0) or 0,
+                "output": getattr(last_usage, "completion_tokens", 0) or 0,
+            }
+        gen.update(
+            output={
+                "answer": truncate_for_trace(answer),
+                "reasoning": truncate_for_trace(reasoning),
+            },
+            usage_details=_ud,
+        )
+    except Exception:  # noqa: S110 -- 观测失败不阻断业务
+        pass

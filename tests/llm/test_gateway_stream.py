@@ -65,3 +65,47 @@ class TestCompleteStream:
 
 def sets_all_text(events):
     return "".join(e.text for e in events if e.kind == "text")
+
+
+class TestCompleteStreamObservation:
+    def test_trace_updates_generation(self, monkeypatch):
+        """观测收口：传 trace 时 generation 结束前 update answer/reasoning。"""
+        updated = {}
+
+        class _FakeObs:
+            def update(self, **kw):
+                updated.update(kw)
+
+        class _FakeCM:
+            def __enter__(self):
+                return _FakeObs()
+
+            def __exit__(self, *a):
+                return False
+
+        got = {}
+
+        class _FakeLF:
+            def start_as_current_observation(self, **kw):
+                got["name"] = kw.get("name")
+                got["metadata"] = kw.get("metadata")
+                return _FakeCM()
+
+        monkeypatch.setattr("finance_agent.langfuse_tracing.get_langfuse", lambda: _FakeLF())
+
+        def fake_stream(**kwargs):  # noqa: ARG001
+            yield _chunk(reasoning="思")
+            yield _chunk(text="答", finish="stop")
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+        events = list(
+            complete_stream(
+                [{"role": "user", "content": "hi"}],
+                llm_config={"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+                trace={"name": "react_agent", "metadata": {"agent": "react"}},
+            )
+        )
+        assert any(e.kind == "text" for e in events)
+        assert got["name"] == "react_agent"
+        assert updated["output"]["answer"] == "答"
+        assert updated["output"]["reasoning"] == "思"
