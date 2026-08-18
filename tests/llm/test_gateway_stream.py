@@ -7,10 +7,9 @@ complete_stream / complete_with_tools 是 legacy 转调 gateway 的前提。
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from finance_agent.llm.gateway import complete_stream
-
-
-from types import SimpleNamespace, MethodType
 
 
 def _chunk(*, text: str = "", reasoning: str = "", finish: str | None = None):

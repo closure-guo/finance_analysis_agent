@@ -105,11 +105,11 @@ def complete_stream(
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (
+        classify_outcome,
         derive_output_budget,
         normalize_exception,
         raw_stream,
     )
-    from finance_agent.llm.adapters.litellm_adapter import classify_outcome
 
     budget = derive_output_budget(profile.capability, requested=max_tokens)
     try:

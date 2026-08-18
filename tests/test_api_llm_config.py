@@ -141,15 +141,15 @@ def test_list_models_connection_error():
 def _mock_probe_report(*, error=None, **cap):
     from finance_agent.llm.probes import ProbeReport
 
-    defaults = dict(
-        non_stream=True,
-        stream=True,
-        tool_call=True,
-        tool_followup=True,
-        json_output=True,
-        latency_ms=50,
-        warnings=[],
-    )
+    defaults = {
+        "non_stream": True,
+        "stream": True,
+        "tool_call": True,
+        "tool_followup": True,
+        "json_output": True,
+        "latency_ms": 50,
+        "warnings": [],
+    }
     defaults.update(cap)
     return ProbeReport(error=error, **defaults)
 
