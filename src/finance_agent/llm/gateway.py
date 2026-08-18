@@ -95,15 +95,21 @@ def complete_stream(
 ):
     """统一流式 complete 入口（delta 5.1）：yield CanonicalEvent。
 
-    - text: 正文增量；reasoning: 思考增量；finished：流结束（带 finish_reason）；
-      error：归一化 typed error。
-    本骨架的 chunk 语义由 adapter.raw_stream 产出聚合；实际 chunk 结构
-    在 legacy 流式转移时统一为 CanonicalEvent（当前 minimal 形态）。
+    Agent 核心消费归一事件流（reasoning/text/finished/error），不感知
+    provider 细节。对接 litellm 同步流 chunk（choices[0].delta:
+    reasoning_content -> reasoning；content -> text）。
     """
+    from finance_agent.llm.types import CanonicalEvent
+
     profile = resolve_profile(purpose=purpose, llm_config=llm_config)
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
-    from finance_agent.llm.adapters.litellm_adapter import derive_output_budget, raw_stream
+    from finance_agent.llm.adapters.litellm_adapter import (
+        derive_output_budget,
+        normalize_exception,
+        raw_stream,
+    )
+    from finance_agent.llm.adapters.litellm_adapter import classify_outcome
 
     budget = derive_output_budget(profile.capability, requested=max_tokens)
     try:
@@ -119,34 +125,20 @@ def complete_stream(
         saw_text = False
         finish = None
         for chunk in stream:
-            # 兼容不同 chunk 形态：项优先取 content/delta，其次 choice delta
-            delta = ""
-            reasoning = ""
-            finish = getattr(chunk, "finish", None) or finish
-            if hasattr(chunk, "delta"):
-                delta = chunk.delta or ""
-            if hasattr(chunk, "reasoning"):
-                reasoning = chunk.reasoning or ""
-            if delta:
+            choice = chunk.choices[0]
+            delta = choice.delta
+            finish = getattr(choice, "finish_reason", None) or finish
+            if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                yield CanonicalEvent(kind="reasoning", reasoning=str(delta.reasoning_content))
+            if delta and getattr(delta, "content", None):
                 saw_text = True
-                yield {"kind": "text", "text": delta, "reasoning": "", "tool_call": None,
-                       "finish_reason": None, "usage": None, "raw": None}
-            if reasoning:
-                yield {"kind": "reasoning", "text": "", "reasoning": reasoning,
-                       "tool_call": None, "finish_reason": None, "usage": None, "raw": None}
-        from finance_agent.llm.adapters.litellm_adapter import classify_outcome
-
+                yield CanonicalEvent(kind="text", text=str(delta.content))
         try:
             classify_outcome(finish, saw_text_delta=saw_text)
         except Exception as exc:  # noqa: BLE001
-            yield {"kind": "error", "text": "", "reasoning": "", "tool_call": None,
-                   "finish_reason": str(exc), "usage": None, "raw": str(exc)}
+            yield CanonicalEvent(kind="error", finish_reason=type(exc).__name__, raw={"error": str(exc)})
             return
-        yield {"kind": "finished", "text": "", "reasoning": "", "tool_call": None,
-               "finish_reason": finish, "usage": None, "raw": None}
+        yield CanonicalEvent(kind="finished", finish_reason=finish)
     except Exception as exc:  # noqa: BLE001
-        from finance_agent.llm.adapters.litellm_adapter import normalize_exception
-
         err = normalize_exception(exc)
-        yield {"kind": "error", "text": "", "reasoning": "", "tool_call": None,
-               "finish_reason": type(err).__name__, "usage": None, "raw": str(err)}
+        yield CanonicalEvent(kind="error", finish_reason=type(err).__name__, raw={"error": str(err)})
