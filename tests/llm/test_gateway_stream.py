@@ -52,7 +52,13 @@ class TestCompleteStream:
             yield _chunk(text="答", finish="stop")
 
         monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
-        kinds = [e.kind for e in complete_stream([{"role": "user", "content": "hi"}], llm_config={"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"})]
+        kinds = [
+            e.kind
+            for e in complete_stream(
+                [{"role": "user", "content": "hi"}],
+                llm_config={"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+            )
+        ]
         assert "reasoning" in kinds
         assert "text" in kinds
 

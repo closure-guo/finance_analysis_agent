@@ -136,9 +136,13 @@ def complete_stream(
         try:
             classify_outcome(finish, saw_text_delta=saw_text)
         except Exception as exc:  # noqa: BLE001
-            yield CanonicalEvent(kind="error", finish_reason=type(exc).__name__, raw={"error": str(exc)})
+            yield CanonicalEvent(
+                kind="error", finish_reason=type(exc).__name__, raw={"error": str(exc)}
+            )
             return
         yield CanonicalEvent(kind="finished", finish_reason=finish)
     except Exception as exc:  # noqa: BLE001
         err = normalize_exception(exc)
-        yield CanonicalEvent(kind="error", finish_reason=type(err).__name__, raw={"error": str(err)})
+        yield CanonicalEvent(
+            kind="error", finish_reason=type(err).__name__, raw={"error": str(err)}
+        )
