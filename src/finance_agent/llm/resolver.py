@@ -18,7 +18,14 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from finance_agent.llm.registry import _PRESETS, ModelProfile, get_profile_preset
+from finance_agent.llm.registry import (
+    _PRESETS,
+    DEFAULT_PROVIDER_OPTIONS,
+    PROVIDER_OPTIONS_SCHEMAS,
+    REQUEST_OVERRIDABLE,
+    ModelProfile,
+    get_profile_preset,
+)
 from finance_agent.llm.types import Purpose
 
 # registry 已知 provider（model 前缀白名单）
@@ -64,6 +71,54 @@ def _resolve_from_env(
     return model, base_url, api_key
 
 
+def _validate_options(provider: str, options: dict[str, Any]) -> dict[str, Any]:
+    """有 schema 的 provider 走 pydantic 校验（未知 key / 非法值显式报错）。"""
+    schema = PROVIDER_OPTIONS_SCHEMAS.get(provider)
+    if schema is not None:
+        schema.model_validate(options)
+    return options
+
+
+def _provider_options_from_request(provider: str, llm_config: dict[str, Any]) -> dict[str, Any]:
+    """请求级合并（§7.1）：registry defaults < llm_config 白名单字段。
+
+    白名单来源两处：顶层白名单键（如 ``thinking``）+ 可选 ``provider_options``
+    dict；白名单外的 key 抛 ValueError 家族，禁止请求级覆盖受管配置。
+    """
+    merged = dict(DEFAULT_PROVIDER_OPTIONS.get(provider, {}))
+    whitelist = REQUEST_OVERRIDABLE.get(provider, set())
+    for key in whitelist:
+        if key in llm_config:
+            merged[key] = llm_config[key]
+    raw = llm_config.get("provider_options")
+    if raw is not None:
+        if not isinstance(raw, dict):
+            raise IncompleteLLMConfigError("llm_config.provider_options 必须是 dict")
+        for key, value in raw.items():
+            if key not in whitelist:
+                raise IncompleteLLMConfigError(
+                    f"provider_options 键 '{key}' 不在 {provider} 请求级白名单 "
+                    f"{sorted(whitelist)} —— 禁止请求级覆盖受管 provider 配置"
+                )
+            merged[key] = value
+    return _validate_options(provider, merged)
+
+
+def _provider_options_from_env(env: Mapping[str, str], model: str) -> dict[str, Any]:
+    """环境变量分支（§7.1）：deepseek 模型 → registry defaults + LLM_* 覆盖。"""
+    if not model.startswith("deepseek/"):
+        return {}
+    merged = dict(DEFAULT_PROVIDER_OPTIONS.get("deepseek", {}))
+    for key, env_key in (
+        ("thinking", "LLM_THINKING"),
+        ("reasoning_effort", "LLM_REASONING_EFFORT"),
+    ):
+        value = env.get(env_key, "")
+        if value:
+            merged[key] = value
+    return _validate_options("deepseek", merged)
+
+
 def resolve_profile(
     *,
     purpose: Purpose = "deep",
@@ -92,14 +147,16 @@ def resolve_profile(
                 f"apiKey={'有' if api_key else '缺'}）——禁止与环境变量混搭成半套配置"
             )
         model = _ensure_prefix(model, base_url)
+        provider = model.split("/", 1)[0]
         return ModelProfile(
             name=f"request:{model}",
-            provider=model.split("/", 1)[0],
+            provider=provider,
             model=model,
             base_url=base_url,
             api_key=api_key,
             capability=_PRESETS["openai-compatible"].capability,
             default_params={},
+            provider_options=_provider_options_from_request(provider, llm_config),
         )
 
     # 2. 命名 preset
@@ -139,6 +196,7 @@ def resolve_profile(
             api_key=api_key,
             capability=base.capability,
             default_params={},
+            provider_options=_provider_options_from_env(env, model),
         )
     if not base_url or not api_key:
         raise IncompleteLLMConfigError(
@@ -159,4 +217,5 @@ def resolve_profile(
         api_key=api_key,
         capability=cap,
         default_params={},
+        provider_options=_provider_options_from_env(env, model),
     )

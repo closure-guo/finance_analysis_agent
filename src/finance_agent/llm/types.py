@@ -58,6 +58,9 @@ class ModelProfile:
     api_key: str | None
     capability: Capability
     default_params: dict[str, Any] = field(default_factory=dict)
+    # provider 特有配置（设计档案 §7.1）：thinking/reasoning_effort 等，
+    # 消费只发生在 adapter，业务代码零 provider 分支
+    provider_options: dict[str, Any] = field(default_factory=dict)
     fallback: tuple[str, ...] = ()
 
 

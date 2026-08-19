@@ -9,7 +9,40 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
 from finance_agent.llm.types import Capability, ModelProfile
+
+
+class DeepSeekOptions(BaseModel):
+    """deepseek provider_options schema（设计档案 §7.1 示例）。
+
+    pydantic 默认拒绝未知 key（extra=ignore 不是本项目的语义——
+    未知配置项必须显式报错，禁止静默吞掉）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    thinking: Literal["enabled", "disabled"] | None = None
+    reasoning_effort: Literal["low", "high", "max"] | None = None
+
+
+# provider_options 校验 schema（§7.1 registry 静态三件套之一）
+PROVIDER_OPTIONS_SCHEMAS: dict[str, type[BaseModel]] = {
+    "deepseek": DeepSeekOptions,
+}
+
+# provider 静态默认 options（对齐 legacy deep 分支行为）
+DEFAULT_PROVIDER_OPTIONS: dict[str, dict] = {
+    "deepseek": {"thinking": "enabled", "reasoning_effort": "max"},
+}
+
+# 请求级 llm_config 允许覆盖的白名单；未登记 provider 请求级不可覆盖
+REQUEST_OVERRIDABLE: dict[str, set[str]] = {
+    "deepseek": {"thinking", "reasoning_effort"},
+}
 
 _NO_REASONING = {
     "reasoning_field": None,
@@ -49,6 +82,7 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_forced=False,
         ),
         default_params={},
+        provider_options=dict(DEFAULT_PROVIDER_OPTIONS["deepseek"]),
     ),
     "ark-glm": ModelProfile(
         name="ark-glm",
