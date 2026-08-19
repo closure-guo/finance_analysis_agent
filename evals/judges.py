@@ -4,26 +4,17 @@
 - 裁判模型 deepseek/deepseek-chat,temperature=0(可复现)
 - rubric 末尾强约束 JSON {score, reason} + 「不以篇幅长短论优劣」
 - 解析失败重试一次,仍失败 score=None(计入失败率,不阻塞实验)
-- judge generation 经独立 Langfuse(environment="langfuse-llm-as-a-judge")
-  client 包裹,成本 Dashboard 独立核算;无凭据降级为无 trace 直调
-
-singleton 说明:judge client 用模块级 `_judge_client` 单例(而非 @lru_cache)。
-测试隔离:`tests/evals/test_judges.py` 的 autouse fixture
-`_reset_judge_singleton` 在每个用例前后直接赋值 None 重置单例;
-lru_cache 缓存的 None 会令后续「有凭据」用例拿不到 client、不再调
-`_create_judge_client`,断言失败。模块变量等价于「可重置的单例」。
+- judge generation 统一经 gateway 观测(purpose="judge"),environment
+  标记(langfuse-llm-as-a-judge)经 trace.metadata 传递,成本 Dashboard
+  独立核算口径保留
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import TYPE_CHECKING
 
 from finance_agent.nodes._llm_utils import parse_json_response
-
-if TYPE_CHECKING:
-    from langfuse import Langfuse
 
 
 def _judge_model() -> str:
@@ -100,68 +91,42 @@ RUBRICS: dict[str, str] = {
 }
 
 
-def _create_judge_client(environment: str) -> Langfuse:
-    """构造 judge 专用 Langfuse client(独立 environment,成本独立核算)。
-
-    client 构造统一收敛到此函数,便于测试 patch 隔离。
-    """
-    from langfuse import Langfuse
-
-    return Langfuse(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=os.getenv("LANGFUSE_HOST", "http://localhost:3000"),
-        environment=environment,
-    )
-
-
-# 模块级单例;测试可 `@patch("evals.judges._judge_client", None)` 跨用例重置。
-_judge_client: Langfuse | None = None
-
-
-def get_judge_langfuse() -> Langfuse | None:
-    """judge client 单例;无凭据返回 None(降级为无 trace 直调)。
-
-    单例缓存于模块级 `_judge_client`;构造失败(Langfuse 不可用)也降级 None,
-    永不抛异常阻塞 judge。
-    """
-    global _judge_client
-    if _judge_client is not None:
-        return _judge_client
-    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
-        return None
-    try:
-        _judge_client = _create_judge_client(JUDGE_ENV)
-        return _judge_client
-    except Exception:
-        return None
-
-
 def _call_judge_llm(prompt: str) -> str:
-    """裁判调用:有凭据时经 judge client generation 包裹,否则直调。"""
-    import litellm
+    """裁判调用:统一经 gateway(purpose="judge")。
 
-    kwargs = {
-        "model": _judge_model(),
-        "temperature": 0.0,
-        "messages": [{"role": "user", "content": prompt}],
-        "timeout": 120,  # 防 judge 调用无限挂起（与 harness 路径一致）
+    llm_config 映射决策:resolver 的 judge 环境分支要求 JUDGE_* 三件套齐
+    且不回退 LLM_*;为保留 judges.py 既有 JUDGE_*→LLM_* 回退语义(存量
+    eval 配置只设 LLM_* 也能跑),这里始终走请求级分支——由
+    _judge_model/_judge_base_url/_judge_api_key 调用时读环境拼出
+    {model, baseUrl, apiKey}(apiKey 可省:keyless 端点或 resolver env 回退)。
+
+    baseUrl 缺失的旧行为是 litellm 直连 provider 官方端点;迁移后仅
+    deepseek/* 显式补官方端点(https://api.deepseek.com/v1),其余前缀
+    由 resolver 请求分支显式报 IncompleteLLMConfigError——run_judge
+    捕获后记 judge_parse_failed,不阻塞实验(显式失败好过静默打错网关)。
+
+    Langfuse 环境审计:judge generation 改由 gateway 统一观测,
+    environment 标记经 trace.metadata 保留独立核算口径。
+    """
+    from finance_agent.llm.gateway import complete_text
+
+    model = _judge_model()
+    base_url = _judge_base_url()
+    if not base_url and model.startswith("deepseek/"):
+        base_url = "https://api.deepseek.com/v1"
+    llm_config = {
+        "model": model,
+        "baseUrl": base_url or "",
+        "apiKey": _judge_api_key() or "",
     }
-    if _judge_base_url():
-        kwargs["api_base"] = _judge_base_url()
-    if _judge_api_key():
-        kwargs["api_key"] = _judge_api_key()
-    client = get_judge_langfuse()
-    if client is None:
-        resp = litellm.completion(**kwargs)
-        return resp.choices[0].message.content or ""
-    with client.start_as_current_observation(
-        name="judge", as_type="generation", model=_judge_model(), input=prompt
-    ) as gen:
-        resp = litellm.completion(**kwargs)
-        text = resp.choices[0].message.content or ""
-        gen.update(output=text)
-        return text
+    text, _meta = complete_text(
+        [{"role": "user", "content": prompt}],
+        purpose="judge",
+        temperature=0.0,
+        llm_config=llm_config,
+        trace={"name": "judge", "metadata": {"environment": JUDGE_ENV}},
+    )
+    return text
 
 
 def _render(dimension: str, variables: dict[str, str]) -> str:
