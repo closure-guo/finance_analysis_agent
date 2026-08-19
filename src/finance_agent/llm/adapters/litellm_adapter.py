@@ -16,12 +16,13 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from finance_agent.llm.errors import LLMError
-    from finance_agent.llm.types import Capability
+    from finance_agent.llm.types import Capability, ModelProfile
 
 _INIT_LOCK = threading.Lock()
 _initialized = False
@@ -254,6 +255,53 @@ def guard_params_supported(
         )
 
 
+def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
+    """provider_options 唯一消费点：校验并转为请求 kwargs（设计档案 §7.1）。
+
+    registry schema 校验（非法值/未知 key → pydantic ValidationError）。
+    provider=="deepseek" 且 capability.extra_body_allowed 时产出：
+    - ``extra_body.thinking.type``：thinking 显式设置时携带
+    - ``reasoning_effort``：显式设置时携带
+    - ``suppress_temperature: True``：thinking=="enabled" 时携带 —— 内部
+      契约标志（非 litellm 参数），gateway 据此不发送 temperature
+      （deepseek thinking 模式拒收 temperature，对齐 legacy deep 分支）。
+    其他 provider / 空 provider_options → ``{}``。
+    """
+    options = dict(getattr(profile, "provider_options", None) or {})
+    if not options:
+        return {}
+    from finance_agent.llm.registry import PROVIDER_OPTIONS_SCHEMAS
+
+    schema = PROVIDER_OPTIONS_SCHEMAS.get(profile.provider)
+    if schema is None:
+        return {}
+    validated = schema.model_validate(options)
+    if profile.provider != "deepseek" or not profile.capability.extra_body_allowed:
+        return {}
+    out: dict[str, Any] = {}
+    thinking = getattr(validated, "thinking", None)
+    effort = getattr(validated, "reasoning_effort", None)
+    if thinking is not None:
+        out["extra_body"] = {"thinking": {"type": thinking}}
+    if effort is not None:
+        out["reasoning_effort"] = effort
+    # 内部契约标志：告知 gateway 不发送 temperature（非 litellm 参数）
+    if thinking == "enabled":
+        out["suppress_temperature"] = True
+    return out
+
+
+def _with_default_timeout(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """调用方未传 timeout 时注入默认值（incident 016/017 卡死防护）。
+
+    请求无超时会令流式 chunk 停滞时调用永久挂起（016 线程死锁、
+    017 思考后即止两类事故均表现为主管线卡死）。显式 timeout 不覆盖。
+    """
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = float(os.environ.get("LLM_TIMEOUT_SECONDS", "300"))
+    return kwargs
+
+
 def raw_completion(**kwargs: Any) -> Any:
     """adapter 内暴露 litellm.completion（gateway/probes 唯一入口）。
 
@@ -263,14 +311,14 @@ def raw_completion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**kwargs)
+    return litellm.completion(**_with_default_timeout(dict(kwargs)))
 
 
 def raw_stream(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**kwargs, stream=True)
+    return litellm.completion(**_with_default_timeout(dict(kwargs)), stream=True)
 
 
 async def raw_acompletion(**kwargs: Any) -> Any:

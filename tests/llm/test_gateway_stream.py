@@ -63,6 +63,70 @@ class TestCompleteStream:
         assert "text" in kinds
 
 
+class TestCompleteStreamTemperatureAndProviderOptions:
+    def _run(self, monkeypatch, llm_config, *, temperature=None):
+        captured = []
+
+        def fake_stream(**kwargs):
+            captured.append(kwargs)
+            yield _chunk(text="答", finish="stop")
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+        list(
+            complete_stream(
+                [{"role": "user", "content": "hi"}],
+                llm_config=llm_config,
+                temperature=temperature,
+            )
+        )
+        return captured[0]
+
+    def test_temperature_passed_through(self, monkeypatch):
+        kw = self._run(
+            monkeypatch,
+            {"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+            temperature=0.3,
+        )
+        assert kw["temperature"] == 0.3
+
+    def test_no_temperature_when_not_given(self, monkeypatch):
+        kw = self._run(
+            monkeypatch,
+            {"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+        )
+        assert "temperature" not in kw
+
+    def test_deepseek_provider_kwargs_and_suppressed_temperature(self, monkeypatch):
+        """deepseek thinking=enabled：extra_body/reasoning_effort 下发，不发 temperature。"""
+        kw = self._run(
+            monkeypatch,
+            {
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://x/v1",
+                "apiKey": "k",
+            },
+            temperature=0.7,
+        )
+        assert kw["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert kw["reasoning_effort"] == "max"
+        assert "suppress_temperature" not in kw
+        assert "temperature" not in kw
+
+    def test_deepseek_thinking_disabled_still_sends_temperature(self, monkeypatch):
+        kw = self._run(
+            monkeypatch,
+            {
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://x/v1",
+                "apiKey": "k",
+                "thinking": "disabled",
+            },
+            temperature=0.7,
+        )
+        assert kw["extra_body"] == {"thinking": {"type": "disabled"}}
+        assert kw["temperature"] == 0.7
+
+
 def sets_all_text(events):
     return "".join(e.text for e in events if e.kind == "text")
 

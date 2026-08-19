@@ -52,6 +52,7 @@ def complete_text(
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
     llm_config: dict[str, Any] | None = None,
+    temperature: float | None = None,
 ) -> tuple[str, dict]:
     """统一非流式 complete 入口（骨架；薄壳转调后扩展）。
 
@@ -62,21 +63,31 @@ def complete_text(
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (
+        apply_provider_options,
         derive_output_budget,
         normalize_exception,
         raw_completion,
     )
 
     budget = derive_output_budget(profile.capability, requested=max_tokens)
+    # provider_options 消费（§7.1）：merge 在 default_params 之后（可覆盖）；
+    # ``suppress_temperature`` 是 adapter→gateway 内部契约标志：deepseek
+    # thinking=enabled 时端点拒收 temperature（对齐 legacy deep 分支），不发。
+    provider_kwargs = apply_provider_options(profile)
+    suppress_temperature = bool(provider_kwargs.pop("suppress_temperature", False))
+    request_kwargs: dict[str, Any] = {
+        "model": profile.model,
+        "messages": messages,
+        "max_tokens": budget,
+        "api_key": profile.api_key,
+        "api_base": profile.base_url,
+        **(profile.default_params or {}),
+        **provider_kwargs,
+    }
+    if not suppress_temperature and temperature is not None:
+        request_kwargs["temperature"] = temperature
     try:
-        resp = raw_completion(
-            model=profile.model,
-            messages=messages,
-            max_tokens=budget,
-            api_key=profile.api_key,
-            api_base=profile.base_url,
-            **(profile.default_params or {}),
-        )
+        resp = raw_completion(**request_kwargs)
         text = resp.choices[0].message.content or ""
     except Exception as exc:  # noqa: BLE001
         raise normalize_exception(exc) from exc
@@ -93,6 +104,7 @@ def complete_stream(
     tools: list[dict[str, Any]] | None = None,
     llm_config: dict[str, Any] | None = None,
     trace: dict[str, Any] | None = None,
+    temperature: float | None = None,
 ):
     """统一流式 complete 入口（delta 5.1）：yield CanonicalEvent。
 
@@ -110,6 +122,7 @@ def complete_stream(
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (
+        apply_provider_options,
         classify_outcome,
         derive_output_budget,
         normalize_exception,
@@ -140,16 +153,25 @@ def complete_stream(
                 _gen_cm = None
 
     budget = derive_output_budget(profile.capability, requested=max_tokens)
+    # provider_options 消费（§7.1）：merge 在 default_params 之后（可覆盖）；
+    # ``suppress_temperature`` 是 adapter→gateway 内部契约标志：deepseek
+    # thinking=enabled 时端点拒收 temperature（对齐 legacy deep 分支），不发。
+    provider_kwargs = apply_provider_options(profile)
+    suppress_temperature = bool(provider_kwargs.pop("suppress_temperature", False))
+    request_kwargs: dict[str, Any] = {
+        "model": profile.model,
+        "messages": messages,
+        "max_tokens": budget,
+        "api_key": profile.api_key,
+        "api_base": profile.base_url,
+        "tools": tools,
+        **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
+        **provider_kwargs,
+    }
+    if not suppress_temperature and temperature is not None:
+        request_kwargs["temperature"] = temperature
     try:
-        stream = raw_stream(
-            model=profile.model,
-            messages=messages,
-            max_tokens=budget,
-            api_key=profile.api_key,
-            api_base=profile.base_url,
-            tools=tools,
-            **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
-        )
+        stream = raw_stream(**request_kwargs)
         saw_text = False
         finish = None
         _answer = ""
