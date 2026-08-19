@@ -46,6 +46,70 @@ def build_trace_metadata(
     }
 
 
+def _start_trace_observation(trace: dict[str, Any] | None, profile, messages):
+    """按 trace dict 开启 Langfuse generation 观测（失败不阻断，返回 None）。"""
+    if not trace:
+        return None, None
+    from finance_agent.langfuse_tracing import get_langfuse
+
+    lf = get_langfuse()
+    if lf is None:
+        return None, None
+    try:
+        gen_cm = lf.start_as_current_observation(
+            as_type="generation",
+            name=trace.get("name") or f"litellm:{profile.model}",
+            model=profile.model,
+            input={"messages": messages},
+            metadata=trace.get("metadata") or {},
+        )
+        return gen_cm, gen_cm.__enter__()
+    except Exception:  # noqa: S110 -- 观测失败不阻断业务
+        return None, None
+
+
+def _usage_details(resp) -> dict:
+    """resp.usage → Langfuse usage_details（无 usage 时空 dict）。"""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return {}
+    return {
+        "input": getattr(usage, "prompt_tokens", 0) or 0,
+        "output": getattr(usage, "completion_tokens", 0) or 0,
+    }
+
+
+def _extract_with_tools_output(resp) -> dict:
+    """从 completion resp 提取结构化 generation output（自 legacy.py 移植）。
+
+    返回 ``{answer, reasoning}``，非空 tool_calls 时追加 ``tool_calls`` 字段
+    （``[{name, arguments}]``，arguments 裁剪）。answer 不回退 reasoning
+    （工具调用场景 content 通常为空，回退会误导 trace）。
+    """
+    from finance_agent.langfuse_tracing import truncate_for_trace
+
+    message = None
+    choices = getattr(resp, "choices", [])
+    if choices:
+        message = getattr(choices[0], "message", None)
+    output_text = (getattr(message, "content", "") or "") if message else ""
+    reasoning_text = (getattr(message, "reasoning_content", "") or "") if message else ""
+    tool_calls: list[dict] = []
+    if message is not None:
+        for tc in getattr(message, "tool_calls", None) or []:
+            func = getattr(tc, "function", None)
+            tc_name = (getattr(func, "name", "") or "") if func else ""
+            tc_args = (getattr(func, "arguments", "") or "") if func else ""
+            tool_calls.append({"name": tc_name, "arguments": truncate_for_trace(tc_args)})
+    out: dict = {
+        "answer": truncate_for_trace(output_text),
+        "reasoning": truncate_for_trace(reasoning_text),
+    }
+    if tool_calls:
+        out["tool_calls"] = tool_calls
+    return out
+
+
 def complete_text(
     messages: list[dict[str, Any]],
     *,
@@ -54,11 +118,17 @@ def complete_text(
     tools: list[dict[str, Any]] | None = None,
     llm_config: dict[str, Any] | None = None,
     temperature: float | None = None,
+    trace: dict[str, Any] | None = None,
 ) -> tuple[str, dict]:
-    """统一非流式 complete 入口（骨架；薄壳转调后扩展）。
+    """统一非流式 complete 入口（5.1-C：trace 观测 + sanitize + raw_* 元数据）。
 
-    返回 (text, trace_metadata)。守卫关键参数、预算派生、错误归一
-    由 adapter/guard/errors 承接口——业务仅面向本入口与返回 metadata。
+    返回 ``(text, metadata)``：text 为 message.content（缺失空串，不做
+    reasoning 回退）；metadata 除 trace 契约字段（build_trace_metadata）外
+    附带 ``raw_content`` / ``raw_reasoning``（非 trace 字段，供 legacy 薄壳
+    实现「content 为空回退 reasoning」旧行为）。
+
+    ``trace``（可选）开启 Langfuse generation 观测（name/metadata），
+    观测失败不阻断业务；output 结构 ``{answer, reasoning}`` + usage_details。
     """
     profile = resolve_profile(purpose=purpose, llm_config=llm_config)
     ensure_litellm_runtime()
@@ -68,7 +138,11 @@ def complete_text(
         derive_output_budget,
         normalize_exception,
         raw_completion,
+        sanitize_request_messages,
     )
+
+    messages = sanitize_request_messages(messages, profile.capability)
+    _gen_cm, _gen = _start_trace_observation(trace, profile, messages)
 
     budget = derive_output_budget(profile.capability, requested=max_tokens)
     # provider_options 消费（§7.1）：merge 在 default_params 之后（可覆盖）；
@@ -80,21 +154,133 @@ def complete_text(
         "model": profile.model,
         "messages": messages,
         "max_tokens": budget,
-        "api_key": profile.api_key,
-        "api_base": profile.base_url,
         **(profile.default_params or {}),
         **provider_kwargs,
     }
+    if profile.api_key:
+        request_kwargs["api_key"] = profile.api_key
+    if profile.base_url:
+        request_kwargs["api_base"] = profile.base_url
     if not suppress_temperature and temperature is not None:
         request_kwargs["temperature"] = temperature
     try:
         resp = raw_completion(**request_kwargs)
-        text = resp.choices[0].message.content or ""
+        message = resp.choices[0].message
+        raw_content = message.content or ""
+        raw_reasoning = getattr(message, "reasoning_content", "") or ""
     except Exception as exc:  # noqa: BLE001
+        _close_observation(_gen_cm)
         raise normalize_exception(exc) from exc
-    return text, build_trace_metadata(
+    # Langfuse output.answer 与 legacy call_llm 对齐：content 为空时用
+    # reasoning 作为 answer（legacy trace 行为），但返回 text 不做回退。
+    _finalize_observation(
+        _gen, raw_content or raw_reasoning, raw_reasoning, getattr(resp, "usage", None)
+    )
+    _close_observation(_gen_cm)
+    text = raw_content
+    metadata = build_trace_metadata(
         profile, purpose=purpose, finish_reason=resp.choices[0].finish_reason
     )
+    metadata["raw_content"] = raw_content
+    metadata["raw_reasoning"] = raw_reasoning
+    return text, metadata
+
+
+def _close_observation(gen_cm) -> None:
+    """退出 Langfuse observation CM（失败不阻断）。"""
+    if gen_cm is None:
+        return
+    from contextlib import suppress
+
+    with suppress(Exception):
+        gen_cm.__exit__(None, None, None)
+
+
+def complete_with_tools(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str = "auto",
+    purpose: Purpose = "quick",
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    llm_config: dict[str, Any] | None = None,
+    trace: dict[str, Any] | None = None,
+):
+    """统一非流式带工具 complete 入口（5.1-C Task 3）。
+
+    resolve_profile → guard → sanitize → budget → apply_provider_options →
+    raw_completion，**返回原始 resp 对象**（调用方检查 ``.tool_calls``）。
+    Langfuse 观测 output 含 ``{answer, reasoning, tool_calls?}`` + usage_details；
+    主观测不可用时降级经 ``open_span`` 记录（对齐 legacy 降级路径）。
+
+    计划内语义修正（5.1-C，零生产调用方）：deepseek thinking+tools 保持
+    开启（registry provider_options 默认），不再像 legacy 显式 disabled。
+    """
+    from contextlib import suppress
+
+    profile = resolve_profile(purpose=purpose, llm_config=llm_config)
+    ensure_litellm_runtime()
+    guard_params_supported(profile.capability, tools=tools, tool_choice=tool_choice)
+    from finance_agent.llm.adapters.litellm_adapter import (
+        apply_provider_options,
+        derive_output_budget,
+        normalize_exception,
+        raw_completion,
+        sanitize_request_messages,
+    )
+
+    messages = sanitize_request_messages(messages, profile.capability)
+    _gen_cm, _gen = _start_trace_observation(trace, profile, messages)
+
+    budget = derive_output_budget(profile.capability, requested=max_tokens)
+    provider_kwargs = apply_provider_options(profile)
+    suppress_temperature = bool(provider_kwargs.pop("suppress_temperature", False))
+    request_kwargs: dict[str, Any] = {
+        "model": profile.model,
+        "messages": messages,
+        "max_tokens": budget,
+        **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
+        **provider_kwargs,
+    }
+    if profile.api_key:
+        request_kwargs["api_key"] = profile.api_key
+    if profile.base_url:
+        request_kwargs["api_base"] = profile.base_url
+    if tools:
+        request_kwargs["tools"] = tools
+        if tool_choice:
+            request_kwargs["tool_choice"] = tool_choice
+    if not suppress_temperature and temperature is not None:
+        request_kwargs["temperature"] = temperature
+
+    def _do_call():
+        try:
+            return raw_completion(**request_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            raise normalize_exception(exc) from exc
+
+    if trace and _gen is None:
+        # 降级路径（对齐 legacy）：主观测不可用 → open_span（自带 no-op 兜底）
+        from finance_agent.langfuse_tracing import open_span
+
+        with open_span(
+            name=trace.get("name") or f"litellm:{profile.model}",
+            input={"messages": messages},
+        ) as obs:
+            resp = _do_call()
+            if obs is not None:
+                with suppress(Exception):  # trace 失败不影响业务
+                    obs.update(output=_extract_with_tools_output(resp))
+            _close_observation(_gen_cm)
+            return resp
+
+    resp = _do_call()
+    if _gen is not None:
+        with suppress(Exception):
+            _gen.update(output=_extract_with_tools_output(resp), usage_details=_usage_details(resp))
+    _close_observation(_gen_cm)
+    return resp
 
 
 def complete_stream(

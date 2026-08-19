@@ -8,7 +8,6 @@ mock.patch 字符串目标不变；新代码应使用 gateway/resolver/contracts
 
 from finance_agent.llm.legacy import (  # noqa: F401
     LLMConfig,
-    _build_kwargs,
     call_llm,
     call_llm_stream,
     call_llm_with_tools,
