@@ -9,6 +9,7 @@ provider 前缀补全 / provider options / 消息清洗 / 重试 / Langfuse 观�
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -122,7 +123,7 @@ class LiteLLMClient:
         }
 
         finished_yielded = False
-        async for ev in complete_stream_async(
+        _gen = complete_stream_async(
             messages,
             purpose="react",
             tools=tools,
@@ -137,33 +138,43 @@ class LiteLLMClient:
             # 请求级配置解析时 resolver 会强制 openai-compatible preset（max_output=8192），
             # 此处显式下发 16384 以精确复刻旧 _build_kwargs 合同，不改 resolver 能力选择。
             max_tokens=16384,
-        ):
-            if ev.kind == "reasoning":
-                yield LLMResponse(reasoning_delta=ev.reasoning)
-            elif ev.kind == "text":
-                yield LLMResponse(text_delta=ev.text)
-            elif ev.kind == "tool_call":
-                calls: list[ToolCallRequest] = []
-                for i, tc in enumerate((ev.tool_call or {}).get("calls", [])):
-                    raw_args = tc.get("function", {}).get("arguments", "")
-                    try:
-                        args = json.loads(raw_args) if raw_args else {}
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning("tool_call arguments 非法 JSON，降级空 dict: %s", raw_args)
-                        args = {}
-                    calls.append(
-                        ToolCallRequest(
-                            id=tc.get("id") or f"call_{i}",
-                            name=tc.get("function", {}).get("name", ""),
-                            arguments=args,
+        )
+        try:
+            async for ev in _gen:
+                if ev.kind == "reasoning":
+                    yield LLMResponse(reasoning_delta=ev.reasoning)
+                elif ev.kind == "text":
+                    yield LLMResponse(text_delta=ev.text)
+                elif ev.kind == "tool_call":
+                    calls: list[ToolCallRequest] = []
+                    for i, tc in enumerate((ev.tool_call or {}).get("calls", [])):
+                        raw_args = tc.get("function", {}).get("arguments", "")
+                        try:
+                            args = json.loads(raw_args) if raw_args else {}
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(
+                                "tool_call arguments 非法 JSON，降级空 dict: %s", raw_args
+                            )
+                            args = {}
+                        calls.append(
+                            ToolCallRequest(
+                                id=tc.get("id") or f"call_{i}",
+                                name=tc.get("function", {}).get("name", ""),
+                                arguments=args,
+                            )
                         )
-                    )
-                yield LLMResponse(tool_calls=calls, is_finished=True)
-                finished_yielded = True
-            elif ev.kind == "finished":
-                if not finished_yielded:
-                    yield LLMResponse(is_finished=True)
-                return
+                    yield LLMResponse(tool_calls=calls, is_finished=True)
+                    finished_yielded = True
+                elif ev.kind == "finished":
+                    if not finished_yielded:
+                        yield LLMResponse(is_finished=True)
+                    return
+        finally:
+            # finished 后生成器仍悬挂在 yield 点：显式 aclose 使 gateway 的观测收尾
+            # （Langfuse CM __exit__）在本任务上下文执行。留给 GC 跨上下文 aclose
+            # 会触发 OTel "token created in a different Context" detach 告警。
+            with contextlib.suppress(Exception):
+                await _gen.aclose()
 
     def __repr__(self) -> str:
         return f"LiteLLMClient(model={self.model})"

@@ -299,3 +299,55 @@ class TestStreamFlag:
         )
         assert captured["stream"] is True
         assert any(e.kind == "finished" for e in events)
+
+
+async def test_exhaustion_writes_error_to_observation(monkeypatch):
+    """重试耗尽上抛前，观测写 output={error}/level=ERROR（对齐旧 harness 失败路径）。"""
+    from finance_agent.langfuse_tracing import get_langfuse
+
+    class _Obs:
+        def __init__(self):
+            self.updated = {}
+
+        def update(self, **kw):
+            self.updated.update(kw)
+
+    class _CM:
+        def __enter__(self):
+            return obs
+
+        def __exit__(self, *a):
+            return False
+
+    obs = _Obs()
+    monkeypatch.setattr(
+        "finance_agent.langfuse_tracing.get_langfuse",
+        lambda: type("_LF", (), {"start_as_current_observation": lambda self, **kw: _CM()})(),
+    )
+    assert get_langfuse  # noqa: B018 -- 引用锚定
+    import asyncio as _aio
+
+    async def fake_acompletion(**kwargs):  # noqa: ARG001
+        raise litellm.exceptions.RateLimitError(message="limit", llm_provider="openai", model="m")
+
+    async def fake_sleep(_):
+        return None
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    monkeypatch.setattr(_aio, "sleep", fake_sleep)
+    with pytest.raises(LLMError):
+        await _collect(
+            complete_stream_async(
+                [{"role": "user", "content": "hi"}],
+                llm_config={
+                    "model": "deepseek/deepseek-chat",
+                    "baseUrl": "https://x/v1",
+                    "apiKey": "k",
+                },
+                trace={"name": "t"},
+            )
+        )
+    assert obs.updated.get("level") == "ERROR"
+    assert "error" in obs.updated.get("output", {})

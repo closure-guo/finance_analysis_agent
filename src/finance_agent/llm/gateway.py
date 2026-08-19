@@ -619,6 +619,13 @@ async def complete_stream_async(
                 if err.retryable and attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * 2**attempt)
                     continue
+                # 观测落痕：重试耗尽/不可重试上抛前写 error output（对齐旧 harness
+                # _finish_langfuse 失败路径，避免错误 trace 静默）
+                if _gen is not None:
+                    from contextlib import suppress
+
+                    with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                        _gen.update(output={"error": str(err)}, level="ERROR")
                 raise err from exc
     finally:
         if _gen_cm is not None:
