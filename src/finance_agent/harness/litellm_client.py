@@ -132,6 +132,11 @@ class LiteLLMClient:
             trace=trace,
             max_retries=self.max_retries,
             retry_delay=self.retry_delay,
+            # 输出预算保真：harness 为 legacy 生产 ReAct 路径，输出预算固定 16384
+            # （incident-016 类：reasoning 与正文共享配额，8192 会截断 deep 输出）。
+            # 请求级配置解析时 resolver 会强制 openai-compatible preset（max_output=8192），
+            # 此处显式下发 16384 以精确复刻旧 _build_kwargs 合同，不改 resolver 能力选择。
+            max_tokens=16384,
         ):
             if ev.kind == "reasoning":
                 yield LLMResponse(reasoning_delta=ev.reasoning)

@@ -80,6 +80,8 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_field="reasoning_content",
             reasoning_must_echo_on_tool=True,
             reasoning_forced=False,
+            # DeepSeek 官方支持 tool_choice=required（force_tool ReAct 轮）
+            tool_choice_required=True,
         ),
         default_params={},
         provider_options=dict(DEFAULT_PROVIDER_OPTIONS["deepseek"]),
@@ -96,6 +98,8 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_field="reasoning_content",
             reasoning_must_echo_on_tool=False,
             reasoning_forced=True,
+            # 方舟 GLM 支持函数调用 / tool_choice=required（force_tool ReAct 轮）
+            tool_choice_required=True,
             # reasoning 与正文共享配额，预算必须覆盖 reasoning 峰值（incident 017）
             max_output=16384,
         ),

@@ -202,6 +202,19 @@ async def test_full_config_trio_passed_as_llm_config(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_forwards_max_tokens_16384(monkeypatch):
+    """harness ReAct 路径输出预算保真（终审 I1）：chat_stream 必须显式下发
+    max_tokens=16384，避免请求级配置解析时回落到 openai-compatible 的 8192
+    而截断 deep 输出（incident-016 类：reasoning 与正文共享配额）。"""
+    rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])
+    client = LiteLLMClient(
+        model="deepseek/deepseek-chat", api_key="sk-fake", base_url="https://api.example.com/v1"
+    )
+    await _run(monkeypatch, client, rec)
+    assert rec.calls[0]["max_tokens"] == 16384
+
+
+@pytest.mark.asyncio
 async def test_partial_config_passes_none(monkeypatch):
     """构造参数不全（无显式 key、无 env key）时 llm_config=None，交给 resolver 用 env/preset。"""
     rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])

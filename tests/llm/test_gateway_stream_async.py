@@ -153,6 +153,37 @@ async def test_tool_choice_passed_through(monkeypatch):
     assert captured["tools"][0]["function"]["name"] == "f"
 
 
+async def test_glm_tool_choice_required_proceeds(monkeypatch):
+    """终审 I2：GLM 模型（env 分支解析到 ark-glm preset，声明 tool_choice_required）
+    在真实 guard 下允许 tool_choice='required'（force_tool ReAct 轮不再硬失败）。
+
+    注：请求级 llm_config 分支一律强绑 openai-compatible preset（无 required 能力），
+    故此处用 env 分支复现生产 harness ReAct 路径（chat_stream 未带完整 trio 时
+    走 env/preset 解析）。
+    """
+    captured = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _AsyncIter([_chunk(text="答", finish="stop")])
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    monkeypatch.setenv("LLM_MODEL", "glm-5.2")
+    monkeypatch.setenv("LLM_BASE_URL", "https://x/v1")
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    await _collect(
+        complete_stream_async(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "f"}}],
+            tool_choice="required",
+        )
+    )
+    assert captured["tool_choice"] == "required"
+    assert captured["tools"][0]["function"]["name"] == "f"
+
+
 async def test_retryable_error_then_success(monkeypatch):
     calls = {"n": 0}
 
