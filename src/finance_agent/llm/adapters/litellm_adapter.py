@@ -6,9 +6,10 @@
   全局 100 线程池提交 logging，worker 内 asyncio.run 新建 ProactorEventLoop，
   Windows/Py3.14 ``_fallback_socketpair`` 并发竞态令线程永久卡在 accept()
   （100 worker 全灭、退出 join 挂死）。项目 Langfuse 走自研 SDK，零损失。
-- ``drop_params``：保留（全局静默 drop 违背设计档案 §8，但 evals judge 仍直连
-  litellm、thinking+tools 组合等依赖它；judge 路径迁入 gateway 后按白名单化收紧，
-  见 follow-up gh#76/略）
+- ``drop_params``：Task 8 起移除全局静默 drop（设计档案 §8：关键参数不静默
+  丢弃）。未知/白名单外参数由 litellm 原生报错（显式失败）；白名单内非关键
+  参数仅在 capability 明确不支持时由 ``_drop_unsupported`` 剔除。回滚保险：
+  环境变量 ``LLM_DROP_PARAMS_STRICT=1`` 可临时恢复旧全局 drop 行为。
 - litellm-langfuse 兼容补丁：1.85.x 与 langfuse 4.x 深度不兼容
   （version 属性、sdk_integration 参数等多处不匹配），noop 其 logger。
 
@@ -18,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from typing import TYPE_CHECKING, Any
@@ -25,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from finance_agent.llm.errors import LLMError
     from finance_agent.llm.types import Capability, ModelProfile
+
+logger = logging.getLogger(__name__)
 
 _INIT_LOCK = threading.Lock()
 _initialized = False
@@ -77,7 +81,12 @@ def ensure_litellm_runtime() -> None:
             return
         import litellm
 
-        litellm.drop_params = True
+        # Task 8：移除全局静默 drop（设计档案 §8）；回滚开关：线上出现
+        # 端点拒收非关键参数的事故时，设 LLM_DROP_PARAMS_STRICT=1 临时恢复旧行为
+        if os.environ.get("LLM_DROP_PARAMS_STRICT") == "1":
+            litellm.drop_params = True
+        else:
+            litellm.drop_params = False
         # incident 016 死锁防护（NOT RECOMMENDED 标记仅影响 litellm 自身
         # 用量回调——项目未注册任何 litellm callback，零功能损失）
         litellm.disable_streaming_logging = True
@@ -393,6 +402,27 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     return out
 
 
+# 非关键参数白名单（Task 8）：仅这些参数允许按 capability 剔除；
+# 白名单外未知参数一律透传，由 litellm/端点原生报错（显式失败）。
+_SOFT_DROP_WHITELIST = {"temperature", "top_p", "frequency_penalty", "presence_penalty"}
+
+
+def _drop_unsupported(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """白名单内且 capability 明确不支持的非关键参数 → 剔除 + warning。
+
+    YAGNI：当前唯一 capability 信号是 ``reasoning_forced``（方舟 GLM 类
+    thinking 强制端点拒收 temperature）→ 仅据此剔除 temperature；
+    top_p/frequency_penalty/presence_penalty 暂无 capability 信号，透传。
+    """
+    model = kwargs.get("model")
+    if not isinstance(model, str):
+        return kwargs
+    if "temperature" in kwargs and capability_for_model(model).reasoning_forced:
+        logger.warning("参数 temperature 被 adapter 白名单剔除(端点不支持)：model=%s", model)
+        kwargs.pop("temperature")
+    return kwargs
+
+
 def _with_default_timeout(kwargs: dict[str, Any]) -> dict[str, Any]:
     """调用方未传 timeout 时注入默认值（incident 016/017 卡死防护）。
 
@@ -413,14 +443,14 @@ def raw_completion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**_with_default_timeout(dict(kwargs)))
+    return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))
 
 
 def raw_stream(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**_with_default_timeout(dict(kwargs)), stream=True)
+    return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))), stream=True)
 
 
 async def raw_acompletion(**kwargs: Any) -> Any:
@@ -428,4 +458,4 @@ async def raw_acompletion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return await litellm.acompletion(**_with_default_timeout(dict(kwargs)))
+    return await litellm.acompletion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))
