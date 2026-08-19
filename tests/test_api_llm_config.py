@@ -259,3 +259,43 @@ class AuthenticationError(Exception):
 
 class NotFoundError(Exception):
     pass
+
+
+# ── probe 成功写缓存（llm-capability-probe delta Task 2）──
+
+
+def test_test_llm_config_success_writes_probe_cache():
+    """POST /api/llm-config/test 成功探测后写入 probe 缓存（键同 resolver）。"""
+    from finance_agent.llm.probe_cache import (
+        _reset_probe_cache_for_tests,
+        cache_key,
+        get_probe_cache,
+    )
+
+    _reset_probe_cache_for_tests()
+    get_probe_cache().clear()
+    try:
+        with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+            mock_probe.return_value = _mock_probe_report()
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/llm-config/test",
+                    json={
+                        "model": "deepseek/deepseek-chat",
+                        "baseUrl": "https://api.deepseek.com/v1",
+                        "apiKey": "sk-cache",
+                    },
+                )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        key = cache_key(
+            model="deepseek/deepseek-chat",
+            base_url="https://api.deepseek.com/v1",
+            api_key="sk-cache",
+        )
+        cached = get_probe_cache().get(key)
+        assert cached is not None
+        assert cached.tool_call is True
+    finally:
+        _reset_probe_cache_for_tests()
+        get_probe_cache().clear()

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -121,6 +122,24 @@ def _provider_options_from_env(env: Mapping[str, str], model: str) -> dict[str, 
     return _validate_options("deepseek", merged)
 
 
+def _merge_probe_facts(profile: ModelProfile) -> ModelProfile:
+    """probe 缓存事实合并（llm-capability-probe spec）：只读缓存，不发探测。
+
+    命中 → merge_probe_into_profile 覆盖 capability（probe 为准）+
+    probe_warnings，probe_required=False；未命中 → probe_required=True
+    （消费方据此决定是否要求先探测）。解析期零真实 LLM 调用。
+    """
+    from finance_agent.llm.probe_cache import cache_key, get_probe_cache
+    from finance_agent.llm.probes import merge_probe_into_profile
+
+    report = get_probe_cache().get(
+        cache_key(model=profile.model, base_url=profile.base_url, api_key=profile.api_key)
+    )
+    if report is None:
+        return dataclasses.replace(profile, probe_required=True)
+    return merge_probe_into_profile(profile, report)
+
+
 def resolve_profile(
     *,
     purpose: Purpose = "deep",
@@ -128,12 +147,26 @@ def resolve_profile(
     preset: str | None = None,
     _env: Mapping[str, str] | None = None,
 ) -> ModelProfile:
-    """解析当前调用应使用的 ModelProfile。
+    """解析当前调用应使用的 ModelProfile（含 probe 缓存事实合并）。
 
     - preset：显式命名 preset（registry），优先于环境变量
     - llm_config：请求级配置（model/baseUrl/apiKey），必须完整
     - _env：环境映射注入（默认 os.environ），每次调用实时读取
+    - probe 缓存命中 → capability 以 probe 事实为准；未命中 → probe_required
     """
+    return _merge_probe_facts(
+        _resolve_profile_static(purpose=purpose, llm_config=llm_config, preset=preset, _env=_env)
+    )
+
+
+def _resolve_profile_static(
+    *,
+    purpose: Purpose = "deep",
+    llm_config: dict[str, Any] | None = None,
+    preset: str | None = None,
+    _env: Mapping[str, str] | None = None,
+) -> ModelProfile:
+    """静态解析（registry/env/request 三分支，不含 probe 合并）。"""
     env = _env if _env is not None else os.environ
 
     # 1. 请求级（必须原子完整）

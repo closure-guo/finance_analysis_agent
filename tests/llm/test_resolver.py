@@ -10,11 +10,41 @@ from __future__ import annotations
 
 import pytest
 
+from finance_agent.llm.probe_cache import (
+    _reset_probe_cache_for_tests,
+    cache_key,
+    get_probe_cache,
+)
+from finance_agent.llm.probes import ProbeReport
 from finance_agent.llm.resolver import (
     IncompleteLLMConfigError,
     UnknownProviderPrefixError,
     resolve_profile,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_probe_cache():
+    """每个测试独立的 probe 缓存单例（隔离缓存命中/未命中状态）。"""
+    _reset_probe_cache_for_tests()
+    get_probe_cache().clear()
+    yield
+    _reset_probe_cache_for_tests()
+    get_probe_cache().clear()
+
+
+def _report(**overrides) -> ProbeReport:
+    defaults = {
+        "non_stream": True,
+        "stream": True,
+        "tool_call": True,
+        "tool_followup": True,
+        "json_output": True,
+        "latency_ms": 100,
+        "warnings": [],
+    }
+    defaults.update(overrides)
+    return ProbeReport(**defaults)
 
 
 @pytest.fixture(autouse=True)
@@ -164,3 +194,58 @@ class TestProviderPrefix:
         )
         assert profile2.base_url == "https://b/v1"
         del os
+
+
+class TestProbeFactMerge:
+    """llm-capability-probe delta：resolver 合并 probe 缓存事实。"""
+
+    ENV_DEEPSEEK = {
+        "LLM_MODEL": "deepseek/deepseek-chat",
+        "LLM_BASE_URL": "https://api.deepseek.com/v1",
+        "LLM_API_KEY": "sk-merge",
+    }
+
+    def test_cache_hit_overrides_capability_and_sets_warnings(self):
+        """缓存命中（tool_call=false）→ tools=none + warning，其余字段不动。"""
+        get_probe_cache().put(
+            cache_key(
+                model="deepseek/deepseek-chat",
+                base_url="https://api.deepseek.com/v1",
+                api_key="sk-merge",
+            ),
+            _report(tool_call=False, tool_followup=False),
+        )
+        profile = resolve_profile(purpose="deep", _env=self.ENV_DEEPSEEK)
+        assert profile.capability.tools == "none"
+        assert profile.probe_required is False
+        assert any("tools" in w for w in profile.probe_warnings)
+        # probe 不改连接与 provider 配置
+        assert profile.api_key == "sk-merge"
+        assert profile.model == "deepseek/deepseek-chat"
+
+    def test_cache_miss_sets_probe_required(self):
+        """缓存未命中 → probe_required=True，capability 保持静态表。"""
+        profile = resolve_profile(purpose="deep", _env=self.ENV_DEEPSEEK)
+        assert profile.probe_required is True
+        assert profile.probe_warnings == ()
+        assert profile.capability.tools != "none"  # deepseek 静态表支持工具
+
+    def test_merge_preserves_max_output(self):
+        """合并不回退 capability 特化 max_output（ark-glm 16384）。"""
+        env = {
+            "LLM_MODEL": "glm-5.2",
+            "LLM_BASE_URL": "https://ark.example/api/v3",
+            "LLM_API_KEY": "sk-glm",
+        }
+        get_probe_cache().put(
+            cache_key(
+                model="openai/glm-5.2",
+                base_url="https://ark.example/api/v3",
+                api_key="sk-glm",
+            ),
+            _report(),
+        )
+        profile = resolve_profile(purpose="deep", _env=env)
+        assert profile.model == "openai/glm-5.2"
+        assert profile.capability.max_output == 16384
+        assert profile.probe_required is False

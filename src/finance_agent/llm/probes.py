@@ -83,16 +83,46 @@ def judge_capability_from_probe(report: ProbeReport) -> Capability:
 
 
 def merge_probe_into_profile(profile: ModelProfile, report: ProbeReport) -> ModelProfile:
-    """probe 运行时事实覆盖静态 profile 的能力表（以 probe 为准）。"""
-    return ModelProfile(
-        name=profile.name,
-        provider=profile.provider,
-        model=profile.model,
-        base_url=profile.base_url,
-        api_key=profile.api_key,
-        capability=judge_capability_from_probe(report),
-        default_params=profile.default_params,
-        fallback=profile.fallback,
+    """probe 运行时事实覆盖静态 profile 的能力表（以 probe 为准）。
+
+    probe 只验证「factual」能力（tools/json/streaming 类），不测量上下文/
+    输出窗口，也不测 reasoning 行为——`judge_capability_from_probe` 硬编码的
+    max_context/max_output 是保守默认值，直接采用会回退 capability 特化配置
+    （如 ark-glm 的 max_output=16384、reasoning_forced 的预算策略）。因此
+    保留原 capability 的 max_context/max_output/reasoning_* 等 provider 静态
+    事实，只覆盖 probe 实测字段；与静态表不一致的字段名记入 probe_warnings。
+    其余 profile 字段（api_key/provider_options/default_params 等）原样保留。
+    """
+    import dataclasses
+
+    probed = judge_capability_from_probe(report)
+    orig = profile.capability
+    merged_cap = dataclasses.replace(
+        probed,
+        max_context=orig.max_context,
+        max_output=orig.max_output,
+        reasoning_field=orig.reasoning_field,
+        reasoning_must_echo_on_tool=orig.reasoning_must_echo_on_tool,
+        reasoning_forced=orig.reasoning_forced,
+    )
+    warnings: list[str] = []
+    for field_name in (
+        "tools",
+        "json_schema",
+        "streaming",
+        "streaming_tool_calls",
+        "tool_choice_required",
+        "supports_system_role",
+        "extra_body_allowed",
+    ):
+        old, new = getattr(orig, field_name), getattr(merged_cap, field_name)
+        if old != new:
+            warnings.append(f"{field_name}: {old}→{new}")
+    return dataclasses.replace(
+        profile,
+        capability=merged_cap,
+        probe_required=False,
+        probe_warnings=tuple(warnings),
     )
 
 
