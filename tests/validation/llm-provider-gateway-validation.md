@@ -31,6 +31,22 @@
 
 已知边界（B2 计划内）：薄壳对 messages 含 tool 角色不再强制 disable_thinking（task C 域）；半套请求配置经 resolver 显式拒绝（spec「半套请求配置被拒绝」），1 个旧测试随迁为完整配置。
 
+## C 轮次（2026-08-19，feat/llm-gateway-51：旧路径收口）
+
+| 验证项 | 依据 | 结果 |
+|---|---|---|
+| adapter 工具合并收口 | `tests/llm/adapters/test_tool_call_merge.py`（ToolCallAccumulator/finalize/sanitize） | ✅ 全绿 |
+| complete_stream_async | `tests/llm/test_gateway_stream_async.py`（tool_call 事件/三 finish 分支/per-chunk 超时/retryable 重试耗尽 raise/tool_choice/stream=True） | ✅ 9 passed |
+| complete_with_tools + call_llm/with_tools 薄壳 | `tests/test_llm.py` 迁移 + thinshell（DeprecationWarning/reasoning 回退）；`_build_kwargs`/`_is_deepseek` 删除 | ✅ 全绿 |
+| LiteLLMClient 翻译层 | `tests/test_litellm_client.py` 重写（mock complete_stream_async；json.loads arguments/llm_config 原子性/trace metadata） | ✅ 全绿 |
+| 全量回归 | `uv run pytest -k "not live"` | ✅ 1026 passed / 11 deselected |
+| lint / 类型 | ruff 0；mypy 69 错误集与 C 基线 e1c15c0 worktree 对照逐行一致（零新增） | ✅ |
+| grep 门禁 | allowlist 收紧为仅 `llm/adapters/litellm_adapter.py`；`src/finance_agent` 无残留 `import litellm` | ✅ 门禁+src grep 双通过 |
+| 真实 async + 工具验证 | 方舟 GLM：经 LiteLLMClient→complete_stream_async 真实工具调用 `search_stock {'query':'贵州茅台'}`，thinking 36/text 10/tools 1/done 1 | ✅ 成功路径通过 |
+| 真实验证暴露 bug 修复 | 首跑暴露 `complete_stream_async` 漏传 `stream=True`（取到非流式 ModelResponse）→ 修复 + 防回归断言（95e86e1） | ✅ 修复后通过 |
+
+已知边界（C 计划内）：with_tools 的 deepseek thinking+tools 开启（语义修正，零生产调用方）；resolver apiKey 放宽（Ollama 无 key 本地端点回归修复）；`drop_params=True` 保留并注释指向 follow-up（judge 路径迁移后白名单化）。真实验证中 generator 提前 aclose 时 Langfuse OTel context detach 告警（非致命，业务成功）→ follow-up。
+
 ## 结论
 
 [ ] 全部通过，可 archive — 须待端到端跑批结果 + 5.1 薄壳转调收口

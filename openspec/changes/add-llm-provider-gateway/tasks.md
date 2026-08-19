@@ -31,7 +31,7 @@
 
 ## 5. 阶段五：迁移收尾与治理
 
-- [ ] 5.1 旧路径切薄壳（进度：harness 已收口 adapter、gateway complete_stream 已 Canonical 对接+Langfuse 观测收口；B2 已完成：call_llm_stream 薄壳转调 complete_stream + provider_options 机制落地(§7.1 registry 三件套/resolver 三层合并/adapter 唯一消费) + 受影响测试迁移 + 双路径对拍 + 真实 quick 验证通过(方舟 GLM 171 thinking 分片)；剩余 C: harness loop → CanonicalEvent + call_llm/call_llm_with_tools 两入口转调后收紧 grep 门禁。见 tests/validation/llm-provider-gateway-validation.md）：`llm.py` 三入口与 `harness/litellm_client.py` 转调 gateway（deprecation warning），合同测试对拍双路径一致后收紧 grep 门禁
+- [x] 5.1 旧路径切薄壳（进度：harness 已收口 adapter、gateway complete_stream 已 Canonical 对接+Langfuse 观测收口；B2 完成 call_llm_stream 薄壳转调 + provider_options 机制；C 完成：complete_stream_async(异步 Canonical/tool_call 事件/per-chunk 超时/retryable 重试) + complete_with_tools + call_llm/call_llm_with_tools 薄壳 + LiteLLMClient.chat_stream→CanonicalEvent 翻译层 + grep 门禁收紧至仅 adapter + 真实验证(方舟 GLM 工具调用流式+stream=True bug 修复)。见 tests/validation/llm-provider-gateway-validation.md）：`llm.py` 三入口与 `harness/litellm_client.py` 转调 gateway（deprecation warning），合同测试对拍双路径一致后收紧 grep 门禁
 - [x] 5.2 端到端验证：全量 pytest + 一轮 evals 跑批（方舟 GLM + opencode judge）比对 r6 基线（judge_failures=0、四 rubric 有意义分布不回退）
 - [x] 5.3 文档：架构文档更新（docs/architecture.md 增 gateway 层）、incident 016/017 补「根治指向」链接；@live 用例改为读 resolver 配置（修方舟 404 环境性失败）
 - [ ] 5.4 人工验证报告（已落 tests/validation/llm-provider-gateway-validation.md；archive 待 5.1 收口）： `tests/validation/`（设置页 probe 交互 + 换 provider 演练），走 sync + archive
