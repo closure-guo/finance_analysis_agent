@@ -210,6 +210,8 @@ def complete_text(
         purpose=purpose,
         finish_reason=resp.choices[0].finish_reason,
         max_tokens_source="requested" if max_tokens is not None else "capability",
+        # usage 真值存在时非估算（设计档案 §12：估算必须标 usage_estimated=true）
+        usage_estimated=getattr(resp, "usage", None) is None,
     )
     metadata["raw_content"] = raw_content
     metadata["raw_reasoning"] = raw_reasoning

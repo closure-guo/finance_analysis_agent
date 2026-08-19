@@ -162,3 +162,41 @@ async def test_async_error_observation_includes_error_type(monkeypatch):
         ):
             pass
     assert obs.updated.get("metadata", {}).get("error_type")
+
+
+def test_complete_text_metadata_has_usage_estimated(monkeypatch):
+    """生产路径接线：complete_text 返回 metadata 带 usage_estimated（§12）。"""
+    from types import SimpleNamespace
+
+    from finance_agent.llm.gateway import complete_text
+
+    def fake_raw_completion(**kwargs):  # noqa: ARG001
+        msg = SimpleNamespace(content="答", reasoning_content=None)
+        resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        return resp
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion", fake_raw_completion
+    )
+    _, meta = complete_text(
+        [{"role": "user", "content": "hi"}],
+        llm_config={"model": "deepseek/deepseek-chat", "baseUrl": "https://x/v1", "apiKey": "k"},
+    )
+    assert meta["usage_estimated"] is False
+
+    def fake_no_usage(**kwargs):  # noqa: ARG001
+        msg = SimpleNamespace(content="答", reasoning_content=None)
+        resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=msg, finish_reason="stop")], usage=None
+        )
+        return resp
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_completion", fake_no_usage)
+    _, meta = complete_text(
+        [{"role": "user", "content": "hi"}],
+        llm_config={"model": "deepseek/deepseek-chat", "baseUrl": "https://x/v1", "apiKey": "k"},
+    )
+    assert meta["usage_estimated"] is True
