@@ -28,6 +28,10 @@ import {
   type LLMConfig,
   type LLMProfile,
   type ProfileStore,
+  canEnterMode,
+  clearCapability,
+  parseCapability,
+  type CapabilityMatrix,
 } from './llmConfig'
 
 // 搜索类工具集合：这类工具的状态与结果由独立搜索横幅（SearchBanner）承载，
@@ -123,6 +127,8 @@ export default function App() {
   const llmConfig = useMemo(() => getActiveConfig(profileStore), [profileStore])
   // apiKey 由激活 profile 派生（EmptyState/请求拦截保持语义不变）
   const apiKey = llmConfig.apiKey
+  // 当前激活 profile 的能力矩阵（probe 事实；null = 未探测 → 门禁放行）
+  const capability = llmConfig.capability ?? null
   // 切换激活 profile（LLM 切换下拉框使用）
   const switchProfile = useCallback((id: string) => {
     setProfileStore(prev => {
@@ -137,13 +143,34 @@ export default function App() {
     setProfileStore(prev => {
       // 无 profile 时自动创建默认 profile（含配置）
       if (prev.profiles.length === 0) {
-        const next = addProfile(prev, '我的配置', cfg)
+        const next = addProfile(prev, '我的配置', clearCapability(cfg))
         saveProfiles(next)
         return next
       }
       // 更新激活 profile 的 config
+      const newProfiles = prev.profiles.map(p => {
+        if (p.id !== prev.activeId) return p
+        // 连接三要素（apiKey/model/baseUrl）任一变更 → 旧 probe 事实失效，清空 capability；
+        // 未变更 → 保留 probe 事实（含本次会话内新探测结果）
+        const connectionChanged =
+          p.config.apiKey !== cfg.apiKey || p.config.model !== cfg.model || p.config.baseUrl !== cfg.baseUrl
+        const config = connectionChanged
+          ? clearCapability(cfg)
+          : { ...cfg, capability: cfg.capability ?? p.config.capability ?? null }
+        return { ...p, config }
+      })
+      const next = { ...prev, profiles: newProfiles }
+      saveProfiles(next)
+      return next
+    })
+  }, [])
+  // probe 事实落库：连通性测试成功后把 capability 写入激活 profile（无 profile 时不落库，仅在弹窗内展示）
+  const handleProbeCapability = useCallback((capability: CapabilityMatrix | null) => {
+    setProfileStore(prev => {
+      const active = prev.profiles.find(p => p.id === prev.activeId)
+      if (!active) return prev
       const newProfiles = prev.profiles.map(p =>
-        p.id === prev.activeId ? { ...p, config: cfg } : p
+        p.id === prev.activeId ? { ...p, config: { ...p.config, capability } } : p
       )
       const next = { ...prev, profiles: newProfiles }
       saveProfiles(next)
@@ -621,6 +648,7 @@ export default function App() {
           <EmptyState
             onSend={handleSendFromEmpty}
             apiKey={apiKey}
+            capability={capability}
             setShowSettings={setShowSettings}
             mode={mode}
             setMode={setMode}
@@ -709,6 +737,7 @@ export default function App() {
               leftInset={leftInset}
               mode={mode}
               setMode={setMode}
+              capability={capability}
               onNewAnalysis={newAnalysis}
               apiKey={apiKey}
               setShowSettings={setShowSettings}
@@ -727,6 +756,8 @@ export default function App() {
           config={llmConfig}
           backendDefaults={backendDefaults}
           profileStore={profileStore}
+          capability={capability}
+          onProbeCapability={handleProbeCapability}
           onSave={handleSaveConfig}
           onSaveAs={handleSaveAsConfig}
           onSwitchProfile={switchProfile}
@@ -895,9 +926,10 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
 }
 
 // ── Empty State ──
-function EmptyState({ onSend, apiKey, setShowSettings, mode, setMode, profileName, profiles, activeProfileId, onSwitchProfile }: {
+function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, setMode, profileName, profiles, activeProfileId, onSwitchProfile }: {
   onSend: (text: string, mode?: string) => void
   apiKey: string
+  capability: CapabilityMatrix | null
   setShowSettings: (v: boolean) => void
   mode: 'quick' | 'deep'
   setMode: (m: 'quick' | 'deep') => void
@@ -965,13 +997,17 @@ function EmptyState({ onSend, apiKey, setShowSettings, mode, setMode, profileNam
             </button>
             {dropdownOpen && (
               <div className="absolute left-4 top-7 z-[70] w-72 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
-                {modes.map(m => (
+                {modes.map(m => {
+                  const gate = canEnterMode(m.id, capability)
+                  return (
                   <button
                     key={m.id}
-                    onClick={() => { setMode(m.id); setDropdownOpen(false) }}
-                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors"
+                    onClick={() => { if (gate.allowed) { setMode(m.id); setDropdownOpen(false) } }}
+                    disabled={!gate.allowed}
+                    title={gate.allowed ? undefined : gate.reason}
+                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
-                    onMouseEnter={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+                    onMouseEnter={(e) => { if (mode !== m.id && gate.allowed) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
                     onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                   >
                     <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
@@ -981,9 +1017,13 @@ function EmptyState({ onSend, apiKey, setShowSettings, mode, setMode, profileNam
                         {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
                       </div>
                       <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{m.desc}</div>
+                      {!gate.allowed && (
+                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--status-error-default)' }}>{gate.reason}</div>
+                      )}
                     </div>
                   </button>
-                ))}
+                  )
+                })}
               </div>
             )}
 
@@ -1694,11 +1734,12 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
+function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
   onSend: (text: string) => void
   leftInset: number
   mode: 'quick' | 'deep'
   setMode: (m: 'quick' | 'deep') => void
+  capability: CapabilityMatrix | null
   onNewAnalysis: () => void
   apiKey: string
   setShowSettings: (v: boolean) => void
@@ -1760,13 +1801,17 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis, apiKey,
             </button>
             {modeDropdownOpen && (
               <div className="absolute left-1 bottom-8 z-[70] w-72 glass-card rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
-                {modes.map(m => (
+                {modes.map(m => {
+                  const gate = canEnterMode(m.id, capability)
+                  return (
                   <button
                     key={m.id}
                     onClick={() => handleModeSelect(m.id)}
-                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors"
+                    disabled={!gate.allowed}
+                    title={gate.allowed ? undefined : gate.reason}
+                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
-                    onMouseEnter={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+                    onMouseEnter={(e) => { if (mode !== m.id && gate.allowed) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
                     onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                   >
                     <i className={`fas ${m.icon} ${m.color} text-xs mt-0.5`}></i>
@@ -1776,12 +1821,16 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis, apiKey,
                         {mode === m.id && <i className="fas fa-check ml-1.5 text-[10px]"></i>}
                       </div>
                       <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{m.desc}</div>
+                      {!gate.allowed && (
+                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--status-error-default)' }}>{gate.reason}</div>
+                      )}
                     </div>
-                    {mode !== m.id && (
+                    {mode !== m.id && gate.allowed && (
                       <span className="text-[10px] mt-0.5 flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>新会话</span>
                     )}
                   </button>
-                ))}
+                  )
+                })}
               </div>
             )}
 
@@ -1848,10 +1897,12 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, onNewAnalysis, apiKey,
 
 // ── Settings Modal（LLM 设置面板，取代旧版仅 API Key 的弹窗）──
 // 实现 delta 5.1/5.5（模型/BaseURL/思考开关）、6.1-6.5（Provider 预设 + 模型发现）、7.1-7.4（连通性测试）。
-function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+function SettingsModal({ config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
   config: LLMConfig
   backendDefaults: { model: string; baseUrl: string; thinking: string }
   profileStore: ProfileStore
+  capability: CapabilityMatrix | null
+  onProbeCapability: (cap: CapabilityMatrix | null) => void
   onSave: (cfg: LLMConfig) => void
   onSaveAs: (cfg: LLMConfig, name: string) => void
   onSwitchProfile: (id: string) => void
@@ -1876,6 +1927,15 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
   const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'success' | 'fail'>('idle')
   const [testLatencyMs, setTestLatencyMs] = useState<number | undefined>(undefined)
   const [testMessage, setTestMessage] = useState('')
+  // probe 得到的能力矩阵（弹窗内展示；连接三要素变更后置空待重探测）
+  const [capability, setCapability] = useState<CapabilityMatrix | null>(capabilityProp)
+  const [testWarnings, setTestWarnings] = useState<string[]>([])
+
+  // 连接三要素（apiKey/model/baseUrl）变更 → 旧 probe 事实失效
+  const invalidateCapability = () => {
+    setCapability(null)
+    setTestWarnings([])
+  }
 
   // 思考模式开关仅在 DeepSeek 模型下展示（delta 5.5）
   const showThinkingToggle = isDeepSeekModel(model)
@@ -1889,6 +1949,7 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
     setModel(preset.model)
     setBaseUrl(preset.baseUrl)
     setThinking(preset.thinking || 'enabled')
+    invalidateCapability()
   }
 
   // 刷新模型列表：调用后端代理拉取 {base_url}/models（delta 6.3）
@@ -1943,14 +2004,20 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
           thinking: showThinkingToggle ? thinking : '',
         }),
       })
-      const data: { success?: boolean; latency_ms?: number; model?: string; error?: string; error_type?: string } = await resp.json().catch(() => ({}))
+      // 后端响应为 camelCase（latencyMs/errorType/capability/warnings）；旧代码误读 snake_case 导致延迟不显示
+      const data: { success?: boolean; latencyMs?: number; model?: string; error?: string; errorType?: string; capability?: unknown; warnings?: unknown } = await resp.json().catch(() => ({}))
       if (data?.success) {
         setTestStatus('success')
-        setTestLatencyMs(typeof data.latency_ms === 'number' ? data.latency_ms : undefined)
+        setTestLatencyMs(typeof data.latencyMs === 'number' ? data.latencyMs : undefined)
         setTestMessage(typeof data.model === 'string' ? data.model : '')
+        // probe 事实：capability 矩阵 + warnings（成功但无 capability 视为未探测）
+        const cap = parseCapability(data.capability)
+        setCapability(cap)
+        setTestWarnings(Array.isArray(data.warnings) ? data.warnings.filter((w): w is string => typeof w === 'string') : [])
+        onProbeCapability(cap)
       } else {
         setTestStatus('fail')
-        setTestMessage(formatTestError(data?.error_type, data?.error))
+        setTestMessage(formatTestError(data?.errorType, data?.error))
       }
     } catch {
       setTestStatus('fail')
@@ -1965,6 +2032,8 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
       baseUrl: baseUrl.trim(),
       // 非 DeepSeek 模型不持久化 thinking（开关已隐藏）
       thinking: showThinkingToggle ? thinking : '',
+      // 携带当前 probe 事实（连接三要素未变时保留；变更则由父级 clearCapability 清空）
+      capability,
     })
     onClose()
   }
@@ -1994,7 +2063,7 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
           type="password"
           placeholder="sk-..."
           value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
+          onChange={e => { setApiKey(e.target.value); invalidateCapability() }}
           className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         />
@@ -2004,9 +2073,9 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
         <div className="flex gap-2 mb-2">
           <input
             type="text"
-            placeholder={backendDefaults.model || 'deepseek/deepseek-chat'}
-            value={model}
-            onChange={e => setModel(e.target.value)}
+          placeholder={backendDefaults.model || 'deepseek/deepseek-chat'}
+          value={model}
+          onChange={e => { setModel(e.target.value); invalidateCapability() }}
             className="flex-1 glass-input rounded-xl px-4 py-3 text-sm outline-none"
             style={{ color: 'var(--text-default)' }}
           />
@@ -2056,7 +2125,7 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
           type="text"
           placeholder={backendDefaults.baseUrl || 'https://api.deepseek.com/v1（留空使用默认）'}
           value={baseUrl}
-          onChange={e => setBaseUrl(e.target.value)}
+          onChange={e => { setBaseUrl(e.target.value); invalidateCapability() }}
           className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         />
@@ -2106,6 +2175,51 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
               {testMessage}
             </p>
           )}
+
+          {/* 能力矩阵（harden-llm-gateway Task 6：probe 事实驱动展示） */}
+          <div className="mt-3 glass-input rounded-xl px-4 py-3">
+            <div className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+              <i className="fas fa-clipboard-check mr-1"></i>能力矩阵
+            </div>
+            {capability ? (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5" data-testid="capability-matrix">
+                {(
+                  [
+                    { key: 'non_stream', label: '非流式' },
+                    { key: 'stream', label: '流式' },
+                    { key: 'tool_call', label: '工具调用' },
+                    { key: 'tool_followup', label: '工具跟随' },
+                    { key: 'json_output', label: 'JSON 输出' },
+                  ] as { key: keyof CapabilityMatrix; label: string }[]
+                ).map(item => (
+                  <div key={item.key} className="flex items-center gap-1.5 text-xs" data-testid={`capability-${item.key}`}>
+                    <i
+                      className={`fas ${capability[item.key] ? 'fa-check-circle' : 'fa-times-circle'}`}
+                      style={{ color: capability[item.key] ? 'var(--status-success-default)' : 'var(--status-error-default)' }}
+                    ></i>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {item.label}
+                      {!capability[item.key] && <span style={{ color: 'var(--text-tertiary)' }}>（不支持）</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              // probe_required：未探测时提示（不展示错误，仅静态能力语义）
+              <p className="text-[11px]" data-testid="capability-probe-required" style={{ color: 'var(--text-tertiary)' }}>
+                <i className="fas fa-info-circle mr-1"></i>未探测，展示静态能力。点击「测试连接」获取该 provider 的实测能力矩阵。
+              </p>
+            )}
+            {testWarnings.length > 0 && (
+              <ul className="mt-2 space-y-1" data-testid="capability-warnings">
+                {testWarnings.map((w, i) => (
+                  <li key={i} className="text-[11px]" style={{ color: 'var(--status-warning-default)' }}>
+                    <i className="fas fa-exclamation-triangle mr-1"></i>{w}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
 
         {/* 配置管理区（delta Decision 10） */}
@@ -2129,7 +2243,7 @@ function SettingsModal({ config, backendDefaults, profileStore, onSave, onSaveAs
                 const name = profileName.trim()
                 if (!name) return
                 // 将当前表单值另存为新 profile
-                onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '' }, name)
+                onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '', capability }, name)
                 setProfileName('')
               }}
               className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap"
