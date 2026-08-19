@@ -44,6 +44,7 @@
 | grep 门禁 | allowlist 收紧为仅 `llm/adapters/litellm_adapter.py`；`src/finance_agent` 无残留 `import litellm` | ✅ 门禁+src grep 双通过 |
 | 真实 async + 工具验证 | 方舟 GLM：经 LiteLLMClient→complete_stream_async 真实工具调用 `search_stock {'query':'贵州茅台'}`，thinking 36/text 10/tools 1/done 1 | ✅ 成功路径通过 |
 | 真实验证暴露 bug 修复 | 首跑暴露 `complete_stream_async` 漏传 `stream=True`（取到非流式 ModelResponse）→ 修复 + 防回归断言（95e86e1） | ✅ 修复后通过 |
+| 终审 I1/I2 修复 | harness 输出预算显式 `max_tokens=16384`（防 incident-016 类截断回归）+ ark-glm/deepseek-official 声明 `tool_choice_required=True`（force_tool 轮不再被 guard 硬拒）（00c79b8） | ✅ 1031 passed |
 
 已知边界（C 计划内）：with_tools 的 deepseek thinking+tools 开启（语义修正，零生产调用方）；resolver apiKey 放宽（Ollama 无 key 本地端点回归修复）；`drop_params=True` 保留并注释指向 follow-up（judge 路径迁移后白名单化）。真实验证中 generator 提前 aclose 时 Langfuse OTel context detach 告警（非致命，业务成功）→ follow-up。
 
