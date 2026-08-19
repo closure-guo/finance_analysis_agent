@@ -4,8 +4,10 @@
 优先级：请求级 llm_config → 命名 preset → 环境变量 → registry 默认。
 
 核心不变量：
-- 原子性：请求级配置存在时必须完整，缺关键字段抛 IncompleteLLMConfigError，
-  禁止与环境变量混搭成半套配置（judge 回退 LLM_* 打错网关的根因，PR #74）。
+- 原子性：请求级配置 model+baseUrl 必须齐全（缺 baseUrl 抛
+  IncompleteLLMConfigError），apiKey 可省——keyless 本地端点（Ollama）
+  或显式 env 回退（LLM_API_KEY → DEEPSEEK_API_KEY）。
+  原 judge 回退 LLM_* 打错网关（PR #74）的混搭防线保留在 baseUrl 层。
 - 调用时读环境：模块级不缓存任何环境值（python -m 入口 import 早于
   load_dotenv 的时序 bug 回归）。
 - judge 不静默借用 LLM_*：评估裁判必须显式配置（JUDGE_*），或显式选择
@@ -141,11 +143,14 @@ def resolve_profile(
         api_key = str(llm_config.get("apiKey") or "") or None
         if not model:
             raise IncompleteLLMConfigError("请求级 llm_config 缺 model")
-        if not base_url or not api_key:
+        if not base_url:
+            # 缺 baseUrl 才是半套；apiKey 可省（keyless 本地端点，如 Ollama），
+            # 省略时显式 env 回退（LLM_API_KEY → DEEPSEEK_API_KEY），仍无则 None
             raise IncompleteLLMConfigError(
-                f"请求级 llm_config 不完整（model={model}, baseUrl={'有' if base_url else '缺'}, "
-                f"apiKey={'有' if api_key else '缺'}）——禁止与环境变量混搭成半套配置"
+                f"请求级 llm_config 不完整（model={model}, baseUrl=缺）——"
+                "缺端点才是半套配置；apiKey 可省略（env 回退或 keyless 端点）"
             )
+        api_key = api_key or env.get("LLM_API_KEY", "") or env.get("DEEPSEEK_API_KEY", "") or None
         model = _ensure_prefix(model, base_url)
         provider = model.split("/", 1)[0]
         return ModelProfile(
@@ -198,10 +203,11 @@ def resolve_profile(
             default_params={},
             provider_options=_provider_options_from_env(env, model),
         )
-    if not base_url or not api_key:
+    if not base_url:
+        # 有 apiKey 无端点仍是半套；有端点无 key 允许（keyless 本地端点）
         raise IncompleteLLMConfigError(
-            f"环境变量配置不完整（model={model}, baseUrl={'有' if base_url else '缺'}, "
-            f"apiKey={'有' if api_key else '缺'}）"
+            f"环境变量配置不完整（model={model}, baseUrl=缺, apiKey={'有' if api_key else '缺'}）——"
+            "缺端点才是半套配置；apiKey 可省略（keyless 端点）"
         )
     model = _ensure_prefix(model, base_url)
     cap = (

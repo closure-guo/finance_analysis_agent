@@ -94,6 +94,14 @@ class TestFinalizeArguments:
         calls = finalize_tool_calls(acc)
         assert json.loads(calls[0]["function"]["arguments"]) == {}
 
+    def test_nested_arguments_invalid_json_inner_kept_as_wrapper(self):
+        """literal 用例（review finding）：嵌套 arguments 内层非法 JSON → 解包失败，
+        保留 wrapper dict 原样重序列化（不因清洗破坏请求）。"""
+        acc = ToolCallAccumulator()
+        acc.add(_delta(0, id="c", name="t", args=json.dumps({"arguments": "not json {{"})))
+        calls = finalize_tool_calls(acc)
+        assert json.loads(calls[0]["function"]["arguments"]) == {"arguments": "not json {{"}
+
 
 class TestSanitizeRequestMessages:
     def test_delegates_to_sanitize_messages_for_profile(self):

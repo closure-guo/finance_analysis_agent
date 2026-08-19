@@ -72,12 +72,55 @@ class TestPriorityOrder:
 
 class TestNoHalfConfigDrift:
     def test_partial_request_config_raises(self):
-        """请求级只有 model 无端点凭据 → 显式报错，禁止与环境变量混搭。"""
+        """请求级只有 model 无端点 → 显式报错，禁止与环境变量混搭。"""
         with pytest.raises(IncompleteLLMConfigError):
             resolve_profile(
                 purpose="deep",
-                llm_config={"model": "glm-5.2"},  # 缺 baseUrl/apiKey
+                llm_config={"model": "glm-5.2"},  # 缺 baseUrl
                 _env={"LLM_API_KEY": "sk-env", "LLM_BASE_URL": "https://env.example/v1"},
+            )
+
+    def test_keyless_request_config_resolves(self):
+        """请求级 model+baseUrl 无 key（keyless 本地端点，如 Ollama preset）→ api_key=None。"""
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={"model": "openai/llama3", "baseUrl": "http://localhost:11434/v1"},
+            _env={},
+        )
+        assert profile.model == "openai/llama3"
+        assert profile.base_url == "http://localhost:11434/v1"
+        assert profile.api_key is None
+
+    def test_keyless_request_config_falls_back_to_env_key(self):
+        """请求级缺 key 时显式 env 回退：LLM_API_KEY 优先，其次 DEEPSEEK_API_KEY。"""
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={"model": "glm-5.2", "baseUrl": "https://ark.example/v3"},
+            _env={"LLM_API_KEY": "sk-env", "DEEPSEEK_API_KEY": "sk-ds"},
+        )
+        assert profile.api_key == "sk-env"
+        profile2 = resolve_profile(
+            purpose="deep",
+            llm_config={"model": "glm-5.2", "baseUrl": "https://ark.example/v3"},
+            _env={"DEEPSEEK_API_KEY": "sk-ds"},
+        )
+        assert profile2.api_key == "sk-ds"
+
+    def test_env_keyless_with_base_url_resolves(self):
+        """环境变量 model+base_url 无 key → keyless 端点，api_key=None。"""
+        profile = resolve_profile(
+            purpose="deep",
+            _env={"LLM_MODEL": "llama3", "LLM_BASE_URL": "http://localhost:11434/v1"},
+        )
+        assert profile.model == "openai/llama3"
+        assert profile.api_key is None
+
+    def test_env_key_without_base_url_still_raises(self):
+        """环境变量 model+key 无端点 → 仍是半套配置，显式报错。"""
+        with pytest.raises(IncompleteLLMConfigError):
+            resolve_profile(
+                purpose="deep",
+                _env={"LLM_MODEL": "glm-5.2", "LLM_API_KEY": "k"},
             )
 
     def test_judge_purpose_no_silent_fallback(self):

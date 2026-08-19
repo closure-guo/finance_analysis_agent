@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from finance_agent.llm.adapters.litellm_adapter import (
     apply_provider_options,
+    raw_acompletion,
     raw_completion,
     raw_stream,
 )
@@ -106,4 +107,36 @@ class TestRawTimeoutInjection:
         captured: list[dict] = []
         self._patch_completion(monkeypatch, captured)
         raw_completion(model="openai/m", timeout=42)
+        assert captured[0]["timeout"] == 42
+
+    def test_raw_acompletion_injects_default_timeout(self, monkeypatch):
+        """async 路径同样注入请求级默认超时（review finding：旧 harness timeout=120 行为回归）。"""
+        import asyncio
+
+        import litellm
+
+        captured: list[dict] = []
+
+        async def fake_acompletion(**kwargs):
+            captured.append(kwargs)
+            return "resp"
+
+        monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+        monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+        asyncio.run(raw_acompletion(model="openai/m"))
+        assert captured[0]["timeout"] == 300.0
+
+    def test_raw_acompletion_explicit_timeout_not_overwritten(self, monkeypatch):
+        import asyncio
+
+        import litellm
+
+        captured: list[dict] = []
+
+        async def fake_acompletion(**kwargs):
+            captured.append(kwargs)
+            return "resp"
+
+        monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+        asyncio.run(raw_acompletion(model="openai/m", timeout=42))
         assert captured[0]["timeout"] == 42

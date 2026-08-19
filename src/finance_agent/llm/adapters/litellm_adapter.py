@@ -426,4 +426,4 @@ async def raw_acompletion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return await litellm.acompletion(**kwargs)
+    return await litellm.acompletion(**_with_default_timeout(dict(kwargs)))
