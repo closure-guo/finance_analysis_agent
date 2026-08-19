@@ -16,6 +16,21 @@
 | judge 输入合同 | `tests/evals/test_judges.py`（input_missing 不评分） | ✅ 15 passed |
 | 端到端评估跑批 | `python -m evals.run baseline-v2-ark --local` | ⬜ 见附录（后台跑批） |
 
+## B2 轮次（2026-08-19，feat/llm-gateway-51：call_llm_stream 薄壳转调）
+
+| 验证项 | 依据 | 结果 |
+|---|---|---|
+| provider_options 机制（§7.1） | `tests/llm/test_provider_options.py`（registry 三件套 + resolver 三层合并 + 白名单拒绝） | ✅ 全绿 |
+| adapter 消费 + timeout 注入 | `tests/llm/adapters/test_apply_provider_options.py` + gateway temperature 用例 | ✅ 全绿 |
+| 薄壳双路径对拍 | `tests/llm/test_llm_stream_thinshell.py`（tuple 流 == CanonicalEvent 流拼接；error→重抛 LLMError retryable；DeprecationWarning；半套配置拒绝） | ✅ 全绿 |
+| 受影响测试迁移 | `tests/test_llm.py` 3 个 stream 测试 + `test_pipeline_llm_config.py`（mock 目标 → `adapters.litellm_adapter.raw_stream`，断言零弱化） | ✅ 全绿 |
+| 全量回归 | `uv run pytest -k "not live"` | ✅ 1026 passed（基线 992 + 新增） |
+| lint / 类型 | ruff 全过；mypy 69 错误集与基线 027121f 逐行一致（零新增） | ✅ |
+| grep 门禁 | legacy.py 仍在 allowlist（call_llm/call_llm_with_tools 未转调，计划内） | ✅ 通过 |
+| 真实 quick 验证 | 方舟 GLM（openai/glm-5.3）真实流式：`call_llm_stream(quick=True)` | ✅ 171 thinking 分片(702字) + 完整 answer（「A股T+1…」） |
+
+已知边界（B2 计划内）：薄壳对 messages 含 tool 角色不再强制 disable_thinking（task C 域）；半套请求配置经 resolver 显式拒绝（spec「半套请求配置被拒绝」），1 个旧测试随迁为完整配置。
+
 ## 结论
 
 [ ] 全部通过，可 archive — 须待端到端跑批结果 + 5.1 薄壳转调收口
