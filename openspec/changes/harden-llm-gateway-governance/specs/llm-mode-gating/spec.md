@@ -2,7 +2,7 @@
 
 ### Requirement: 前端能力矩阵展示
 
-设置页 SHALL 展示当前 profile 的能力矩阵（non_stream/stream/tool_call/tool_followup/json_output），数据来自 `/api/llm-config/test` 返回的 probe 结果；probe 未完成时先显示静态 capability，完成后更新。
+设置页 SHALL 展示当前 profile 的能力矩阵（non_stream/stream/tool_call/tool_followup/json_output），数据来自 `/api/llm-config/test` 返回的 probe 结果；probe 未完成时显示「未探测」提示（前端无静态 capability 来源，静态声明仅存在于后端 resolver），完成后以 probe 事实更新。
 (Previously: 后端端点已返回 capability 矩阵，前端未消费。)
 
 #### Scenario: probe 结果驱动矩阵
@@ -11,7 +11,7 @@
 
 ### Requirement: 模式入口按 capability 门禁
 
-前端 SHALL 按 capability 禁用不满足要求的模式入口并显示原因：`tool_call=false` 的 profile 禁用深度 ReAct（提示可切换 profile 或使用快速模式）；管线结构化入口在 `json_output=false` 时禁用。门禁 SHALL 消费 probe 事实（probe 优先于静态声明）。被禁用入口 MUST 显示禁用原因，不得静默隐藏。
+前端 SHALL 按 capability 禁用不满足要求的模式入口并显示原因：`tool_call=false` 的 profile 禁用深度 ReAct（提示可切换 profile 或使用快速模式）；管线结构化入口在 `json_output=false` 时显示降级提示（JSON 输出不可用，结构化节点质量可能下降），不禁用入口。门禁 SHALL 消费 probe 事实（probe 优先于静态声明）。被禁用入口 MUST 显示禁用原因，不得静默隐藏。
 (Previously: 任意 profile 均可进入任意模式，弱能力 provider 在深度模式下故障。)
 
 #### Scenario: 无工具能力禁用深度模式
