@@ -19,8 +19,8 @@ from finance_agent.llm.types import Capability, ModelProfile
 class DeepSeekOptions(BaseModel):
     """deepseek provider_options schema（设计档案 §7.1 示例）。
 
-    pydantic 默认拒绝未知 key（extra=ignore 不是本项目的语义——
-    未知配置项必须显式报错，禁止静默吞掉）。
+    pydantic v2 默认 ignore 未知 key——本 schema 显式 extra="forbid"
+    拒绝（未知配置项必须显式报错，禁止静默吞掉）。
     """
 
     model_config = ConfigDict(extra="forbid")
