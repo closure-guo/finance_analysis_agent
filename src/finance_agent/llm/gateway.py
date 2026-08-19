@@ -37,9 +37,15 @@ def build_trace_metadata(
     repair_count: int = 0,
     fallback_from: str | None = None,
     degradation: str | None = None,
+    max_tokens_source: str | None = None,
+    usage_estimated: bool | None = None,
 ) -> dict:
-    """构造 generation trace 契约字段（design 档案 §14）。"""
-    return {
+    """构造 generation trace 契约字段（design 档案 §14）。
+
+    ``max_tokens_source``（"requested"|"capability"）与 ``usage_estimated``
+    为可选预算治理观测键：仅显式传入时落入 dict，既有消费者不受影响。
+    """
+    meta = {
         "profile": profile.name,
         "provider": profile.provider,
         "model": profile.model,
@@ -53,6 +59,11 @@ def build_trace_metadata(
         "fallback_from": fallback_from,
         "degradation": degradation,
     }
+    if max_tokens_source is not None:
+        meta["max_tokens_source"] = max_tokens_source
+    if usage_estimated is not None:
+        meta["usage_estimated"] = usage_estimated
+    return meta
 
 
 def _start_trace_observation(trace: dict[str, Any] | None, profile, messages):
@@ -180,6 +191,11 @@ def complete_text(
         raw_content = message.content or ""
         raw_reasoning = getattr(message, "reasoning_content", "") or ""
     except Exception as exc:  # noqa: BLE001
+        if _gen is not None:
+            from contextlib import suppress
+
+            with suppress(Exception):  # 观测失败不阻断
+                _gen.update(metadata={"error_type": type(exc).__name__}, level="ERROR")
         _close_observation(_gen_cm)
         raise normalize_exception(exc) from exc
     # Langfuse output.answer 与 legacy call_llm 对齐：content 为空时用
@@ -190,7 +206,10 @@ def complete_text(
     _close_observation(_gen_cm)
     text = raw_content
     metadata = build_trace_metadata(
-        profile, purpose=purpose, finish_reason=resp.choices[0].finish_reason
+        profile,
+        purpose=purpose,
+        finish_reason=resp.choices[0].finish_reason,
+        max_tokens_source="requested" if max_tokens is not None else "capability",
     )
     metadata["raw_content"] = raw_content
     metadata["raw_reasoning"] = raw_reasoning
@@ -477,6 +496,11 @@ def complete_stream(
     except Exception as exc:  # noqa: BLE001
         _finalize_observation(_gen, _answer, _reasoning, _last_usage)
         err = normalize_exception(exc)
+        if _gen is not None:
+            from contextlib import suppress
+
+            with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                _gen.update(metadata={"error_type": type(err).__name__}, level="ERROR")
         yield CanonicalEvent(
             kind="error", finish_reason=type(err).__name__, raw={"error": str(err)}
         )
@@ -709,7 +733,11 @@ async def complete_stream_async(
                     from contextlib import suppress
 
                     with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
-                        _gen.update(output={"error": str(err)}, level="ERROR")
+                        _gen.update(
+                            output={"error": str(err)},
+                            level="ERROR",
+                            metadata={"error_type": type(err).__name__},
+                        )
                 raise err from exc
     finally:
         if _gen_cm is not None:
