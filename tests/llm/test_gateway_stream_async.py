@@ -240,3 +240,31 @@ async def test_per_chunk_timeout(monkeypatch):
             )
         )
     assert calls["n"] == 2
+
+
+class TestStreamFlag:
+    async def test_raw_acompletion_called_with_stream_true(self, monkeypatch):
+        """流式必须下发 stream=True（否则拿到非流式 ModelResponse，无 __aiter__）。
+
+        真实验证暴露：raw_acompletion 非流式返回 ModelResponse 非 async 迭代器，
+        complete_stream_async 若漏传 stream=True 会在 __aiter__ 抛 AttributeError。
+        """
+        captured: dict = {}
+
+        async def fake_raw(**kwargs):
+            captured.update(kwargs)
+            return _AsyncIter([_chunk(finish="stop")])
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_raw)
+        events = await _collect(
+            complete_stream_async(
+                [{"role": "user", "content": "hi"}],
+                llm_config={
+                    "model": "deepseek/deepseek-chat",
+                    "baseUrl": "https://api.deepseek.com/v1",
+                    "apiKey": "k",
+                },
+            )
+        )
+        assert captured["stream"] is True
+        assert any(e.kind == "finished" for e in events)

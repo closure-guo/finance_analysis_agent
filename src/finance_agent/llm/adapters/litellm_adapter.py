@@ -6,7 +6,9 @@
   全局 100 线程池提交 logging，worker 内 asyncio.run 新建 ProactorEventLoop，
   Windows/Py3.14 ``_fallback_socketpair`` 并发竞态令线程永久卡在 accept()
   （100 worker 全灭、退出 join 挂死）。项目 Langfuse 走自研 SDK，零损失。
-- ``drop_params``：历史行为保留（阶段二 Task 2.5 白名单化后收紧）。
+- ``drop_params``：保留（全局静默 drop 违背设计档案 §8，但 evals judge 仍直连
+  litellm、thinking+tools 组合等依赖它；judge 路径迁入 gateway 后按白名单化收紧，
+  见 follow-up gh#76/略）
 - litellm-langfuse 兼容补丁：1.85.x 与 langfuse 4.x 深度不兼容
   （version 属性、sdk_integration 参数等多处不匹配），noop 其 logger。
 

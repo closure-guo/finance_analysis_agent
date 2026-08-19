@@ -508,6 +508,8 @@ async def complete_stream_async(
         "max_tokens": budget,
         "api_base": profile.base_url,
         "tool_choice": tool_choice,
+        # 关键：必须流式（raw_acompletion 非流式返回 ModelResponse 而非 async 迭代器）
+        "stream": True,
         **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
         **provider_kwargs,
     }
