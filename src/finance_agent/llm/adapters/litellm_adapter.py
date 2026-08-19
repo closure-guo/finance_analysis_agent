@@ -156,6 +156,106 @@ def sanitize_messages_for_profile(messages: list[dict], capability: Capability) 
     return cleaned
 
 
+def sanitize_request_messages(messages: list[dict], capability: Capability) -> list[dict]:
+    """gateway 各入口复用命名的薄包装（delta Task 5.1-C.1）。
+
+    逻辑唯一实现仍是 ``sanitize_messages_for_profile``，此处仅提供
+    gateway 语义命名（请求前消息清洗），不复制实现。
+    """
+    return sanitize_messages_for_profile(messages, capability)
+
+
+# ── 工具增量合并收口（delta Task 5.1-C.1，设计 §8 职责 3）─────────────
+
+
+class ToolCallAccumulator:
+    """流式 tool_calls 增量按 index 聚合（自 harness/litellm_client.py:270-287 移植）。
+
+    litellm 流式 delta 的 tool_calls 片段形如
+    ``{id, function: {name, arguments}, index}``（attrs，测试可用同构 dict）；
+    arguments 片段跨 chunk 拼接，id/name 首次出现即固定。
+    """
+
+    def __init__(self) -> None:
+        self._calls: dict[int, dict] = {}
+
+    def add(self, delta: Any) -> None:
+        """聚合单个 tool_call 增量片段。"""
+        if isinstance(delta, dict):
+            idx = delta.get("index", 0)
+            tc_id = delta.get("id") or ""
+            func = delta.get("function") or {}
+        else:
+            idx = getattr(delta, "index", 0)
+            tc_id = getattr(delta, "id", None) or ""
+            func = getattr(delta, "function", None) or {}
+        if isinstance(func, dict):
+            name = func.get("name", "")
+            args = func.get("arguments", "")
+        else:
+            name = getattr(func, "name", None) or ""
+            args = getattr(func, "arguments", None) or ""
+
+        if idx not in self._calls:
+            self._calls[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+        call = self._calls[idx]
+        if tc_id:
+            call["id"] = tc_id
+        if name:
+            call["function"]["name"] = name
+        if args:
+            call["function"]["arguments"] += args
+
+    @property
+    def calls(self) -> dict[int, dict]:
+        """已聚合的 tool_call dict（按 index 键控）。"""
+        return self._calls
+
+
+def finalize_tool_calls(acc: ToolCallAccumulator) -> list[dict]:
+    """聚合结果 → 标准 tool_calls 列表（自 harness :46-57 / :411-430 移植）。
+
+    按 index 排序输出 ``{id, function: {name, arguments: <json str>}}``；
+    arguments 先经 ``_normalize_arguments_str``（单引号字面量重序列化），
+    再做嵌套 ``{"arguments": X}`` 解包（X 为 dict 直接用、为 str 保留），
+    空值归为 ``{}``，非法 JSON 不因清洗破坏请求。
+    """
+    import json
+
+    results: list[dict] = []
+    for idx in sorted(acc.calls.keys()):
+        raw = acc.calls[idx]
+        args_raw = raw["function"]["arguments"] or ""
+        normalized = _normalize_arguments_str(args_raw)
+        args_str: str = str(normalized) if normalized else "{}"
+        try:
+            parsed = json.loads(args_str) if args_str else {}
+        except (json.JSONDecodeError, ValueError):
+            parsed = {}
+        # 嵌套 {"arguments": X} 解包（模型偶发格式，_normalize_tool_args 语义）
+        if isinstance(parsed, dict) and len(parsed) == 1 and "arguments" in parsed:
+            inner = parsed["arguments"]
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except (json.JSONDecodeError, ValueError):
+                    inner = None
+            if isinstance(inner, dict):
+                parsed = inner
+            elif isinstance(inner, str):
+                args_str = inner
+                parsed = None
+        if parsed is not None:
+            args_str = json.dumps(parsed, ensure_ascii=False)
+        results.append(
+            {
+                "id": raw.get("id") or f"call_{idx}",
+                "function": {"name": raw["function"]["name"], "arguments": args_str},
+            }
+        )
+    return results
+
+
 def classify_outcome(finish_reason: str | None, *, saw_text_delta: bool) -> None:
     """finish_reason 归一化分型（delta Task 2.2）。
 
