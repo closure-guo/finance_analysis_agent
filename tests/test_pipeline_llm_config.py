@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from finance_agent.llm import LLMConfig
 
@@ -116,26 +116,31 @@ def test_node_without_llm_config_passes_none(mock_stream):
 # ── 端到端：llm_config 注入后使用正确模型 ──
 
 
-@patch("finance_agent.llm.legacy.litellm.completion")
-def test_pipeline_llm_config_uses_correct_model(mock_completion):
-    """llm_config.model 注入后，call_llm_stream 内部 litellm.completion 收到正确 model。
+@patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
+def test_pipeline_llm_config_uses_correct_model(mock_raw_stream):
+    """llm_config.model 注入后，call_llm_stream 经 gateway 下发给 raw_stream 正确 model。
 
-    这验证了完整透传链：call_llm_streaming(llm_config) → call_llm_stream(llm_config)
-    → _build_kwargs(llm_config) → litellm.completion(model=cfg.model)。
+    5.1-B2 迁移：call_llm_stream 薄壳转调 complete_stream，mock 目标改
+    adapter.raw_stream；llm_config 需完整（resolver 原子性）。
+
+    验证完整透传链：call_llm_streaming(llm_config) → call_llm_stream(llm_config)
+    → complete_stream → raw_stream(model=cfg.model)。
     """
-    # 构造流式响应 mock（call_llm_stream 用 litellm.completion(**kwargs, stream=True)）
-    mock_chunk = MagicMock()
-    mock_chunk.choices = [MagicMock()]
-    mock_chunk.choices[0].delta.content = "answer"
-    mock_chunk.choices[0].delta.reasoning_content = None
-    mock_chunk.choices[0].finish_reason = "stop"
-    mock_chunk.usage = None
-    mock_completion.return_value = iter([mock_chunk])
+    from types import SimpleNamespace
+
+    delta = SimpleNamespace(reasoning_content=None, content="answer")
+    choice = SimpleNamespace(delta=delta, finish_reason="stop")
+    chunk = SimpleNamespace(choices=[choice], usage=None)
+
+    def _fake_stream(**kwargs):  # noqa: ARG001
+        yield chunk
+
+    mock_raw_stream.side_effect = _fake_stream
 
     from finance_agent.nodes._llm_utils import call_llm_streaming
 
-    cfg = LLMConfig(model="openai/gpt-4o-mini")
+    cfg = LLMConfig(model="openai/gpt-4o-mini", baseUrl="https://api.test/v1", apiKey="k")
     call_llm_streaming("test", system="sys", llm_config=cfg)
 
-    completion_kwargs = mock_completion.call_args[1]
+    completion_kwargs = mock_raw_stream.call_args[1]
     assert completion_kwargs["model"] == "openai/gpt-4o-mini"

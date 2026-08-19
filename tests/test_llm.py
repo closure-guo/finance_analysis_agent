@@ -342,31 +342,28 @@ def test_call_llm_writes_reasoning_to_output(mock_completion, mock_get_langfuse)
     assert call_kwargs["output"]["reasoning"] == "思考过程"
 
 
-@patch("finance_agent.llm.legacy._get_langfuse")
-@patch("finance_agent.llm.legacy.litellm.completion")
-def test_call_llm_stream_writes_reasoning_to_output(mock_completion, mock_get_langfuse):
-    """call_llm_stream 累加 reasoning_content 并写入 generation output.reasoning。"""
+@patch("finance_agent.langfuse_tracing.get_langfuse")
+@patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
+def test_call_llm_stream_writes_reasoning_to_output(mock_raw_stream, mock_get_langfuse):
+    """call_llm_stream 累加 reasoning_content 并写入 generation output.reasoning。
 
-    def _delta(reasoning=None, content=None):
-        d = MagicMock()
-        d.reasoning_content = reasoning
-        d.content = content
-        return d
+    5.1-B2 迁移：观测收口在 gateway（complete_stream 经 trace 开启），
+    mock 目标改为 adapter.raw_stream / langfuse_tracing.get_langfuse。
+    """
 
-    def _chunk(delta):
-        c = MagicMock()
-        c.choices = [MagicMock(delta=delta)]
-        c.usage = None
-        return c
+    def _fake_stream(**kwargs):  # noqa: ARG001
+        from types import SimpleNamespace
 
-    # litellm.completion(stream=True) 返回同步 iterator（call_llm_stream 用 for 消费）
-    mock_completion.return_value = iter(
-        [
-            _chunk(_delta(reasoning="思考A")),
-            _chunk(_delta(reasoning="思考B")),
-            _chunk(_delta(content="最终答案")),
-        ]
-    )
+        def _chunk(reasoning=None, content=None, finish=None):
+            delta = SimpleNamespace(reasoning_content=reasoning, content=content)
+            choice = SimpleNamespace(delta=delta, finish_reason=finish)
+            return SimpleNamespace(choices=[choice], usage=None)
+
+        yield _chunk(reasoning="思考A")
+        yield _chunk(reasoning="思考B")
+        yield _chunk(content="最终答案")
+
+    mock_raw_stream.side_effect = _fake_stream
 
     mockObs = MagicMock()
     mockCm = MagicMock()
@@ -378,7 +375,16 @@ def test_call_llm_stream_writes_reasoning_to_output(mock_completion, mock_get_la
 
     from finance_agent.llm import call_llm_stream
 
-    results = list(call_llm_stream("hi", api_key="fake"))
+    results = list(
+        call_llm_stream(
+            "hi",
+            llm_config={
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://x/v1",
+                "apiKey": "k",
+            },
+        )
+    )
 
     # yield 顺序：thinking x2 + answer x1
     assert results == [("thinking", "思考A"), ("thinking", "思考B"), ("answer", "最终答案")]
@@ -613,24 +619,23 @@ def test_call_llm_omits_metadata_when_prompt_unset(mock_completion, mock_get_lan
     assert "prompt_version" not in md
 
 
-@patch("finance_agent.llm.legacy._get_langfuse")
-@patch("finance_agent.llm.legacy.litellm.completion")
-def test_call_llm_stream_attaches_prompt_metadata(mock_completion, mock_get_langfuse):
-    """call_llm_stream 把 prompt_name/prompt_version 经 metadata 挂到 generation。"""
+@patch("finance_agent.langfuse_tracing.get_langfuse")
+@patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
+def test_call_llm_stream_attaches_prompt_metadata(mock_raw_stream, mock_get_langfuse):
+    """call_llm_stream 把 prompt_name/prompt_version 经 metadata 挂到 generation。
 
-    def _delta(content=None):
-        d = MagicMock()
-        d.reasoning_content = None
-        d.content = content
-        return d
+    5.1-B2 迁移：metadata 经 trace dict 由 gateway 观测写入；mock 目标改
+    adapter.raw_stream / langfuse_tracing.get_langfuse。
+    """
 
-    def _chunk(content):
-        c = MagicMock()
-        c.choices = [MagicMock(delta=_delta(content=content))]
-        c.usage = None
-        return c
+    def _fake_stream(**kwargs):  # noqa: ARG001
+        from types import SimpleNamespace
 
-    mock_completion.return_value = iter([_chunk("答案")])
+        delta = SimpleNamespace(reasoning_content=None, content="答案")
+        choice = SimpleNamespace(delta=delta, finish_reason=None)
+        yield SimpleNamespace(choices=[choice], usage=None)
+
+    mock_raw_stream.side_effect = _fake_stream
 
     mockObs = MagicMock()
     mockCm = MagicMock()
@@ -642,7 +647,18 @@ def test_call_llm_stream_attaches_prompt_metadata(mock_completion, mock_get_lang
 
     from finance_agent.llm import call_llm_stream
 
-    list(call_llm_stream("hi", api_key="fake", prompt_name="bull_debater", prompt_version="local"))
+    list(
+        call_llm_stream(
+            "hi",
+            llm_config={
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://x/v1",
+                "apiKey": "k",
+            },
+            prompt_name="bull_debater",
+            prompt_version="local",
+        )
+    )
 
     call_kwargs = mockLf.start_as_current_observation.call_args.kwargs
     assert call_kwargs["metadata"]["prompt_name"] == "bull_debater"
@@ -756,26 +772,42 @@ def test_call_llm_metadata_omits_missing_fields(mock_completion, mock_get_langfu
     assert md2 == {"agent": "trader"}
 
 
-@patch("finance_agent.llm.legacy._get_langfuse")
-@patch("finance_agent.llm.legacy.litellm.completion")
-def test_call_llm_stream_named_by_agent(mock_completion, mock_get_langfuse):
-    """call_llm_stream 传 agent 时 observation name 用 agent 名。"""
+@patch("finance_agent.langfuse_tracing.get_langfuse")
+@patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
+def test_call_llm_stream_named_by_agent(mock_raw_stream, mock_get_langfuse):
+    """call_llm_stream 传 agent 时 observation name 用 agent 名。
 
-    def _chunk(text):
-        c = MagicMock()
-        d = MagicMock()
-        d.reasoning_content = None
-        d.content = text
-        c.choices = [MagicMock(delta=d)]
-        c.usage = None
-        return c
+    5.1-B2 迁移：观测收口在 gateway；mock 目标改
+    adapter.raw_stream / langfuse_tracing.get_langfuse。
+    """
 
-    mock_completion.return_value = iter([_chunk("a"), _chunk("b")])
+    def _fake_stream(**kwargs):  # noqa: ARG001
+        from types import SimpleNamespace
+
+        def _chunk(text):
+            delta = SimpleNamespace(reasoning_content=None, content=text)
+            choice = SimpleNamespace(delta=delta, finish_reason=None)
+            return SimpleNamespace(choices=[choice], usage=None)
+
+        yield _chunk("a")
+        yield _chunk("b")
+
+    mock_raw_stream.side_effect = _fake_stream
     mockLf = _mock_langfuse_for_naming(mock_get_langfuse)
 
     from finance_agent.llm import call_llm_stream
 
-    list(call_llm_stream("hi", api_key="fake", agent="trader"))
+    list(
+        call_llm_stream(
+            "hi",
+            llm_config={
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://x/v1",
+                "apiKey": "k",
+            },
+            agent="trader",
+        )
+    )
     kwargs = mockLf.start_as_current_observation.call_args.kwargs
     assert kwargs["name"] == "trader"
 

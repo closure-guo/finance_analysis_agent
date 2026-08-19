@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import contextlib
 import os
+import warnings
 from dataclasses import dataclass
+from typing import Any
 
 import litellm
 
@@ -285,6 +287,66 @@ def call_llm(
         return str(content)
 
 
+def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
+    """LLMConfig / dict → gateway 请求级 llm_config dict（5.1-B2 薄壳适配）。
+
+    - 无 model → None（complete_stream 经 env/preset 解析）
+    - baseUrl 缺 → env LLM_BASE_URL；apiKey 缺 → cfg.apiKey → api_key 参数
+      → LLM_API_KEY → DEEPSEEK_API_KEY（镜像 legacy _build_kwargs 回退链）
+    - thinking 仅在显式设置时携带
+    """
+    if isinstance(llm_config, LLMConfig):
+        model = llm_config.model
+        base_url = llm_config.baseUrl
+        key = llm_config.apiKey
+        thinking = llm_config.thinking
+    elif isinstance(llm_config, dict):
+        model = llm_config.get("model")
+        base_url = llm_config.get("baseUrl")
+        key = llm_config.get("apiKey")
+        thinking = llm_config.get("thinking")
+    else:
+        return None
+    if not model:
+        return None
+    cfg: dict = {"model": model}
+    effective_base = base_url or os.environ.get("LLM_BASE_URL", "")
+    if effective_base:
+        cfg["baseUrl"] = effective_base
+    effective_key = (
+        key or api_key or os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+    )
+    if effective_key:
+        cfg["apiKey"] = effective_key
+    if thinking:
+        cfg["thinking"] = thinking
+    return cfg
+
+
+# error 事件 finish_reason（类名字符串）→ errors 模块 typed error 类；
+# 旧名别名（OutputTruncated 等）指向同一类，__name__ 归并无歧义。
+from finance_agent.llm import errors as _llm_errors  # noqa: E402
+
+_ERROR_CLASS_BY_NAME: dict[str, type] = {
+    getattr(_llm_errors, _name).__name__: getattr(_llm_errors, _name)
+    for _name in dir(_llm_errors)
+    if isinstance(getattr(_llm_errors, _name), type)
+    and issubclass(getattr(_llm_errors, _name), _llm_errors.LLMError)
+}
+
+
+def _llm_model_for_name(llm_config: Any, quick: bool) -> str:
+    """observation 命名用 model 解析（镜像旧 litellm:{model} 行为）。"""
+    cfg_model = None
+    if isinstance(llm_config, LLMConfig):
+        cfg_model = llm_config.model
+    elif isinstance(llm_config, dict):
+        cfg_model = llm_config.get("model")
+    return (
+        cfg_model or os.environ.get("LLM_QUICK_MODEL" if quick else "LLM_MODEL") or _DEFAULT_MODEL
+    )
+
+
 def call_llm_stream(
     prompt: str,
     system: str = "",
@@ -300,28 +362,29 @@ def call_llm_stream(
     session_id: str | None = None,
     stock_code: str | None = None,
 ):
-    """Streaming LLM call — yields tokens one by one.
+    """Streaming LLM call — yields ("thinking"/"answer", text) tuples.
+
+    .. deprecated:: 5.1-B2
+        薄壳转调 :func:`finance_agent.llm.gateway.complete_stream`；观测收口在
+        gateway（经 trace dict 传入），本函数不再直接触 litellm/Langfuse。
 
     If ``messages`` is provided, it replaces the default prompt/system construction
     (used for tool result follow-up calls).
 
-    If ``quick=True``, uses LLM_QUICK_MODEL instead of LLM_MODEL.
+    llm_config 接受 LLMConfig 或完整 dict（model/baseUrl/apiKey[，thinking]）；
+    缺 model 时由 gateway 经 env/preset 解析。
 
-    llm_config.model（若提供）覆盖 quick/非 quick 的 model 解析。
-
-    prompt_name / prompt_version（ADR-0015 Task 4）：经 metadata 挂到 Langfuse
-    generation，兑现「Prompt 元数据可追溯」。两者均 None 时不写 metadata 键。
-
-    agent / session_id / stock_code：Langfuse generation 命名与过滤字段。
-    agent 非空时 observation name 用 agent 名（而非 litellm:{model}）；
-    三者仅在显式提供时写入 metadata（向后兼容）。
+    agent / session_id / stock_code：Langfuse generation 命名与过滤字段（经
+    trace metadata 透传给 gateway 观测）。
     """
-    if llm_config and llm_config.model:
-        model = llm_config.model
-    elif messages is not None or quick:
-        model = os.environ.get("LLM_QUICK_MODEL", _QUICK_MODEL)
-    else:
-        model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
+    warnings.warn(
+        "call_llm_stream 已弃用：请使用 finance_agent.llm.gateway.complete_stream",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from finance_agent.llm.types import Purpose
+
+    purpose: Purpose = "quick" if quick else "deep"
 
     if messages is None:
         messages = []
@@ -329,80 +392,31 @@ def call_llm_stream(
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-    # Tool result follow-up must disable thinking (DeepSeek requires reasoning_content passthrough)
-    disable_thinking = messages is not None and any(m.get("role") == "tool" for m in messages)
+    cfg_dict = _request_config_dict(llm_config, api_key)
+    trace = {
+        "name": agent or f"litellm:{_llm_model_for_name(llm_config, quick)}",
+        "metadata": _generation_metadata(
+            prompt_name, prompt_version, agent, session_id, stock_code
+        ),
+    }
 
-    kwargs = _build_kwargs(
-        model=model,
-        messages=messages,
+    from finance_agent.llm.gateway import complete_stream
+
+    for ev in complete_stream(
+        messages,
+        purpose=purpose,
         max_tokens=max_tokens,
-        stream=True,
         temperature=temperature,
-        api_key=api_key,
-        disable_thinking=disable_thinking,
-        llm_config=llm_config,
-    )
-
-    _lf = _get_langfuse()
-    _gen_cm = None
-    _gen = None
-    if _lf is not None:
-        try:
-            _gen_cm = _lf.start_as_current_observation(
-                as_type="generation",
-                name=agent or f"litellm:{model}",
-                model=model,
-                input={"messages": messages},
-                metadata=_generation_metadata(
-                    prompt_name, prompt_version, agent, session_id, stock_code
-                ),
-            )
-            _gen = _gen_cm.__enter__()
-        except Exception:
-            _gen = None
-            _gen_cm = None
-
-    try:
-        _accumulated = ""
-        _accumulated_reasoning_stream = ""  # 累加 DeepSeek reasoning_content（原生思考增量）
-        _last_usage = None
-        stream = litellm.completion(**kwargs)
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            # Yield reasoning content (thinking) and answer content separately
-            if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                _accumulated_reasoning_stream += str(delta.reasoning_content)
-                yield ("thinking", str(delta.reasoning_content))
-            if delta and delta.content:
-                _accumulated += str(delta.content)
-                yield ("answer", str(delta.content))
-            _u = getattr(chunk, "usage", None)
-            if _u:
-                _last_usage = _u
-
-        if _gen is not None:
-            try:
-                _ud = {}
-                if _last_usage:
-                    _ud = {
-                        "input": getattr(_last_usage, "prompt_tokens", 0) or 0,
-                        "output": getattr(_last_usage, "completion_tokens", 0) or 0,
-                    }
-                # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
-                _gen.update(
-                    output={
-                        "answer": truncate_for_trace(_accumulated),
-                        "reasoning": truncate_for_trace(_accumulated_reasoning_stream),
-                    },
-                    usage_details=_ud,
-                )
-                _gen.end()
-            except Exception:  # noqa: S110
-                pass
-    finally:
-        if _gen_cm is not None:
-            with contextlib.suppress(Exception):
-                _gen_cm.__exit__(None, None, None)
+        llm_config=cfg_dict,
+        trace=trace,
+    ):
+        if ev.kind == "reasoning":
+            yield ("thinking", ev.reasoning)
+        elif ev.kind == "text":
+            yield ("answer", ev.text)
+        elif ev.kind == "error":
+            err_cls = _ERROR_CLASS_BY_NAME.get(ev.finish_reason or "", _llm_errors.UnknownLLMError)
+            raise err_cls(ev.raw.get("error") or ev.finish_reason or "LLM error")
 
 
 def _extract_with_tools_output(resp) -> dict:
