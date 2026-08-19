@@ -15,8 +15,17 @@ from finance_agent.llm.adapters.litellm_adapter import (
     ensure_litellm_runtime,
     guard_params_supported,
 )
-from finance_agent.llm.errors import LLMTimeoutError
+from finance_agent.llm.errors import (
+    AuthError,
+    ContentFilteredError,
+    LLMTimeoutError,
+    ModelNotFoundError,
+    OutputContractError,
+    UnsupportedCapabilityError,
+)
+from finance_agent.llm.registry import get_profile_preset, list_presets
 from finance_agent.llm.resolver import resolve_profile
+from finance_agent.llm.router import select_profile
 from finance_agent.llm.types import ModelProfile, Purpose
 
 
@@ -117,6 +126,7 @@ def complete_text(
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
     llm_config: dict[str, Any] | None = None,
+    preset: str | None = None,
     temperature: float | None = None,
     trace: dict[str, Any] | None = None,
 ) -> tuple[str, dict]:
@@ -129,8 +139,9 @@ def complete_text(
 
     ``trace``（可选）开启 Langfuse generation 观测（name/metadata），
     观测失败不阻断业务；output 结构 ``{answer, reasoning}`` + usage_details。
+    ``preset``：显式命名 preset（透传 resolve_profile，fallback 链成员用）。
     """
-    profile = resolve_profile(purpose=purpose, llm_config=llm_config)
+    profile = resolve_profile(purpose=purpose, llm_config=llm_config, preset=preset)
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (
@@ -184,6 +195,79 @@ def complete_text(
     metadata["raw_content"] = raw_content
     metadata["raw_reasoning"] = raw_reasoning
     return text, metadata
+
+
+# fallback 链触发错误（spec llm-policy-router Requirement 2）：不可经同
+# profile 重试解决的（合同耗尽/内容过滤/鉴权/模型缺失/能力不支持）依链
+# 切换 profile；网络瞬时错误不在此处理（流路径内部自有重试）。
+_FALLBACK_TRIGGER_ERRORS = (
+    OutputContractError,
+    ContentFilteredError,
+    AuthError,
+    ModelNotFoundError,
+    UnsupportedCapabilityError,
+)
+_MAX_FALLBACK_ATTEMPTS = 3
+
+
+def complete_text_with_fallback(
+    messages: list[dict[str, Any]],
+    *,
+    purpose: Purpose = "deep",
+    llm_config: dict[str, Any] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    trace: dict[str, Any] | None = None,
+) -> tuple[str, dict]:
+    """带 fallback 链的非流式 complete 入口（harden Task 4）。
+
+    流程：resolve primary → 拼 candidates（primary + 其 registry fallback
+    名）→ select_profile 排序/能力校验得重试链 → 逐成员调
+    complete_text（primary 用请求级 llm_config 或命名 preset，fallback
+    成员用 ``preset=<name>``）。捕获 ``_FALLBACK_TRIGGER_ERRORS``：
+    链未耗尽换下一成员重试，成功后 metadata 合并 ``fallback_from``
+    （前一 profile 名）+ ``router_trace``；链耗尽上抛最后错误；其他
+    异常立即传播。总尝试次数 ≤3。业务调用点接线为 follow-up。
+    """
+    primary = resolve_profile(purpose=purpose, llm_config=llm_config)
+    candidates: list[ModelProfile] = [primary]
+    for name in primary.fallback:
+        candidates.append(get_profile_preset(name))
+    routed = select_profile(purpose=purpose, candidates=candidates)
+    # 路由 primary 与请求解析 primary 一致时直接用其链；不一致仍以
+    # 请求级 primary 打头（请求语义优先），链成员按路由序去重。
+    ordered: list[ModelProfile] = [primary]
+    for cand in [routed.primary, *routed.fallback_chain]:
+        if all(cand.name != p.name for p in ordered):
+            ordered.append(cand)
+    ordered = ordered[:_MAX_FALLBACK_ATTEMPTS]
+
+    preset_names = set(list_presets())
+    last_error: Exception | None = None
+    for idx, prof in enumerate(ordered):
+        # 请求级 primary 优先透传 llm_config；命名 preset 成员用 preset 名
+        use_config = llm_config if idx == 0 else None
+        use_preset = prof.name if prof.name in preset_names else None
+        try:
+            text, metadata = complete_text(
+                messages,
+                purpose=purpose,
+                max_tokens=max_tokens,
+                llm_config=use_config if use_preset is None else None,
+                preset=use_preset,
+                temperature=temperature,
+                trace=trace,
+            )
+        except _FALLBACK_TRIGGER_ERRORS as exc:
+            last_error = exc
+            if idx + 1 < len(ordered):
+                continue
+            raise
+        if idx > 0:
+            metadata["fallback_from"] = ordered[idx - 1].name
+            metadata["router_trace"] = routed.trace
+        return text, metadata
+    raise last_error if last_error is not None else RuntimeError("fallback 链为空")
 
 
 def _close_observation(gen_cm) -> None:

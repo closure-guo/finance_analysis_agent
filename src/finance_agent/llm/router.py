@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finance_agent.llm.errors import UnsupportedCapabilityError
-from finance_agent.llm.types import ModelProfile
+from finance_agent.llm.types import ModelProfile, Purpose
 
 # 各 purpose 的硬性能力要求：{capability 字段: 允许值集合}
 REQUIRED_CAPS: dict[str, dict[str, set[str]]] = {
@@ -57,7 +57,7 @@ def _cap_summary(profile: ModelProfile) -> dict[str, str]:
 
 def select_profile(
     *,
-    purpose: str,
+    purpose: Purpose,
     candidates: list[ModelProfile],
     allow_action_fallback: bool = False,
 ) -> RouterResult:

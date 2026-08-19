@@ -85,6 +85,8 @@ _PRESETS: dict[str, ModelProfile] = {
         ),
         default_params={},
         provider_options=dict(DEFAULT_PROVIDER_OPTIONS["deepseek"]),
+        # fallback 示例链（设计档案 §9）：DeepSeek 官方端点不可用时切官方 OpenAI
+        fallback=("openai-official",),
     ),
     "ark-glm": ModelProfile(
         name="ark-glm",
