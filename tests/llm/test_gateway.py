@@ -92,3 +92,38 @@ class TestCompleteTextTemperatureAndProviderOptions:
         assert kw["reasoning_effort"] == "max"
         assert "temperature" not in kw
         assert "suppress_temperature" not in kw
+
+
+def test_complete_text_hangs_times_out(monkeypatch):
+    """非流式 complete_text 半僵连接保护：raw_completion 卡死不挂进程。
+
+    管线 report/nlp/web_fetcher 经 call_llm → complete_text 走此路径——只有
+    请求级 300s 超时且对半僵连接不触发（evals 卡死根因同族），须线程泵兜底。
+    """
+    import threading
+    import time
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion",
+        lambda **kw: time.sleep(30) or None,  # 永不返回的半僵调用
+    )
+    from finance_agent.llm.gateway import complete_text
+
+    result: dict = {}
+
+    def run():
+        try:
+            complete_text(
+                [{"role": "user", "content": "hi"}],
+                llm_config={"model": "openai/glm-5.3", "baseUrl": "https://x/v1", "apiKey": "k"},
+                timeout_seconds=0.3,
+            )
+            result["err"] = None
+        except Exception as e:
+            result["err"] = type(e).__name__
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(4)
+    assert not t.is_alive(), "complete_text 卡死：timeout 未生效"
+    assert result["err"] == "LLMTimeoutError"

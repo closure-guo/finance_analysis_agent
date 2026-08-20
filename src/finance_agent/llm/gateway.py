@@ -29,6 +29,39 @@ from finance_agent.llm.router import select_profile
 from finance_agent.llm.types import ModelProfile, Purpose
 
 
+def _raw_completion_with_timeout(request_kwargs: dict[str, Any], timeout_seconds: float):
+    """raw_completion 半僵连接兜底（incident 016/017 同族）。
+
+    litellm 请求级 timeout 对挂死连接不触发——把阻塞调用放进 daemon 线程，
+    主侧队列超时强制终止；超时抛 retryable LLMTimeoutError（调用方重试）。
+    """
+    import queue as _q
+    import threading as _t
+
+    q: _q.Queue = _q.Queue()
+
+    def _call() -> None:
+        try:
+            from finance_agent.llm.adapters.litellm_adapter import raw_completion
+
+            q.put(("ok", raw_completion(**request_kwargs)))
+        except BaseException as exc:  # noqa: BLE001 -- 异常经队列回传
+            q.put(("err", exc))
+
+    _t.Thread(target=_call, daemon=True).start()
+    try:
+        status, item = q.get(timeout=timeout_seconds)
+    except _q.Empty:
+        from finance_agent.llm.errors import LLMTimeoutError
+
+        raise LLMTimeoutError(
+            f"非流式调用超过 {timeout_seconds}s 未返回（半僵连接），终止本次生成"
+        ) from None
+    if status == "err":
+        raise item
+    return item
+
+
 def build_trace_metadata(
     profile: ModelProfile,
     *,
@@ -140,6 +173,7 @@ def complete_text(
     preset: str | None = None,
     temperature: float | None = None,
     trace: dict[str, Any] | None = None,
+    timeout_seconds: float = 300.0,
 ) -> tuple[str, dict]:
     """统一非流式 complete 入口（5.1-C：trace 观测 + sanitize + raw_* 元数据）。
 
@@ -147,6 +181,9 @@ def complete_text(
     reasoning 回退）；metadata 除 trace 契约字段（build_trace_metadata）外
     附带 ``raw_content`` / ``raw_reasoning``（非 trace 字段，供 legacy 薄壳
     实现「content 为空回退 reasoning」旧行为）。
+    ``timeout_seconds``：半僵连接兜底（incident 016/017 同族——请求级 300s
+    超时对挂死连接不触发），非流式调用经 daemon 线程泵 + 队列超时强制终止
+    （report/nlp/web_fetcher 全经此路径）。
 
     ``trace``（可选）开启 Langfuse generation 观测（name/metadata），
     观测失败不阻断业务；output 结构 ``{answer, reasoning}`` + usage_details。
@@ -159,7 +196,6 @@ def complete_text(
         apply_provider_options,
         derive_output_budget,
         normalize_exception,
-        raw_completion,
         sanitize_request_messages,
     )
 
@@ -186,7 +222,7 @@ def complete_text(
     if not suppress_temperature and temperature is not None:
         request_kwargs["temperature"] = temperature
     try:
-        resp = raw_completion(**request_kwargs)
+        resp = _raw_completion_with_timeout(request_kwargs, timeout_seconds)
         message = resp.choices[0].message
         raw_content = message.content or ""
         raw_reasoning = getattr(message, "reasoning_content", "") or ""
