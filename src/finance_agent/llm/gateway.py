@@ -201,7 +201,11 @@ def complete_text(
     # Langfuse output.answer 与 legacy call_llm 对齐：content 为空时用
     # reasoning 作为 answer（legacy trace 行为），但返回 text 不做回退。
     _finalize_observation(
-        _gen, raw_content or raw_reasoning, raw_reasoning, getattr(resp, "usage", None)
+        _gen,
+        raw_content or raw_reasoning,
+        raw_reasoning,
+        getattr(resp, "usage", None),
+        metadata=(trace or {}).get("metadata"),
     )
     _close_observation(_gen_cm)
     text = raw_content
@@ -486,7 +490,9 @@ def complete_stream(
                 yield CanonicalEvent(kind="text", text=ct)
             if getattr(chunk, "usage", None):
                 _last_usage = chunk.usage
-        _finalize_observation(_gen, _answer, _reasoning, _last_usage)
+        _finalize_observation(
+            _gen, _answer, _reasoning, _last_usage, metadata=(trace or {}).get("metadata")
+        )
         try:
             classify_outcome(finish, saw_text_delta=saw_text)
         except Exception as exc:  # noqa: BLE001
@@ -496,7 +502,9 @@ def complete_stream(
             return
         yield CanonicalEvent(kind="finished", finish_reason=finish)
     except Exception as exc:  # noqa: BLE001
-        _finalize_observation(_gen, _answer, _reasoning, _last_usage)
+        _finalize_observation(
+            _gen, _answer, _reasoning, _last_usage, metadata=(trace or {}).get("metadata")
+        )
         err = normalize_exception(exc)
         if _gen is not None:
             from contextlib import suppress
@@ -515,12 +523,20 @@ def complete_stream(
 
 
 def _finalize_observation(
-    gen, answer: str, reasoning: str, last_usage, tool_calls: list | None = None
+    gen,
+    answer: str,
+    reasoning: str,
+    last_usage,
+    tool_calls: list | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """写 Langfuse generation output/usage（自 legacy 移植；无观测则 no-op）。
 
     incident #67：root span output 必须在 span exit/flush 前写，否则被丢弃。
     ``tool_calls``（可选）：``[{name, arguments}]`` 结构（自 harness 移植）。
+    ``metadata``（可选）：显式经 update 写入——langfuse 4.13 OTel 导出会把
+    start_as_current_observation(metadata=) 挤掉（观测 metadata 被 resource/
+    scope 属性覆盖），业务标记（如 judge environment）必须在 update 时落。
     """
     if gen is None:
         return
@@ -542,7 +558,10 @@ def _finalize_observation(
                 {"name": c["function"]["name"], "arguments": c["function"]["arguments"]}
                 for c in tool_calls
             ]
-        gen.update(output=output, usage_details=_ud)
+        update_kwargs: dict[str, Any] = {"output": output, "usage_details": _ud}
+        if metadata:
+            update_kwargs["metadata"] = metadata
+        gen.update(**update_kwargs)
     except Exception:  # noqa: S110 -- 观测失败不阻断业务
         pass
 
@@ -677,6 +696,7 @@ async def complete_stream_async(
                             reasoning_acc,
                             last_usage,
                             tool_calls=calls,
+                            metadata=(trace or {}).get("metadata"),
                         )
                         yield CanonicalEvent(kind="tool_call", tool_call={"calls": calls})
                         yield CanonicalEvent(kind="finished", finish_reason="tool_calls")
@@ -690,6 +710,7 @@ async def complete_stream_async(
                                 reasoning_acc,
                                 last_usage,
                                 tool_calls=calls,
+                                metadata=(trace or {}).get("metadata"),
                             )
                             yield CanonicalEvent(kind="tool_call", tool_call={"calls": calls})
                             yield CanonicalEvent(kind="finished", finish_reason="tool_calls")
@@ -712,6 +733,7 @@ async def complete_stream_async(
                         reasoning_acc,
                         last_usage,
                         tool_calls=calls,
+                        metadata=(trace or {}).get("metadata"),
                     )
                     yield CanonicalEvent(kind="tool_call", tool_call={"calls": calls})
                     yield CanonicalEvent(kind="finished", finish_reason="tool_calls")
@@ -721,6 +743,7 @@ async def complete_stream_async(
                         answer,
                         reasoning_acc,
                         last_usage,
+                        metadata=(trace or {}).get("metadata"),
                     )
                     yield CanonicalEvent(kind="finished", finish_reason=None)
                 return
