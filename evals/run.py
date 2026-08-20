@@ -120,7 +120,22 @@ def _local_scores(output: dict, expected: dict) -> tuple[dict, int]:
 def run_local(items: list[dict], experiment_name: str) -> list[dict]:
     rows: list[dict] = []
     for item in items:
-        output = run_task(item=item, expected_output=item.get("expected_output"))
+        # 单条隔离：一条 dataset 失败（如 OutputTruncated 耗尽重试）记录为
+        # skipped=error 后继续，不炸整批——否则 16 条基线对比被单条坏输出绑架。
+        try:
+            output = run_task(item=item, expected_output=item.get("expected_output"))
+        except Exception as exc:  # noqa: BLE001 -- 记录后继续下一条
+            print(f"[run] item 失败（已隔离继续）: {type(exc).__name__}: {exc}")
+            rows.append(
+                {
+                    "item": item["input"]["query"],
+                    "mode": item["input"]["mode"],
+                    "skipped": f"error:{type(exc).__name__}",
+                    "scores": {},
+                    "judge_failures": 0,
+                }
+            )
+            continue
         if output.get("skipped"):
             rows.append(
                 {
