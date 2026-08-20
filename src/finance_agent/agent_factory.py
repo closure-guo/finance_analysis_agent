@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import Any
 
 from finance_agent.harness import Agent, PermissionMode
+from finance_agent.harness.context import ContextBudget
 from finance_agent.llm import LLMConfig
 from finance_agent.prompts.loader import PromptInfo, load_prompt_with_meta
 
@@ -830,6 +831,27 @@ def _stream_graph(
 # ───────────────────────────────────────────────
 
 
+def _build_context_budget(
+    model: str, api_key: str | None, base_url: str | None
+) -> ContextBudget | None:
+    """按解析出的 react profile capability 派生 ContextBudget（设计档案 §12）。
+
+    与 harness/litellm_client.chat_stream 同语义：model/baseUrl/apiKey 三者
+    齐备才作为请求级 llm_config 下发，否则交 resolver 用 env/preset。
+    resolver 失败回落默认预算（ContextBudget()），绝不阻断 Agent 构建。
+    """
+    llm_config: dict[str, Any] | None = None
+    if model and base_url and api_key:
+        llm_config = {"model": model, "baseUrl": base_url, "apiKey": api_key}
+    try:
+        from finance_agent.llm.resolver import resolve_profile
+
+        profile = resolve_profile(purpose="react", llm_config=llm_config)
+        return ContextBudget.from_capability(profile.capability)
+    except Exception:  # noqa: BLE001 -- 预算派生失败不阻断 agent 构建
+        return ContextBudget()
+
+
 def build_agent(
     mode: str = "quick",
     api_key: str | None = None,
@@ -885,6 +907,9 @@ def build_agent(
         prompt_version=_mode_pinfo.prompt_version if _mode_pinfo else None,
     )
 
+    # 预算按 capability 派生（设计档案 §12）：Agent 上下文预算跟随解析 profile
+    context_budget = _build_context_budget(model, effectiveApiKey, effectiveBaseUrl)
+
     if mode == "quick":
         prompt = _mode_pinfo.template.format(now=_now()) if _mode_pinfo else ""
         agent = Agent(
@@ -894,6 +919,7 @@ def build_agent(
             permission_mode=PermissionMode.YOLO,
             max_iterations=3,
             llm=llm_client,
+            context_budget=context_budget,
         )
         # TESTING=1 时注册 stub web_search（固定结果，不调真实 Tavily），
         # 与 StubLLMClient 的 tool_call 场景配合，确定性复现"思考->web search->思考"。
@@ -914,6 +940,7 @@ def build_agent(
             permission_mode=PermissionMode.YOLO,
             max_iterations=10,
             llm=llm_client,
+            context_budget=context_budget,
         )
         web_sources_collector: list[dict] = []
         agent.tools.register(_make_search_stock(api_key), name="search_stock")
@@ -961,6 +988,7 @@ def build_agent(
             permission_mode=PermissionMode.YOLO,
             max_iterations=3,
             llm=llm_client,
+            context_budget=context_budget,
         )
         agent.tools.register(_web_search, name="web_search")
         return agent

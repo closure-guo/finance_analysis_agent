@@ -1,22 +1,23 @@
-"""LiteLLM 适配的 LLM 客户端。
+"""LiteLLM 适配的 LLM 客户端（CanonicalEvent→LLMResponse 翻译层）。
 
-用 litellm 替换 harness 默认的 httpx LLMClient，
-支持 DeepSeek/Kimi 等 OpenAI 兼容 API，包括 thinking mode 和 tool calling。
+delta 5.1-C Task 4：chat_stream 收口 gateway.complete_stream_async，本模块
+不再直接调用 litellm（无 _build_kwargs/自有重试/自有 Langfuse 观测），
+仅做构造字段 → gateway 参数、CanonicalEvent → LLMResponse 的翻译。
+provider 前缀补全 / provider options / 消息清洗 / 重试 / Langfuse 观测
+分别归构造器、adapter 与 gateway。
 """
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import json
 import logging
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC
 from typing import Any
 
 from finance_agent.harness.llm_client import LLMResponse
 from finance_agent.harness.types import ToolCallRequest
-from finance_agent.langfuse_tracing import truncate_for_trace
 
 logger = logging.getLogger("finance_agent.harness.litellm_client")
 
@@ -39,29 +40,11 @@ def _resolve_key(api_key: str | None) -> str:
     return os.environ.get("DEEPSEEK_API_KEY", "")
 
 
-def _is_deepseek(model: str) -> bool:
-    return "deepseek" in model.lower()
-
-
-def _normalize_tool_args(args: dict) -> dict:
-    """模型偶发返回嵌套 {"arguments": X} 格式，解包为真正参数。"""
-    if len(args) == 1 and "arguments" in args:
-        inner = args["arguments"]
-        if isinstance(inner, str):
-            try:
-                inner = json.loads(inner)
-            except (json.JSONDecodeError, TypeError):
-                return args
-        if isinstance(inner, dict):
-            return inner
-    return args
-
-
 def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) -> dict:
     """构造 generation metadata：仅在显式提供 prompt_name/version 时写入对应键。
 
     ADR-0015 Task 4：prompt 元数据可追溯。未传入时返回空 dict（与历史
-    Langfuse 调用向后兼容）。与 llm.py 中同名 helper 对称，避免跨模块依赖。
+    Langfuse 调用向后兼容）。
     """
     md: dict = {}
     if prompt_name:
@@ -79,7 +62,7 @@ def _generation_metadata(
     """构造 generation metadata：prompt 元数据 + agent 过滤字段。
 
     agent 仅在显式提供时写入（与 _prompt_metadata 相同的向后兼容约定，
-    不污染 metadata 命名空间）。与 llm.py 中同名 helper 同构，避免跨模块依赖。
+    不污染 metadata 命名空间）。
     """
     md = _prompt_metadata(prompt_name, prompt_version)
     if agent:
@@ -88,7 +71,7 @@ def _generation_metadata(
 
 
 class LiteLLMClient:
-    """用 litellm 实现的 LLM 客户端，接口与 harness LLMClient 一致。"""
+    """用 gateway 实现的 LLM 客户端，接口与 harness LLMClient 一致。"""
 
     def __init__(
         self,
@@ -111,81 +94,12 @@ class LiteLLMClient:
         # litellm 无法识别调用协议。自定义 OpenAI 兼容端点统一用 openai/ 前缀路由。
         if self.base_url and self.model and "/" not in self.model:
             self.model = f"openai/{self.model}"
-        # thinking 模式：None 时默认 "enabled"（向后兼容），由 build_agent 从 llm_config 注入
         self.thinking = thinking
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        # prompt 元数据（ADR-0015 Task 4）：ReAct 链路的 system_prompt 来自单一
-        # mode prompt（quick_mode / deep_mode / follow_up_mode），整个 agent 生命周期
-        # 固定，故作为 client 实例字段；chat_stream 每次都挂到 generation metadata。
-        # prompt_version 来自 Langfuse BasePrompt.version（int），本地兜底 "local"。
         self.prompt_name = prompt_name
         self.prompt_version = prompt_version
-        # agent 标签（Task 4）：harness 侧 generation observation 用 agent 名命名
-        # （如 react_agent），使其在 Langfuse trace 中可按 agent 归属/过滤。
         self.agent = agent
-
-        # Langfuse 可观测性（可选，ADR-0015）- 复用统一单例
-        self._langfuse = None
-        if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
-            from finance_agent.langfuse_tracing import get_langfuse
-
-            self._langfuse = get_langfuse()
-
-    def _build_kwargs(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        temperature: float = 0.7,
-        tool_choice: str = "auto",
-    ) -> dict[str, Any]:
-        """构建 litellm 参数，处理 DeepSeek 特有配置。"""
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "stream": True,
-            # 16384 与 llm.py 默认对齐：方舟 GLM-5.2 强制 thinking，reasoning
-            # 与正文共享 max_tokens 配额，不传（依赖端点默认 4096）会截断正文
-            # 或令 content 为空（quick/follow_up 空输出的根因之一）。
-            "max_tokens": 16384,
-            "timeout": 120,  # 整体请求超时（秒），防止 streaming 响应卡死
-        }
-
-        if self.api_key:
-            kwargs["api_key"] = self.api_key
-        if self.base_url:
-            kwargs["api_base"] = self.base_url
-
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = tool_choice
-
-        # DeepSeek: 开启原生思考模式（reasoning_content 与 content 分离下发）
-        # 官方文档（2025-12 起更新）：思考模式支持工具调用，仅要求工具调用轮次
-        # 在后续请求中回传 reasoning_content 字段（见 Message.to_api_dict / ContextManager）。
-        # 思考模式不支持 temperature/top_p 等参数（设置不报错但不生效）。
-        # thinking 由构造时传入（build_agent 从 llm_config 解析），None 时默认 "enabled"（向后兼容）。
-        is_ds = _is_deepseek(self.model)
-        effectiveThinking = self.thinking or "enabled"
-
-        if is_ds:
-            kwargs["extra_body"] = {"thinking": {"type": effectiveThinking}}
-        else:
-            kwargs["temperature"] = temperature
-            # 消息清洗收口 adapter（delta Task 2.1）：按 capability 决定
-            # reasoning 字段回传（方舟拒收 400 / DeepSeek 要求回传）+
-            # arguments 规范化（GLM 单引号字面量回传被拒 → ReAct 全灭，
-            # quick/follow_up 空 report 根因，见 incident 017）。
-            from finance_agent.llm.adapters.litellm_adapter import (
-                capability_for_model,
-                sanitize_messages_for_profile,
-            )
-
-            kwargs["messages"] = sanitize_messages_for_profile(
-                kwargs["messages"], capability_for_model(self.model)
-            )
-
-        return kwargs
 
     async def chat_stream(
         self,
@@ -194,240 +108,73 @@ class LiteLLMClient:
         temperature: float = 0.7,
         tool_choice: str = "auto",
     ) -> AsyncIterator[LLMResponse]:
-        """流式聊天请求，yield LLMResponse 对象。"""
-        from datetime import datetime
+        """流式聊天请求：包装 gateway.complete_stream_async，翻译 CanonicalEvent。"""
+        from finance_agent.llm.gateway import complete_stream_async
 
-        # litellm 仅经 adapter 收口（delta 5.1）：acompletion 由 adapter 暴露，
-        # 使 grep 门禁（adapters 外禁 import litellm）可收紧 harness allowlist
-        from finance_agent.llm.adapters.litellm_adapter import raw_acompletion
+        # 请求级配置：model/baseUrl/apiKey 三者齐备才原子下发，
+        # 否则 None 交给 resolver 用 env/preset（与 legacy._request_config_dict 语义一致）。
+        llm_config: dict[str, Any] | None = None
+        if self.model and self.base_url and self.api_key:
+            llm_config = {"model": self.model, "baseUrl": self.base_url, "apiKey": self.api_key}
 
-        kwargs = self._build_kwargs(messages, tools, temperature, tool_choice)
-        _start_time = datetime.now(UTC)
-        _accumulated_text = ""
-        _accumulated_reasoning = ""  # 累加 DeepSeek reasoning_content（原生思考增量）
+        trace = {
+            "name": self.agent or f"litellm:{self.model}",
+            "metadata": _generation_metadata(self.prompt_name, self.prompt_version, self.agent),
+        }
 
-        # Langfuse 追踪（ADR-0015）- start_as_current_observation 建立父子上下文，
-        # 使本 generation 挂到 CallbackHandler 已建好的 react_loop span 下。
-        # 保留 CM 引用以便 __exit__ 恢复 OTel 上下文（否则下次 chat_stream 会误挂父级）。
-        # prompt_name/prompt_version（Task 4）：来自 client 实例字段，每次都挂到 metadata。
-        # agent 标签（Task 4）：设 agent 时 observation 以 agent 命名（如 react_agent），
-        # 否则回退 litellm:{model}。
-        _lf_cm = None
-        _lf_obs = None
-        if self._langfuse:
-            try:
-                _lf_cm = self._langfuse.start_as_current_observation(
-                    name=self.agent or f"litellm:{self.model}",
-                    as_type="generation",
-                    input={"messages": messages},
-                    model=self.model,
-                    metadata=_generation_metadata(
-                        self.prompt_name, self.prompt_version, self.agent
-                    ),
-                )
-                _lf_obs = _lf_cm.__enter__()
-            except Exception as e:
-                logger.warning("Langfuse 观测创建失败: %s", e)
-                _lf_cm = None
-                _lf_obs = None
-
-        for attempt in range(self.max_retries):
-            try:
-                current_tool_calls: dict[int, dict[str, Any]] = {}
-
-                response = await raw_acompletion(**kwargs)
-
-                # per-chunk 超时保护：单个 chunk 超过 60 秒未到达则终止流
-                _chunk_iter = response.__aiter__()
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(_chunk_iter.__anext__(), timeout=60.0)
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError:
-                        logger.warning("LLM streaming chunk 超时（60s 无数据），终止当前流")
-                        break
-
-                    choices = chunk.choices
-                    if not choices:
-                        continue
-
-                    delta = choices[0].delta
-                    finish_reason = choices[0].finish_reason
-
-                    # 原生思考增量（DeepSeek reasoning_content）-- 先于 content 输出
-                    reasoning = getattr(delta, "reasoning_content", None) or ""
-                    if reasoning:
-                        _accumulated_reasoning += reasoning  # 累加供 Langfuse 落 trace
-                        yield LLMResponse(reasoning_delta=reasoning)
-
-                    # 文本增量（content，最终回答）
-                    text = getattr(delta, "content", None) or ""
-                    if text:
-                        _accumulated_text += text
-                        yield LLMResponse(text_delta=text)
-
-                    # Tool call 增量
-                    tool_delta = getattr(delta, "tool_calls", None) or []
-                    for t in tool_delta:
-                        idx = t.index if hasattr(t, "index") else 0
-                        if idx not in current_tool_calls:
-                            current_tool_calls[idx] = {
-                                "id": "",
-                                "function": {"name": "", "arguments": ""},
-                            }
-
-                        call = current_tool_calls[idx]
-                        if t.id:
-                            call["id"] = t.id
-                        func = t.function
-                        if func and func.name:
-                            call["function"]["name"] = func.name
-                        if func and func.arguments:
-                            call["function"]["arguments"] += func.arguments
-
-                    # 检查 finish_reason
-                    if finish_reason == "tool_calls" and current_tool_calls:
-                        parsed = self._parse_tool_calls(current_tool_calls)
-                        self._finish_langfuse(
-                            _lf_cm,
-                            _lf_obs,
-                            _accumulated_text,
-                            chunk,
-                            reasoning=_accumulated_reasoning,
-                            tool_calls=parsed,
-                        )
-                        yield LLMResponse(tool_calls=parsed, is_finished=True)
-                        return
-
-                    if finish_reason == "stop":
-                        if current_tool_calls:
-                            parsed = self._parse_tool_calls(current_tool_calls)
-                            self._finish_langfuse(
-                                _lf_cm,
-                                _lf_obs,
-                                _accumulated_text,
-                                chunk,
-                                reasoning=_accumulated_reasoning,
-                                tool_calls=parsed,
-                            )
-                            yield LLMResponse(tool_calls=parsed, is_finished=True)
-                        else:
-                            self._finish_langfuse(
-                                _lf_cm,
-                                _lf_obs,
-                                _accumulated_text,
-                                chunk,
-                                reasoning=_accumulated_reasoning,
-                            )
-                            yield LLMResponse(is_finished=True)
-                        return
-
-                # 流结束但没有明确的 finish_reason
-                if current_tool_calls:
-                    parsed = self._parse_tool_calls(current_tool_calls)
-                    self._finish_langfuse(
-                        _lf_cm,
-                        _lf_obs,
-                        _accumulated_text,
-                        None,
-                        reasoning=_accumulated_reasoning,
-                        tool_calls=parsed,
-                    )
-                    yield LLMResponse(tool_calls=parsed, is_finished=True)
-                else:
-                    self._finish_langfuse(
-                        _lf_cm, _lf_obs, _accumulated_text, None, reasoning=_accumulated_reasoning
-                    )
-                    yield LLMResponse(is_finished=True)
-                return
-
-            except Exception as e:
-                logger.warning(f"LLM 请求失败 (尝试 {attempt + 1}/{self.max_retries}): {e}")
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2**attempt))
-                else:
-                    if _lf_cm and _lf_obs:
-                        try:
-                            _lf_obs.update(output={"error": str(e)}, level="ERROR")
-                            _lf_cm.__exit__(None, None, None)
-                            if self._langfuse:
-                                self._langfuse.flush()
-                        except Exception as e2:  # noqa: S110
-                            logger.debug("Langfuse 错误观测收尾失败: %s", e2)
-                    # 重试耗尽：raise 异常而非 yield 错误文本，使 Agent 主循环能正确捕获
-                    raise
-
-    def _finish_langfuse(
-        self,
-        cm,
-        obs,
-        text: str,
-        last_chunk,
-        reasoning: str = "",
-        tool_calls: list[ToolCallRequest] | None = None,
-    ) -> None:
-        """流结束后更新 Langfuse 观测并退出上下文（恢复 OTel 父级）。
-
-        tool_calls 仅在工具调用分支传入（list[ToolCallRequest]），纯文本分支传 None。
-        output 结构：{answer, reasoning, [tool_calls]}；无 tool_calls 时不写该字段，
-        保持 Task 2 已落地的 {answer, reasoning} 结构向后兼容。
-        """
-        if not cm or not obs:
-            return
+        finished_yielded = False
+        _gen = complete_stream_async(
+            messages,
+            purpose="react",
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            llm_config=llm_config,
+            trace=trace,
+            max_retries=self.max_retries,
+            retry_delay=self.retry_delay,
+            # 输出预算保真：harness 为 legacy 生产 ReAct 路径，输出预算固定 16384
+            # （incident-016 类：reasoning 与正文共享配额，8192 会截断 deep 输出）。
+            # 请求级配置解析时 resolver 会强制 openai-compatible preset（max_output=8192），
+            # 此处显式下发 16384 以精确复刻旧 _build_kwargs 合同，不改 resolver 能力选择。
+            max_tokens=16384,
+        )
         try:
-            usage = {}
-            if last_chunk and hasattr(last_chunk, "usage") and last_chunk.usage:
-                u = last_chunk.usage
-                usage = {
-                    "input": getattr(u, "prompt_tokens", 0),
-                    "output": getattr(u, "completion_tokens", 0),
-                    "total": getattr(u, "total_tokens", 0),
-                }
-            # output 结构化：answer + reasoning（裁剪防撑爆 Langfuse span）
-            output_obj: dict[str, Any] = {
-                "answer": truncate_for_trace(text),
-                "reasoning": truncate_for_trace(reasoning),
-            }
-            # 仅有工具调用时才写入 tool_calls 字段（保持纯文本分支 output 结构不变）
-            if tool_calls:
-                output_obj["tool_calls"] = [
-                    {
-                        "name": tc.name,
-                        # ToolCallRequest.arguments 是 dict，序列化为紧凑 JSON 字符串保留语义
-                        "arguments": truncate_for_trace(
-                            json.dumps(tc.arguments, ensure_ascii=False, separators=(",", ":"))
-                        ),
-                    }
-                    for tc in tool_calls
-                ]
-            obs.update(output=output_obj, usage_details=usage)
-            cm.__exit__(None, None, None)
-            if self._langfuse:
-                self._langfuse.flush()
-        except Exception as e:
-            logger.warning("Langfuse 观测更新失败: %s", e)
-
-    def _parse_tool_calls(self, raw_calls: dict[int, dict[str, Any]]) -> list[ToolCallRequest]:
-        """解析累积的 tool_call 数据。"""
-        results = []
-        for idx in sorted(raw_calls.keys()):
-            raw = raw_calls[idx]
-            try:
-                args = (
-                    json.loads(raw["function"]["arguments"]) if raw["function"]["arguments"] else {}
-                )
-                args = _normalize_tool_args(args)
-            except json.JSONDecodeError:
-                args = {}
-            results.append(
-                ToolCallRequest(
-                    id=raw.get("id", f"call_{idx}"),
-                    name=raw["function"]["name"],
-                    arguments=args,
-                )
-            )
-        return results
+            async for ev in _gen:
+                if ev.kind == "reasoning":
+                    yield LLMResponse(reasoning_delta=ev.reasoning)
+                elif ev.kind == "text":
+                    yield LLMResponse(text_delta=ev.text)
+                elif ev.kind == "tool_call":
+                    calls: list[ToolCallRequest] = []
+                    for i, tc in enumerate((ev.tool_call or {}).get("calls", [])):
+                        raw_args = tc.get("function", {}).get("arguments", "")
+                        try:
+                            args = json.loads(raw_args) if raw_args else {}
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(
+                                "tool_call arguments 非法 JSON，降级空 dict: %s", raw_args
+                            )
+                            args = {}
+                        calls.append(
+                            ToolCallRequest(
+                                id=tc.get("id") or f"call_{i}",
+                                name=tc.get("function", {}).get("name", ""),
+                                arguments=args,
+                            )
+                        )
+                    yield LLMResponse(tool_calls=calls, is_finished=True)
+                    finished_yielded = True
+                elif ev.kind == "finished":
+                    if not finished_yielded:
+                        yield LLMResponse(is_finished=True)
+                    return
+        finally:
+            # finished 后生成器仍悬挂在 yield 点：显式 aclose 使 gateway 的观测收尾
+            # （Langfuse CM __exit__）在本任务上下文执行。留给 GC 跨上下文 aclose
+            # 会触发 OTel "token created in a different Context" detach 告警。
+            with contextlib.suppress(Exception):
+                await _gen.aclose()
 
     def __repr__(self) -> str:
         return f"LiteLLMClient(model={self.model})"

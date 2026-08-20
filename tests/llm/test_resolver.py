@@ -10,11 +10,41 @@ from __future__ import annotations
 
 import pytest
 
+from finance_agent.llm.probe_cache import (
+    _reset_probe_cache_for_tests,
+    cache_key,
+    get_probe_cache,
+)
+from finance_agent.llm.probes import ProbeReport
 from finance_agent.llm.resolver import (
     IncompleteLLMConfigError,
     UnknownProviderPrefixError,
     resolve_profile,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_probe_cache():
+    """每个测试独立的 probe 缓存单例（隔离缓存命中/未命中状态）。"""
+    _reset_probe_cache_for_tests()
+    get_probe_cache().clear()
+    yield
+    _reset_probe_cache_for_tests()
+    get_probe_cache().clear()
+
+
+def _report(**overrides) -> ProbeReport:
+    defaults = {
+        "non_stream": True,
+        "stream": True,
+        "tool_call": True,
+        "tool_followup": True,
+        "json_output": True,
+        "latency_ms": 100,
+        "warnings": [],
+    }
+    defaults.update(overrides)
+    return ProbeReport(**defaults)
 
 
 @pytest.fixture(autouse=True)
@@ -72,12 +102,55 @@ class TestPriorityOrder:
 
 class TestNoHalfConfigDrift:
     def test_partial_request_config_raises(self):
-        """请求级只有 model 无端点凭据 → 显式报错，禁止与环境变量混搭。"""
+        """请求级只有 model 无端点 → 显式报错，禁止与环境变量混搭。"""
         with pytest.raises(IncompleteLLMConfigError):
             resolve_profile(
                 purpose="deep",
-                llm_config={"model": "glm-5.2"},  # 缺 baseUrl/apiKey
+                llm_config={"model": "glm-5.2"},  # 缺 baseUrl
                 _env={"LLM_API_KEY": "sk-env", "LLM_BASE_URL": "https://env.example/v1"},
+            )
+
+    def test_keyless_request_config_resolves(self):
+        """请求级 model+baseUrl 无 key（keyless 本地端点，如 Ollama preset）→ api_key=None。"""
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={"model": "openai/llama3", "baseUrl": "http://localhost:11434/v1"},
+            _env={},
+        )
+        assert profile.model == "openai/llama3"
+        assert profile.base_url == "http://localhost:11434/v1"
+        assert profile.api_key is None
+
+    def test_keyless_request_config_falls_back_to_env_key(self):
+        """请求级缺 key 时显式 env 回退：LLM_API_KEY 优先，其次 DEEPSEEK_API_KEY。"""
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={"model": "glm-5.2", "baseUrl": "https://ark.example/v3"},
+            _env={"LLM_API_KEY": "sk-env", "DEEPSEEK_API_KEY": "sk-ds"},
+        )
+        assert profile.api_key == "sk-env"
+        profile2 = resolve_profile(
+            purpose="deep",
+            llm_config={"model": "glm-5.2", "baseUrl": "https://ark.example/v3"},
+            _env={"DEEPSEEK_API_KEY": "sk-ds"},
+        )
+        assert profile2.api_key == "sk-ds"
+
+    def test_env_keyless_with_base_url_resolves(self):
+        """环境变量 model+base_url 无 key → keyless 端点，api_key=None。"""
+        profile = resolve_profile(
+            purpose="deep",
+            _env={"LLM_MODEL": "llama3", "LLM_BASE_URL": "http://localhost:11434/v1"},
+        )
+        assert profile.model == "openai/llama3"
+        assert profile.api_key is None
+
+    def test_env_key_without_base_url_still_raises(self):
+        """环境变量 model+key 无端点 → 仍是半套配置，显式报错。"""
+        with pytest.raises(IncompleteLLMConfigError):
+            resolve_profile(
+                purpose="deep",
+                _env={"LLM_MODEL": "glm-5.2", "LLM_API_KEY": "k"},
             )
 
     def test_judge_purpose_no_silent_fallback(self):
@@ -121,3 +194,58 @@ class TestProviderPrefix:
         )
         assert profile2.base_url == "https://b/v1"
         del os
+
+
+class TestProbeFactMerge:
+    """llm-capability-probe delta：resolver 合并 probe 缓存事实。"""
+
+    ENV_DEEPSEEK = {
+        "LLM_MODEL": "deepseek/deepseek-chat",
+        "LLM_BASE_URL": "https://api.deepseek.com/v1",
+        "LLM_API_KEY": "sk-merge",
+    }
+
+    def test_cache_hit_overrides_capability_and_sets_warnings(self):
+        """缓存命中（tool_call=false）→ tools=none + warning，其余字段不动。"""
+        get_probe_cache().put(
+            cache_key(
+                model="deepseek/deepseek-chat",
+                base_url="https://api.deepseek.com/v1",
+                api_key="sk-merge",
+            ),
+            _report(tool_call=False, tool_followup=False),
+        )
+        profile = resolve_profile(purpose="deep", _env=self.ENV_DEEPSEEK)
+        assert profile.capability.tools == "none"
+        assert profile.probe_required is False
+        assert any("tools" in w for w in profile.probe_warnings)
+        # probe 不改连接与 provider 配置
+        assert profile.api_key == "sk-merge"
+        assert profile.model == "deepseek/deepseek-chat"
+
+    def test_cache_miss_sets_probe_required(self):
+        """缓存未命中 → probe_required=True，capability 保持静态表。"""
+        profile = resolve_profile(purpose="deep", _env=self.ENV_DEEPSEEK)
+        assert profile.probe_required is True
+        assert profile.probe_warnings == ()
+        assert profile.capability.tools != "none"  # deepseek 静态表支持工具
+
+    def test_merge_preserves_max_output(self):
+        """合并不回退 capability 特化 max_output（ark-glm 16384）。"""
+        env = {
+            "LLM_MODEL": "glm-5.2",
+            "LLM_BASE_URL": "https://ark.example/api/v3",
+            "LLM_API_KEY": "sk-glm",
+        }
+        get_probe_cache().put(
+            cache_key(
+                model="openai/glm-5.2",
+                base_url="https://ark.example/api/v3",
+                api_key="sk-glm",
+            ),
+            _report(),
+        )
+        profile = resolve_profile(purpose="deep", _env=env)
+        assert profile.model == "openai/glm-5.2"
+        assert profile.capability.max_output == 16384
+        assert profile.probe_required is False

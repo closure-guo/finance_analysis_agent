@@ -9,7 +9,40 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
 from finance_agent.llm.types import Capability, ModelProfile
+
+
+class DeepSeekOptions(BaseModel):
+    """deepseek provider_options schema（设计档案 §7.1 示例）。
+
+    pydantic v2 默认 ignore 未知 key——本 schema 显式 extra="forbid"
+    拒绝（未知配置项必须显式报错，禁止静默吞掉）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    thinking: Literal["enabled", "disabled"] | None = None
+    reasoning_effort: Literal["low", "high", "max"] | None = None
+
+
+# provider_options 校验 schema（§7.1 registry 静态三件套之一）
+PROVIDER_OPTIONS_SCHEMAS: dict[str, type[BaseModel]] = {
+    "deepseek": DeepSeekOptions,
+}
+
+# provider 静态默认 options（对齐 legacy deep 分支行为）
+DEFAULT_PROVIDER_OPTIONS: dict[str, dict] = {
+    "deepseek": {"thinking": "enabled", "reasoning_effort": "max"},
+}
+
+# 请求级 llm_config 允许覆盖的白名单；未登记 provider 请求级不可覆盖
+REQUEST_OVERRIDABLE: dict[str, set[str]] = {
+    "deepseek": {"thinking", "reasoning_effort"},
+}
 
 _NO_REASONING = {
     "reasoning_field": None,
@@ -47,8 +80,13 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_field="reasoning_content",
             reasoning_must_echo_on_tool=True,
             reasoning_forced=False,
+            # DeepSeek 官方支持 tool_choice=required（force_tool ReAct 轮）
+            tool_choice_required=True,
         ),
         default_params={},
+        provider_options=dict(DEFAULT_PROVIDER_OPTIONS["deepseek"]),
+        # fallback 示例链（设计档案 §9）：DeepSeek 官方端点不可用时切官方 OpenAI
+        fallback=("openai-official",),
     ),
     "ark-glm": ModelProfile(
         name="ark-glm",
@@ -62,6 +100,8 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_field="reasoning_content",
             reasoning_must_echo_on_tool=False,
             reasoning_forced=True,
+            # 方舟 GLM 支持函数调用 / tool_choice=required（force_tool ReAct 轮）
+            tool_choice_required=True,
             # reasoning 与正文共享配额，预算必须覆盖 reasoning 峰值（incident 017）
             max_output=16384,
         ),

@@ -6,7 +6,10 @@
   全局 100 线程池提交 logging，worker 内 asyncio.run 新建 ProactorEventLoop，
   Windows/Py3.14 ``_fallback_socketpair`` 并发竞态令线程永久卡在 accept()
   （100 worker 全灭、退出 join 挂死）。项目 Langfuse 走自研 SDK，零损失。
-- ``drop_params``：历史行为保留（阶段二 Task 2.5 白名单化后收紧）。
+- ``drop_params``：Task 8 起移除全局静默 drop（设计档案 §8：关键参数不静默
+  丢弃）。未知/白名单外参数由 litellm 原生报错（显式失败）；白名单内非关键
+  参数仅在 capability 明确不支持时由 ``_drop_unsupported`` 剔除。回滚保险：
+  环境变量 ``LLM_DROP_PARAMS_STRICT=1`` 可临时恢复旧全局 drop 行为。
 - litellm-langfuse 兼容补丁：1.85.x 与 langfuse 4.x 深度不兼容
   （version 属性、sdk_integration 参数等多处不匹配），noop 其 logger。
 
@@ -16,12 +19,16 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from finance_agent.llm.errors import LLMError
-    from finance_agent.llm.types import Capability
+    from finance_agent.llm.types import Capability, ModelProfile
+
+logger = logging.getLogger(__name__)
 
 _INIT_LOCK = threading.Lock()
 _initialized = False
@@ -74,7 +81,12 @@ def ensure_litellm_runtime() -> None:
             return
         import litellm
 
-        litellm.drop_params = True
+        # Task 8：移除全局静默 drop（设计档案 §8）；回滚开关：线上出现
+        # 端点拒收非关键参数的事故时，设 LLM_DROP_PARAMS_STRICT=1 临时恢复旧行为
+        if os.environ.get("LLM_DROP_PARAMS_STRICT") == "1":
+            litellm.drop_params = True
+        else:
+            litellm.drop_params = False
         # incident 016 死锁防护（NOT RECOMMENDED 标记仅影响 litellm 自身
         # 用量回调——项目未注册任何 litellm callback，零功能损失）
         litellm.disable_streaming_logging = True
@@ -153,6 +165,106 @@ def sanitize_messages_for_profile(messages: list[dict], capability: Capability) 
             ]
         cleaned.append(m)
     return cleaned
+
+
+def sanitize_request_messages(messages: list[dict], capability: Capability) -> list[dict]:
+    """gateway 各入口复用命名的薄包装（delta Task 5.1-C.1）。
+
+    逻辑唯一实现仍是 ``sanitize_messages_for_profile``，此处仅提供
+    gateway 语义命名（请求前消息清洗），不复制实现。
+    """
+    return sanitize_messages_for_profile(messages, capability)
+
+
+# ── 工具增量合并收口（delta Task 5.1-C.1，设计 §8 职责 3）─────────────
+
+
+class ToolCallAccumulator:
+    """流式 tool_calls 增量按 index 聚合（自 harness/litellm_client.py:270-287 移植）。
+
+    litellm 流式 delta 的 tool_calls 片段形如
+    ``{id, function: {name, arguments}, index}``（attrs，测试可用同构 dict）；
+    arguments 片段跨 chunk 拼接，id/name 首次出现即固定。
+    """
+
+    def __init__(self) -> None:
+        self._calls: dict[int, dict] = {}
+
+    def add(self, delta: Any) -> None:
+        """聚合单个 tool_call 增量片段。"""
+        if isinstance(delta, dict):
+            idx = delta.get("index", 0)
+            tc_id = delta.get("id") or ""
+            func = delta.get("function") or {}
+        else:
+            idx = getattr(delta, "index", 0)
+            tc_id = getattr(delta, "id", None) or ""
+            func = getattr(delta, "function", None) or {}
+        if isinstance(func, dict):
+            name = func.get("name", "")
+            args = func.get("arguments", "")
+        else:
+            name = getattr(func, "name", None) or ""
+            args = getattr(func, "arguments", None) or ""
+
+        if idx not in self._calls:
+            self._calls[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+        call = self._calls[idx]
+        if tc_id:
+            call["id"] = tc_id
+        if name:
+            call["function"]["name"] = name
+        if args:
+            call["function"]["arguments"] += args
+
+    @property
+    def calls(self) -> dict[int, dict]:
+        """已聚合的 tool_call dict（按 index 键控）。"""
+        return self._calls
+
+
+def finalize_tool_calls(acc: ToolCallAccumulator) -> list[dict]:
+    """聚合结果 → 标准 tool_calls 列表（自 harness :46-57 / :411-430 移植）。
+
+    按 index 排序输出 ``{id, function: {name, arguments: <json str>}}``；
+    arguments 先经 ``_normalize_arguments_str``（单引号字面量重序列化），
+    再做嵌套 ``{"arguments": X}`` 解包（X 为 dict 直接用、为 str 保留），
+    空值归为 ``{}``，非法 JSON 不因清洗破坏请求。
+    """
+    import json
+
+    results: list[dict] = []
+    for idx in sorted(acc.calls.keys()):
+        raw = acc.calls[idx]
+        args_raw = raw["function"]["arguments"] or ""
+        normalized = _normalize_arguments_str(args_raw)
+        args_str: str = str(normalized) if normalized else "{}"
+        try:
+            parsed = json.loads(args_str) if args_str else {}
+        except (json.JSONDecodeError, ValueError):
+            parsed = {}
+        # 嵌套 {"arguments": X} 解包（模型偶发格式，_normalize_tool_args 语义）
+        if isinstance(parsed, dict) and len(parsed) == 1 and "arguments" in parsed:
+            inner = parsed["arguments"]
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except (json.JSONDecodeError, ValueError):
+                    inner = None
+            if isinstance(inner, dict):
+                parsed = inner
+            elif isinstance(inner, str):
+                args_str = inner
+                parsed = None
+        if parsed is not None:
+            args_str = json.dumps(parsed, ensure_ascii=False)
+        results.append(
+            {
+                "id": raw.get("id") or f"call_{idx}",
+                "function": {"name": raw["function"]["name"], "arguments": args_str},
+            }
+        )
+    return results
 
 
 def classify_outcome(finish_reason: str | None, *, saw_text_delta: bool) -> None:
@@ -254,6 +366,74 @@ def guard_params_supported(
         )
 
 
+def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
+    """provider_options 唯一消费点：校验并转为请求 kwargs（设计档案 §7.1）。
+
+    registry schema 校验（非法值/未知 key → pydantic ValidationError）。
+    provider=="deepseek" 且 capability.extra_body_allowed 时产出：
+    - ``extra_body.thinking.type``：thinking 显式设置时携带
+    - ``reasoning_effort``：显式设置时携带
+    - ``suppress_temperature: True``：thinking=="enabled" 时携带 —— 内部
+      契约标志（非 litellm 参数），gateway 据此不发送 temperature
+      （deepseek thinking 模式拒收 temperature，对齐 legacy deep 分支）。
+    其他 provider / 空 provider_options → ``{}``。
+    """
+    options = dict(getattr(profile, "provider_options", None) or {})
+    if not options:
+        return {}
+    from finance_agent.llm.registry import PROVIDER_OPTIONS_SCHEMAS
+
+    schema = PROVIDER_OPTIONS_SCHEMAS.get(profile.provider)
+    if schema is None:
+        return {}
+    validated = schema.model_validate(options)
+    if profile.provider != "deepseek" or not profile.capability.extra_body_allowed:
+        return {}
+    out: dict[str, Any] = {}
+    thinking = getattr(validated, "thinking", None)
+    effort = getattr(validated, "reasoning_effort", None)
+    if thinking is not None:
+        out["extra_body"] = {"thinking": {"type": thinking}}
+    if effort is not None:
+        out["reasoning_effort"] = effort
+    # 内部契约标志：告知 gateway 不发送 temperature（非 litellm 参数）
+    if thinking == "enabled":
+        out["suppress_temperature"] = True
+    return out
+
+
+# 非关键参数白名单（Task 8）：仅这些参数允许按 capability 剔除；
+# 白名单外未知参数一律透传，由 litellm/端点原生报错（显式失败）。
+_SOFT_DROP_WHITELIST = {"temperature", "top_p", "frequency_penalty", "presence_penalty"}
+
+
+def _drop_unsupported(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """白名单内且 capability 明确不支持的非关键参数 → 剔除 + warning。
+
+    YAGNI：当前唯一 capability 信号是 ``reasoning_forced``（方舟 GLM 类
+    thinking 强制端点拒收 temperature）→ 仅据此剔除 temperature；
+    top_p/frequency_penalty/presence_penalty 暂无 capability 信号，透传。
+    """
+    model = kwargs.get("model")
+    if not isinstance(model, str):
+        return kwargs
+    if "temperature" in kwargs and capability_for_model(model).reasoning_forced:
+        logger.warning("参数 temperature 被 adapter 白名单剔除(端点不支持)：model=%s", model)
+        kwargs.pop("temperature")
+    return kwargs
+
+
+def _with_default_timeout(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """调用方未传 timeout 时注入默认值（incident 016/017 卡死防护）。
+
+    请求无超时会令流式 chunk 停滞时调用永久挂起（016 线程死锁、
+    017 思考后即止两类事故均表现为主管线卡死）。显式 timeout 不覆盖。
+    """
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = float(os.environ.get("LLM_TIMEOUT_SECONDS", "300"))
+    return kwargs
+
+
 def raw_completion(**kwargs: Any) -> Any:
     """adapter 内暴露 litellm.completion（gateway/probes 唯一入口）。
 
@@ -263,14 +443,14 @@ def raw_completion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**kwargs)
+    return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))
 
 
 def raw_stream(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**kwargs, stream=True)
+    return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))), stream=True)
 
 
 async def raw_acompletion(**kwargs: Any) -> Any:
@@ -278,4 +458,4 @@ async def raw_acompletion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return await litellm.acompletion(**kwargs)
+    return await litellm.acompletion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))

@@ -59,6 +59,33 @@ class ContextBudget:
     output_reserve: int = 8000  # 模型输出预留
     tool_result_budget: int = 50000  # 单个工具结果超过此值则截断
     compact_threshold_ratio: float = 0.85  # 达到总预算的 85% 时触发压缩
+    usage_estimated: bool = (
+        True  # max_context_tokens 是否来自 capability 估算（calibrate 真值后 False）
+    )
+
+    @classmethod
+    def from_capability(cls, cap: Any | None) -> ContextBudget:
+        """按 profile capability 派生预算（设计档案 §12）。
+
+        max_context_tokens 取 capability.max_context；cap 缺失（None 或无
+        max_context）回落默认 120000；其余预留字段保持现值（比例不变）。
+        """
+        max_context = getattr(cap, "max_context", None) if cap is not None else None
+        return cls(max_context_tokens=int(max_context) if max_context else 120000)
+
+    def calibrate(self, usage_total: int | None) -> None:
+        """以真实 usage 校准预算。
+
+        usage_total 为 None → 仅标记 usage_estimated=True（回到估算态）；
+        真值 → usage_estimated=False，且当 usage + 输出预留超预算时按 1.05
+        系数上抬 max_context_tokens（避免估算偏低导致误压缩）。
+        """
+        if usage_total is None:
+            self.usage_estimated = True
+            return
+        self.usage_estimated = False
+        if usage_total + 8192 > self.max_context_tokens:
+            self.max_context_tokens = int(usage_total * 1.05)
 
     @property
     def available_for_history(self) -> int:

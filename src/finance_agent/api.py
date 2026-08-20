@@ -1761,17 +1761,33 @@ async def test_llm_config(req: LLMConfigRequest):
     """
     import time as _time
 
+    from finance_agent.llm.probe_cache import cache_key, get_probe_cache
     from finance_agent.llm.probes import run_live_probes
 
     cfg = _to_llm_config(req)
     startMs = _time.time()
     usedModel = (cfg.model if cfg else None) or os.getenv("LLM_MODEL", "deepseek/deepseek-v4-pro")
+    usedApiKey = (cfg.apiKey if cfg else None) or None
+    usedBaseUrl = (cfg.baseUrl if cfg else None) or None
+    # 模型前缀归一（设计档案 §6）：自定义 baseUrl + 裸模型名 → 强制 openai/，
+    # 与 resolver._ensure_prefix 同一语义；同时令缓存键与 resolve 侧一致
+    # （裸模型探测结果否则永不命中 resolver 读取，终审 #77）。
+    from finance_agent.llm.resolver import _ensure_prefix
+
+    usedModel = _ensure_prefix(usedModel, usedBaseUrl)
+    probeModel = usedModel
     try:
         report = run_live_probes(
             model=usedModel,
-            api_key=(cfg.apiKey if cfg else None) or None,
-            base_url=(cfg.baseUrl if cfg else None) or None,
+            api_key=usedApiKey,
+            base_url=usedBaseUrl,
         )
+        if report.error is None:
+            # 探测成功写入缓存：后续 resolve_profile 同键命中即合并 probe 事实
+            get_probe_cache().put(
+                cache_key(model=probeModel, base_url=usedBaseUrl, api_key=usedApiKey),
+                report,
+            )
         latencyMs = int((_time.time() - startMs) * 1000)
         return {
             "success": (report.non_stream or report.error is None),

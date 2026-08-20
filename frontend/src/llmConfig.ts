@@ -8,6 +8,67 @@ export interface LLMConfig {
   model: string
   baseUrl: string
   thinking: string // "enabled" | "disabled" | ""（空表示未设置，回退后端默认）
+  // /api/llm-config/test probe 得到的能力矩阵（camelCase JSON 的 capability 字段）。
+  // undefined/null 均表示未探测（门禁放行，不误伤）。
+  capability?: CapabilityMatrix | null
+}
+
+// 能力矩阵：/api/llm-config/test 返回的 probe 事实（snake_case 与后端响应一致）
+export interface CapabilityMatrix {
+  non_stream: boolean
+  stream: boolean
+  tool_call: boolean
+  tool_followup: boolean
+  json_output: boolean
+}
+
+// 模式门禁判定结果
+export interface ModeGate {
+  allowed: boolean
+  reason: string
+}
+
+// 模式入口 capability 门禁（probe 事实驱动）。
+// 规则：
+//   - capability 为 null/undefined → 放行（probe 未完成不误伤）
+//   - deep：tool_call===false → 禁用（深度 ReAct 依赖工具调用）
+//           json_output===false → 仍允许，但 reason 标注管线结构化 caveat
+//   - quick：stream 与 non_stream 均 false → 禁用（完全无法对话）
+export function canEnterMode(mode: 'quick' | 'deep', capability: CapabilityMatrix | null | undefined): ModeGate {
+  if (!capability) return { allowed: true, reason: '' }
+  if (mode === 'deep') {
+    if (capability.tool_call === false) {
+      return { allowed: false, reason: '该 provider 不支持工具调用，可切换 provider 或使用快速模式' }
+    }
+    if (capability.json_output === false) {
+      return { allowed: true, reason: '该 provider 不支持 JSON 输出，深度管线结构化步骤可能降级' }
+    }
+    return { allowed: true, reason: '' }
+  }
+  if (capability.stream === false && capability.non_stream === false) {
+    return { allowed: false, reason: '该 provider 不支持流式与非流式对话，无法使用快速模式' }
+  }
+  return { allowed: true, reason: '' }
+}
+
+// 清除 capability（model/baseUrl/apiKey 变更后旧 probe 事实失效）
+export function clearCapability(cfg: LLMConfig): LLMConfig {
+  return { ...cfg, capability: null }
+}
+
+// 类型守卫：解析 localStorage / API 响应中的 capability 字段（字段缺失/类型不符 → null）
+export function parseCapability(obj: unknown): CapabilityMatrix | null {
+  if (typeof obj !== 'object' || obj === null) return null
+  const c = obj as Record<string, unknown>
+  const keys = ['non_stream', 'stream', 'tool_call', 'tool_followup', 'json_output'] as const
+  if (!keys.every(k => typeof c[k] === 'boolean')) return null
+  return {
+    non_stream: c.non_stream as boolean,
+    stream: c.stream as boolean,
+    tool_call: c.tool_call as boolean,
+    tool_followup: c.tool_followup as boolean,
+    json_output: c.json_output as boolean,
+  }
 }
 
 // 后端 llm_config 请求载荷（camelCase，对齐后端 LLMConfigRequest 模型 baseUrl/apiKey）
@@ -59,6 +120,8 @@ export function loadLlmConfig(): LLMConfig {
         model: typeof parsed.model === 'string' ? parsed.model : '',
         baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : '',
         thinking: typeof parsed.thinking === 'string' ? parsed.thinking : '',
+        // 仅在 probe 事实有效时携带（undefined 与 null 语义等同：未探测）
+        ...(parseCapability(parsed.capability) ? { capability: parseCapability(parsed.capability) } : {}),
       }
     } catch {
       // JSON 损坏：继续走迁移/默认分支

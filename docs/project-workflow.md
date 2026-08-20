@@ -1,14 +1,15 @@
 # 项目工作流
 
-> 本手册是日常开发工作流规范。路由规则与红线的权威来源是 [AGENTS.md](file:///d:/WorkSpace/finance_analysis_agent/AGENTS.md)，本手册补充每一步的具体操作、产物模板和衔接细节。
-> E2E 测试的完整代码模板（playwright.config.ts、LLM stub、spec 示例、CI yaml）见《E2E测试实现方案-finance_analysis_agent.md》，本手册 §5.6 收录其基础设施与工具链纪律。
+> 本手册是日常开发工作流规范。路由规则见 [AGENTS.md](../AGENTS.md)，本手册提供各条路线的详细执行步骤、产物模板和衔接细节。
+>
+> E2E 测试的完整代码模板（playwright.config.ts、LLM stub、spec 示例、CI yaml）见独立文档 `docs/e2e-implementation.md`，本手册 §5.6 收录其基础设施与工具链纪律。
 
 ---
 
 ## 1. 全景图
 
 ```
-任务进站
+任务进站（先查 AGENTS.md 任务路由表判定类型）
   │
   ├─ 新功能 / 行为变更 ──────────────────────────────────────────┐
   ├─ 修 bug · 意图变更 / 行为未定义 ────────────────────────────┤
@@ -67,21 +68,19 @@
 
 ---
 
-## 2. 任务路由
+## 2. 路由索引
 
-每个任务进站前，先按下表分类：
+任务路由由 `AGENTS.md` 统一管理。本文档不重复路由分类逻辑，只提供各条路线的执行步骤。
 
-| 任务类型 | 判别方法 | 路由 | 触碰 OpenSpec |
-|---|---|---|---|
-| 新功能 | 系统新增能力 | ①→⑥ 完整管线（交互类含 ④.5 E2E 门禁） | 全程 |
-| 修 bug · 意图不变 | 打开 `openspec/specs/` 对应条目，「正确行为」已写明而代码没做到 | systematic-debugging + 复现测试 | 不碰 |
-| 修 bug · 意图变更 / 行为未定义 | 翻不到对应条目，或条目本身要改 | 同新功能（①→⑥） | 全程 |
-| 重大架构决策 | 涉及架构层面的取舍 | 手动落 `docs/adr/` | 不碰 |
-| 小改动 | typo、文案、配置 | 直接改 | 不碰 |
+| 路由目标 | 本文档对应章节 |
+|---|---|
+| 新功能 / 行为变更完整管线 | §3 |
+| 修 bug · 意图不变 | §4.1 |
+| 修 bug · 意图变更 | §4.2 |
 
-**交互类变更判别**：delta 涉及前端 UI、SSE 流式、会话切换、状态流转中任一者，即为交互类变更，走 ④.5 E2E 门禁；纯后端逻辑变更（指标计算、数据管道、prompt 调整）不适用 ④.5。
+**交互类变更判别**：delta 涉及前端 UI、SSE 流式、会话切换、状态流转中任一者，即为交互类变更，走 §3 完整管线（含 §3.5 E2E 门禁）；纯后端逻辑变更（指标计算、数据管道、prompt 调整）不适用 §3.5。
 
-**测试分工**：单元/集成测试走 Superpowers TDD 五步纪律（Step 2 计划模板）；浏览器交互层的 E2E spec 生成、审查、诊断全部由 e2e-skills 工具链接管（§5.6），不临时手写、不走其他测试方式。
+**测试分工**：单元/集成测试走 Superpowers TDD 五步纪律（§3 Step 2 计划模板）；浏览器交互层的 E2E spec 生成、审查、诊断全部由 e2e-skills 工具链接管（§5.6），不临时手写、不走其他测试方式。
 
 ---
 
@@ -171,7 +170,7 @@ openspec validate <change-id> --strict
 
 1. 宣告: "I'm using the writing-plans skill to create the implementation plan."
 2. 读 delta spec，拆成 TDD 粒度的任务
-3. 每个任务包含：文件路径、接口契约、TDD 五步（写失败测试 -> 运行确认失败 -> 写最小实现 -> 运行确认通过 -> 提交）
+3. 每个任务包含：文件路径、接口契约、TDD 五步（写失败测试 -> 运行确认失败 -> 写最小实现 -> 运行确认通过 ->提交）
    - 交互类变更必须拆出 E2E spec 任务卡，全流程走 e2e-skills 工具链：
      1. `playwright-test-generator` 配合 Playwright MCP/CLI 真实探索浏览器，获取真实 DOM 快照（无 MCP/CLI 时 generator 退化为静态快照，探索不到弹窗和多步流程，必须先配好）
      2. 人工审批场景方案后再落 spec
@@ -366,7 +365,7 @@ git commit -m "feat: add specific feature"
 cd e2e && npx playwright test
 ```
 
-stub 套件（后端以 `TESTING=1` 启动，独立测试库 + LLM 可控 stub，见 §5.6），确定性、秒级-分钟级完成。
+stub 套件（后端以 `TESTING=1` 启动，独立测试库 + LLM 可控 stub，见 `docs/e2e-implementation.md`），确定性、秒级-分钟级完成。
 
 **通过标准**: 全绿。
 
@@ -582,7 +581,7 @@ Task 3: in progress
 
 ### 5.5 E2E spec 写作红线
 
-写 E2E spec 任务卡（Step 2）和审查 spec 代码（Step 3）时的检查清单，由 scan.sh + e2e-reviewer 自动把关：
+写 E2E spec 任务卡（§3 Step 2）和审查 spec 代码（§3 Step 3）时的检查清单，由 scan.sh + e2e-reviewer 自动把关：
 
 ```markdown
 - ❌ 禁止恒真断言：`toBeDefined()` / `assert locator is not None`（P0）
@@ -604,9 +603,9 @@ Task 3: in progress
 3. 先探索后编码：任何 selector 必须来自真实浏览器快照，禁止盲写
 4. 功能坏了测试必须红——所有「条件绕过」式防御代码都是反模式
 
-### 5.6 E2E 基础设施与工具链（e2e-skills）
+### 5.6 E2E 基础设施与工具链
 
-**定位**: e2e-skills 工具链是工作流中浏览器交互层测试的唯一纪律——spec 的生成、审查、诊断分别由 `playwright-test-generator`、`scan.sh` + `e2e-reviewer`、`playwright-debugger` 承担，嵌入 Superpowers 管线的 Step 2 / Step 3 / Step 4.5。单元与集成测试仍走 TDD 五步纪律（Step 2 计划模板），e2e-skills 只接管浏览器层。
+**定位**: e2e-skills 工具链是工作流中浏览器交互层测试的唯一纪律——spec 的生成、审查、诊断分别由 `playwright-test-generator`、`scan.sh` + `e2e-reviewer`、`playwright-debugger` 承担，嵌入 Superpowers 管线的 §3 Step 2 / Step 3 / Step 4.5。单元与集成测试仍走 TDD 五步纪律（§3 Step 2 计划模板），e2e-skills 只接管浏览器层。
 
 **目录结构**（E2E 为独立 TS 项目，与前后端语言解耦）:
 
@@ -628,36 +627,22 @@ finance_analysis_agent/
     └── playwright-report/   # 失败证据（gitignore）
 ```
 
-初始化：
+**工具链纪律**（执行时必须遵守）:
 
-```bash
-mkdir e2e && cd e2e
-npm init -y
-npm i -D @playwright/test
-npx playwright install chromium
-```
-
-**基础设施三件套**（门禁能跑起来的前提）:
-
-1. **双 webServer**: `playwright.config.ts` 同时拉起后端（`TESTING=1 uvicorn main:app --port 8000`）和前端（`:5173`），靠轮询 `/health` 确认后端就绪（后端没有就加一个，三行代码）
-2. **`TESTING=1` 测试模式**: 后端启动逻辑读环境变量——指向独立测试数据库（绝不碰开发库）+ LLM 客户端替换为可控 stub（按固定节奏吐固定 delta，流式断言才有确定性）
-3. **seed/reset 接口**: `TESTING=1` 下暴露 `/api/test/seed` 与 `/api/test/reset`，fixtures 用 `request` 上下文直接调 API 造数据，不经过 UI
-
-**三层 spec 设计**:
-
-| 层 | 文件 | 断言对象 |
-|---|---|---|
-| 流式核心链路 | streaming.spec.ts | 累积状态、指示器生命周期、断连降级（`route.abort()` 故障注入） |
-| 前后端契约 | contract.spec.ts | `waitForRequest`/`waitForResponse` 验证请求体与 SSE content-type |
-| 交互状态 | interaction.spec.ts | `toHaveCSS` 断言计算后样式终态，自动重试等过渡完成 |
+| 阶段 | 工具 | 输入 | 输出 |
+|---|---|---|---|
+| 生成 | playwright-test-generator | Playwright MCP/CLI 真实探索的 DOM 快照 | 失败的 spec |
+| 审查 | scan.sh + e2e-reviewer | spec 代码 | P0/P1 反模式报告 |
+| 诊断 | playwright-debugger | playwright-report trace/截图 | 根因诊断报告 |
+| CI | stub 套件（门禁）+ @live 套件（nightly） | 全量 spec | 通过/失败报告 |
 
 **工具链安装**:
 
 ```bash
-npx skills add voidmatcha/e2e-skills -g --all   # Claude Code / Trae 通用
+npx skills add voidmatcha/e2e-skills -g --all
 ```
 
-**工具链日常流程**:
+**日常流程**:
 
 ```
 新功能开发
@@ -669,21 +654,6 @@ npx skills add voidmatcha/e2e-skills -g --all   # Claude Code / Trae 通用
   → 失败 → playwright-debugger（15 根因诊断）→ 修复后重新回归
 ```
 
-**要点**:
-
-- generator 运行前确保 agent 配有 Playwright MCP 或 CLI，否则退化为静态快照，探索不到弹窗和多步流程
-- generator 首次运行会把 E2E 规范写入项目 `AGENTS.md` 并指定种子 spec，后续所有会话按同一纪律写测试
-- 存量代码先跑 `scan.sh` 再跑 reviewer，P0 优先修，一次只修一个反模式家族
-
-**CI 策略**:
-
-| 套件 | 触发 | 用途 |
-|---|---|---|
-| stub 套件（`TESTING=1`） | PR / push | 门禁，确定性回归；失败上传 `playwright-report` artifact |
-| @live 套件（真 LLM） | nightly 定时 | 防 stub 与真实模型行为漂移；漂移确认后回流修正 stub 或 spec |
-
-CI 失败时下载 report artifact，本地交 `playwright-debugger` 诊断。CI yaml 模板见《E2E测试实现方案-finance_analysis_agent.md》§7。
-
 **落地路线**（一次性建设，P1–P4 完成后门禁生效）:
 
 | 阶段 | 内容 | 验收标准 |
@@ -694,6 +664,8 @@ CI 失败时下载 report artifact，本地交 `playwright-debugger` 诊断。CI
 | P4 CI（半天） | GitHub Actions、trace artifact、@live nightly | PR 上自动跑，失败可查证据 |
 | P5 扩展 | interaction.spec 补交互态、generator 补覆盖率缺口 | 核心用户路径全覆盖 |
 
+> **实现细节**（初始化命令、playwright.config.ts 完整配置、TESTING=1 后端实现、CI yaml 模板、seed/reset 接口设计）见独立文档 `docs/e2e-implementation.md`。
+
 ---
 
 ## 6. 并行变更规则
@@ -701,29 +673,3 @@ CI 失败时下载 report artifact，本地交 `playwright-debugger` 诊断。CI
 - 不同 requirement 的提案可并行推进
 - 同一 requirement 被两个提案同时 MODIFIED 时，后到者必须 rebase 到先到者的合并结果上
 - sync 后主规范库是唯一真相，以它为准解决冲突
-
----
-
-## 7. 关键规则速查
-
-| 规则 | 出处 |
-|---|---|
-| 每个会话开始必须调用 `using-superpowers` | project_rules.md |
-| 契约归 OpenSpec，施工图归 Superpowers | 实施文档 §5.2 规则 1 |
-| Superpowers 管线从 writing-plans 进入，跳过 brainstorming | 实施文档 §5.2 规则 1 |
-| 两份任务列表分层不合并（tasks.md 粗粒度 / plan 细粒度） | 实施文档 §5.2 规则 2 |
-| 没有先写失败测试的代码，删除重写 | AGENTS.md Verification red lines |
-| 「测试全过」不等于「行为正确」 | AGENTS.md Verification red lines |
-| 交互行为变更必须有人工验证环节 | AGENTS.md Verification red lines |
-| archive 前置: tasks.md 全勾 + verification 通过 + 人工验证报告 | 实施文档 §5.3 |
-| 修改任何已有行为前必须先查 openspec/specs/ | AGENTS.md Spec contract rules |
-| 主规范库只能通过 sync 合并更新，禁止手改 | AGENTS.md Spec contract rules |
-| ADR 由人手动维护，agent 不得自动新建 | AGENTS.md Agent skills |
-| 交互类变更必须过 E2E 门禁（Step 4.5），红则打回禁止带病进人工验证 | workflow §3 Step 4.5 |
-| 浏览器层测试只走 e2e-skills 工具链：generator 生成 / scan+reviewer 审查 / debugger 诊断 | workflow §5.6 |
-| selector 禁止盲写，必须来自 Playwright MCP/CLI 真实探索的 DOM 快照 | workflow §3 Step 2 |
-| E2E 运行失败先出 debugger 根因诊断再派 fix，禁止盲改赌修复 | workflow §3 Step 3 |
-| stub 套件（TESTING=1）跑门禁，@live 套件（真 LLM）nightly 防漂移 | AGENTS.md 测试约束 / workflow §5.6 |
-| E2E spec 写作红线（P0/P1 反模式），scan.sh + e2e-reviewer 把关 | workflow §5.5 |
-| 禁止 route.fulfill / MSW 伪造业务接口响应（LLM/第三方 TESTING=1 stub 除外） | AGENTS.md 红线 / workflow §5.5 |
-| Bug fix: 一个 PR 只修一个 Bug，先写复现测试 | 用户规则 |

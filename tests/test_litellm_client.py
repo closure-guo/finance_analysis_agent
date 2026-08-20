@@ -1,12 +1,23 @@
-"""LiteLLM 客户端 chat_stream 错误传播测试。
+"""LiteLLMClient.chat_stream 翻译层测试（delta 5.1-C Task 4）。
 
-对应 change: harden-react-path-resilience Task 2.1。
-验证 chat_stream 重试耗尽后 SHALL raise 异常，而非 yield 错误文本。
+chat_stream 收口 gateway.complete_stream_async：本文件只测
+CanonicalEvent→LLMResponse 翻译层语义（reasoning/text/tool_call/finished、
+tool_call arguments json.loads + 坏 JSON 降级 {}、llm_config 完整性判定、
+trace 元数据键）。
+
+迁移映射（旧测试 → 新归属）：
+- retry-raise / retry 次数 → tests/llm/test_gateway_stream_async.py（gateway 层）
+- Langfuse output.reasoning/answer/tool_calls 落 trace → gateway 层（已覆盖）
+- _build_kwargs thinking/deepseek 分支 → 已删除（provider options 归 adapter，
+  见 tests/llm/adapters/test_apply_provider_options.py / test_message_sanitize.py）
+- messages reasoning_content 清洗 / 单引号 arguments 规范化 → adapter
+  （tests/llm/adapters/test_message_sanitize.py）
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -14,490 +25,237 @@ from finance_agent.harness.litellm_client import LiteLLMClient
 from finance_agent.harness.llm_client import LLMResponse
 
 
-@pytest.mark.asyncio
-async def test_chat_stream_raises_on_retry_exhausted(monkeypatch):
-    """chat_stream 重试耗尽后 SHALL raise 异常，不 yield 错误文本。"""
-    client = LiteLLMClient(
-        model="deepseek/deepseek-chat", api_key="fake", max_retries=2, retry_delay=0
-    )
+@dataclass
+class FakeEvent:
+    kind: str
+    text: str = ""
+    reasoning: str = ""
+    tool_call: dict[str, Any] | None = None
+    finish_reason: str | None = None
 
-    # mock litellm.acompletion 持续抛出异常
-    async def _mock_acompletion(**kwargs):
+
+def _text_ev(t: str) -> FakeEvent:
+    return FakeEvent(kind="text", text=t)
+
+
+def _reasoning_ev(r: str) -> FakeEvent:
+    return FakeEvent(kind="reasoning", reasoning=r)
+
+
+def _tool_call_ev(calls: list[dict]) -> FakeEvent:
+    return FakeEvent(kind="tool_call", tool_call={"calls": calls})
+
+
+def _finished_ev() -> FakeEvent:
+    return FakeEvent(kind="finished", finish_reason="stop")
+
+
+class GatewayRecorder:
+    """替换 gateway.complete_stream_async，记录调用参数并回放脚本事件。"""
+
+    def __init__(self, events: list[FakeEvent]):
+        self.events = events
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, messages, **kwargs):
+        self.calls.append({"messages": messages, **kwargs})
+        for ev in self.events:
+            yield ev
+
+
+async def _run(monkeypatch, client: LiteLLMClient, recorder: GatewayRecorder, **chat_kwargs):
+    monkeypatch.setattr("finance_agent.llm.gateway.complete_stream_async", recorder)
+    out: list[LLMResponse] = []
+    async for r in client.chat_stream(messages=[{"role": "user", "content": "hi"}], **chat_kwargs):
+        out.append(r)
+    return out
+
+
+# ── CanonicalEvent → LLMResponse 翻译 ──
+
+
+@pytest.mark.asyncio
+async def test_translates_text_and_reasoning_deltas(monkeypatch):
+    rec = GatewayRecorder(
+        [_reasoning_ev("思考A"), _reasoning_ev("思考B"), _text_ev("答案"), _finished_ev()]
+    )
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    out = await _run(monkeypatch, client, rec)
+
+    assert [r.reasoning_delta for r in out] == ["思考A", "思考B", "", ""]
+    assert out[2].text_delta == "答案"
+    assert out[2].is_finished is False
+    # 纯文本结束：finished 事件 → 额外 is_finished=True 尾帧
+    assert out[3].is_finished is True
+    assert out[3].text_delta == ""
+
+
+@pytest.mark.asyncio
+async def test_translates_tool_call_event_with_parsed_arguments(monkeypatch):
+    rec = GatewayRecorder(
+        [
+            _tool_call_ev(
+                [
+                    {
+                        "id": "call_0",
+                        "function": {"name": "web_search", "arguments": '{"q": "茅台"}'},
+                    }
+                ]
+            ),
+            _finished_ev(),
+        ]
+    )
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    out = await _run(monkeypatch, client, rec)
+
+    assert out[0].is_finished is True
+    assert out[0].tool_calls is not None
+    assert out[0].tool_calls[0].id == "call_0"
+    assert out[0].tool_calls[0].name == "web_search"
+    # arguments 是 dict（ToolCallRequest 契约：已 JSON parse）
+    assert out[0].tool_calls[0].arguments == {"q": "茅台"}
+    # tool_call 帧已带 is_finished → finished 不再追加尾帧
+    assert len(out) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_call_bad_json_falls_back_to_empty_dict(monkeypatch, caplog):
+    rec = GatewayRecorder(
+        [
+            _tool_call_ev([{"id": "c1", "function": {"name": "f", "arguments": "{not-json"}}]),
+            _finished_ev(),
+        ]
+    )
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    out = await _run(monkeypatch, client, rec)
+
+    assert out[0].tool_calls[0].arguments == {}
+
+
+@pytest.mark.asyncio
+async def test_tool_call_missing_id_gets_index_fallback(monkeypatch):
+    rec = GatewayRecorder(
+        [
+            _tool_call_ev(
+                [
+                    {"function": {"name": "a", "arguments": "{}"}},
+                    {"id": "x", "function": {"name": "b", "arguments": "{}"}},
+                ]
+            ),
+            _finished_ev(),
+        ]
+    )
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    out = await _run(monkeypatch, client, rec)
+
+    assert [tc.id for tc in out[0].tool_calls] == ["call_0", "x"]
+
+
+@pytest.mark.asyncio
+async def test_error_event_not_expected_gateway_raises_instead(monkeypatch):
+    """gateway 契约：重试耗尽 raise LLMError（不发 error 事件）。异常应透传。"""
+
+    async def _raising(*args, **kwargs):
         raise RuntimeError("API 连接失败")
+        yield  # pragma: no cover
 
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-
-    # 收集 yield 的所有 LLMResponse
-    yielded: list[LLMResponse] = []
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    monkeypatch.setattr("finance_agent.llm.gateway.complete_stream_async", _raising)
     with pytest.raises(RuntimeError, match="API 连接失败"):
-        async for resp in client.chat_stream(messages=[{"role": "user", "content": "test"}]):
-            yielded.append(resp)
-
-    # 不应 yield 任何包含错误文本的 LLMResponse
-    assert len(yielded) == 0
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_retries_before_raising(monkeypatch):
-    """chat_stream SHALL 在重试次数内重试，耗尽后才 raise。"""
-    callCount = 0
-    client = LiteLLMClient(
-        model="deepseek/deepseek-chat", api_key="fake", max_retries=3, retry_delay=0
-    )
-
-    async def _mock_acompletion(**kwargs):
-        nonlocal callCount
-        callCount += 1
-        raise ConnectionError("网络错误")
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-
-    with pytest.raises(ConnectionError, match="网络错误"):
-        async for _ in client.chat_stream(messages=[{"role": "user", "content": "test"}]):
+        async for _ in client.chat_stream(messages=[{"role": "user", "content": "t"}]):
             pass
 
-    # 应该重试 3 次（max_retries）
-    assert callCount == 3
+
+# ── llm_config 完整性判定 / 参数透传 ──
 
 
-# ── tasks.md 3.4: LiteLLMClient thinking 配置测试 ──
-
-
-def test_build_kwargs_thinking_default_enabled():
-    """thinking=None 时 DeepSeek 模型默认 enabled（向后兼容）。"""
-    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
-    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
-    assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
-
-
-def test_build_kwargs_thinking_disabled():
-    """thinking='disabled' 时 extra_body 设为 disabled。"""
-    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake", thinking="disabled")
-    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
-    assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
-
-
-def test_build_kwargs_thinking_enabled_explicit():
-    """thinking='enabled' 显式传入时 extra_body 设为 enabled。"""
-    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake", thinking="enabled")
-    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
-    assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
-
-
-def test_build_kwargs_non_deepseek_ignores_thinking():
-    """非 DeepSeek 模型不受 thinking 影响，走 temperature 模式。"""
-    client = LiteLLMClient(model="openai/gpt-4o", api_key="fake", thinking="enabled")
-    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
-    assert "extra_body" not in kwargs
-    assert "temperature" in kwargs
-
-
-def test_build_kwargs_thinking_with_tools():
-    """thinking 配置下带 tools 时仍正确设置 extra_body。"""
-    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake", thinking="enabled")
-    kwargs = client._build_kwargs(
-        messages=[{"role": "user", "content": "hi"}],
-        tools=[{"type": "function", "function": {"name": "f"}}],
+@pytest.mark.asyncio
+async def test_full_config_trio_passed_as_llm_config(monkeypatch):
+    rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])
+    client = LiteLLMClient(
+        model="deepseek/deepseek-chat",
+        api_key="sk-fake",
+        base_url="https://api.example.com/v1",
+        max_retries=5,
+        retry_delay=0.2,
     )
-    assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
-    assert kwargs["tools"] == [{"type": "function", "function": {"name": "f"}}]
+    await _run(
+        monkeypatch,
+        client,
+        rec,
+        tools=[{"type": "function", "function": {"name": "f"}}],
+        temperature=0.3,
+    )
+
+    kw = rec.calls[0]
+    assert kw["llm_config"] == {
+        "model": "deepseek/deepseek-chat",
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-fake",
+    }
+    assert kw["purpose"] == "react"
+    assert kw["max_retries"] == 5
+    assert kw["retry_delay"] == 0.2
+    assert kw["temperature"] == 0.3
+    assert kw["tool_choice"] == "auto"
+    assert kw["tools"] == [{"type": "function", "function": {"name": "f"}}]
 
 
-def test_build_kwargs_base_url_from_init():
-    """base_url 构造参数注入 api_base。"""
+@pytest.mark.asyncio
+async def test_chat_stream_forwards_max_tokens_16384(monkeypatch):
+    """harness ReAct 路径输出预算保真（终审 I1）：chat_stream 必须显式下发
+    max_tokens=16384，避免请求级配置解析时回落到 openai-compatible 的 8192
+    而截断 deep 输出（incident-016 类：reasoning 与正文共享配额）。"""
+    rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])
+    client = LiteLLMClient(
+        model="deepseek/deepseek-chat", api_key="sk-fake", base_url="https://api.example.com/v1"
+    )
+    await _run(monkeypatch, client, rec)
+    assert rec.calls[0]["max_tokens"] == 16384
+
+
+@pytest.mark.asyncio
+async def test_partial_config_passes_none(monkeypatch):
+    """构造参数不全（无显式 key、无 env key）时 llm_config=None，交给 resolver 用 env/preset。"""
+    rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    client = LiteLLMClient(model="deepseek/deepseek-chat")
+    await _run(monkeypatch, client, rec)
+    assert rec.calls[0]["llm_config"] is None
+
+
+# ── trace 元数据（镜像旧 _generation_metadata 语义）──
+
+
+@pytest.mark.asyncio
+async def test_trace_metadata_prompt_and_agent_keys(monkeypatch):
+    rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])
     client = LiteLLMClient(
         model="deepseek/deepseek-chat",
         api_key="fake",
-        base_url="https://custom.example.com/v1",
-    )
-    kwargs = client._build_kwargs(messages=[{"role": "user", "content": "hi"}])
-    assert kwargs["api_base"] == "https://custom.example.com/v1"
-
-
-# ── agent-trace-content-fidelity Task 2: reasoning 落 generation output ──
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_writes_reasoning_to_langfuse_output(monkeypatch):
-    """流式 reasoning_content 累加并写入 generation output.reasoning。"""
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    # 构造带 reasoning_content + content 的假流
-    def _delta(reasoning=None, content=None):
-        d = MagicMock()
-        d.reasoning_content = reasoning
-        d.content = content
-        return d
-
-    def _chunk(deltas, finish_reason=None):
-        chunk = MagicMock()
-        # usage 缺省 None；last_chunk.usage 为空由 _finish_langfuse 降级处理
-        chunk.usage = None
-        chunk.choices = [MagicMock(delta=deltas, finish_reason=finish_reason)]
-        return chunk
-
-    # litellm.acompletion(stream=True) 是 coroutine，await 后返回 async iterator。
-    # 因此 mock 必须是 async function 返回 async generator（不能直接是 async generator）。
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk(_delta(reasoning="思考A"))
-            yield _chunk(_delta(reasoning="思考B"))
-            yield _chunk(_delta(content="最终答案"), finish_reason="stop")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-
-    client = LiteLLMClient(model="deepseek-chat")
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
-
-    results = []
-    async for resp in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
-        results.append(resp)
-
-    # 断言 output 是对象且含累加的 reasoning
-    mockObs.update.assert_called_once()
-    call_kwargs = mockObs.update.call_args.kwargs
-    assert call_kwargs["output"]["reasoning"] == "思考A思考B"
-    assert call_kwargs["output"]["answer"] == "最终答案"
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_reasoning_empty_when_no_thinking(monkeypatch):
-    """无 reasoning 时 output.reasoning 为空字符串。"""
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    def _chunk(content, finish_reason="stop"):
-        chunk = MagicMock()
-        chunk.usage = None
-        chunk.choices = [
-            MagicMock(
-                delta=MagicMock(content=content, reasoning_content=None),
-                finish_reason=finish_reason,
-            )
-        ]
-        return chunk
-
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk("纯文本答案")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-    client = LiteLLMClient(model="deepseek-chat")
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
-
-    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
-        pass
-
-    call_kwargs = mockObs.update.call_args.kwargs
-    assert call_kwargs["output"]["reasoning"] == ""
-    assert call_kwargs["output"]["answer"] == "纯文本答案"
-
-
-# ── agent-trace-content-fidelity Task 3: tool_calls 落 generation output ──
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_writes_tool_calls_to_output(monkeypatch):
-    """带 tool_calls 的流，output 含结构化 tool_calls 字段。"""
-    from types import SimpleNamespace
-
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    # litellm tool_call delta：对象含 .index/.id/.function(.name/.arguments JSON 字符串)
-    def _make_tool_delta(idx, name=None, args=None, tid=None):
-        func = SimpleNamespace(name=name, arguments=args)
-        return SimpleNamespace(index=idx, id=tid, function=func)
-
-    def _chunk(content=None, tool_delta=None, finish_reason=None):
-        chunk = MagicMock()
-        chunk.usage = None
-        delta = MagicMock(content=content, reasoning_content=None)
-        delta.tool_calls = tool_delta if tool_delta is not None else []
-        chunk.choices = [MagicMock(delta=delta, finish_reason=finish_reason)]
-        return chunk
-
-    # litellm.acompletion(stream=True) 是 coroutine，await 后返回 async iterator。
-    # 因此 mock 必须是外层 async function 返回内层 async generator（不能直接是 async generator）。
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk(
-                tool_delta=[_make_tool_delta(0, name="web_search", args='{"q":"茅台"}', tid="1")]
-            )
-            yield _chunk(finish_reason="tool_calls")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-    client = LiteLLMClient(model="deepseek-chat")
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
-
-    async for _ in client.chat_stream(
-        messages=[{"role": "user", "content": "搜一下"}],
-        tools=[{"type": "function", "function": {"name": "web_search"}}],
-    ):
-        pass
-
-    call_kwargs = mockObs.update.call_args.kwargs
-    # 纯文本分支不应写入 tool_calls 字段；tool_calls 分支必须有结构化 tool_calls
-    assert call_kwargs["output"]["tool_calls"] == [
-        {"name": "web_search", "arguments": '{"q":"茅台"}'}
-    ]
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_text_branch_has_no_tool_calls_key(monkeypatch):
-    """纯文本流（无 tool_calls）的 output 不应含 tool_calls 字段（保持向后兼容）。"""
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    def _chunk(content, finish_reason="stop"):
-        chunk = MagicMock()
-        chunk.usage = None
-        chunk.choices = [
-            MagicMock(
-                delta=MagicMock(content=content, reasoning_content=None, tool_calls=[]),
-                finish_reason=finish_reason,
-            )
-        ]
-        return chunk
-
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk("纯文本")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-    client = LiteLLMClient(model="deepseek-chat")
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
-
-    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
-        pass
-
-    call_kwargs = mockObs.update.call_args.kwargs
-    assert "tool_calls" not in call_kwargs["output"]
-    assert call_kwargs["output"]["answer"] == "纯文本"
-
-
-# ── agent-trace-content-fidelity Task 4: prompt metadata 挂 generation ──
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_attaches_prompt_metadata_from_client_fields(monkeypatch):
-    """LiteLLMClient 用构造时传入的 prompt_name/prompt_version 挂到 generation metadata。"""
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    def _chunk(content, finish_reason="stop"):
-        chunk = MagicMock()
-        chunk.usage = None
-        chunk.choices = [
-            MagicMock(
-                delta=MagicMock(content=content, reasoning_content=None, tool_calls=[]),
-                finish_reason=finish_reason,
-            )
-        ]
-        return chunk
-
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk("答案")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-    client = LiteLLMClient(
-        model="deepseek-chat",
         prompt_name="quick_mode",
         prompt_version=5,
+        agent="react_agent",
     )
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
+    await _run(monkeypatch, client, rec)
 
-    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
-        pass
-
-    call_kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
-    assert call_kwargs["metadata"]["prompt_name"] == "quick_mode"
-    assert call_kwargs["metadata"]["prompt_version"] == 5
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_omits_metadata_when_no_prompt_fields(monkeypatch):
-    """LiteLLMClient 未传 prompt 字段时 metadata 不含 prompt_name/version（向后兼容）。"""
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    def _chunk(content, finish_reason="stop"):
-        chunk = MagicMock()
-        chunk.usage = None
-        chunk.choices = [
-            MagicMock(
-                delta=MagicMock(content=content, reasoning_content=None, tool_calls=[]),
-                finish_reason=finish_reason,
-            )
-        ]
-        return chunk
-
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk("答案")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-    client = LiteLLMClient(model="deepseek-chat")  # 不传 prompt 元数据
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
-
-    async for _ in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
-        pass
-
-    call_kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
-    md = call_kwargs.get("metadata", {})
-    assert "prompt_name" not in md
-    assert "prompt_version" not in md
-
-
-# ── agent-trace-agent-attribution Task 4: generation observation 用 agent 名 ──
+    trace = rec.calls[0]["trace"]
+    assert trace["name"] == "react_agent"
+    assert trace["metadata"] == {
+        "prompt_name": "quick_mode",
+        "prompt_version": 5,
+        "agent": "react_agent",
+    }
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_generation_named_by_agent(monkeypatch):
-    """LiteLLMClient 设 agent 时 generation observation 用 agent 名。"""
-    from finance_agent.harness.litellm_client import LiteLLMClient
-
-    # 与 test_chat_stream_writes_reasoning_to_langfuse_output 同款流式 mock
-    def _delta(reasoning=None, content=None):
-        d = MagicMock()
-        d.reasoning_content = reasoning
-        d.content = content
-        return d
-
-    def _chunk(deltas, finish_reason=None):
-        chunk = MagicMock()
-        chunk.usage = None
-        chunk.choices = [MagicMock(delta=deltas, finish_reason=finish_reason)]
-        return chunk
-
-    async def _mock_acompletion(**kwargs):
-        async def _stream():
-            yield _chunk(_delta(content="ok"), finish_reason="stop")
-
-        return _stream()
-
-    monkeypatch.setattr("litellm.acompletion", _mock_acompletion)
-
-    mockObs = MagicMock()
-    mockCm = MagicMock()
-    mockCm.__enter__ = MagicMock(return_value=mockObs)
-    mockCm.__exit__ = MagicMock(return_value=False)
-
-    client = LiteLLMClient(model="deepseek-chat", agent="react_agent")
-    monkeypatch.setattr(client, "_langfuse", MagicMock())
-    client._langfuse.start_as_current_observation.return_value = mockCm
-
-    out = []
-    async for r in client.chat_stream(messages=[{"role": "user", "content": "hi"}]):
-        out.append(r)
-    assert out, "chat_stream 应至少产出一个响应项"
-
-    kwargs = client._langfuse.start_as_current_observation.call_args.kwargs
-    assert kwargs["name"] == "react_agent"
-    assert kwargs["metadata"]["agent"] == "react_agent"
-
-
-# ── 方舟 GLM reasoning_content 回传 400 修复（quick 空 report 根因）──
-
-
-def test_build_kwargs_strips_reasoning_for_non_deepseek():
-    """非 DeepSeek 端点（如方舟 GLM）拒绝 messages 里的 reasoning_content 字段。
-
-    实测方舟 plan/v3 返回 400 Invalid request body → harness ReAct 多轮
-    工具调用全部失败 → quick/follow_up report 为空。DeepSeek 官方行为相反
-    （工具调用轮次必须回传 reasoning_content），按 provider 区分。
-    """
-    client = LiteLLMClient(model="openai/glm-5.2", api_key="fake")
-    messages = [
-        {"role": "user", "content": "茅台现在能买吗"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {"id": "t1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
-            ],
-            "reasoning_content": "思考中...",
-        },
-    ]
-    kwargs = client._build_kwargs(messages=messages)
-    for m in kwargs["messages"]:
-        assert "reasoning_content" not in m
-
-
-def test_build_kwargs_keeps_reasoning_for_deepseek():
-    """DeepSeek 官方端点保留 reasoning_content 回传（缺失触发 400）。"""
+async def test_trace_metadata_omits_unset_keys(monkeypatch):
+    rec = GatewayRecorder([_text_ev("ok"), _finished_ev()])
     client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
-    messages = [
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {"id": "t1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
-            ],
-            "reasoning_content": "r",
-        }
-    ]
-    kwargs = client._build_kwargs(messages=messages)
-    assert kwargs["messages"][0]["reasoning_content"] == "r"
+    await _run(monkeypatch, client, rec)
 
-
-def test_build_kwargs_normalizes_single_quote_tool_args():
-    """GLM 输出的单引号 arguments 回传方舟 400 → 必须规范化为合法 JSON。"""
-    client = LiteLLMClient(model="openai/glm-5.2", api_key="fake")
-    messages = [
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "c1",
-                    "type": "function",
-                    "function": {"name": "web_search", "arguments": "{'query': '贵州茅台 股价'}"},
-                }
-            ],
-        }
-    ]
-    kwargs = client._build_kwargs(messages=messages)
-    args = kwargs["messages"][0]["tool_calls"][0]["function"]["arguments"]
-    import json as _json
-
-    assert _json.loads(args) == {"query": "贵州茅台 股价"}
+    trace = rec.calls[0]["trace"]
+    assert trace["name"] == "litellm:deepseek/deepseek-chat"
+    assert trace["metadata"] == {}

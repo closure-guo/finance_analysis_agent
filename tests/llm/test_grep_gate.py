@@ -13,12 +13,10 @@ from pathlib import Path
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "finance_agent"
 
-# 阶段一白名单：adapter（唯一正式入口）+ 兼容薄壳存量
+# 5.1-C 收紧后白名单：仅 adapter（litellm 唯一入口；设计档案 §8）。
+# legacy.py / harness 已薄壳化转调 gateway，不再允许直接 import litellm。
 _ALLOWLIST = {
     Path("llm/adapters/litellm_adapter.py"),
-    # legacy.py（旧 llm.py）薄壳：流式/工具主链路逻辑尚在，含直接 litellm，
-    # 待 complete_stream/with_tools 在 gateway 实现后转调收紧（Task 5.1 收口）
-    Path("llm/legacy.py"),
 }
 
 _IMPORT_RE = re.compile(r"^\s*(import litellm|from litellm)", re.MULTILINE)

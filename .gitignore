@@ -263,3 +263,7 @@ tests/e2e/playwright/test-results/
 
 # SDD 隔离 worktree（superpowers:using-git-worktrees）
 .worktrees/
+
+# ZCode 会话工具目录
+data/repro-stub.db
+.zcode/

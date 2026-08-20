@@ -8,7 +8,7 @@ finish_reason/repair_count/fallback_from/degradation。
 
 from __future__ import annotations
 
-from finance_agent.llm.gateway import build_trace_metadata
+from finance_agent.llm.gateway import build_trace_metadata, complete_text
 from finance_agent.llm.registry import get_profile_preset
 
 
@@ -46,3 +46,84 @@ def test_build_trace_with_contract_facts():
     assert md["repair_count"] == 2
     assert md["fallback_from"] == "deepseek-official"
     assert md["degradation"] == "action_protocol"
+
+
+class TestCompleteTextTemperatureAndProviderOptions:
+    def _run(self, monkeypatch, llm_config, *, temperature=None):
+        from types import SimpleNamespace
+
+        captured = []
+
+        def fake_completion(**kwargs):
+            captured.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=SimpleNamespace(content="答"), finish_reason="stop")
+                ]
+            )
+
+        monkeypatch.setattr(
+            "finance_agent.llm.adapters.litellm_adapter.raw_completion", fake_completion
+        )
+        complete_text(
+            [{"role": "user", "content": "hi"}], llm_config=llm_config, temperature=temperature
+        )
+        return captured[0]
+
+    def test_temperature_passed_through(self, monkeypatch):
+        kw = self._run(
+            monkeypatch,
+            {"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+            temperature=0.2,
+        )
+        assert kw["temperature"] == 0.2
+
+    def test_deepseek_suppresses_temperature_and_sends_provider_kwargs(self, monkeypatch):
+        kw = self._run(
+            monkeypatch,
+            {
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://x/v1",
+                "apiKey": "k",
+            },
+            temperature=0.9,
+        )
+        assert kw["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert kw["reasoning_effort"] == "max"
+        assert "temperature" not in kw
+        assert "suppress_temperature" not in kw
+
+
+def test_complete_text_hangs_times_out(monkeypatch):
+    """非流式 complete_text 半僵连接保护：raw_completion 卡死不挂进程。
+
+    管线 report/nlp/web_fetcher 经 call_llm → complete_text 走此路径——只有
+    请求级 300s 超时且对半僵连接不触发（evals 卡死根因同族），须线程泵兜底。
+    """
+    import threading
+    import time
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion",
+        lambda **kw: time.sleep(30) or None,  # 永不返回的半僵调用
+    )
+    from finance_agent.llm.gateway import complete_text
+
+    result: dict = {}
+
+    def run():
+        try:
+            complete_text(
+                [{"role": "user", "content": "hi"}],
+                llm_config={"model": "openai/glm-5.3", "baseUrl": "https://x/v1", "apiKey": "k"},
+                timeout_seconds=0.3,
+            )
+            result["err"] = None
+        except Exception as e:
+            result["err"] = type(e).__name__
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(4)
+    assert not t.is_alive(), "complete_text 卡死：timeout 未生效"
+    assert result["err"] == "LLMTimeoutError"
