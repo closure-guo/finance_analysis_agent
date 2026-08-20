@@ -1769,7 +1769,13 @@ async def test_llm_config(req: LLMConfigRequest):
     usedModel = (cfg.model if cfg else None) or os.getenv("LLM_MODEL", "deepseek/deepseek-v4-pro")
     usedApiKey = (cfg.apiKey if cfg else None) or None
     usedBaseUrl = (cfg.baseUrl if cfg else None) or None
-    probeModel = usedModel or ""
+    # 模型前缀归一（设计档案 §6）：自定义 baseUrl + 裸模型名 → 强制 openai/，
+    # 与 resolver._ensure_prefix 同一语义；同时令缓存键与 resolve 侧一致
+    # （裸模型探测结果否则永不命中 resolver 读取，终审 #77）。
+    from finance_agent.llm.resolver import _ensure_prefix
+
+    usedModel = _ensure_prefix(usedModel, usedBaseUrl)
+    probeModel = usedModel
     try:
         report = run_live_probes(
             model=usedModel,

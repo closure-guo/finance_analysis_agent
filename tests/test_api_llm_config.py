@@ -299,3 +299,52 @@ def test_test_llm_config_success_writes_probe_cache():
     finally:
         _reset_probe_cache_for_tests()
         get_probe_cache().clear()
+
+
+class TestBareModelPrefixNormalization:
+    """裸模型名 + 自定义 baseUrl → 探测前强制 openai/ 前缀（§6；终审 #77 缓存键失配同修）。"""
+
+    def test_bare_model_with_base_url_gets_openai_prefix(self):
+        from finance_agent.llm.probe_cache import _reset_probe_cache_for_tests
+
+        _reset_probe_cache_for_tests()
+        try:
+            with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+                mock_probe.return_value = _mock_probe_report()
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/api/llm-config/test",
+                        json={"model": "glm-5.3", "baseUrl": "https://ark/v1", "apiKey": "k"},
+                    )
+            assert resp.status_code == 200
+            assert mock_probe.call_args[1]["model"] == "openai/glm-5.3"
+        finally:
+            _reset_probe_cache_for_tests()
+
+    def test_bare_model_without_base_url_untouched(self):
+        with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+            mock_probe.return_value = _mock_probe_report()
+            with TestClient(app) as client:
+                client.post("/api/llm-config/test", json={"model": "llama3", "apiKey": "k"})
+        assert mock_probe.call_args[1]["model"] == "llama3"
+
+    def test_cache_key_uses_normalized_model(self):
+        from finance_agent.llm.probe_cache import (
+            _reset_probe_cache_for_tests,
+            cache_key,
+            get_probe_cache,
+        )
+
+        _reset_probe_cache_for_tests()
+        try:
+            with patch("finance_agent.llm.probes.run_live_probes") as mock_probe:
+                mock_probe.return_value = _mock_probe_report()
+                with TestClient(app) as client:
+                    client.post(
+                        "/api/llm-config/test",
+                        json={"model": "glm-5.3", "baseUrl": "https://ark/v1", "apiKey": "k"},
+                    )
+            key = cache_key(model="openai/glm-5.3", base_url="https://ark/v1", api_key="k")
+            assert get_probe_cache().get(key) is not None
+        finally:
+            _reset_probe_cache_for_tests()
