@@ -231,20 +231,31 @@ def call_llm_streaming(
             time.sleep(delay)
         return _stub_pipeline_answer(node_name)
 
-    answer_parts: list[str] = []
-    for kind, text in call_llm_stream(
-        prompt,
-        system=system,
-        api_key=api_key,
-        llm_config=llm_config,
-        prompt_name=prompt_name,
-        prompt_version=prompt_version,
-        agent=node_name,
-        stock_code=stock_code,
-    ):
-        if kind == "thinking" and writer:
-            writer({"type": "thinking", "node": node_name, "token": text})
-        elif kind == "answer":
-            answer_parts.append(text)
+    # retryable LLMError（OutputTruncated/EmptyLLMOutput/超时/限流）重试一次：
+    # gateway 按 Task 2.2 合同把截断/空输出归一为 typed error，但管线节点直调
+    # 本函数无兜底（evals 跑批暴露：一次 finish_reason=length 炸整跑批）。
+    # 与 call_llm_for_json 的「服务瞬时故障重试一次」同语义；非 retryable 直接上抛。
+    from finance_agent.llm.errors import LLMError
 
-    return "".join(answer_parts)
+    for attempt in range(2):
+        answer_parts: list[str] = []
+        try:
+            for kind, text in call_llm_stream(
+                prompt,
+                system=system,
+                api_key=api_key,
+                llm_config=llm_config,
+                prompt_name=prompt_name,
+                prompt_version=prompt_version,
+                agent=node_name,
+                stock_code=stock_code,
+            ):
+                if kind == "thinking" and writer:
+                    writer({"type": "thinking", "node": node_name, "token": text})
+                elif kind == "answer":
+                    answer_parts.append(text)
+            return "".join(answer_parts)
+        except LLMError as exc:
+            if not exc.retryable or attempt == 1:
+                raise
+    return ""  # 不可达（循环内 return/raise）

@@ -131,3 +131,63 @@ class TestRetryOnApiError:
         ):
             call_llm_for_json("x")
         assert len(calls) == 2
+
+
+class TestStreamingRetryOnRetryableLLMError:
+    """call_llm_streaming 对 retryable LLMError 重试一次（evals 跑批暴露回归：
+    gateway 把 finish_reason=length 归一为 OutputTruncatedError，节点直调无重试
+    直接炸管线；旧路径截断只表现为坏 JSON 走 call_llm_for_json 兜底）。"""
+
+    def test_truncated_then_success_retries_once(self):
+        from finance_agent.llm.errors import OutputTruncatedError
+
+        calls = {"n": 0}
+
+        def fake_stream(*a, **kw):  # noqa: ARG001
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OutputTruncatedError("finish_reason=length")
+            return iter([("answer", '{"ok": 1}')])
+
+        with patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream):
+            from finance_agent.nodes._llm_utils import call_llm_streaming
+
+            result = call_llm_streaming("p", node_name="trader")
+        assert result == '{"ok": 1}'
+        assert calls["n"] == 2
+
+    def test_non_retryable_raises_immediately(self):
+        from finance_agent.llm.errors import AuthError
+
+        calls = {"n": 0}
+
+        def fake_stream(*a, **kw):  # noqa: ARG001
+            calls["n"] += 1
+            raise AuthError("bad key")
+
+        with (
+            patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream),
+            pytest.raises(AuthError),
+        ):
+            from finance_agent.nodes._llm_utils import call_llm_streaming
+
+            call_llm_streaming("p", node_name="trader")
+        assert calls["n"] == 1
+
+    def test_retryable_exhausted_raises(self):
+        from finance_agent.llm.errors import EmptyLLMOutputError
+
+        calls = {"n": 0}
+
+        def fake_stream(*a, **kw):  # noqa: ARG001
+            calls["n"] += 1
+            raise EmptyLLMOutputError("thinking 后即止")
+
+        with (
+            patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream),
+            pytest.raises(EmptyLLMOutputError),
+        ):
+            from finance_agent.nodes._llm_utils import call_llm_streaming
+
+            call_llm_streaming("p", node_name="trader")
+        assert calls["n"] == 2
