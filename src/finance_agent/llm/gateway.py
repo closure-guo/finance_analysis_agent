@@ -401,6 +401,7 @@ def complete_stream(
     llm_config: dict[str, Any] | None = None,
     trace: dict[str, Any] | None = None,
     temperature: float | None = None,
+    chunk_timeout: float = 120.0,
 ):
     """统一流式 complete 入口（delta 5.1）：yield CanonicalEvent。
 
@@ -475,7 +476,39 @@ def complete_stream(
         _answer = ""
         _reasoning = ""
         _last_usage = None
-        for chunk in stream:
+        # per-chunk 超时保护（incident 016/017 卡死族）：同步阻塞迭代无法被
+        # 中断，用 daemon 线程把 chunk 泵进队列、主侧带超时取——半僵流
+        # （chunk 永不到达且 litellm 请求级 timeout 不触发）不再挂死进程。
+        import queue as _queue
+        import threading as _threading
+
+        _DONE = object()
+        _q: _queue.Queue = _queue.Queue()
+
+        def _pump() -> None:
+            try:
+                for chunk in stream:
+                    _q.put(chunk)
+            except BaseException as exc:  # noqa: BLE001 -- 异常经队列回传主侧
+                _q.put(exc)
+            else:
+                _q.put(_DONE)
+
+        _threading.Thread(target=_pump, daemon=True).start()
+        while True:
+            try:
+                item = _q.get(timeout=chunk_timeout)
+            except _queue.Empty:
+                from finance_agent.llm.errors import LLMTimeoutError
+
+                raise LLMTimeoutError(
+                    f"流式 chunk 超过 {chunk_timeout}s 未到达（半僵流），终止本次生成"
+                ) from None
+            if item is _DONE:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            chunk = item
             choice = chunk.choices[0]
             delta = choice.delta
             finish = getattr(choice, "finish_reason", None) or finish

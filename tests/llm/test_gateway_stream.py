@@ -173,3 +173,63 @@ class TestCompleteStreamObservation:
         assert got["name"] == "react_agent"
         assert updated["output"]["answer"] == "答"
         assert updated["output"]["reasoning"] == "思"
+
+
+class TestSyncChunkTimeout:
+    """同步流半僵流保护（evals 跑批暴露：GLM 流中途停住永不结束，进程静默挂死）。
+
+    complete_stream 必须有 per-chunk 超时（镜像 async 的 wait_for）：
+    chunk 超时未到达 → error 事件(LLMTimeoutError)，不无限阻塞。
+    """
+
+    def test_stalled_stream_times_out(self, monkeypatch):
+        import threading
+        import time
+
+        def fake_stream(**kwargs):  # noqa: ARG001
+            def gen():
+                yield _chunk(text="你")
+                time.sleep(30)  # 半僵流：chunk 之间永久停顿
+                yield _chunk(text="好", finish="stop")
+
+            return gen()
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+        result: dict = {}
+
+        def run():
+            result["events"] = list(
+                complete_stream(
+                    [{"role": "user", "content": "hi"}],
+                    llm_config={
+                        "model": "openai/glm-5.3",
+                        "baseUrl": "https://x/v1",
+                        "apiKey": "k",
+                    },
+                    chunk_timeout=0.3,
+                )
+            )
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(5)
+        assert not t.is_alive(), "同步流卡死：chunk_timeout 未生效"
+        evs = result["events"]
+        assert any(e.kind == "text" for e in evs)
+        assert evs[-1].kind == "error"
+        assert evs[-1].finish_reason == "LLMTimeoutError"
+
+    def test_normal_stream_unaffected(self, monkeypatch):
+        def fake_stream(**kwargs):  # noqa: ARG001
+            yield _chunk(text="你好")
+            yield _chunk(finish="stop")
+
+        monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+        evs = list(
+            complete_stream(
+                [{"role": "user", "content": "hi"}],
+                llm_config={"model": "openai/glm-5.3", "baseUrl": "https://x/v1", "apiKey": "k"},
+                chunk_timeout=1.0,
+            )
+        )
+        assert evs[-1].kind == "finished"
