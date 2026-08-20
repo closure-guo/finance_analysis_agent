@@ -460,13 +460,17 @@ def complete_stream(
         "messages": messages,
         "max_tokens": budget,
         "api_base": profile.base_url,
-        "tools": tools,
         **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
         **provider_kwargs,
     }
     if profile.api_key:
         # keyless 本地端点（如 Ollama）api_key 为 None：不发送空 key
         request_kwargs["api_key"] = profile.api_key
+    if tools:
+        # tools 非空才携带：tools=None 下发会让方舟等式端点短思考后直接
+        # finish=length（drop_params 白名单化后不再静默丢弃 None）——
+        # evals 全节点 answer=0/truncation 的根因。
+        request_kwargs["tools"] = tools
     if not suppress_temperature and temperature is not None:
         request_kwargs["temperature"] = temperature
     try:

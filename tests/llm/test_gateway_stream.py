@@ -233,3 +233,40 @@ class TestSyncChunkTimeout:
             )
         )
         assert evs[-1].kind == "finished"
+
+
+def test_tools_none_not_sent_to_raw_stream(monkeypatch):
+    """tools=None 不得下发（ark 收 tools:null 会短思考后异常截断 finish=length）。
+
+    旧全局 drop_params 时代 litellm 静默丢弃 None 参数；drop_params 白名单化
+    移除后，同步 complete_stream 无条件携带 tools=None 直达端点——evals 跑批
+    全部节点 answer=0 + reasoning~4k + finish=length 的根因。
+    """
+    captured: dict = {}
+
+    def fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield _chunk(text="好", finish="stop")
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream)
+    list(
+        complete_stream(
+            [{"role": "user", "content": "hi"}],
+            llm_config={"model": "openai/glm-5.3", "baseUrl": "https://x/v1", "apiKey": "k"},
+        )
+    )
+    assert "tools" not in captured, "tools=None 被下发到端点"
+
+    def fake_stream_tools(**kwargs):
+        captured.update(kwargs)
+        yield _chunk(finish="stop")
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_stream_tools)
+    list(
+        complete_stream(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "f"}}],
+            llm_config={"model": "openai/glm-5.3", "baseUrl": "https://x/v1", "apiKey": "k"},
+        )
+    )
+    assert captured["tools"] == [{"type": "function", "function": {"name": "f"}}]
