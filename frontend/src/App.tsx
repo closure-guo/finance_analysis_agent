@@ -1897,7 +1897,7 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnaly
 
 // ── Settings Modal（LLM 设置面板，取代旧版仅 API Key 的弹窗）──
 // 实现 delta 5.1/5.5（模型/BaseURL/思考开关）、6.1-6.5（Provider 预设 + 模型发现）、7.1-7.4（连通性测试）。
-function SettingsModal({ config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+export function SettingsModal({ config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
   config: LLMConfig
   backendDefaults: { model: string; baseUrl: string; thinking: string }
   profileStore: ProfileStore
@@ -1930,6 +1930,22 @@ function SettingsModal({ config, backendDefaults, profileStore, capability: capa
   // probe 得到的能力矩阵（弹窗内展示；连接三要素变更后置空待重探测）
   const [capability, setCapability] = useState<CapabilityMatrix | null>(capabilityProp)
   const [testWarnings, setTestWarnings] = useState<string[]>([])
+
+  // 切换 profile 时表单整体切换（设计档案 §15 原子切换，ZCode 式编辑逻辑）：
+  // 本地 useState 只在挂载取初值，activeId 变化后必须显式同步为目标 profile 的
+  // 配置，否则弹窗停留在旧 profile 的字段（且不清 apiKey——整体换，不留旧值）。
+  useEffect(() => {
+    const active = profileStore.profiles.find(p => p.id === profileStore.activeId)
+    if (!active) return
+    setApiKey(active.config.apiKey)
+    setModel(active.config.model)
+    setBaseUrl(active.config.baseUrl)
+    setThinking(active.config.thinking || backendDefaults.thinking || 'enabled')
+    setCapability(active.config.capability ?? null)
+    setTestWarnings([])
+    setTestStatus('idle')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在激活 profile 切换时同步；config 对象因保存/probe 更新会变 identity，不应重置用户编辑中字段
+  }, [profileStore.activeId])
 
   // 连接三要素（apiKey/model/baseUrl）变更 → 旧 probe 事实失效
   const invalidateCapability = () => {
