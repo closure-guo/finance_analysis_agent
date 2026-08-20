@@ -235,8 +235,12 @@ def call_llm_streaming(
     # gateway 按 Task 2.2 合同把截断/空输出归一为 typed error，但管线节点直调
     # 本函数无兜底（evals 跑批暴露：一次 finish_reason=length 炸整跑批）。
     # 与 call_llm_for_json 的「服务瞬时故障重试一次」同语义；非 retryable 直接上抛。
-    from finance_agent.llm.errors import LLMError
+    # 截断特例（Task 2.2「预算复核」）：重试时预算加倍（16384→32768）——
+    # reasoning 与正文共享配额的端点（方舟 GLM，incident 017 同族）16384 对
+    # 长 JSON 节点不够，原预算复读大概率再截。
+    from finance_agent.llm.errors import LLMError, OutputTruncatedError
 
+    escalate: dict = {}
     for attempt in range(2):
         answer_parts: list[str] = []
         try:
@@ -249,12 +253,17 @@ def call_llm_streaming(
                 prompt_version=prompt_version,
                 agent=node_name,
                 stock_code=stock_code,
+                **escalate,
             ):
                 if kind == "thinking" and writer:
                     writer({"type": "thinking", "node": node_name, "token": text})
                 elif kind == "answer":
                     answer_parts.append(text)
             return "".join(answer_parts)
+        except OutputTruncatedError:
+            if attempt == 1:
+                raise
+            escalate = {"max_tokens": 32768}  # 预算复核：截断→加倍重试
         except LLMError as exc:
             if not exc.retryable or attempt == 1:
                 raise

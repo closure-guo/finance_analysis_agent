@@ -191,3 +191,22 @@ class TestStreamingRetryOnRetryableLLMError:
 
             call_llm_streaming("p", node_name="trader")
         assert calls["n"] == 2
+
+
+def test_truncation_retry_escalates_budget():
+    """截断重试必须预算复核（Task 2.2）：第二次调用 max_tokens=32768 而非原预算复读。"""
+    from finance_agent.llm.errors import OutputTruncatedError
+
+    captured = []
+
+    def fake_stream(*a, **kw):
+        captured.append(kw.get("max_tokens"))
+        if len(captured) == 1:
+            raise OutputTruncatedError("finish_reason=length")
+        return iter([("answer", "ok")])
+
+    with patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream):
+        from finance_agent.nodes._llm_utils import call_llm_streaming
+
+        assert call_llm_streaming("p", node_name="trader") == "ok"
+    assert captured == [None, 32768]
