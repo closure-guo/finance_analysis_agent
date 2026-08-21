@@ -1,19 +1,8 @@
-"""generate_file: 生成 Word/PPT 文件（统一追加免责声明）。"""
+"""generate_file: 生成 Word/PPT/PDF/Markdown 文件（统一追加免责声明）。"""
 
 from __future__ import annotations
 
-import os
-from datetime import datetime
-from pathlib import Path
-
-from finance_agent.export.docx_exporter import markdown_to_docx
-from finance_agent.export.pptx_exporter import markdown_to_pptx
-
-_DISCLAIMER = (
-    "\n\n---\n\n**免责声明**：本报告由 AI 系统基于公开财务数据自动生成，仅供参考，不构成任何投资建议。"
-    "报告中的分析和结论基于历史数据和公开市场信息，不保证未来表现。"
-    "投资者应结合自身情况独立判断，并咨询专业投资顾问。"
-)
+from finance_agent.export.service import append_disclaimer, export_report
 
 
 def generate_file(state: dict) -> dict:
@@ -21,42 +10,18 @@ def generate_file(state: dict) -> dict:
     if not final_report:
         return {"file_path": None, "file_paths": None}
 
-    # 统一追加免责声明（避免重复）
-    if "免责声明" not in final_report:
-        final_report += _DISCLAIMER
-
     stock_code = state.get("stock_code", "unknown")
     stock_name = _get_stock_name(state)
 
-    reports_dir = Path(os.environ.get("REPORTS_DIR", "reports"))
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    # 兼容旧行为：会话落库 / SSE 下发的 final_report（即 report_markdown）含免责声明；
+    # 导出服务内 append_disclaimer 幂等，传已追加文本不会重复追加。
+    final_report = append_disclaimer(final_report)
 
-    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = f"{stock_code}_{date_str}"
-
-    docx_target = str(reports_dir / f"{base_name}_report.docx")
-    pptx_target = str(reports_dir / f"{base_name}_report.pptx")
-
-    docx_path: str | None = docx_target
-    pptx_path: str | None = pptx_target
-
-    try:
-        markdown_to_docx(final_report, docx_target, stock_name)
-    except Exception:
-        docx_path = None  # noqa: S110
-
-    try:
-        markdown_to_pptx(final_report, pptx_target, stock_name)
-    except Exception:
-        pptx_path = None  # noqa: S110
-
-    file_paths: dict[str, str | None] = {
-        "docx": docx_path,
-        "pptx": pptx_path,
-    }
+    # 导出服务统一处理免责声明、缺失图片容错、REPORTS_DIR 落盘与单格式失败容错
+    file_paths = export_report(final_report, stock_code, stock_name)
 
     return {
-        "file_path": docx_path,
+        "file_path": file_paths.get("docx"),
         "file_paths": file_paths,
         "final_report": final_report,
     }
