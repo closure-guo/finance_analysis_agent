@@ -35,6 +35,11 @@ def _make_session(report_md: str) -> str:
 
 
 def test_export_pdf_returns_url(tmp_path, monkeypatch, isolated_db):
+    # 该用例唯一验证 pdf 成功路径（200 + .pdf 后缀 + url 前缀）。Windows 本地缺 GTK
+    # 系统库时 weasyprint 不可 import（OSError），此时整体跳过（本机 skip，CI 全量跑）；
+    # 用 exc_type 元组同时覆盖 ImportError 与 OSError。仅函数体内使用 importorskip，
+    # 不放在模块顶层以免跳过本文件其余用例。
+    pytest.importorskip("weasyprint", exc_type=(ImportError, OSError))
     monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
     sid = _make_session("# 测试报告\n\n正文。\n")
 

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from finance_agent.export.service import append_disclaimer, export_report, sanitize_missing_images
 
 _SAMPLE = "# 测试报告\n\n## 章节\n\n正文内容。\n\n| A | B |\n|---|---|\n| 1 | 2 |\n"
@@ -28,10 +30,22 @@ def test_append_disclaimer_idempotent():
 
 def test_export_report_all_formats(tmp_path, monkeypatch):
     monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    # 探测 weasyprint 可用性：Windows 本地缺 GTK 系统库时 import 抛 OSError，
+    # CI/Linux 已配系统库。可用 → 断言四格式全部生成；不可用 → 不整个跳过本用例
+    # （docx/pptx/md 生成仍须验证），把降级行为固化为断言：pdf 为 None。
+    pdf_available = True
+    try:
+        pytest.importorskip("weasyprint", exc_type=(ImportError, OSError))
+    except pytest.skip.Exception:
+        pdf_available = False
+
     result = export_report(_SAMPLE, "600519", "贵州茅台")
 
     assert set(result.keys()) == {"docx", "pptx", "pdf", "md"}
+    assert bool(pdf_available) == (result["pdf"] is not None)
     for fmt, path in result.items():
+        if fmt == "pdf" and not pdf_available:
+            continue
         assert path is not None, f"{fmt} 应生成成功"
         assert Path(path).exists()
 

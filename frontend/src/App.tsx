@@ -243,6 +243,12 @@ export default function App() {
   const [warningMessage, setWarningMessage] = useState<string | null>(null)
   // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
   const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
+  // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
+  // 避免抽屉仍显示旧会话的下载按钮、点击导出旧会话文件。currentSessionId 为 null（新建
+  // 分析/首屏）时同样置 null（幂等，无副作用）。
+  useEffect(() => {
+    setDrawerMessage(null)
+  }, [currentSessionId])
   const showWarning = useCallback((text: string) => {
     setWarningMessage(text)
     setTimeout(() => setWarningMessage(null), 3000)
