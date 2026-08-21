@@ -226,6 +226,13 @@ class ModelsRequest(BaseModel):
     apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
 
 
+class ExportRequest(BaseModel):
+    """按需导出请求体（POST /api/export）。fmt: pdf | word | markdown。"""
+
+    session_id: str
+    fmt: str  # pdf | word | markdown（映射 docx/md）
+
+
 # ── Helpers ──
 
 
@@ -1863,6 +1870,40 @@ def _classify_llm_error(e: Exception) -> str:
         return "network"
 
     return "unknown"
+
+
+_FMT_TO_KEY = {"pdf": "pdf", "word": "docx", "markdown": "md"}
+
+
+@app.post("/api/export")
+async def export_report_file(req: ExportRequest):
+    """按需导出：从会话 report_markdown 现场生成单一文件，返回可下载 URL。
+
+    404：会话不存在或无报告内容；400：不支持的导出格式；500：转换失败。
+    """
+    from finance_agent.export.service import export_report as do_export
+
+    fmt_key = _FMT_TO_KEY.get(req.fmt)
+    if fmt_key is None:
+        raise HTTPException(status_code=400, detail="不支持的导出格式，可选：pdf / word / markdown")
+
+    session = await asyncio.to_thread(get_session, req.session_id)
+    report_md = (session or {}).get("report_markdown") or ""
+    if not report_md:
+        raise HTTPException(status_code=404, detail="会话不存在或无报告内容")
+
+    stock_code = (session or {}).get("stock_code") or "unknown"
+    stock_name = (session or {}).get("stock_name") or ""
+
+    # 转换在独立线程执行，避免阻塞事件循环（现有 API 同款模式）
+    result = await asyncio.to_thread(do_export, report_md, stock_code, stock_name, (fmt_key,))
+    path = result.get(fmt_key)
+
+    if not path:
+        raise HTTPException(status_code=500, detail="报告导出失败，请稍后重试")
+
+    file_name = str(Path(path).name)
+    return {"file_name": file_name, "url": f"/api/files/{file_name}"}
 
 
 @app.get("/api/files/{filename}")
