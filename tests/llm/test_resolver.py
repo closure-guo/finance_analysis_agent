@@ -196,7 +196,78 @@ class TestProviderPrefix:
         del os
 
 
-class TestProbeFactMerge:
+class TestApiFormPrefix:
+    """add-llm-api-form：请求级 apiForm 驱动裸模型名前缀推导 + Profile 携带 api_form。"""
+
+    def _resolve(self, api_form):
+        return resolve_profile(
+            purpose="deep",
+            llm_config={
+                "model": "gpt-4o",
+                "baseUrl": "https://api.example.com/v1",
+                "apiKey": "sk-x",
+                "apiForm": api_form,
+            },
+            _env={},
+        )
+
+    def test_chat_completion_derives_openai_prefix(self):
+        profile = self._resolve("chat_completion")
+        assert profile.model == "openai/gpt-4o"
+        assert profile.api_form == "chat_completion"
+
+    def test_responses_derives_openai_prefix(self):
+        profile = self._resolve("responses")
+        assert profile.model == "openai/gpt-4o"
+        assert profile.api_form == "responses"
+
+    def test_messages_derives_anthropic_prefix(self):
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={
+                "model": "claude-sonnet-4-20250514",
+                "baseUrl": "https://api.anthropic.com/v1",
+                "apiKey": "sk-x",
+                "apiForm": "messages",
+            },
+            _env={},
+        )
+        assert profile.model == "anthropic/claude-sonnet-4-20250514"
+        assert profile.api_form == "messages"
+
+    def test_already_prefixed_model_kept_as_is(self):
+        """模型名已含 / 前缀时原样使用，不做推导。"""
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={
+                "model": "deepseek/deepseek-chat",
+                "baseUrl": "https://api.deepseek.com/v1",
+                "apiKey": "sk-x",
+                "apiForm": "chat_completion",
+            },
+            _env={},
+        )
+        assert profile.model == "deepseek/deepseek-chat"
+
+    def test_no_api_form_keeps_existing_openai_fallback(self):
+        """未设 apiForm + 有端点 → 维持现状 openai/ 前缀。"""
+        profile = resolve_profile(
+            purpose="deep",
+            llm_config={
+                "model": "gpt-4o",
+                "baseUrl": "https://api.example.com/v1",
+                "apiKey": "sk-x",
+            },
+            _env={},
+        )
+        assert profile.model == "openai/gpt-4o"
+        assert profile.api_form is None
+
+    def test_invalid_api_form_rejected(self):
+        """非法 apiForm 显式报错，不静默忽略。"""
+        with pytest.raises(IncompleteLLMConfigError):
+            self._resolve("bogus")
+
     """llm-capability-probe delta：resolver 合并 probe 缓存事实。"""
 
     ENV_DEEPSEEK = {

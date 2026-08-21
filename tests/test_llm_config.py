@@ -109,3 +109,28 @@ def test_llm_config_request_to_llm_config_mapping():
     assert cfg.baseUrl == "https://api.deepseek.com/v1"
     assert cfg.apiKey == "sk-xxx"
     assert cfg.thinking == "disabled"
+
+
+# ── apiForm（add-llm-api-form）──
+
+
+def test_llm_config_request_accepts_valid_api_form():
+    """合法 apiForm 三个取值都能通过校验。"""
+    for value in ("chat_completion", "messages", "responses"):
+        req = LLMConfigRequest.model_validate({"apiForm": value})
+        assert req.apiForm == value
+
+
+def test_llm_config_request_null_api_form_allowed():
+    """apiForm 为 null/缺省 → None（未设置，自动路由）。"""
+    assert LLMConfigRequest().apiForm is None
+    assert LLMConfigRequest.model_validate({"apiForm": None}).apiForm is None
+
+
+def test_llm_config_request_rejects_invalid_api_form():
+    """非法 apiForm → ValidationError（HTTP 422），不静默忽略。"""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        LLMConfigRequest.model_validate({"apiForm": "bogus"})

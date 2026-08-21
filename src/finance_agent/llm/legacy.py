@@ -35,6 +35,7 @@ class LLMConfig:
     baseUrl: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
     apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
     thinking: str | None = None
+    apiForm: str | None = None  # noqa: N815  # API 形式：chat_completion / messages / responses，None 自动路由
 
 
 def _prompt_metadata(prompt_name: str | None, prompt_version: str | int | None) -> dict:
@@ -86,11 +87,13 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         base_url = llm_config.baseUrl
         key = llm_config.apiKey
         thinking = llm_config.thinking
+        api_form = llm_config.apiForm
     elif isinstance(llm_config, dict):
         model = llm_config.get("model")
         base_url = llm_config.get("baseUrl")
         key = llm_config.get("apiKey")
         thinking = llm_config.get("thinking")
+        api_form = llm_config.get("apiForm")
     else:
         return None
     if not model:
@@ -106,6 +109,8 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         cfg["apiKey"] = effective_key
     if thinking:
         cfg["thinking"] = thinking
+    if api_form:
+        cfg["apiForm"] = api_form
     return cfg
 
 

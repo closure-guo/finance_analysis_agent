@@ -49,7 +49,12 @@ class UnknownProviderPrefixError(ValueError):
     """model 前缀不在已知 provider 白名单——不从域名猜协议。"""
 
 
-def _ensure_prefix(model: str, base_url: str | None) -> str:
+# API 形式 → provider 前缀（add-llm-api-form）：
+# Chat Completion / Responses 走 OpenAI 系，Messages 走 Anthropic。
+_API_FORM_PROVIDER = {"chat_completion": "openai", "responses": "openai", "messages": "anthropic"}
+
+
+def _ensure_prefix(model: str, base_url: str | None, api_form: str | None = None) -> str:
     """自定义端点 + 无前缀 → openai/；已带前缀但未知 → 显式报错。"""
     if "/" in model:
         provider = model.split("/", 1)[0]
@@ -59,6 +64,9 @@ def _ensure_prefix(model: str, base_url: str | None) -> str:
                 "OpenAI 兼容端点请使用 openai/<model>"
             )
         return model
+    # 裸模型名：按所选 API 形式推导 provider 前缀（用户不再手写 openai/anthropic）
+    if api_form and api_form in _API_FORM_PROVIDER:
+        return f"{_API_FORM_PROVIDER[api_form]}/{model}"
     if base_url:
         return f"openai/{model}"
     # 无端点也无前缀：交给 registry 默认 provider 语义（deepseek-official）
@@ -174,6 +182,7 @@ def _resolve_profile_static(
         model = str(llm_config.get("model") or "")
         base_url = str(llm_config.get("baseUrl") or "") or None
         api_key = str(llm_config.get("apiKey") or "") or None
+        api_form = llm_config.get("apiForm")
         if not model:
             raise IncompleteLLMConfigError("请求级 llm_config 缺 model")
         if not base_url:
@@ -184,7 +193,11 @@ def _resolve_profile_static(
                 "缺端点才是半套配置；apiKey 可省略（env 回退或 keyless 端点）"
             )
         api_key = api_key or env.get("LLM_API_KEY", "") or env.get("DEEPSEEK_API_KEY", "") or None
-        model = _ensure_prefix(model, base_url)
+        if api_form is not None and api_form not in _API_FORM_PROVIDER:
+            raise IncompleteLLMConfigError(
+                f"apiForm 必须为 chat_completion / messages / responses 之一，收到 {api_form!r}"
+            )
+        model = _ensure_prefix(model, base_url, api_form)
         provider = model.split("/", 1)[0]
         return ModelProfile(
             name=f"request:{model}",
@@ -194,6 +207,7 @@ def _resolve_profile_static(
             api_key=api_key,
             capability=_PRESETS["openai-compatible"].capability,
             default_params={},
+            api_form=api_form,
             provider_options=_provider_options_from_request(provider, llm_config),
         )
 

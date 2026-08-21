@@ -8,6 +8,8 @@ export interface LLMConfig {
   model: string
   baseUrl: string
   thinking: string // "enabled" | "disabled" | ""（空表示未设置，回退后端默认）
+  // API 形式：chat_completion / messages / responses；undefined/空=未设置（litellm 自动路由）
+  apiForm?: string
   // /api/llm-config/test probe 得到的能力矩阵（camelCase JSON 的 capability 字段）。
   // undefined/null 均表示未探测（门禁放行，不误伤）。
   capability?: CapabilityMatrix | null
@@ -77,7 +79,22 @@ export interface LLMConfigPayload {
   baseUrl?: string
   apiKey?: string
   thinking?: string
+  apiForm?: string
 }
+
+// API 形式选项（add-llm-api-form）：下拉框展示文案 + 存储值。
+// 模型名前缀由所选 API 形式在后端推导，前端不再强制用户手写 openai/anthropic 前缀。
+export const API_FORM_OPTIONS: { value: string; label: string }[] = [
+  { value: 'chat_completion', label: 'OpenAI Chat Completion' },
+  { value: 'messages', label: 'Anthropic Messages' },
+  { value: 'responses', label: 'OpenAI Responses' },
+]
+
+// 缺省 API 形式：未显式配置时默认 OpenAI Chat Completion（无「跟随默认」空态）
+export const DEFAULT_API_FORM = 'chat_completion'
+
+// 合法 API 形式值集合（用于请求载荷过滤）
+const API_FORM_VALUES = new Set(API_FORM_OPTIONS.map(o => o.value))
 
 export const FA_LLM_CONFIG_KEY = 'fa_llm_config'
 // 多配置管理：profiles 存储 key
@@ -91,21 +108,22 @@ export interface ProviderPreset {
   model: string
   baseUrl: string
   thinking: string // "" 表示该预设不展示思考开关（非 DeepSeek 模型）
+  apiForm: string // API 形式值（chat_completion / messages / responses），"" 表示由用户选择
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
-  { name: 'DeepSeek 官方', model: 'deepseek/deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', thinking: 'enabled' },
-  { name: 'OpenAI', model: 'openai/gpt-4o', baseUrl: '', thinking: '' },
-  { name: 'Anthropic', model: 'anthropic/claude-sonnet-4-20250514', baseUrl: '', thinking: '' },
-  { name: '本地 Ollama', model: 'openai/llama3', baseUrl: 'http://localhost:11434/v1', thinking: '' },
-  { name: '自定义', model: '', baseUrl: '', thinking: 'enabled' },
+  { name: 'DeepSeek 官方', model: 'deepseek/deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', thinking: 'enabled', apiForm: 'chat_completion' },
+  { name: 'OpenAI', model: 'openai/gpt-4o', baseUrl: '', thinking: '', apiForm: 'chat_completion' },
+  { name: 'Anthropic', model: 'anthropic/claude-sonnet-4-20250514', baseUrl: '', thinking: '', apiForm: 'messages' },
+  { name: '本地 Ollama', model: 'openai/llama3', baseUrl: 'http://localhost:11434/v1', thinking: '', apiForm: 'chat_completion' },
+  { name: '自定义', model: '', baseUrl: '', thinking: 'enabled', apiForm: 'chat_completion' },
 ]
 
 export const CUSTOM_PRESET_NAME = '自定义'
 
 // 空配置（首次加载/未配置时的默认值）
 export function emptyLlmConfig(): LLMConfig {
-  return { apiKey: '', model: '', baseUrl: '', thinking: '' }
+  return { apiKey: '', model: '', baseUrl: '', thinking: '', apiForm: DEFAULT_API_FORM }
 }
 
 // 从 localStorage 读取配置。
@@ -120,6 +138,8 @@ export function loadLlmConfig(): LLMConfig {
         model: typeof parsed.model === 'string' ? parsed.model : '',
         baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : '',
         thinking: typeof parsed.thinking === 'string' ? parsed.thinking : '',
+        // API 形式：合法值保留，缺省/非法回退默认 OpenAI Chat Completion
+        apiForm: (typeof parsed.apiForm === 'string' && API_FORM_VALUES.has(parsed.apiForm) ? parsed.apiForm : DEFAULT_API_FORM),
         // 仅在 probe 事实有效时携带（undefined 与 null 语义等同：未探测）
         ...(parseCapability(parsed.capability) ? { capability: parseCapability(parsed.capability) } : {}),
       }
@@ -130,7 +150,7 @@ export function loadLlmConfig(): LLMConfig {
   // 迁移：旧 key 存在时，将其值作为 apiKey，写入新 key 并清除旧 key
   const legacy = localStorage.getItem(LEGACY_API_KEY_STORAGE)
   if (legacy) {
-    const cfg: LLMConfig = { apiKey: legacy, model: '', baseUrl: '', thinking: '' }
+    const cfg: LLMConfig = { apiKey: legacy, model: '', baseUrl: '', thinking: '', apiForm: DEFAULT_API_FORM }
     localStorage.setItem(FA_LLM_CONFIG_KEY, JSON.stringify(cfg))
     localStorage.removeItem(LEGACY_API_KEY_STORAGE)
     return cfg
@@ -156,7 +176,12 @@ export function buildLlmConfigPayload(cfg: LLMConfig): LLMConfigPayload | null {
   if (apiKey) payload.apiKey = apiKey
   // thinking 仅在显式取值 enabled/disabled 时携带（空值回退后端默认）
   if (cfg.thinking === 'enabled' || cfg.thinking === 'disabled') payload.thinking = cfg.thinking
-  return Object.keys(payload).length > 0 ? payload : null
+  // apiForm 仅显式合法值时携带（后端据此前缀推导 + 设 litellm api 参数）
+  if (typeof cfg.apiForm === 'string' && API_FORM_VALUES.has(cfg.apiForm)) payload.apiForm = cfg.apiForm
+  // 全空（无任何真实配置字段）时返回 null —— apiForm 默认值本身不构成配置，
+  // 否则仅下发 {apiForm} 会触发后端「缺 model」报错，破坏 env 回退路径。
+  if (!model && !baseUrl && !apiKey && payload.thinking === undefined) return null
+  return payload
 }
 
 // 判断模型名是否为 DeepSeek 系列（决定是否展示思考模式开关）

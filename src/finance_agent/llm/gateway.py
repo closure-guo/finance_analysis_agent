@@ -193,6 +193,7 @@ def complete_text(
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (
+        apply_api_form_kwargs,
         apply_provider_options,
         derive_output_budget,
         normalize_exception,
@@ -214,6 +215,7 @@ def complete_text(
         "max_tokens": budget,
         **(profile.default_params or {}),
         **provider_kwargs,
+        **apply_api_form_kwargs(profile),
     }
     if profile.api_key:
         request_kwargs["api_key"] = profile.api_key
@@ -368,6 +370,7 @@ def complete_with_tools(
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice=tool_choice)
     from finance_agent.llm.adapters.litellm_adapter import (
+        apply_api_form_kwargs,
         apply_provider_options,
         derive_output_budget,
         normalize_exception,
@@ -387,6 +390,7 @@ def complete_with_tools(
         "max_tokens": budget,
         **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
         **provider_kwargs,
+        **apply_api_form_kwargs(profile),
     }
     if profile.api_key:
         request_kwargs["api_key"] = profile.api_key
@@ -455,6 +459,7 @@ def complete_stream(
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (
+        apply_api_form_kwargs,
         apply_provider_options,
         classify_outcome,
         derive_output_budget,
@@ -498,6 +503,7 @@ def complete_stream(
         "api_base": profile.base_url,
         **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
         **provider_kwargs,
+        **apply_api_form_kwargs(profile),
     }
     if profile.api_key:
         # keyless 本地端点（如 Ollama）api_key 为 None：不发送空 key
@@ -669,6 +675,7 @@ async def complete_stream_async(
     guard_params_supported(profile.capability, tools=tools, tool_choice=tool_choice)
     from finance_agent.llm.adapters.litellm_adapter import (
         ToolCallAccumulator,
+        apply_api_form_kwargs,
         apply_provider_options,
         derive_output_budget,
         finalize_tool_calls,
@@ -714,6 +721,7 @@ async def complete_stream_async(
         "stream": True,
         **{k: v for k, v in (profile.default_params or {}).items() if k != "max_tokens"},
         **provider_kwargs,
+        **apply_api_form_kwargs(profile),
     }
     if profile.api_key:
         # keyless 本地端点（如 Ollama）api_key 为 None：不发送空 key

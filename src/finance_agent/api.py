@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 _logger = logging.getLogger("finance_agent.api")
 
@@ -180,6 +180,16 @@ class LLMConfigRequest(BaseModel):  # noqa: N815  # 字段 camelCase 为前端 J
     baseUrl: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
     apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
     thinking: str | None = None
+    apiForm: str | None = None  # noqa: N815  # API 形式：chat_completion / messages / responses，null=litellm 自动路由
+
+    @field_validator("apiForm")
+    @classmethod
+    def _api_form_allowed(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("chat_completion", "messages", "responses"):
+            raise ValueError(
+                f"apiForm 必须为 chat_completion / messages / responses 之一，收到 {v!r}"
+            )
+        return v
 
 
 class AnalyzeRequest(BaseModel):
@@ -231,6 +241,7 @@ def _to_llm_config(req: LLMConfigRequest | None) -> LLMConfig | None:
         baseUrl=req.baseUrl,
         apiKey=req.apiKey,
         thinking=req.thinking,
+        apiForm=req.apiForm,
     )
     # 全 None 时返回 None，避免无意义的空配置传播
     if not any([cfg.model, cfg.baseUrl, cfg.apiKey, cfg.thinking]):
