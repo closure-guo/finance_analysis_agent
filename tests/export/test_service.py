@@ -7,8 +7,10 @@ from finance_agent.export.service import append_disclaimer, export_report, sanit
 _SAMPLE = "# 测试报告\n\n## 章节\n\n正文内容。\n\n| A | B |\n|---|---|\n| 1 | 2 |\n"
 
 
-def test_sanitize_missing_images_drops_broken_lines():
-    text = "# 标题\n\n![好图](C:/存在/图.png)\n\n![坏图](C:/不存在/图.png)\n正文\n"
+def test_sanitize_missing_images_drops_broken_lines(tmp_path):
+    good_img = tmp_path / "good.png"
+    good_img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    text = f"# 标题\n\n![好图]({good_img})\n\n![坏图](C:/不存在/图.png)\n正文\n"
     result = sanitize_missing_images(text)
 
     assert "![好图]" in result
