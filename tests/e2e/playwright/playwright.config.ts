@@ -19,6 +19,9 @@ export default defineConfig({
     'pipeline-eta-banner.spec.ts',
     'pipeline-hierarchical-timeline.spec.ts',
     'resume-pipeline-across-sessions.spec.ts',
+    // 报告导出抽屉依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175），
+    // 由 playwright.timeline.config.ts 运行，默认 config 无此后端，故排除
+    'report-export.spec.ts',
     // 以下为前置技术债：使用 waitForTimeout 的时序依赖测试，在 CI 上不稳定，
     // 需专属 STUB_SCENARIO 或在 timeline config 内运行
     'session-switch-resumption.spec.ts',
