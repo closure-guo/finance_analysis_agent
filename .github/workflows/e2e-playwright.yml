@@ -36,6 +36,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq fonts-noto-cjk
+          # WeasyPrint 系统库（libpango/libgdk-pixbuf/shared-mime-info），与 Dockerfile 运行时容器保持一致
+          sudo apt-get install -y -qq libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 shared-mime-info
           # 清除 matplotlib 字体缓存，使新安装的字体生效
           rm -rf ~/.cache/matplotlib /home/runner/.cache/matplotlib
 
