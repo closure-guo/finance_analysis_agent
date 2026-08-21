@@ -34,13 +34,13 @@ describe('loadLlmConfig - localStorage 读取与迁移', () => {
 
   it('无任何配置时返回空配置', () => {
     const cfg = loadLlmConfig()
-    expect(cfg).toEqual({ apiKey: '', model: '', baseUrl: '', thinking: '' })
+    expect(cfg).toEqual({ apiKey: '', model: '', baseUrl: '', thinking: '', apiForm: 'chat_completion' })
   })
 
   it('读取已存在的 fa_llm_config JSON', () => {
     const stored: LLMConfig = { apiKey: 'sk-1', model: 'deepseek/deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', thinking: 'enabled' }
     localStorage.setItem(FA_LLM_CONFIG_KEY, JSON.stringify(stored))
-    expect(loadLlmConfig()).toEqual(stored)
+    expect(loadLlmConfig()).toEqual({ ...stored, apiForm: 'chat_completion' })
   })
 
   it('旧 key fa_api_key 存在且无新 key 时自动迁移', () => {
@@ -244,7 +244,7 @@ describe('loadProfiles - profiles 读取与迁移', () => {
     const store = loadProfiles()
     expect(store.profiles).toHaveLength(1)
     expect(store.profiles[0].name).toBe('旧配置')
-    expect(store.profiles[0].config).toEqual(cfg)
+    expect(store.profiles[0].config).toEqual({ ...cfg, apiForm: 'chat_completion' })
     expect(store.activeId).toBe(store.profiles[0].id)
     // 迁移后清除旧 key
     expect(localStorage.getItem(FA_LLM_CONFIG_KEY)).toBeNull()
@@ -414,5 +414,37 @@ describe('getActiveProfileName - 获取激活配置名', () => {
   it('返回激活 profile 的名称', () => {
     let store = addProfile(loadProfiles(), 'DeepSeek 办公', emptyLlmConfig())
     expect(getActiveProfileName(store)).toBe('DeepSeek 办公')
+  })
+})
+
+describe('apiForm - API 形式（add-llm-api-form）', () => {
+  it('payload 显式携带合法 apiForm', () => {
+    const out = buildLlmConfigPayload({ model: 'x/y', baseUrl: 'https://x', apiKey: 'k', thinking: '', apiForm: 'messages' })
+    expect(out?.apiForm).toBe('messages')
+  })
+  it('apiForm 为空/非法时不携带（后端自动路由）', () => {
+    const outEmpty = buildLlmConfigPayload({ model: 'x/y', baseUrl: 'https://x', apiKey: 'k', thinking: '' })
+    expect(outEmpty?.apiForm).toBeUndefined()
+    const outInvalid = buildLlmConfigPayload({ model: 'x/y', baseUrl: 'https://x', apiKey: 'k', thinking: '', apiForm: 'bogus' } as LLMConfig)
+    expect(outInvalid?.apiForm).toBeUndefined()
+  })
+
+  it('loadLlmConfig 读取合法 apiForm', () => {
+    const stored: LLMConfig = { apiKey: 'sk-1', model: 'gpt-4o', baseUrl: 'https://x/v1', thinking: '', apiForm: 'responses' }
+    localStorage.clear()
+    localStorage.setItem(FA_LLM_CONFIG_KEY, JSON.stringify(stored))
+    expect(loadLlmConfig().apiForm).toBe('responses')
+  })
+  it('loadLlmConfig 丢弃非法/缺失 apiForm 并回退默认 OpenAI Chat Completion', () => {
+    localStorage.clear()
+    localStorage.setItem(FA_LLM_CONFIG_KEY, JSON.stringify({ apiKey: 'k', model: 'm', baseUrl: 'b', thinking: '', apiForm: 'bogus' }))
+    expect(loadLlmConfig().apiForm).toBe('chat_completion')
+  })
+
+  it('Anthropic 预设携带 messages，OpenAI 预设携带 chat_completion', () => {
+    const anthropic = PROVIDER_PRESETS.find((p) => p.name === 'Anthropic')!
+    const openai = PROVIDER_PRESETS.find((p) => p.name === 'OpenAI')!
+    expect(anthropic.apiForm).toBe('messages')
+    expect(openai.apiForm).toBe('chat_completion')
   })
 })

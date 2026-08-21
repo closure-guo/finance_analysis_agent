@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from finance_agent.llm.adapters.litellm_adapter import (
+    apply_api_form_kwargs,
     apply_provider_options,
     raw_acompletion,
     raw_completion,
@@ -140,3 +141,30 @@ class TestRawTimeoutInjection:
         monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
         asyncio.run(raw_acompletion(model="openai/m", timeout=42))
         assert captured[0]["timeout"] == 42
+
+
+class TestApplyApiFormKwargs:
+    """add-llm-api-form：profile.api_form → litellm ``api`` 参数映射。"""
+
+    def test_chat_completion_maps_to_chat(self):
+        p = get_profile_preset("openai-official")
+        import dataclasses
+
+        p = dataclasses.replace(p, api_form="chat_completion")
+        assert apply_api_form_kwargs(p) == {"api": "chat"}
+
+    def test_messages_maps_to_messages(self):
+        import dataclasses
+
+        p = dataclasses.replace(get_profile_preset("openai-official"), api_form="messages")
+        assert apply_api_form_kwargs(p) == {"api": "messages"}
+
+    def test_responses_maps_to_responses(self):
+        import dataclasses
+
+        p = dataclasses.replace(get_profile_preset("openai-official"), api_form="responses")
+        assert apply_api_form_kwargs(p) == {"api": "responses"}
+
+    def test_no_api_form_returns_empty(self):
+        # 默认 profile 无 api_form（None）
+        assert apply_api_form_kwargs(get_profile_preset("openai-official")) == {}

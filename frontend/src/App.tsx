@@ -24,6 +24,8 @@ import {
   matchPreset,
   buildModelWithPrefix,
   PROVIDER_PRESETS,
+  API_FORM_OPTIONS,
+  DEFAULT_API_FORM,
   CUSTOM_PRESET_NAME,
   type LLMConfig,
   type LLMProfile,
@@ -1915,6 +1917,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   // 思考模式：已保存值优先，其次后端默认，最后内置 enabled
   const [thinking, setThinking] = useState<string>(config.thinking || backendDefaults.thinking || 'enabled')
+  const [apiForm, setApiForm] = useState<string>(config.apiForm || DEFAULT_API_FORM)
   // 配置管理：另存为输入（delta Decision 10）
   const [profileName, setProfileName] = useState('')
 
@@ -1941,6 +1944,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
     setModel(active.config.model)
     setBaseUrl(active.config.baseUrl)
     setThinking(active.config.thinking || backendDefaults.thinking || 'enabled')
+    setApiForm(active.config.apiForm || DEFAULT_API_FORM)
     setCapability(active.config.capability ?? null)
     setTestWarnings([])
     setTestStatus('idle')
@@ -1965,6 +1969,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
     setModel(preset.model)
     setBaseUrl(preset.baseUrl)
     setThinking(preset.thinking || 'enabled')
+    setApiForm(preset.apiForm)
     invalidateCapability()
   }
 
@@ -2048,6 +2053,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
       baseUrl: baseUrl.trim(),
       // 非 DeepSeek 模型不持久化 thinking（开关已隐藏）
       thinking: showThinkingToggle ? thinking : '',
+      apiForm: apiForm,
       // 携带当前 probe 事实（连接三要素未变时保留；变更则由父级 clearCapability 清空）
       capability,
     })
@@ -2070,6 +2076,19 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
         >
           {PROVIDER_PRESETS.map(p => (
             <option key={p.name} value={p.name}>{p.name}</option>
+          ))}
+        </select>
+
+        {/* API 形式（add-llm-api-form）：显式指定协议，模型名前缀据此推导 */}
+        <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API 形式</label>
+        <select
+          value={apiForm}
+          onChange={e => setApiForm(e.target.value)}
+          className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+          style={{ color: 'var(--text-default)' }}
+        >
+          {API_FORM_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
 
@@ -2259,7 +2278,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
                 const name = profileName.trim()
                 if (!name) return
                 // 将当前表单值另存为新 profile
-                onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '', capability }, name)
+                onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '', apiForm: apiForm, capability }, name)
                 setProfileName('')
               }}
               className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap"

@@ -402,6 +402,26 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     return out
 
 
+# API 形式 → litellm completion 的 ``api`` 参数（add-llm-api-form）：
+# chat_completion→/chat/completions、messages→/v1/messages、responses→/responses。
+# 仅在显式设置时返回 kwargs；空/未知 → {}（litellm 按 model 前缀自动路由）。
+_API_FORM_TO_LITELLM_API = {
+    "chat_completion": "chat",
+    "messages": "messages",
+    "responses": "responses",
+}
+
+
+def apply_api_form_kwargs(profile: ModelProfile) -> dict[str, Any]:
+    api_form = getattr(profile, "api_form", None)
+    if not api_form:
+        return {}
+    litellm_api = _API_FORM_TO_LITELLM_API.get(api_form)
+    if litellm_api is None:
+        return {}  # 上游已校验，防御性兜底
+    return {"api": litellm_api}
+
+
 # 非关键参数白名单（Task 8）：仅这些参数允许按 capability 剔除；
 # 白名单外未知参数一律透传，由 litellm/端点原生报错（显式失败）。
 _SOFT_DROP_WHITELIST = {"temperature", "top_p", "frequency_penalty", "presence_penalty"}

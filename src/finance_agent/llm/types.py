@@ -62,6 +62,9 @@ class ModelProfile:
     # 消费只发生在 adapter，业务代码零 provider 分支
     provider_options: dict[str, Any] = field(default_factory=dict)
     fallback: tuple[str, ...] = ()
+    # API 形式（add-llm-api-form）：chat_completion / messages / responses，
+    # None=litellm 按 model 前缀自动路由，不显式设置 api 参数
+    api_form: str | None = None
     # probe 治理（llm-capability-probe spec）：无缓存 probe 事实时要求先探测
     probe_required: bool = False
     # probe 事实与静态能力表冲突的字段（如 "tools: single→none"）
