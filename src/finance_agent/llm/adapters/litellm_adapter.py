@@ -301,6 +301,37 @@ def derive_output_budget(capability: Capability, requested: int | None = None) -
     return capability.max_output
 
 
+_RESUME_INSTRUCTION = "你正在续写一份分析报告，直接无缝继续输出剩余部分，不要重复以上已输出的内容。"
+
+
+def _estimate_tokens(text: str) -> int:
+    """正文 token 估算（续写预算派生用）：仅需近似值。"""
+    return max(1, len(text) // 4)
+
+
+def build_resume_kwargs(
+    request_kwargs: dict[str, Any],
+    prior_text: str,
+    progress_annotation: str | None = None,
+) -> dict[str, Any]:
+    """构造断点续写请求 kwargs（delta Task 1.1，design D1/D2）。
+
+    基于原 request_kwargs 深拷贝：messages 追加续写指令段（明确
+    「不重复已给内容、无缝继续」，progress_annotation 非 None 时拼入
+    进度标注），max_tokens 取剩余配额 max(1, 原预算 - prior_text 估算)。
+    其余 key（model/api_key/endpoint/超时）原样保留。
+    """
+    out = dict(request_kwargs)
+    out["messages"] = list(request_kwargs.get("messages", []))
+    instruction = _RESUME_INSTRUCTION
+    if progress_annotation:
+        instruction = f"{progress_annotation}\n\n{instruction}"
+    out["messages"] = out["messages"] + [{"role": "user", "content": instruction}]
+    base_budget = int(request_kwargs.get("max_tokens") or 4096)
+    out["max_tokens"] = max(1, base_budget - _estimate_tokens(prior_text))
+    return out
+
+
 def normalize_exception(exc: Exception) -> LLMError:
     """litellm 异常 → typed error 归一化（delta Task 2.4）。
 
