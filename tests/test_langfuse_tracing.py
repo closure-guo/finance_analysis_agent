@@ -9,7 +9,27 @@
 import logging
 from unittest.mock import MagicMock, patch
 
-from finance_agent.langfuse_tracing import open_span, truncate_for_trace, update_current_span
+from finance_agent.langfuse_tracing import (
+    get_callback_handler,
+    open_span,
+    truncate_for_trace,
+    update_current_span,
+)
+
+# 本仓库未安装完整 langchain 包（只有 langchain-core）；langfuse.langchain 的
+# CallbackHandler 强依赖完整版。该场景在每次 graph.invoke / api 请求都会触发，
+# 若不静默降级会疯狂刷 traceback 噪音。
+_LANGCHAIN_MISSING_MSG = "No module named 'langchain'"
+
+
+def _langchain_missing_importer(name, globals=None, locals=None, fromlist=(), level=0):
+    """模拟 from langfuse.langchain import CallbackHandler 因缺 langchain 抛错。"""
+    if name == "langfuse.langchain":
+        raise ModuleNotFoundError(_LANGCHAIN_MISSING_MSG)
+    return _real_import(name, globals, locals, fromlist, level)
+
+
+_real_import = __import__
 
 
 class TestOpenSpan:
@@ -139,3 +159,66 @@ def test_truncate_for_trace_handles_cjk():
     # head/tail 切片在字节边界上仍能完整 decode 成"股"
     assert out.startswith("股") and out.endswith("股")
     assert "[truncated" in out
+
+
+class TestGetCallbackHandler:
+    """get_callback_handler 缺 langchain 可选依赖的降级契约。
+
+    本仓库未安装完整 langchain 包（仅 langchain-core）；langfuse.langchain 的
+    CallbackHandler 强依赖完整版，import 时抛 ModuleNotFoundError。该调用在每次
+    graph.invoke（evals deep 项）与 API 请求都会触发，若每次都打完整 traceback
+    会刷爆日志——降级必须静默（可 debug 记录，不得 WARNING 级 exc_info 刷屏）。
+    """
+
+    def test_langchain_missing_degrades_silently(self, caplog):
+        """langchain 缺失时返回 None 且不打 WARNING 级日志（静默降级）。"""
+        mockClient = MagicMock()
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient),
+            patch(
+                "builtins.__import__",
+                side_effect=lambda *a, **k: (
+                    _langchain_missing_importer(*a, **k)
+                    if a and a[0] == "langfuse.langchain"
+                    else _real_import(*a, **k)
+                ),
+            ),
+            caplog.at_level(logging.WARNING, logger="finance_agent.langfuse"),
+        ):
+            handler = get_callback_handler()
+
+        assert handler is None
+        warn_recs = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not warn_recs, (
+            f"langchain 缺失不应刷 WARNING 级 traceback, got: {[r.getMessage() for r in warn_recs]}"
+        )
+
+    def test_langchain_missing_records_debug_once(self, caplog):
+        """langchain 缺失时仍可留一条 DEBUG 记录（非全静默，便于诊断）。"""
+        mockClient = MagicMock()
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient),
+            patch(
+                "builtins.__import__",
+                side_effect=lambda *a, **k: (
+                    _langchain_missing_importer(*a, **k)
+                    if a and a[0] == "langfuse.langchain"
+                    else _real_import(*a, **k)
+                ),
+            ),
+            caplog.at_level(logging.DEBUG, logger="finance_agent.langfuse"),
+        ):
+            get_callback_handler()
+
+        debug_recs = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert debug_recs, "langchain 缺失时应留 DEBUG 级诊断记录"
+
+    def test_langfuse_unconfigured_returns_none_quiet(self, caplog):
+        """langfuse 未配置时直接返回 None，无任何日志。"""
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=None),
+            caplog.at_level(logging.DEBUG, logger="finance_agent.langfuse"),
+        ):
+            handler = get_callback_handler()
+        assert handler is None
+        assert not caplog.records
