@@ -316,17 +316,23 @@ def build_resume_kwargs(
 ) -> dict[str, Any]:
     """构造断点续写请求 kwargs（delta Task 1.1，design D1/D2）。
 
-    基于原 request_kwargs 深拷贝：messages 追加续写指令段（明确
-    「不重复已给内容、无缝继续」，progress_annotation 非 None 时拼入
-    进度标注），max_tokens 取剩余配额 max(1, 原预算 - prior_text 估算)。
-    其余 key（model/api_key/endpoint/超时）原样保留。
+    基于原 request_kwargs 克隆（外层 dict 与 messages 列表新建，内嵌
+    消息对象引用共享；本函数不突变内嵌对象）：messages 末尾合成 1 条
+    user 续写指令消息，content 布局为「进度标注（非 None 时在前）→
+    已生成内容尾部（prior_text 尾部 4000 字符，design D1 尾部注入基线，
+    供模型无缝续写）→ 续写指令」；max_tokens 取剩余配额
+    max(1, 原预算 - _estimate_tokens(完整 prior_text))（design D2：
+    第一次生成已消耗的配额）。其余 key（model/api_key/endpoint/超时）
+    原样保留。
     """
     out = dict(request_kwargs)
     out["messages"] = list(request_kwargs.get("messages", []))
-    instruction = _RESUME_INSTRUCTION
+    parts: list[str] = []
     if progress_annotation:
-        instruction = f"{progress_annotation}\n\n{instruction}"
-    out["messages"] = out["messages"] + [{"role": "user", "content": instruction}]
+        parts.append(progress_annotation)
+    parts.append(f"已生成内容尾部：\n{prior_text[-4000:]}")
+    parts.append(_RESUME_INSTRUCTION)
+    out["messages"] = out["messages"] + [{"role": "user", "content": "\n\n".join(parts)}]
     base_budget = int(request_kwargs.get("max_tokens") or 4096)
     out["max_tokens"] = max(1, base_budget - _estimate_tokens(prior_text))
     return out
