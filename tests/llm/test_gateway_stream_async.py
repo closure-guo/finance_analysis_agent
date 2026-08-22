@@ -351,3 +351,76 @@ async def test_exhaustion_writes_error_to_observation(monkeypatch):
         )
     assert obs.updated.get("level") == "ERROR"
     assert "error" in obs.updated.get("output", {})
+
+
+async def test_generator_exit_ends_observation_without_cm_exit(monkeypatch):
+    """调用方提前终止流（GeneratorExit）时不触发 OTel detach（跨 context 噪音源）。
+
+    复现：litellm_client 在 tool_call 事件后 return → async generator 被
+    aclose/GC → GeneratorExit 在 yield 处抛出 → gateway finally 若仍调
+    ``_gen_cm.__exit__``，其 OTel detach 会因 token 创建于不同 Context 而抛
+    ValueError（opentelemetry 内部 logger.exception 刷 "Failed to detach context"
+    噪音）。修复：GeneratorExit 场景改为 ``_gen.end()`` 优雅收口（span 数据不丢、
+    零告警），不再调用 CM 的 ``__exit__``。
+    """
+    from finance_agent.langfuse_tracing import get_langfuse
+
+    class _Obs:
+        def __init__(self):
+            self.ended = False
+
+        def update(self, **kw):  # noqa: ARG002 -- 正常路径调用
+            pass
+
+        def end(self, *a, **kw):
+            self.ended = True
+
+    class _CM:
+        def __init__(self, obs):
+            self._obs = obs
+            self.exited = False
+
+        def __enter__(self):
+            return self._obs
+
+        def __exit__(self, *a):
+            self.exited = True
+            return False
+
+    obs = _Obs()
+    cm = _CM(obs)
+    monkeypatch.setattr(
+        "finance_agent.langfuse_tracing.get_langfuse",
+        lambda: type("_LF", (), {"start_as_current_observation": lambda self, **kw: cm})(),
+    )
+    assert get_langfuse  # noqa: B018 -- 引用锚定
+
+    async def fake_acompletion(**kwargs):  # noqa: ARG001
+        return _AsyncIter(
+            [
+                _chunk(tool_calls=[_tc(id="c1", name="f", arguments="{}")]),
+                _chunk(finish="tool_calls"),
+            ]
+        )
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+
+    async def consume_and_abandon():
+        gen = complete_stream_async(
+            [{"role": "user", "content": "hi"}],
+            llm_config={"model": "glm-5.2", "baseUrl": "https://x/v1", "apiKey": "k"},
+            trace={"name": "t"},
+        )
+        async for ev in gen:
+            if ev.kind == "tool_call":
+                break  # 拿到 tool_call 就停（生产 ReAct 在 tool_call 后 return 的同款路径）
+        await gen.aclose()  # 显式关闭 → GeneratorExit
+
+    await consume_and_abandon()
+    assert cm.exited is False, (
+        "GeneratorExit 场景不应走 __exit__（OTel detach 跨 context 会刷 "
+        "'Failed to detach context' 告警），应改为 _gen.end() 收口"
+    )
+    assert obs.ended is True, "observation 应以 end() 收口，span 数据不丢"

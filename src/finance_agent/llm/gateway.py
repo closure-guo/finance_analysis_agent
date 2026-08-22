@@ -594,11 +594,19 @@ def complete_stream(
             kind="error", finish_reason=type(err).__name__, raw={"error": str(err)}
         )
     finally:
-        if _gen_cm is not None:
+        if _gen_cm is not None and _gen is not None:
+            import sys as _sys
             from contextlib import suppress
 
-            with suppress(Exception):
-                _gen_cm.__exit__(None, None, None)
+            # GeneratorExit：调用方提前终止流，OTel detach token 跨 Context 必抛
+            # ValueError 并被 opentelemetry 内部刷 "Failed to detach context" 噪音。
+            # 改 _gen.end() 优雅收口（同步生成器同 async 版）。
+            if _sys.exc_info()[0] is GeneratorExit:
+                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断业务
+                    _gen.end()
+            else:
+                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断业务
+                    _gen_cm.__exit__(None, None, None)
 
 
 def _finalize_observation(
@@ -846,11 +854,21 @@ async def complete_stream_async(
                         )
                 raise err from exc
     finally:
-        if _gen_cm is not None:
+        if _gen_cm is not None and _gen is not None:
+            import sys as _sys
             from contextlib import suppress
 
-            with suppress(Exception):
-                _gen_cm.__exit__(None, None, None)
+            # GeneratorExit：调用方提前终止流（ReAct tool_call 后 return 等），
+            # async generator 在 yield 处被 aclose/GC。此时 OTel detach 的 token
+            # 创建于 enter 时的 Context，跨 context reset 必抛 ValueError 且被
+            # opentelemetry 内部 logger 刷 "Failed to detach context" 告警（噪音）。
+            # 改为 _gen.end() 优雅收口：span 数据照常落 langfuse，不触发 detach。
+            if _sys.exc_info()[0] is GeneratorExit:
+                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断业务
+                    _gen.end()
+            else:
+                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断业务
+                    _gen_cm.__exit__(None, None, None)
 
 
 class _ChunkTimeoutError(LLMTimeoutError):
