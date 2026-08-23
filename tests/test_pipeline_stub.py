@@ -114,20 +114,23 @@ class TestCallLlmStreamingStub:
         assert isinstance(answer, str) and answer.strip()
 
     def test_stub_returns_answer_without_real_llm(self, testing_env):
-        """TESTING=1 下不得调用真实 call_llm_stream（否则连真实 LLM）。"""
-        with patch("finance_agent.llm.legacy.call_llm_stream") as mock_stream:
+        """TESTING=1 下不得调用真实 complete_stream（否则连真实 LLM）。"""
+        with patch("finance_agent.llm.gateway.complete_stream") as mock_stream:
             answer = self._run_stub("trader")
         mock_stream.assert_not_called()
         assert answer.strip()
 
     def test_production_path_unaffected(self):
-        """无 TESTING 时仍走真实 call_llm_stream（stub 只服务测试）。"""
+        """无 TESTING 时仍走真实 gateway.complete_stream（stub 只服务测试）。"""
+        from finance_agent.llm.types import CanonicalEvent
+
         with (
             patch.dict(
                 os.environ, {k: v for k, v in os.environ.items() if k != "TESTING"}, clear=True
             ),
             patch(
-                "finance_agent.llm.call_llm_stream", return_value=iter([("answer", "{}")])
+                "finance_agent.llm.gateway.complete_stream",
+                return_value=iter([CanonicalEvent(kind="text", text="{}")]),
             ) as mock_stream,
         ):
             from finance_agent.nodes._llm_utils import call_llm_streaming

@@ -257,11 +257,12 @@ def test_call_llm_writes_reasoning_to_output(mock_completion, mock_get_langfuse)
 
 @patch("finance_agent.langfuse_tracing.get_langfuse")
 @patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
-def test_call_llm_stream_writes_reasoning_to_output(mock_raw_stream, mock_get_langfuse):
-    """call_llm_stream 累加 reasoning_content 并写入 generation output.reasoning。
+def test_call_llm_streaming_writes_reasoning_to_output(mock_raw_stream, mock_get_langfuse):
+    """call_llm_streaming 累加 reasoning_content 并写入 generation output.reasoning。
 
-    5.1-B2 迁移：观测收口在 gateway（complete_stream 经 trace 开启），
-    mock 目标改为 adapter.raw_stream / langfuse_tracing.get_langfuse。
+    migrate-off-legacy-llm-shim Task 2：call_llm_streaming 直连
+    gateway.complete_stream（不再经 legacy call_llm_stream 薄壳）；mock 目标
+    保持 adapter.raw_stream / langfuse_tracing.get_langfuse。
     """
 
     def _fake_stream(**kwargs):  # noqa: ARG001
@@ -286,21 +287,19 @@ def test_call_llm_stream_writes_reasoning_to_output(mock_raw_stream, mock_get_la
     mockLf.start_as_current_observation.return_value = mockCm
     mock_get_langfuse.return_value = mockLf
 
-    from finance_agent.llm import call_llm_stream
+    from finance_agent.nodes._llm_utils import call_llm_streaming
 
-    results = list(
-        call_llm_stream(
-            "hi",
-            llm_config={
-                "model": "deepseek/deepseek-chat",
-                "baseUrl": "https://x/v1",
-                "apiKey": "k",
-            },
-        )
+    result = call_llm_streaming(
+        "hi",
+        llm_config={
+            "model": "deepseek/deepseek-chat",
+            "baseUrl": "https://x/v1",
+            "apiKey": "k",
+        },
     )
 
-    # yield 顺序：thinking x2 + answer x1
-    assert results == [("thinking", "思考A"), ("thinking", "思考B"), ("answer", "最终答案")]
+    # thinking 经 writer 转发（无 langgraph 上下文时丢弃），answer 拼接返回
+    assert result == "最终答案"
     mockObs.update.assert_called_once()
     call_kwargs = mockObs.update.call_args.kwargs
     assert call_kwargs["output"]["reasoning"] == "思考A思考B"
@@ -534,11 +533,11 @@ def test_call_llm_omits_metadata_when_prompt_unset(mock_completion, mock_get_lan
 
 @patch("finance_agent.langfuse_tracing.get_langfuse")
 @patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
-def test_call_llm_stream_attaches_prompt_metadata(mock_raw_stream, mock_get_langfuse):
-    """call_llm_stream 把 prompt_name/prompt_version 经 metadata 挂到 generation。
+def test_call_llm_streaming_attaches_prompt_metadata(mock_raw_stream, mock_get_langfuse):
+    """call_llm_streaming 把 prompt_name/prompt_version 经 trace metadata 挂到 generation。
 
-    5.1-B2 迁移：metadata 经 trace dict 由 gateway 观测写入；mock 目标改
-    adapter.raw_stream / langfuse_tracing.get_langfuse。
+    migrate-off-legacy-llm-shim Task 2：metadata 经 trace dict 由 gateway 观测
+    写入；mock 目标保持 adapter.raw_stream / langfuse_tracing.get_langfuse。
     """
 
     def _fake_stream(**kwargs):  # noqa: ARG001
@@ -551,19 +550,17 @@ def test_call_llm_stream_attaches_prompt_metadata(mock_raw_stream, mock_get_lang
     mock_raw_stream.side_effect = _fake_stream
     _mock_langfuse_obs(mock_get_langfuse)
 
-    from finance_agent.llm import call_llm_stream
+    from finance_agent.nodes._llm_utils import call_llm_streaming
 
-    list(
-        call_llm_stream(
-            "hi",
-            llm_config={
-                "model": "deepseek/deepseek-chat",
-                "baseUrl": "https://x/v1",
-                "apiKey": "k",
-            },
-            prompt_name="bull_debater",
-            prompt_version="local",
-        )
+    call_llm_streaming(
+        "hi",
+        llm_config={
+            "model": "deepseek/deepseek-chat",
+            "baseUrl": "https://x/v1",
+            "apiKey": "k",
+        },
+        prompt_name="bull_debater",
+        prompt_version="local",
     )
 
     call_kwargs = mock_get_langfuse.return_value.start_as_current_observation.call_args.kwargs
@@ -648,11 +645,11 @@ def test_call_llm_metadata_omits_missing_fields(mock_completion, mock_get_langfu
 
 @patch("finance_agent.langfuse_tracing.get_langfuse")
 @patch("finance_agent.llm.adapters.litellm_adapter.raw_stream")
-def test_call_llm_stream_named_by_agent(mock_raw_stream, mock_get_langfuse):
-    """call_llm_stream 传 agent 时 observation name 用 agent 名。
+def test_call_llm_streaming_named_by_agent(mock_raw_stream, mock_get_langfuse):
+    """call_llm_streaming 传 node_name 时 observation name 用 node_name。
 
-    5.1-B2 迁移：观测收口在 gateway；mock 目标改
-    adapter.raw_stream / langfuse_tracing.get_langfuse。
+    migrate-off-legacy-llm-shim Task 2：node_name 经 trace.name 透传；mock
+    目标保持 adapter.raw_stream / langfuse_tracing.get_langfuse。
     """
 
     def _fake_stream(**kwargs):  # noqa: ARG001
@@ -669,18 +666,16 @@ def test_call_llm_stream_named_by_agent(mock_raw_stream, mock_get_langfuse):
     mock_raw_stream.side_effect = _fake_stream
     mockLf = _mock_langfuse_obs(mock_get_langfuse)
 
-    from finance_agent.llm import call_llm_stream
+    from finance_agent.nodes._llm_utils import call_llm_streaming
 
-    list(
-        call_llm_stream(
-            "hi",
-            llm_config={
-                "model": "deepseek/deepseek-chat",
-                "baseUrl": "https://x/v1",
-                "apiKey": "k",
-            },
-            agent="trader",
-        )
+    call_llm_streaming(
+        "hi",
+        llm_config={
+            "model": "deepseek/deepseek-chat",
+            "baseUrl": "https://x/v1",
+            "apiKey": "k",
+        },
+        node_name="trader",
     )
     kwargs = mockLf.start_as_current_observation.call_args.kwargs
     assert kwargs["name"] == "trader"

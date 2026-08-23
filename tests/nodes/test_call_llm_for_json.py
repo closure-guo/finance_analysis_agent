@@ -136,10 +136,15 @@ class TestRetryOnApiError:
 class TestStreamingRetryOnRetryableLLMError:
     """call_llm_streaming 对 retryable LLMError 重试一次（evals 跑批暴露回归：
     gateway 把 finish_reason=length 归一为 OutputTruncatedError，节点直调无重试
-    直接炸管线；旧路径截断只表现为坏 JSON 走 call_llm_for_json 兜底）。"""
+    直接炸管线；旧路径截断只表现为坏 JSON 走 call_llm_for_json 兜底）。
+
+    migrate-off-legacy-llm-shim Task 2：mock 目标改 gateway.complete_stream，
+    产出 CanonicalEvent（legacy call_llm_stream 的 (kind,text) 元组迭代被移除）。
+    """
 
     def test_truncated_then_success_retries_once(self):
         from finance_agent.llm.errors import OutputTruncatedError
+        from finance_agent.llm.types import CanonicalEvent
 
         calls = {"n": 0}
 
@@ -147,9 +152,9 @@ class TestStreamingRetryOnRetryableLLMError:
             calls["n"] += 1
             if calls["n"] == 1:
                 raise OutputTruncatedError("finish_reason=length")
-            return iter([("answer", '{"ok": 1}')])
+            return iter([CanonicalEvent(kind="text", text='{"ok": 1}')])
 
-        with patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream):
+        with patch("finance_agent.llm.gateway.complete_stream", side_effect=fake_stream):
             from finance_agent.nodes._llm_utils import call_llm_streaming
 
             result = call_llm_streaming("p", node_name="trader")
@@ -166,7 +171,7 @@ class TestStreamingRetryOnRetryableLLMError:
             raise AuthError("bad key")
 
         with (
-            patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream),
+            patch("finance_agent.llm.gateway.complete_stream", side_effect=fake_stream),
             pytest.raises(AuthError),
         ):
             from finance_agent.nodes._llm_utils import call_llm_streaming
@@ -184,7 +189,7 @@ class TestStreamingRetryOnRetryableLLMError:
             raise EmptyLLMOutputError("thinking 后即止")
 
         with (
-            patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream),
+            patch("finance_agent.llm.gateway.complete_stream", side_effect=fake_stream),
             pytest.raises(EmptyLLMOutputError),
         ):
             from finance_agent.nodes._llm_utils import call_llm_streaming
@@ -196,6 +201,7 @@ class TestStreamingRetryOnRetryableLLMError:
 def test_truncation_retry_escalates_budget():
     """截断重试必须预算复核（Task 2.2）：第二次调用 max_tokens=32768 而非原预算复读。"""
     from finance_agent.llm.errors import OutputTruncatedError
+    from finance_agent.llm.types import CanonicalEvent
 
     captured = []
 
@@ -203,10 +209,10 @@ def test_truncation_retry_escalates_budget():
         captured.append(kw.get("max_tokens"))
         if len(captured) == 1:
             raise OutputTruncatedError("finish_reason=length")
-        return iter([("answer", "ok")])
+        return iter([CanonicalEvent(kind="text", text="ok")])
 
-    with patch("finance_agent.llm.call_llm_stream", side_effect=fake_stream):
+    with patch("finance_agent.llm.gateway.complete_stream", side_effect=fake_stream):
         from finance_agent.nodes._llm_utils import call_llm_streaming
 
         assert call_llm_streaming("p", node_name="trader") == "ok"
-    assert captured == [None, 32768]
+    assert captured == [16384, 32768]
