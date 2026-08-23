@@ -8,12 +8,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
 from finance_agent.llm.contracts import partial_json_progress
+from finance_agent.llm.errors import OutputTruncatedError
 from finance_agent.llm.gateway import (
     _build_progress_annotation,
     _maybe_resume_text,
     complete_stream,
+    complete_stream_async,
+    complete_text,
 )
 
 
@@ -327,3 +332,106 @@ def test_complete_stream_resume_truncated_observation_flags(monkeypatch):
     assert events[-1].kind == "error"
     metas = [u["metadata"] for u in updates if "metadata" in u]
     assert any(m.get("resume_count") == 1 and m.get("truncated") is True for m in metas)
+
+
+# ---- Task 5: complete_text / complete_stream_async 断点续写 ----
+
+
+def _chunk(*, text="", reasoning="", finish=None):
+    """异步流式 chunk（对齐 test_gateway_stream_async._chunk 的 shape）。"""
+    delta = SimpleNamespace(
+        reasoning_content=reasoning or None, content=text or None, tool_calls=None
+    )
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish)])
+
+
+class _AsyncIter:
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._items:
+            return self._items.pop(0)
+        raise StopAsyncIteration
+
+
+def test_complete_text_resumes_after_length(monkeypatch):
+    calls = []
+
+    def fake_raw_completion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            msg = SimpleNamespace(content="前半", reasoning_content="")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=msg, finish_reason="length")],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+        assert "续写" in kwargs["messages"][-1]["content"]
+        msg = SimpleNamespace(content="后半", reasoning_content="")
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2),
+        )
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion", fake_raw_completion
+    )
+    text, meta = complete_text([{"role": "user", "content": "hi"}])
+    assert text == "前半后半"
+    assert meta["resume_count"] == 1
+    assert len(calls) == 2
+
+
+def test_complete_text_resume_truncated_again_raises(monkeypatch):
+    def fake_raw_completion(**kwargs):
+        msg = SimpleNamespace(content="x", reasoning_content="")
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=msg, finish_reason="length")],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion", fake_raw_completion
+    )
+    with pytest.raises(OutputTruncatedError):
+        complete_text([{"role": "user", "content": "hi"}], trace={"name": "t"})
+
+
+async def test_complete_stream_async_resumes_after_length(monkeypatch):
+    calls = []
+
+    async def fake_acompletion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _AsyncIter([_chunk(text="异步前", finish=None), _chunk(finish="length")])
+        assert "续写" in kwargs["messages"][-1]["content"]
+        return _AsyncIter([_chunk(text="异步后", finish=None), _chunk(finish="stop")])
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    events = []
+    async for ev in complete_stream_async([{"role": "user", "content": "hi"}]):
+        events.append(ev)
+    texts = "".join(e.text for e in events if e.kind == "text")
+    assert texts == "异步前异步后"
+    assert events[-1].kind == "finished"
+    assert events[-1].finish_reason == "stop"
+    assert len(calls) == 2
+
+
+async def test_complete_stream_async_empty_length_raises_not_silent(monkeypatch):
+    """修复静默缺陷：异步 length + 空正文必须抛 OutputTruncatedError，而非 finished(None)。"""
+
+    async def fake_acompletion(**kwargs):
+        return _AsyncIter([_chunk(finish="length")])
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    with pytest.raises(OutputTruncatedError):
+        async for _ev in complete_stream_async([{"role": "user", "content": "hi"}]):
+            pass

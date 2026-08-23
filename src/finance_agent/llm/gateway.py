@@ -21,6 +21,7 @@ from finance_agent.llm.errors import (
     LLMTimeoutError,
     ModelNotFoundError,
     OutputContractError,
+    OutputTruncatedError,
     UnsupportedCapabilityError,
 )
 from finance_agent.llm.registry import get_profile_preset, list_presets
@@ -202,6 +203,7 @@ def complete_text(
     purpose: Purpose = "deep",
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
+    top_fields: list[str] | None = None,
     llm_config: dict[str, Any] | None = None,
     preset: str | None = None,
     temperature: float | None = None,
@@ -221,6 +223,12 @@ def complete_text(
     ``trace``（可选）开启 Langfuse generation 观测（name/metadata），
     观测失败不阻断业务；output 结构 ``{answer, reasoning}`` + usage_details。
     ``preset``：显式命名 preset（透传 resolve_profile，fallback 链成员用）。
+
+    断点续写（llm-output-resume Task 5）：finish_reason=length 且正文非空时
+    以「已生成正文尾部(+进度标注) + 剩余配额」构造续写请求二次调用拼接，
+    返回 metadata 附 ``resume_count=1`` 且 finish_reason 取续写段；续写仍
+    length → ``OutputTruncatedError``。``top_fields``（可选）：调用方 schema
+    顶层字段清单，None 则不做进度标注（仅尾部续写）。
     """
     profile = resolve_profile(purpose=purpose, llm_config=llm_config, preset=preset)
     ensure_litellm_runtime()
@@ -256,11 +264,63 @@ def complete_text(
         request_kwargs["api_base"] = profile.base_url
     if not suppress_temperature and temperature is not None:
         request_kwargs["temperature"] = temperature
+    _resumed = False
     try:
         resp = _raw_completion_with_timeout(request_kwargs, timeout_seconds)
         message = resp.choices[0].message
         raw_content = message.content or ""
         raw_reasoning = getattr(message, "reasoning_content", "") or ""
+        # 断点续写（llm-output-resume Task 5）：finish_reason=length 且正文非空
+        # → 以「已生成正文尾部(+进度标注) + 剩余配额」构造续写请求二次调用拼接
+        # （resume 上限 1）；续写仍 length → OutputTruncatedError（观测 truncated
+        # 后上抛）。续写段异常经既有 except 收口 normalize 上抛。
+        if _maybe_resume_text(resp.choices[0].finish_reason, raw_content):
+            from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
+            from finance_agent.llm.contracts import partial_json_progress
+
+            ann = None
+            if top_fields:
+                prog = partial_json_progress(raw_content, top_fields)
+                if prog is not None:
+                    ann = _build_progress_annotation(raw_content, top_fields)
+            resume_kwargs = build_resume_kwargs(
+                request_kwargs, prior_text=raw_content, progress_annotation=ann
+            )
+            try:
+                resp2 = _raw_completion_with_timeout(resume_kwargs, timeout_seconds)
+                raw_content += resp2.choices[0].message.content or ""
+                # 续写完成后统一按 content 处理（正文已拼接，reasoning 不再回退）
+                raw_reasoning = raw_content
+                _resumed = True
+                if _gen is not None:
+                    from contextlib import suppress
+
+                    with suppress(Exception):  # 观测失败不阻断
+                        _gen.update(
+                            metadata={
+                                **((trace or {}).get("metadata") or {}),
+                                "resume_count": 1,
+                            }
+                        )
+                if resp2.choices[0].finish_reason == "length":
+                    raise OutputTruncatedError(
+                        "续写仍 finish_reason=length：输出被截断（resume 上限 1）"
+                    )
+                resp = resp2
+            except OutputTruncatedError:
+                if _gen is not None:
+                    from contextlib import suppress
+
+                    with suppress(Exception):  # 观测失败不阻断
+                        _gen.update(
+                            metadata={
+                                **((trace or {}).get("metadata") or {}),
+                                "resume_count": 1,
+                                "truncated": True,
+                            },
+                            level="ERROR",
+                        )
+                raise
     except Exception as exc:  # noqa: BLE001
         if _gen is not None:
             from contextlib import suppress
@@ -290,6 +350,9 @@ def complete_text(
     )
     metadata["raw_content"] = raw_content
     metadata["raw_reasoning"] = raw_reasoning
+    if _resumed:
+        # 续写成功可追溯：resume_count=1 落返回 metadata（与观测侧一致）
+        metadata["resume_count"] = 1
     return text, metadata
 
 
@@ -795,6 +858,7 @@ async def complete_stream_async(
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str = "auto",
+    top_fields: list[str] | None = None,
     temperature: float | None = None,
     llm_config: dict[str, Any] | None = None,
     trace: dict[str, Any] | None = None,
@@ -808,6 +872,14 @@ async def complete_stream_async(
     （``asyncio.wait_for``）、可重试错误指数退避重试、重试耗尽/不可重试
     直接 raise（保 Agent 主循环捕获合同）、tool_calls 增量按 index 聚合
     终态产出单条 tool_call 事件。空输出分类不在本入口（loop 自有重试）。
+
+    断点续写（llm-output-resume Task 5）：finish=length 且正文非空 → 以
+    「已生成正文尾部(+进度标注) + 剩余配额」二次异步流式续发，事件序
+    text…text…finished（finished 携带续写段 reason）；续写仍 length →
+    OutputTruncatedError。finish=length 且正文为空 → 直接抛
+    OutputTruncatedError（修复「length 被静默当 finished(None)」缺陷）。
+    ``top_fields``（可选）：调用方 schema 顶层字段清单，None 则不做进度
+    标注（仅尾部续写）。续写段迭代同样受 ``chunk_timeout`` 逐 chunk 保护。
     """
     import asyncio
 
@@ -911,6 +983,94 @@ async def complete_stream_async(
                         yield CanonicalEvent(kind="text", text=ct)
                     for t in getattr(delta, "tool_calls", None) or []:
                         accumulator.add(t)
+
+                    if finish == "length":
+                        # 断点续写（llm-output-resume Task 5）：finish_reason=length
+                        # 且正文非空 → 构造续写请求二次异步流式续发（resume 上限 1），
+                        # text/reasoning 事件直接续发，最终 finished 携带续写段 reason；
+                        # 续写仍 length → OutputTruncatedError（观测 truncated=true）。
+                        # 正文为空 → 直接抛（修复「length 被静默当 finished(None)」）。
+                        if _maybe_resume_text(finish, answer):
+                            from finance_agent.llm.adapters.litellm_adapter import (
+                                build_resume_kwargs,
+                            )
+                            from finance_agent.llm.contracts import partial_json_progress
+
+                            ann = None
+                            if top_fields:
+                                prog = partial_json_progress(answer, top_fields)
+                                if prog is not None:
+                                    ann = _build_progress_annotation(answer, top_fields)
+                            resume_kwargs = build_resume_kwargs(
+                                request_kwargs, prior_text=answer, progress_annotation=ann
+                            )
+                            resp2 = await raw_acompletion(**resume_kwargs)
+                            _iter2 = resp2.__aiter__()
+                            _finish2 = None
+                            while True:
+                                try:
+                                    chunk2 = await asyncio.wait_for(
+                                        _iter2.__anext__(), timeout=chunk_timeout
+                                    )
+                                except StopAsyncIteration:
+                                    break
+                                except TimeoutError:
+                                    raise _ChunkTimeoutError("续写段 chunk 超时") from None
+                                if getattr(chunk2, "usage", None):
+                                    last_usage = chunk2.usage
+                                choices2 = getattr(chunk2, "choices", None) or []
+                                if not choices2:
+                                    continue
+                                c2 = choices2[0]
+                                d2 = c2.delta
+                                _finish2 = getattr(c2, "finish_reason", None) or _finish2
+                                if d2 and getattr(d2, "reasoning_content", None):
+                                    r2 = str(d2.reasoning_content)
+                                    reasoning_acc += r2
+                                    yield CanonicalEvent(kind="reasoning", reasoning=r2)
+                                if d2 and getattr(d2, "content", None):
+                                    ct2 = str(d2.content)
+                                    answer += ct2
+                                    yield CanonicalEvent(kind="text", text=ct2)
+                            if _gen is not None:
+                                from contextlib import suppress
+
+                                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                                    _gen.update(
+                                        metadata={
+                                            **((trace or {}).get("metadata") or {}),
+                                            "resume_count": 1,
+                                        }
+                                    )
+                            if _finish2 == "length":
+                                _finalize_observation(
+                                    _gen,
+                                    answer,
+                                    reasoning_acc,
+                                    last_usage,
+                                    metadata=(trace or {}).get("metadata"),
+                                )
+                                if _gen is not None:
+                                    from contextlib import suppress
+
+                                    with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                                        _gen.update(
+                                            metadata={
+                                                **((trace or {}).get("metadata") or {}),
+                                                "resume_count": 1,
+                                                "truncated": True,
+                                            },
+                                            level="ERROR",
+                                        )
+                                raise OutputTruncatedError(
+                                    "续写仍 finish_reason=length：输出被截断（resume 上限 1）"
+                                )
+                            finish = _finish2
+                            # 落入下方 stop/tool_calls 正常收口分支
+                        else:
+                            raise OutputTruncatedError(
+                                "finish_reason=length 且正文为空：输出被截断（无内容可续写）"
+                            )
 
                     if finish == "tool_calls" and accumulator.calls:
                         calls = finalize_tool_calls(accumulator)
