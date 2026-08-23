@@ -7,6 +7,7 @@ mock adapter raw_* 返回「前段 length + 续写 stop」双段流，验证续�
 from __future__ import annotations
 
 from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
+from finance_agent.llm.contracts import partial_json_progress
 
 
 def _estimate_tokens(text: str) -> int:
@@ -82,3 +83,39 @@ def test_build_resume_kwargs_tail_injection_layout_order():
     out = build_resume_kwargs(base, prior_text=prior_text, progress_annotation=ann)
     content = out["messages"][-1]["content"]
     assert content.index(ann) < content.index("已生成内容尾部") < content.index("续写")
+
+
+# ---- Task 2: partial_json_progress ----
+
+FIELDS = ["agent_name", "summary", "key_findings", "claims", "markdown"]
+
+
+def test_partial_progress_field_midway():
+    """标量字段已闭合 → done；数组字段断在半路 → in_progress；未出现 → pending。"""
+    text = '{"agent_name": "technical", "summary": "ok", "key_findings": ["a", "b'
+    prog = partial_json_progress(text, FIELDS)
+    assert prog["agent_name"] == "done"
+    assert prog["summary"] == "done"
+    assert prog["key_findings"] == "in_progress"
+    assert prog["claims"] == "pending"
+    assert prog["markdown"] == "pending"
+
+
+def test_partial_progress_array_element_midway():
+    """数组断在元素中间（元素字符串未闭合）→ 数组字段 in_progress。"""
+    text = '{"agent_name": "macro", "summary": "s", "key_findings": ["a", "b'
+    prog = partial_json_progress(text, FIELDS)
+    assert prog["key_findings"] == "in_progress"
+
+
+def test_partial_progress_unrecoverable_returns_none():
+    """找不到 { 开始（纯文本 / 空文本）→ None，调用方降级仅尾部注入。"""
+    assert partial_json_progress("分析完成，非 JSON", FIELDS) is None
+    assert partial_json_progress("", FIELDS) is None
+
+
+def test_partial_progress_complete_json_all_done():
+    """完整 JSON → 所有字段 done。"""
+    text = '{"agent_name": "x", "summary": "s", "key_findings": [], "claims": [], "markdown": "m"}'
+    prog = partial_json_progress(text, FIELDS)
+    assert set(prog.values()) == {"done"}
