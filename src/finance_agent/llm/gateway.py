@@ -99,6 +99,39 @@ def build_trace_metadata(
     return meta
 
 
+def _maybe_resume_text(finish: str | None, answer: str | None) -> bool:
+    """判定是否触发续写（llm-output-resume Task 1.2）：仅 finish=length 且正文非空。"""
+    return finish == "length" and bool(answer)
+
+
+_STATUS_ICON = {"done": "✅ 已完成", "in_progress": "⏳", "pending": "⬜ 未开始"}
+
+
+def _build_progress_annotation(answer: str | None, top_fields: list[str] | None) -> str | None:
+    """从已生成正文 + 顶层字段清单生成进度标注文本；不可解析返回 None。
+
+    只报「已闭合数量级」事实（in_progress 字段不附目标总数），
+    交付给 build_resume_kwargs 的 progress_annotation。
+    """
+    from finance_agent.llm.contracts import partial_json_progress
+
+    if not answer or not top_fields:
+        return None
+    prog = partial_json_progress(answer, top_fields)
+    if prog is None:
+        return None
+    lines = ["当前输出进度："]
+    for f in top_fields:
+        state = prog.get(f, "pending")
+        icon = _STATUS_ICON[state]
+        if state == "in_progress":
+            # 只报已闭合事实，不编造目标数量（"/5" 解析器无法得知）
+            lines.append(f"- {f}: {icon} 断点位于已输出尾部")
+        else:
+            lines.append(f"- {f}: {icon}")
+    return "\n".join(lines)
+
+
 def _start_trace_observation(trace: dict[str, Any] | None, profile, messages):
     """按 trace dict 开启 Langfuse generation 观测（失败不阻断，返回 None）。"""
     if not trace:

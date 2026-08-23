@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
 from finance_agent.llm.contracts import partial_json_progress
+from finance_agent.llm.gateway import _build_progress_annotation, _maybe_resume_text
 
 
 def _estimate_tokens(text: str) -> int:
@@ -119,3 +120,35 @@ def test_partial_progress_complete_json_all_done():
     text = '{"agent_name": "x", "summary": "s", "key_findings": [], "claims": [], "markdown": "m"}'
     prog = partial_json_progress(text, FIELDS)
     assert set(prog.values()) == {"done"}
+
+
+# ---- Task 3: _maybe_resume_text + _build_progress_annotation ----
+
+
+def test_maybe_resume_length_with_text():
+    assert _maybe_resume_text("length", "已有正文") is True
+
+
+def test_maybe_resume_length_empty_text():
+    assert _maybe_resume_text("length", "") is False
+    assert _maybe_resume_text("length", None) is False
+
+
+def test_maybe_resume_stop_never():
+    assert _maybe_resume_text("stop", "正文") is False
+    assert _maybe_resume_text("tool_calls", "正文") is False
+
+
+def test_build_progress_annotation_formats_markdown():
+    ann = _build_progress_annotation(
+        '{"agent_name": "technical", "key_findings": ["a"',
+        ["agent_name", "summary", "key_findings"],
+    )
+    assert ann is not None
+    assert "agent_name: ✅ 已完成" in ann
+    assert "key_findings: ⏳" in ann
+    assert "summary: ⬜ 未开始" in ann
+
+
+def test_build_progress_annotation_none_for_plain_text():
+    assert _build_progress_annotation("纯文本", ["agent_name"]) is None
