@@ -16,23 +16,29 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _STREAM = "finance_agent.llm.gateway.complete_stream"
-_LEGACY_STREAM = "finance_agent.llm.call_llm_stream"
 
 
 class TestLegacyNotUsed:
     def test_call_llm_streaming_uses_gateway_directly(self):
-        """迁移锚点：call_llm_streaming 直连 gateway.complete_stream，不再经 legacy call_llm_stream。"""
+        """迁移锚点：call_llm_streaming 直连 gateway.complete_stream。
+
+        migrate-off-legacy-llm-shim Task 3 收尾：legacy 薄壳已删除，不再有
+        包级 call_llm_stream 可被调用；断言直连 gateway 路径不变。
+        """
         from finance_agent.llm.types import CanonicalEvent
 
-        with (
-            patch(_STREAM) as mock_stream,
-            patch(_LEGACY_STREAM, side_effect=AssertionError("legacy call_llm_stream 不应被调用")),
-        ):
+        with patch(_STREAM) as mock_stream:
             mock_stream.return_value = iter([CanonicalEvent(kind="text", text="ok")])
             from finance_agent.nodes._llm_utils import call_llm_streaming
 
             assert call_llm_streaming("p", node_name="trader") == "ok"
             mock_stream.assert_called_once()
+
+    def test_legacy_call_llm_stream_symbol_gone(self):
+        """包级 call_llm_stream 已移除（Task 3 删除 legacy re-export）。"""
+        import finance_agent.llm as llm_pkg
+
+        assert not hasattr(llm_pkg, "call_llm_stream")
 
 
 class TestCanonicalEventMapping:
