@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 from finance_agent.app_search import get_stock_list, search_stocks
-from finance_agent.llm import call_llm
+from finance_agent.llm.gateway import complete_text
 from finance_agent.web_search import format_search_for_llm, has_tavily_key, tavily_search
 
 # ── Tool schemas (OpenAI function calling format) ──
@@ -366,9 +366,17 @@ def _search_with_llm_reasoning(query: str, api_key: str | None = None) -> dict |
 - 对于"龙头"、"最强"等时效性描述，优先标记 need_search=true"""
 
     try:
-        resp = call_llm(
-            query, system=system, api_key=api_key, max_tokens=200, quick=True, agent="react_agent"
+        text, meta = complete_text(
+            [{"role": "system", "content": system}, {"role": "user", "content": query}],
+            purpose="quick",
+            max_tokens=200,
+            temperature=0.3,
+            # 无 llm_config：legacy._request_config_dict(None, api_key) 返回 None
+            llm_config=None,
+            trace={"name": "react_agent", "metadata": {"agent": "react_agent"}},
         )
+        # legacy 行为保留：content 为空时回退 reasoning_content
+        resp = text or meta.get("raw_reasoning") or ""
         data = _parse_json_safely(resp)
         if data and data.get("stock_code") and data.get("confidence") == "high":
             return {
@@ -429,9 +437,17 @@ def _search_with_web_search(query: str, api_key: str | None = None) -> list[dict
 
         prompt = f"用户查询：{query}\n\n网络搜索结果：\n{search_text}"
 
-        resp = call_llm(
-            prompt, system=system, api_key=api_key, max_tokens=400, quick=True, agent="react_agent"
+        text, meta = complete_text(
+            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            purpose="quick",
+            max_tokens=400,
+            temperature=0.3,
+            # 无 llm_config：legacy._request_config_dict(None, api_key) 返回 None
+            llm_config=None,
+            trace={"name": "react_agent", "metadata": {"agent": "react_agent"}},
         )
+        # legacy 行为保留：content 为空时回退 reasoning_content
+        resp = text or meta.get("raw_reasoning") or ""
         data = _parse_json_safely(resp)
         if data:
             raw = data.get("candidates", [])
