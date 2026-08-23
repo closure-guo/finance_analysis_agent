@@ -1,8 +1,12 @@
-"""run_experiment:evaluator 装配、quick 模式 judge 跳过、本地降级、结果表。"""
+"""run_experiment:evaluator 装配、quick 模式 judge 跳过、langfuse 必达、结果表。"""
 
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
-from evals.run import _mean_rows, all_evaluators, run_local
+import evals.run
+import pytest
+from evals.dataset_seed import DATASET_NAME
+from evals.run import _mean_rows, all_evaluators
 
 
 class TestEvaluatorAssembly:
@@ -64,32 +68,7 @@ class TestEvaluatorAssembly:
         )
 
 
-class TestLocalRun:
-    @patch("evals.run.run_task")
-    @patch("evals.run.run_judge")
-    def test_local_run_produces_rows(self, mock_judge, mock_task):
-        mock_task.return_value = {
-            "report": "偿债能力 盈利能力",
-            "ticker": "600519",
-            "judge_vars": {"query": "q", "report": "r"},
-            "mode": "deep",
-            "skipped": None,
-        }
-        mock_judge.return_value = {"name": "report_relevance", "score": 4, "reason": "x"}
-        items = [
-            {
-                "input": {"query": "q", "mode": "deep", "stock_code": "600519"},
-                "expected_output": {"ticker": "600519", "must_cover": ["偿债能力"]},
-                "metadata": {"category": "deep_typical", "source": "test"},
-            }
-        ]
-        rows = run_local(items, "test-exp")
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["scores"]["ticker_match"] == 1.0
-        assert row["scores"]["section_coverage"] == 1.0
-        assert row["scores"]["report_relevance"] == 4
-
+class TestMeanRows:
     def test_mean_rows(self):
         rows = [
             {"scores": {"a": 1.0, "b": 4}, "judge_failures": 0},
@@ -99,3 +78,30 @@ class TestLocalRun:
         assert means["a"] == 0.5
         assert means["b"] == 4.0  # None 不计入均值
         assert means["judge_failures"] == 1
+
+
+class TestLangfuseRequired:
+    def test_no_langfuse_exits_nonzero_without_scores(self, monkeypatch):
+        """无 langfuse → main() 必须显式报错退出,绝不本地循环产出分数。"""
+        monkeypatch.setattr(sys, "argv", ["evals/run.py", "test-exp"])
+        with (
+            patch("evals.run.get_langfuse", return_value=None),
+            patch("evals.run.run_task") as mock_task,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            evals.run.main()
+        assert exc_info.value.code  # 非零退出码(字符串/1 皆为真)
+        mock_task.assert_not_called()  # 不走 run_task,不产出分数
+
+    def test_with_langfuse_runs_run_experiment(self, monkeypatch):
+        """有 langfuse → 走 run_experiment 路径,不抛、不降级。"""
+        monkeypatch.setattr(sys, "argv", ["evals/run.py", "test-exp"])
+        fake = MagicMock()
+        fake_result = MagicMock()
+        fake_result.item_results = []
+        fake.get_dataset.return_value.run_experiment.return_value = fake_result
+        with patch("evals.run.get_langfuse", return_value=fake), patch("evals.run._write_report"):
+            evals.run.main()
+        fake.get_dataset.assert_called_once_with(DATASET_NAME)
+        fake.get_dataset.return_value.run_experiment.assert_called_once()
+        fake.flush.assert_called_once()

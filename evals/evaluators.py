@@ -39,8 +39,8 @@ def ticker_match(ticker: str | None, expected_output: dict) -> dict | None:
 def make_evaluation(result: dict):
     """评估结果 dict → langfuse Evaluation(langfuse 4.13 experiment API)。
 
-    value 为 float;comment 可为 None。langfuse 未配置环境不会走到这里
-    (--local 模式直接消费 dict)。
+    value 为 float;comment 可为 None。Evaluator 仅经 run_experiment 调用;
+    langfuse 不可用时 run.py 在进入实验前即显式报错退出。
     """
     from langfuse.experiment import Evaluation
 
