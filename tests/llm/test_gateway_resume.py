@@ -435,3 +435,19 @@ async def test_complete_stream_async_empty_length_raises_not_silent(monkeypatch)
     with pytest.raises(OutputTruncatedError):
         async for _ev in complete_stream_async([{"role": "user", "content": "hi"}]):
             pass
+
+
+def test_complete_stream_raw_stream_error_does_not_crash(monkeypatch, tmp_path):
+    """raw_stream 抛异常（端点拒连/超时）时 complete_stream 产出 error 事件而非
+    崩溃（回归：_answer 未初始化时 except 分支引用未绑定变量 →
+    'cannot access local variable _answer'，evals Item 9-16 全败的根因）。"""
+    from finance_agent.llm.errors import LLMTimeoutError
+    from finance_agent.llm.gateway import complete_stream
+
+    def fake_raw_stream(**kwargs):  # noqa: ARG001
+        raise LLMTimeoutError("端点超时")
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream)
+    events = list(complete_stream([{"role": "user", "content": "hi"}]))
+    assert events[-1].kind == "error"
+    assert "LLMTimeoutError" in events[-1].finish_reason

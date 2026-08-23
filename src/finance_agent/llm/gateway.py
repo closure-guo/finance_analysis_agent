@@ -619,13 +619,17 @@ def complete_stream(
         request_kwargs["tools"] = tools
     if not suppress_temperature and temperature is not None:
         request_kwargs["temperature"] = temperature
+    # 累积变量须在 try 外初始化：raw_stream 抛异常时（端点拒连/超时），
+    # except 分支的 _finalize_observation 仍要引用它们——若初始化在 try 内
+    # raw_stream 之后，异常时变量未绑定 → NameError 盖住原始异常
+    # （evals Item 9-16 全败的根因，'cannot access local variable _answer'）。
+    _answer = ""
+    _reasoning = ""
+    _last_usage = None
     try:
         stream = raw_stream(**request_kwargs)
         saw_text = False
         finish = None
-        _answer = ""
-        _reasoning = ""
-        _last_usage = None
         # per-chunk 超时保护（incident 016/017 卡死族）：同步阻塞迭代无法被
         # 中断，用 daemon 线程把 chunk 泵进队列、主侧带超时取——半僵流
         # （chunk 永不到达且 litellm 请求级 timeout 不触发）不再挂死进程。
