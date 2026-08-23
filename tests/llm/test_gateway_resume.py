@@ -6,9 +6,15 @@ mock adapter raw_* 返回「前段 length + 续写 stop」双段流，验证续�
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
 from finance_agent.llm.contracts import partial_json_progress
-from finance_agent.llm.gateway import _build_progress_annotation, _maybe_resume_text
+from finance_agent.llm.gateway import (
+    _build_progress_annotation,
+    _maybe_resume_text,
+    complete_stream,
+)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -152,3 +158,172 @@ def test_build_progress_annotation_formats_markdown():
 
 def test_build_progress_annotation_none_for_plain_text():
     assert _build_progress_annotation("纯文本", ["agent_name"]) is None
+
+
+# ---- Task 4: complete_stream（同步流式）断点续写 ----
+
+
+def _make_raw_stream(items):
+    """把 chunk 列表包成可迭代的 raw_stream 返回值。"""
+
+    class _It:
+        def __init__(self, items):
+            self._items = list(items)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._items:
+                return self._items.pop(0)
+            raise StopIteration
+
+    return _It(items)
+
+
+def _chunk_sync(*, text="", reasoning="", finish=None):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(reasoning_content=reasoning or None, content=text or None),
+                finish_reason=finish,
+            )
+        ]
+    )
+
+
+def test_complete_stream_resumes_after_length(monkeypatch):
+    calls = []
+
+    def fake_raw_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            # 前段：length 截断
+            return _make_raw_stream([_chunk_sync(text="前半"), _chunk_sync(finish="length")])
+        # 续写段：stop 正常结束（断言带上尾部上下文）
+        msgs = kwargs["messages"]
+        assert msgs[-1]["role"] == "user"
+        assert "续写" in msgs[-1]["content"]
+        assert calls[0]["messages"][-1]["content"] not in msgs[-1]["content"]
+        return _make_raw_stream([_chunk_sync(text="后半"), _chunk_sync(finish="stop")])
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream)
+    events = list(complete_stream([{"role": "user", "content": "hi"}]))
+    texts = "".join(e.text for e in events if e.kind == "text")
+    assert texts == "前半后半"
+    assert events[-1].kind == "finished"
+    assert events[-1].finish_reason == "stop"
+    assert len(calls) == 2
+
+
+def test_complete_stream_resume_sends_progress_annotation(monkeypatch):
+    calls = []
+
+    def fake_raw_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            # 前段：JSON 结构中途截断（局部可解析 → 进度标注可生成）
+            return _make_raw_stream(
+                [_chunk_sync(text='{"agent_name": "tech"'), _chunk_sync(finish="length")]
+            )
+        # 续写段：断言续写请求携带进度标注（已闭合字段 ✅ / 未开始 ⬜）
+        assert (
+            "进度" in kwargs["messages"][-1]["content"] or "✅" in kwargs["messages"][-1]["content"]
+        )
+        return _make_raw_stream([_chunk_sync(text="b"), _chunk_sync(finish="stop")])
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream)
+    events = list(
+        complete_stream(
+            [{"role": "user", "content": "hi"}],
+            top_fields=["agent_name", "summary"],
+        )
+    )
+    assert "".join(e.text for e in events if e.kind == "text") == '{"agent_name": "tech"b'
+    assert len(calls) == 2
+
+
+def test_complete_stream_resume_internal_error_when_truncated_again(monkeypatch):
+    calls = []
+
+    def fake_raw_stream(**kwargs):
+        calls.append(kwargs)
+        return _make_raw_stream([_chunk_sync(text="x"), _chunk_sync(finish="length")])
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream)
+    events = list(complete_stream([{"role": "user", "content": "hi"}]))
+    assert events[-1].kind == "error"
+    assert "OutputTruncated" in events[-1].finish_reason
+    assert len(calls) == 2  # 精确：1 次原始 + 1 次续写，之后停止
+
+
+class _FakeObs:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def update(self, **kw):
+        self._updates.append(kw)
+
+
+class _FakeCM:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def __enter__(self):
+        return _FakeObs(self._updates)
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeLF:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def start_as_current_observation(self, **kw):
+        return _FakeCM(self._updates)
+
+
+def test_complete_stream_resume_observation_records_resume_count(monkeypatch):
+    """续写成功 → 观测 metadata 落 resume_count=1（spec «续写可追溯»）。"""
+    updates = []
+    monkeypatch.setattr("finance_agent.langfuse_tracing.get_langfuse", lambda: _FakeLF(updates))
+    calls = []
+
+    def fake_raw_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _make_raw_stream([_chunk_sync(text="前"), _chunk_sync(finish="length")])
+        return _make_raw_stream([_chunk_sync(text="后"), _chunk_sync(finish="stop")])
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream)
+    events = list(
+        complete_stream(
+            [{"role": "user", "content": "hi"}],
+            trace={"name": "react_agent", "metadata": {"agent": "react"}},
+        )
+    )
+    assert events[-1].kind == "finished"
+    assert events[-1].finish_reason == "stop"
+    metas = [u["metadata"] for u in updates if "metadata" in u]
+    assert any(m.get("resume_count") == 1 for m in metas)
+
+
+def test_complete_stream_resume_truncated_observation_flags(monkeypatch):
+    """续写仍截断 → 观测 metadata 同时含 resume_count=1 与 truncated=true。"""
+    updates = []
+    monkeypatch.setattr("finance_agent.langfuse_tracing.get_langfuse", lambda: _FakeLF(updates))
+
+    def fake_raw_stream(**kwargs):  # noqa: ARG001
+        return _make_raw_stream([_chunk_sync(text="x"), _chunk_sync(finish="length")])
+
+    monkeypatch.setattr("finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream)
+    events = list(
+        complete_stream(
+            [{"role": "user", "content": "hi"}],
+            trace={"name": "react_agent", "metadata": {"agent": "react"}},
+        )
+    )
+    assert events[-1].kind == "error"
+    metas = [u["metadata"] for u in updates if "metadata" in u]
+    assert any(m.get("resume_count") == 1 and m.get("truncated") is True for m in metas)

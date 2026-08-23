@@ -471,6 +471,7 @@ def complete_stream(
     purpose: Purpose = "deep",
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
+    top_fields: list[str] | None = None,
     llm_config: dict[str, Any] | None = None,
     trace: dict[str, Any] | None = None,
     temperature: float | None = None,
@@ -481,6 +482,13 @@ def complete_stream(
     Agent 核心消费归一事件流（reasoning/text/finished/error），不感知
     provider 细节。对接 litellm 同步流 chunk（choices[0].delta:
     reasoning_content -> reasoning；content -> text）。
+
+    断点续写（llm-output-resume delta）：finish_reason=length 且正文非空时
+    以「已生成正文尾部 + 进度标注 + 剩余预算」构造续写请求二次流式，续写段
+    text 事件直接续发，最终 finished 事件携带续写段 reason；续写仍 length →
+    error 事件（OutputTruncatedError）+ 观测 truncated=true。非 length 时
+    零额外调用。``top_fields``（可选）：调用方 schema 顶层字段清单，None 则
+    不做进度标注（仅尾部续写）。
 
     ``trace``（可选）开启 Langfuse generation 观测：``{"name","metadata"}``。
     观测收口在 gateway（自 legacy.call_llm_stream 移植），调用方传入
@@ -605,6 +613,100 @@ def complete_stream(
         _finalize_observation(
             _gen, _answer, _reasoning, _last_usage, metadata=(trace or {}).get("metadata")
         )
+        _finish = finish
+        if _maybe_resume_text(_finish, _answer):
+            # 断点续写（llm-output-resume Delta Task 4）：finish=length 且正文
+            # 非空 → 以「已生成正文尾部(+进度标注) + 剩余预算」构造续写请求二次
+            # 流式，续写段 text 事件直接续发（无 error/finished 前插），最终
+            # finished 事件携带续写段 reason。续写段内层循环与主循环共享
+            # _answer/_reasoning/_last_usage 累积（直接 for 迭代，避开主泵线程）。
+            from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
+            from finance_agent.llm.contracts import partial_json_progress
+            from finance_agent.llm.errors import OutputTruncatedError
+
+            ann = None
+            if top_fields:
+                prog = partial_json_progress(_answer, top_fields)
+                if prog is not None:
+                    ann = _build_progress_annotation(_answer, top_fields)
+            resume_kwargs = build_resume_kwargs(
+                request_kwargs, prior_text=_answer, progress_annotation=ann
+            )
+            try:
+                stream2 = raw_stream(**resume_kwargs)
+                _finish = None
+                for chunk2 in stream2:
+                    choice2 = chunk2.choices[0]
+                    d2 = choice2.delta
+                    if (
+                        getattr(choice2, "finish_reason", None)
+                        and getattr(choice2, "finish_reason", None) != _finish
+                    ):
+                        _finish = getattr(choice2, "finish_reason", None) or _finish
+                    if d2 and getattr(d2, "reasoning_content", None):
+                        _reasoning += str(d2.reasoning_content)
+                    if d2 and getattr(d2, "content", None):
+                        ct = str(d2.content)
+                        _answer += ct
+                        yield CanonicalEvent(kind="text", text=ct)
+            except Exception as exc2:  # noqa: BLE001 -- 续写段异常与主循环同风格收口
+                _finalize_observation(
+                    _gen,
+                    _answer,
+                    _reasoning,
+                    _last_usage,
+                    metadata=(trace or {}).get("metadata"),
+                )
+                err2 = normalize_exception(exc2)
+                if _gen is not None:
+                    from contextlib import suppress
+
+                    with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                        _gen.update(
+                            metadata={
+                                **((trace or {}).get("metadata") or {}),
+                                "truncated": True,
+                            },
+                            level="ERROR",
+                        )
+                yield CanonicalEvent(
+                    kind="error",
+                    finish_reason=type(err2).__name__,
+                    raw={"error": str(err2)},
+                )
+                return
+            # 续写段观测收口：resume_count=1 落观测（spec 续写可追溯）
+            if _gen is not None:
+                from contextlib import suppress
+
+                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                    _gen.update(
+                        metadata={**((trace or {}).get("metadata") or {}), "resume_count": 1}
+                    )
+            if _maybe_resume_text(_finish, _answer):
+                # 续写仍截断：resume 上限 1，上抛 OutputTruncatedError + truncated
+                exc3 = OutputTruncatedError(
+                    "续写仍 finish_reason=length：输出被截断（resume 上限 1）"
+                )
+                if _gen is not None:
+                    from contextlib import suppress
+
+                    with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                        _gen.update(
+                            metadata={
+                                **((trace or {}).get("metadata") or {}),
+                                "resume_count": 1,
+                                "truncated": True,
+                            },
+                            level="ERROR",
+                        )
+                yield CanonicalEvent(
+                    kind="error",
+                    finish_reason=type(exc3).__name__,
+                    raw={"error": str(exc3)},
+                )
+                return
+            finish = _finish
         try:
             classify_outcome(finish, saw_text_delta=saw_text)
         except Exception as exc:  # noqa: BLE001
