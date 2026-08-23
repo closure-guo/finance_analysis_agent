@@ -186,9 +186,9 @@ def focus_hint(state: dict) -> str:
 #   error     → 按 ev.finish_reason（typed 类名字符串，errors 模块内类名即
 #               finish_reason）经 getattr 查表还原为 typed error 后 raise
 #               （查不到 → UnknownLLMError）——对齐 legacy._ERROR_CLASS_BY_NAME。
-# 请求构造逐条复刻 legacy.call_llm_stream 薄壳语义（purpose=deep /
-# temperature=0.3 / max_tokens=16384 / 请求级 llm_config dict /
-# trace.name + metadata），32768 截断翻倍重试 fallback 行为不变。
+# 请求构造逐条复刻 gateway 合约（purpose=deep /
+# temperature=0.3 / max_tokens=65536（GLM 官方默认）/ 请求级 llm_config dict /
+# trace.name + metadata），截断翻倍至 131072（官方上限）重试 fallback 行为不变。
 
 _DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 
@@ -350,12 +350,13 @@ def call_llm_streaming(
     from finance_agent.llm import errors as _llm_errors
     from finance_agent.llm.errors import LLMError, OutputTruncatedError
 
-    # complete_stream 基线参数：对齐 legacy.call_llm_stream 默认
-    # （purpose=deep / temperature=0.3 / max_tokens=16384）。
+    # complete_stream 基线参数：对齐 gateway 合约（purpose=deep / temperature=0.3 /
+    # max_tokens=65536——GLM 官方默认，deep 长 JSON 节点 reasoning 与正文共享配额，
+    # 16k 在长节点会 reasoning 吃空触发 length 截断；65536 给足余量）。
     _call_base: dict = {
         "purpose": "deep",
         "temperature": 0.3,
-        "max_tokens": 16384,
+        "max_tokens": 65536,
         "llm_config": cfg_dict,
         "trace": trace,
     }
@@ -364,7 +365,7 @@ def call_llm_streaming(
         answer_parts: list[str] = []
         try:
             # _call_base + escalate 合并下发（escalate 覆盖 max_tokens：
-            # 截断翻倍 32768）。不能在调用处裸拼 **_call_base, **escalate——
+            # 截断翻倍至官方上限 131072）。不能在调用处裸拼 **_call_base, **escalate——
             # 两处同键（max_tokens）会抛 TypeError，须先经 dict display 合并。
             for ev in complete_stream(messages, **{**_call_base, **escalate}):
                 if ev.kind == "reasoning" and writer:
@@ -383,7 +384,7 @@ def call_llm_streaming(
         except OutputTruncatedError:
             if attempt == 1:
                 raise
-            escalate = {"max_tokens": 32768}  # 预算复核：截断→加倍重试
+            escalate = {"max_tokens": 131072}  # 预算复核：截断→翻倍至官方上限
         except LLMError as exc:
             if not exc.retryable or attempt == 1:
                 raise

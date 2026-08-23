@@ -6,7 +6,7 @@ mock 目标改为 ``finance_agent.llm.gateway.complete_stream``（原 mock
 迭代协议逐字节复刻：
 - reasoning → thinking（经 stream writer）、text → answer 拼接、finished 忽略
 - error 事件按 finish_reason（typed 类名字符串）还原为对应错误；查不到用 UnknownLLMError
-- error(OutputTruncatedError) → 32768 预算复核翻倍重试（截断续写 fallback 保留）
+- error(OutputTruncatedError) → 131072 预算复核翻倍重试（截断续写 fallback 保留）
 - retryable 非截断错误重试一次，预算不翻倍（escalate 仅截断分支触发）
 - 不再经 legacy call_llm_stream（TDD 红锚点）
 """
@@ -119,7 +119,7 @@ class TestErrorEventRestore:
             call_llm_streaming("p", node_name="trader")
 
     def test_error_event_triggers_budget_escalation_retry(self):
-        """截断续写 fallback 保留：首次 error(OutputTruncatedError) → max_tokens 加倍 32768 重试。"""
+        """截断续写 fallback 保留：首次 error(OutputTruncatedError) → max_tokens 翻倍至 131072 重试。"""
         from finance_agent.llm.types import CanonicalEvent
 
         captured = []
@@ -142,7 +142,7 @@ class TestErrorEventRestore:
             from finance_agent.nodes._llm_utils import call_llm_streaming
 
             assert call_llm_streaming("p", node_name="trader") == "ok"
-        assert captured == [16384, 32768]
+        assert captured == [65536, 131072]
 
     def test_retryable_non_truncated_error_retries_without_escalation(self):
         """retryable 非截断（EmptyLLMOutputError）重试一次，预算不翻倍（escalate 仅截断分支触发）。"""
@@ -170,7 +170,7 @@ class TestErrorEventRestore:
 
             assert call_llm_streaming("p") == "res"
         assert calls["n"] == 2
-        assert calls["max_tokens"] == [16384, 16384]
+        assert calls["max_tokens"] == [65536, 65536]
 
     def test_unknown_error_event_falls_back_to_unknown_llm_error(self):
         """finish_reason 查不到 typed 类 → UnknownLLMError 还原（对齐 legacy _ERROR_CLASS_BY_NAME 缺省）。"""
@@ -207,7 +207,7 @@ class TestRequestConstruction:
             {"role": "user", "content": "hi"},
         ]
         assert kwargs["purpose"] == "deep"
-        assert kwargs["max_tokens"] == 16384
+        assert kwargs["max_tokens"] == 65536
         assert kwargs["temperature"] == 0.3
         assert kwargs["llm_config"] is None
         assert kwargs["trace"] == {
