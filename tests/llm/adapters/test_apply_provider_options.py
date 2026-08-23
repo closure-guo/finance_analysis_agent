@@ -31,6 +31,12 @@ def _deepseek(**options: object) -> ModelProfile:
     return dataclasses.replace(p, provider_options=dict(options))
 
 
+def _ark_glm(**options: object) -> ModelProfile:
+    """ark-glm preset + 覆盖 provider_options（provider=openai，name=ark-glm）。"""
+    p = get_profile_preset("ark-glm")
+    return dataclasses.replace(p, provider_options=dict(options))
+
+
 class TestApplyProviderOptions:
     def test_enabled_returns_extra_body_effort_and_suppress(self):
         out = apply_provider_options(_deepseek(thinking="enabled", reasoning_effort="max"))
@@ -68,6 +74,31 @@ class TestApplyProviderOptions:
         p = _deepseek(thinking="enabled")
         cap = dataclasses.replace(p.capability, extra_body_allowed=False)
         assert apply_provider_options(dataclasses.replace(p, capability=cap)) == {}
+
+    def test_ark_glm_returns_reasoning_effort(self):
+        out = apply_provider_options(_ark_glm(reasoning_effort="high"))
+        assert out == {"reasoning_effort": "high"}
+
+    def test_ark_glm_does_not_emit_thinking_or_suppress(self):
+        out = apply_provider_options(_ark_glm(reasoning_effort="max"))
+        assert "extra_body" not in out
+        assert "suppress_temperature" not in out
+        assert out == {"reasoning_effort": "max"}
+
+    def test_ark_glm_env_named_profile_hits(self):
+        """env 分支 profile（name=env:openai/glm-5.3 不含 ark）也命中 ark-glm。"""
+        p = _ark_glm(reasoning_effort="low")
+        p = dataclasses.replace(p, name="env:openai/glm-5.3")
+        out = apply_provider_options(p)
+        assert out == {"reasoning_effort": "low"}
+
+    def test_ark_glm_invalid_effort_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            apply_provider_options(_ark_glm(reasoning_effort="ultra"))
+
+    def test_ark_glm_unknown_key_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            apply_provider_options(_ark_glm(thinking="enabled"))
 
 
 class TestRawTimeoutInjection:

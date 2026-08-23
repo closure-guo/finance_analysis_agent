@@ -403,16 +403,36 @@ def guard_params_supported(
         )
 
 
+def _provider_options_key(profile: ModelProfile) -> str | None:
+    """识别 provider_options 归属的 registry schema key（§7.1）。
+
+    - deepseek 官方 prefix → ``deepseek``
+    - ark-glm：provider=openai 且（name 含 ``ark``——preset 名 ark-glm——
+      或 model 含 ``glm``——env/request 分支构造的 env:openai/glm-5.3）
+      → ``ark-glm``
+    - 其余 provider → None（schema 查无 → 不消费）
+    """
+    name = (profile.name or "").lower()
+    model = (profile.model or "").lower()
+    if profile.provider == "deepseek":
+        return "deepseek"
+    if profile.provider == "openai" and ("ark" in name or "glm" in model):
+        return "ark-glm"
+    return None
+
+
 def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     """provider_options 唯一消费点：校验并转为请求 kwargs（设计档案 §7.1）。
 
     registry schema 校验（非法值/未知 key → pydantic ValidationError）。
-    provider=="deepseek" 且 capability.extra_body_allowed 时产出：
-    - ``extra_body.thinking.type``：thinking 显式设置时携带
-    - ``reasoning_effort``：显式设置时携带
-    - ``suppress_temperature: True``：thinking=="enabled" 时携带 —— 内部
-      契约标志（非 litellm 参数），gateway 据此不发送 temperature
-      （deepseek thinking 模式拒收 temperature，对齐 legacy deep 分支）。
+    - deepseek（capability.extra_body_allowed 时）：
+      ``extra_body.thinking.type``（thinking 显式设置时携带）、
+      ``reasoning_effort``（显式设置时携带）、``suppress_temperature: True``
+      （thinking=="enabled" 时携带，adapter→gateway 内部契约标志，deepseek
+      thinking 模式拒收 temperature，对齐 legacy deep 分支）。
+    - ark-glm（provider=openai + name 含 ark / model 含 glm）：
+      仅产出 ``reasoning_effort`` 请求参数（官方 max/high/low 三档）；
+      thinking/suppress_temperature 是 deepseek 专属，不透传。
     其他 provider / 空 provider_options → ``{}``。
     """
     options = dict(getattr(profile, "provider_options", None) or {})
@@ -420,22 +440,23 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
         return {}
     from finance_agent.llm.registry import PROVIDER_OPTIONS_SCHEMAS
 
-    schema = PROVIDER_OPTIONS_SCHEMAS.get(profile.provider)
-    if schema is None:
+    key = _provider_options_key(profile)
+    if key is None or key not in PROVIDER_OPTIONS_SCHEMAS:
         return {}
-    validated = schema.model_validate(options)
-    if profile.provider != "deepseek" or not profile.capability.extra_body_allowed:
-        return {}
+    validated = PROVIDER_OPTIONS_SCHEMAS[key].model_validate(options)
     out: dict[str, Any] = {}
-    thinking = getattr(validated, "thinking", None)
     effort = getattr(validated, "reasoning_effort", None)
-    if thinking is not None:
-        out["extra_body"] = {"thinking": {"type": thinking}}
     if effort is not None:
         out["reasoning_effort"] = effort
-    # 内部契约标志：告知 gateway 不发送 temperature（非 litellm 参数）
-    if thinking == "enabled":
-        out["suppress_temperature"] = True
+    if key == "deepseek":
+        if not profile.capability.extra_body_allowed:
+            return {}
+        thinking = getattr(validated, "thinking", None)
+        if thinking is not None:
+            out["extra_body"] = {"thinking": {"type": thinking}}
+        # 内部契约标志：告知 gateway 不发送 temperature（非 litellm 参数）
+        if thinking == "enabled":
+            out["suppress_temperature"] = True
     return out
 
 
