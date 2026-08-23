@@ -446,6 +446,13 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     validated = PROVIDER_OPTIONS_SCHEMAS[key].model_validate(options)
     out: dict[str, Any] = {}
     effort = getattr(validated, "reasoning_effort", None)
+    if key == "ark-glm":
+        # 实证（方舟 GLM-5.3）：顶层 reasoning_effort 被 litellm openai 路由
+        # 判 UnsupportedParamsError 拒绝；必须放 extra_body 才透传到端点
+        # （OpenAI 兼容扩展字段）。官方三档 max/high/low。
+        if effort is not None:
+            out["extra_body"] = {"reasoning_effort": effort}
+        return out
     if effort is not None:
         out["reasoning_effort"] = effort
     if key == "deepseek":

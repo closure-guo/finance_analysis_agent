@@ -19,13 +19,13 @@
 
 ### Requirement: ark-glm reasoning_effort 显式配置入口
 
-系统 SHALL 为 ark-glm 提供 reasoning_effort 的配置入口并透传到请求：官方默认 `max`；支持档位 `max/high/low`（GLM-5.3 范围）；配置来源按优先级：请求级 llm_config → 环境变量 `LLM_REASONING_EFFORT` → registry 默认 `max`。透传的 `reasoning_effort` SHALL 出现在发给端点的请求参数中（OpenAI 兼容端点透传）。
+系统 SHALL 为 ark-glm 提供 reasoning_effort 的配置入口并透传到请求：官方默认 `max`；支持档位 `max/high/low`（GLM-5.3 范围）；配置来源按优先级：请求级 llm_config → 环境变量 `LLM_REASONING_EFFORT` → registry 默认 `max`。透传方式 SHALL 为 `extra_body={"reasoning_effort": <值>}`（实证：litellm openai 路由拒收顶层 `reasoning_effort`，extra_body 才成功透传到方舟端点）。
 
 #### Scenario: env 配置生效
 
 - **GIVEN** 环境变量 `LLM_REASONING_EFFORT=high` 且模型为方舟 GLM（`glm` in model）
 - **THEN** 解析出的 profile provider_options SHALL 含 `reasoning_effort: "high"`
-- **AND** apply_provider_options SHALL 产出请求参数 `reasoning_effort="high"`
+- **AND** apply_provider_options SHALL 产出 `extra_body={"reasoning_effort": "high"}`
 
 #### Scenario: 默认值生效
 
