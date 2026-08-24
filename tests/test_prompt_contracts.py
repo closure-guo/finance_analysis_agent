@@ -43,3 +43,36 @@ class TestDebaterAdversarialInstruction:
         text = _load(f"{name}.md")
         assert "反驳" in text
         assert "论点" in text
+
+
+DECISION_PROMPTS = ["trader", "risk_judge", "fund_manager"]
+
+
+@pytest.mark.parametrize("name", DECISION_PROMPTS)
+class TestDecisionSemantics:
+    def test_has_semantics_section(self, name):
+        assert "## 决策语义" in _load(f"{name}.md")
+
+
+class TestTraderSemantics:
+    def test_position_size_defined(self):
+        text = _load("trader.md")
+        assert "light" in text
+        assert "moderate" in text
+        assert "heavy" in text
+
+    def test_confidence_anchored(self):
+        assert "0.7" in _load("trader.md")
+
+
+class TestRiskJudgeSemantics:
+    def test_balanced_evidence_guidance(self):
+        assert "均衡" in _load("risk_judge.md")
+
+
+class TestFundManagerSemantics:
+    def test_decision_options_defined(self):
+        text = _load("fund_manager.md")
+        assert "approve" in text
+        assert "reject" in text
+        assert "return" in text
