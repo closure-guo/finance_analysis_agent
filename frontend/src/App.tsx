@@ -9,6 +9,7 @@ import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations }
 import { buildLayerTree } from './pipelineTree'
 import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
+import { useClickOutside } from './useClickOutside'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import {
@@ -928,7 +929,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
 }
 
 // ── Empty State ──
-function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, setMode, profileName, profiles, activeProfileId, onSwitchProfile }: {
+export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, setMode, profileName, profiles, activeProfileId, onSwitchProfile }: {
   onSend: (text: string, mode?: string) => void
   apiKey: string
   capability: CapabilityMatrix | null
@@ -944,6 +945,13 @@ function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, setMode
   const [dropdownOpen, setDropdownOpen] = useState(false)
   // LLM 切换下拉框展开状态（delta Decision 11）
   const [llmDropdownOpen, setLlmDropdownOpen] = useState(false)
+  // 点击下拉框外部区域关闭（delta fix-dropdown-outside-close）：
+  // rowRef 包裹触发按钮与弹层两者，避免「点触发按钮先关后开」竞态
+  const rowRef = useRef<HTMLDivElement>(null)
+  useClickOutside(rowRef, dropdownOpen || llmDropdownOpen, () => {
+    setDropdownOpen(false)
+    setLlmDropdownOpen(false)
+  })
 
   const handleKeydown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -987,9 +995,9 @@ function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, setMode
       <div className="w-full max-w-2xl animate-fade-in-up relative z-10" style={{ animationDelay: '0.1s' }}>
         <div className="glass-input rounded-2xl p-2">
           {/* Mode dropdown */}
-          <div className="relative flex items-center gap-2 px-4 pt-1 pb-0">
+          <div className="relative flex items-center gap-2 px-4 pt-1 pb-0" ref={rowRef}>
             <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
+              onClick={() => { setLlmDropdownOpen(false); setDropdownOpen(!dropdownOpen) }}
               className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
             >
               <span style={{ color: 'var(--text-tertiary)' }}>模式：</span>
@@ -1032,7 +1040,11 @@ function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, setMode
             {/* LLM 切换下拉框（delta Decision 11）；无 profile 时点击引导配置 */}
             <div className="relative inline-block">
               <button
-                onClick={() => profiles.length === 0 ? setShowSettings(true) : setLlmDropdownOpen(!llmDropdownOpen)}
+                onClick={() => {
+                  if (profiles.length === 0) { setShowSettings(true); return }
+                  setDropdownOpen(false)
+                  setLlmDropdownOpen(!llmDropdownOpen)
+                }}
                 className="flex items-center gap-1 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
               >
                 <i className="fas fa-microchip text-[var(--text-tertiary)]"></i>
@@ -1736,7 +1748,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
+export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
   onSend: (text: string) => void
   leftInset: number
   mode: 'quick' | 'deep'
@@ -1754,6 +1766,13 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnaly
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
   // LLM 切换下拉框展开状态（delta Decision 11）
   const [llmDropdownOpen, setLlmDropdownOpen] = useState(false)
+  // 点击下拉框外部区域关闭（delta fix-dropdown-outside-close）：
+  // rowRef 包裹触发按钮与弹层两者，避免「点触发按钮先关后开」竞态
+  const rowRef = useRef<HTMLDivElement>(null)
+  useClickOutside(rowRef, modeDropdownOpen || llmDropdownOpen, () => {
+    setModeDropdownOpen(false)
+    setLlmDropdownOpen(false)
+  })
 
   const handleKeydown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1792,9 +1811,9 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnaly
       <div className="max-w-3xl mx-auto">
         <div className="glass-input rounded-2xl p-2">
           {/* Mode switcher：下拉框，会话中切换模式直接开启新会话 */}
-          <div className="relative flex items-center gap-1 px-1 pb-1">
+          <div className="relative flex items-center gap-1 px-1 pb-1" ref={rowRef}>
             <button
-              onClick={() => setModeDropdownOpen(!modeDropdownOpen)}
+              onClick={() => { setLlmDropdownOpen(false); setModeDropdownOpen(!modeDropdownOpen) }}
               className="flex items-center gap-1.5 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
             >
               <i className={`fas ${currentMode.icon} ${currentMode.color} text-[10px]`}></i>
@@ -1839,7 +1858,11 @@ function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnaly
             {/* LLM 切换（delta Decision 11）；无 profile 时点击引导配置 */}
             <div className="relative inline-block">
               <button
-                onClick={() => profiles.length === 0 ? setShowSettings(true) : setLlmDropdownOpen(!llmDropdownOpen)}
+                onClick={() => {
+                  if (profiles.length === 0) { setShowSettings(true); return }
+                  setModeDropdownOpen(false)
+                  setLlmDropdownOpen(!llmDropdownOpen)
+                }}
                 className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
               >
                 <i className="fas fa-microchip text-[10px]" style={{ color: 'var(--text-tertiary)' }}></i>
