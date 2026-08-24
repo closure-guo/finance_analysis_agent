@@ -5,7 +5,7 @@
 ## 1. TradeDecision 模型 + prompt
 
 - [ ] 1.1 `models.py::TradeDecision` 新增 `evidence_refs: list[dict] = []`（每项 `{claim: str, source: str}`；source 枚举 technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager 用 Literal 或宽松 str + validator 归一）。TDD：解析含/不含 evidence_refs 的 JSON 均通过；非法 source 清洗或降级
-- [ ] 1.2 `prompts/trader.md`：输出示例加 `evidence_refs`；要求「reasoning 每条例据对应一条引用、数值与来源一致」。TDD：prompt 文本断言（含 evidence_refs 示例与要求）
+- [ ] 1.2 `prompts/trader.md` + `prompts/risk_judge.md`：输出示例加 `evidence_refs`；trader 要求「reasoning 每条例据对应一条引用、数值与来源一致」；risk_judge 要求「采纳自交易方案的论据原样保留引用、不虚构来源」（judge 变量 `trade_decision` 取自 `final_trade_decision`，risk_judge 不回显则 judge 无引用可核对）。TDD：prompt 文本断言（含 evidence_refs 示例与要求）
 - [ ] 1.3 `_llm_utils._STUB_TRADE_DECISION` 补 `evidence_refs: []`（stub 管线合法）。TDD：stub 决策可解析
 
 ## 2. 序列化 + judge 输入

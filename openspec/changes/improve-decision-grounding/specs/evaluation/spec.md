@@ -19,6 +19,13 @@
 - **THEN** `evidence_refs` SHALL 被 Pydantic 解析并随 `_serialize_decision` 输出
 - **AND** 既有字段（action/confidence/reasoning/position_size 等）行为不变
 
+#### Scenario: Risk Judge 回显引用
+
+- **GIVEN** Risk Judge 与 Trader 共用 TradeDecision schema，且 judge 变量 `trade_decision` 取 `final_trade_decision`（Risk Judge 输出）
+- **WHEN** Risk Judge 输出最终决策
+- **THEN** 采纳自交易方案的论据 SHALL 原样保留其 `evidence_refs`（claim 与 source 不变）
+- **AND** SHALL 不虚构来源；无可对应来源的论据可不引用（`evidence_refs` 允许为空数组）
+
 ## MODIFIED Requirements
 
 ### Requirement: decision_grounding 评估
