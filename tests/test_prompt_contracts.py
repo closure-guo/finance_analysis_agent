@@ -76,3 +76,30 @@ class TestFundManagerSemantics:
         assert "approve" in text
         assert "reject" in text
         assert "return" in text
+
+
+class TestResearchManagerStance:
+    def test_has_stance_section(self):
+        assert "## 评级表态" in _load("research_manager.md")
+
+    def test_mandates_direction(self):
+        text = _load("research_manager.md")
+        assert "看多" in text
+        assert "看空" in text
+        assert "中性" in text
+
+
+class TestDeepModeOutputConstraint:
+    def test_has_output_constraint_section(self):
+        assert "## 输出约束" in _load("deep_mode.md")
+
+    def test_bounded_to_tool_output(self):
+        assert "工具输出" in _load("deep_mode.md")
+
+
+class TestReportSummaryGrounding:
+    def test_mandates_material_only(self):
+        src = Path(__file__).resolve().parents[1] / "src/finance_agent/nodes/report.py"
+        text = src.read_text(encoding="utf-8")
+        assert "仅基于" in text
+        assert "不得引入" in text

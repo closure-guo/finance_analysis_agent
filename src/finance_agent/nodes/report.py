@@ -178,6 +178,7 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
     system = (
         "你是投研报告编辑。根据用户关注点和各层分析产出，写一段 150-200 字的研究聚焦摘要，"
         "紧扣用户关注点组织语言，点出最关键的结论与数据。纯文本，不使用 emoji，不输出标题。"
+        "内容仅基于所提供材料中的数据组织，不得引入材料外的数值或推测。"
     )
     prompt = (
         f"股票: {stock_name}\n用户关注点: {focus}\n关注维度: {tags_desc}\n\n"
