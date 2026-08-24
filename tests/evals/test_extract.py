@@ -3,6 +3,8 @@
 
 from evals.extract import extract_conclusion, extract_judge_vars
 
+from finance_agent.models import TradeDecision
+
 
 def _state() -> dict:
     return {
@@ -116,3 +118,55 @@ class TestPydanticStateCompat:
         }
         vars_ = extract_judge_vars(state, query="q")
         assert "加仓" in vars_["risk_judgment"]
+
+
+class TestSerializeDecisionEvidenceRefs:
+    """_serialize_decision / trade_decision 变量含 evidence_refs。"""
+
+    def test_judge_var_trade_decision_contains_evidence_refs(self):
+        state = {
+            "final_trade_decision": TradeDecision.model_validate(
+                {
+                    "action": "buy",
+                    "confidence": 0.75,
+                    "reasoning": "理由",
+                    "evidence_refs": [{"claim": "ROE 3.4%", "source": "fundamental"}],
+                }
+            ),
+            "analyst_reports": {},
+            "risk_debate_history": [],
+        }
+        vars_ = extract_judge_vars(state)
+        assert "evidence_refs" in vars_["trade_decision"]
+        assert "fundamental" in vars_["trade_decision"]
+
+
+class TestSummarizeAnalystReportsKeepsNumbers:
+    """_summarize_analyst_reports 必须保留可核对的数值（claims 附注）。"""
+
+    def test_claim_numbers_preserved(self):
+        reports = {
+            "fundamental": {
+                "agent_name": "fundamental",
+                "summary": "盈利能力稳健",
+                "key_findings": ["ROE 提升"],
+                "claims": [
+                    {
+                        "claim_type": "numerical",
+                        "source_type": "data",
+                        "field_ref": "profitability_metrics.roe.2024",
+                        "stated_value": 3.4,
+                        "interpretation": "ROE 处于行业中等水平",
+                    }
+                ],
+                "markdown": "# fundamental\n正文",
+            }
+        }
+        state = {
+            "final_trade_decision": {},
+            "analyst_reports": reports,
+            "risk_debate_history": [],
+        }
+        vars_ = extract_judge_vars(state)
+        assert "3.4" in vars_["analyst_reports"]
+        assert "ROE 处于行业中等水平" in vars_["analyst_reports"]
