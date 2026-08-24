@@ -3,6 +3,7 @@
 
 from evals.extract import extract_conclusion, extract_judge_vars
 
+from finance_agent.citation import Claim
 from finance_agent.models import TradeDecision
 
 
@@ -170,3 +171,42 @@ class TestSummarizeAnalystReportsKeepsNumbers:
         vars_ = extract_judge_vars(state)
         assert "3.4" in vars_["analyst_reports"]
         assert "ROE 处于行业中等水平" in vars_["analyst_reports"]
+
+
+class TestFormatClaims:
+    """_format_claims 各分支（final review F3 加固）。"""
+
+    def test_interpretation_and_value(self):
+        from evals.extract import _format_claims
+
+        out = _format_claims([{"interpretation": "ROE 提升", "stated_value": 3.4}])
+        assert out == "ROE 提升(3.4)"
+
+    def test_interpretation_only(self):
+        from evals.extract import _format_claims
+
+        out = _format_claims([{"interpretation": "盈利改善", "stated_value": ""}])
+        assert out == "盈利改善"
+
+    def test_value_only(self):
+        from evals.extract import _format_claims
+
+        out = _format_claims([{"interpretation": "", "stated_value": 0.05}])
+        assert out == "0.05"
+
+    def test_pydantic_claim_instance(self):
+        from evals.extract import _format_claims
+
+        c = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="x.y",
+            stated_value=3.4,
+            interpretation="ROE",
+        )
+        assert _format_claims([c]) == "ROE(3.4)"
+
+    def test_empty_list(self):
+        from evals.extract import _format_claims
+
+        assert _format_claims([]) == ""

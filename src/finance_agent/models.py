@@ -113,6 +113,22 @@ class TradeDecision(BaseModel):
     target_price: float | None = None
     evidence_refs: list[TradeEvidenceRef] = Field(default_factory=list)
 
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _scrub_evidence_refs(cls, value: object) -> object:
+        """宽松清洗证据引用：None/非列表 → []；丢弃结构非法条目（LLM 抖动不炸管线）。"""
+        if value is None or not isinstance(value, list):
+            return []
+        cleaned: list[object] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            claim, source = item.get("claim"), item.get("source")
+            if not isinstance(claim, str) or not isinstance(source, str):
+                continue
+            cleaned.append(item)
+        return cleaned
+
 
 class FundManagerDecision(BaseModel):
     """Layer V Fund Manager 的审批决策。

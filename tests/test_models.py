@@ -234,3 +234,27 @@ class TestTradeDecisionEvidenceRefs:
             }
         )
         assert decision.evidence_refs[0].source == "risk_debater"
+
+    def test_evidence_refs_none_scrubbed_to_empty(self):
+        decision = TradeDecision.model_validate(
+            {"action": "hold", "confidence": 0.5, "reasoning": "理由", "evidence_refs": None}
+        )
+        assert decision.evidence_refs == []
+
+    def test_malformed_evidence_refs_items_dropped(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "hold",
+                "confidence": 0.5,
+                "reasoning": "理由",
+                "evidence_refs": [
+                    None,
+                    {"claim": "缺 source"},
+                    {"source": "缺 claim"},
+                    {"claim": "正常", "source": "fundamental"},
+                    "not-a-dict",
+                ],
+            }
+        )
+        assert [r.claim for r in decision.evidence_refs] == ["正常"]
+        assert decision.evidence_refs[0].source == "fundamental"

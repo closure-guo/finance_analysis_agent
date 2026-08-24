@@ -6,6 +6,10 @@ evidence_refs，否则 judge 无结构化引用可核对。
 
 from pathlib import Path
 
+import pytest
+
+from finance_agent.models import TRADE_EVIDENCE_SOURCES
+
 _PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src/finance_agent/prompts"
 
 
@@ -39,3 +43,13 @@ class TestRiskJudgePromptEvidenceRefs:
         # 不虚构来源 + 允许空数组（无可对应来源时）
         assert "不得" in text
         assert "[]" in text
+
+
+class TestPromptSourceEnumDriftGuard:
+    """prompt 的 source 枚举必须与 models.TRADE_EVIDENCE_SOURCES 一致（final review F5）。"""
+
+    @pytest.mark.parametrize("name", ["trader.md", "risk_judge.md"])
+    def test_all_canonical_sources_listed(self, name):
+        text = _load(name)
+        for src in TRADE_EVIDENCE_SOURCES:
+            assert src in text, f"{name} 缺 source: {src}"

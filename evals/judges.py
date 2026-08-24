@@ -70,8 +70,8 @@ RUBRICS: dict[str, str] = {
 若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对：
 - claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager）的结论中找到出处，
   且 reasoning 的主要论据都能在 evidence_refs 中找到对应项 → 4-5 分；
-- source 与论据对不上、claim 数值在来源中不存在（无中生有）、或 evidence_refs 大量缺失
-  reasoning 论据 → 1-2 分。
+- source 与论据对不上、claim 数值在来源中不存在（无中生有）、或 evidence_refs 缺失
+  reasoning 中大量论据的引用 → 1-2 分。
 无 evidence_refs 时按以下原规则从自由文本推断（不因缺字段报错）:
 5 = 决策的每条论据都能在分析师结论/辩论结论中找到出处
 4 = 主要论据有出处,个别细节无明确支撑
