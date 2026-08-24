@@ -29,3 +29,17 @@ class TestAnalystAntiHallucination:
 
     def test_mandates_data_sufficiency_declaration(self, name):
         assert "数据不足" in _load(f"{name}.md")
+
+
+DEBATERS = ["bull_debater", "bear_debater", "risk_debater"]
+
+
+@pytest.mark.parametrize("name", DEBATERS)
+class TestDebaterAdversarialInstruction:
+    def test_has_debate_discipline_section(self, name):
+        assert "## 辩论纪律" in _load(f"{name}.md")
+
+    def test_mandates_refute_opponent(self, name):
+        text = _load(f"{name}.md")
+        assert "反驳" in text
+        assert "论点" in text
