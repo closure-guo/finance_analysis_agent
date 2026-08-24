@@ -103,3 +103,20 @@ class TestReportSummaryGrounding:
         text = src.read_text(encoding="utf-8")
         assert "仅基于" in text
         assert "不得引入" in text
+
+
+SRC_DIR = Path(__file__).resolve().parents[1] / "src/finance_agent"
+
+
+class TestStockParsingConvergence:
+    def test_stock_parsing_prompt_lives_only_in_react_agent(self):
+        # 生产代码中「你是A股股票代码解析助手」只允许出现在 react_agent.py 一处
+        hits = []
+        for py in SRC_DIR.rglob("*.py"):
+            if "finance_agent.nlp" in py.read_text(encoding="utf-8"):
+                hits.append(py)
+        assert hits == [], f"nlp.py 仍被引用: {hits}"
+
+    def test_react_system_prompt_removed(self):
+        ra = (SRC_DIR / "react_agent.py").read_text(encoding="utf-8")
+        assert "REACT_SYSTEM_PROMPT" not in ra
