@@ -140,7 +140,6 @@ src/finance_agent/
 ├── session_store.py      # 会话持久化 (SQLite)
 ├── app_search.py         # 股票搜索（模糊匹配）
 ├── web_search.py         # Tavily Web 搜索封装
-├── nlp.py                # NLP 工具
 ├── charts.py             # 图表数据生成
 ├── timeline_builder.py   # 流式时间线构建
 ├── langfuse_tracing.py   # Langfuse 追踪集成

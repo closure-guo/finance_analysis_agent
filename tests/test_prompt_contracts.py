@@ -42,7 +42,7 @@ class TestDebaterAdversarialInstruction:
     def test_mandates_refute_opponent(self, name):
         text = _load(f"{name}.md")
         assert "反驳" in text
-        assert "论点" in text
+        assert "对方" in text
 
 
 DECISION_PROMPTS = ["trader", "risk_judge", "fund_manager"]
@@ -62,7 +62,7 @@ class TestTraderSemantics:
         assert "heavy" in text
 
     def test_confidence_anchored(self):
-        assert "0.7" in _load("trader.md")
+        assert "≥0.7" in _load("trader.md")
 
 
 class TestRiskJudgeSemantics:
@@ -110,12 +110,13 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src/finance_agent"
 
 class TestStockParsingConvergence:
     def test_stock_parsing_prompt_lives_only_in_react_agent(self):
-        # 生产代码中「你是A股股票代码解析助手」只允许出现在 react_agent.py 一处
+        # nlp.py 必须不存在；股票解析提示词文本必须只出现在 react_agent.py 一处
+        assert not (SRC_DIR / "nlp.py").exists()
         hits = []
         for py in SRC_DIR.rglob("*.py"):
-            if "finance_agent.nlp" in py.read_text(encoding="utf-8"):
-                hits.append(py)
-        assert hits == [], f"nlp.py 仍被引用: {hits}"
+            if "你是A股股票代码解析助手" in py.read_text(encoding="utf-8"):
+                hits.append(str(py.relative_to(SRC_DIR)))
+        assert hits == ["react_agent.py"], hits
 
     def test_react_system_prompt_removed(self):
         ra = (SRC_DIR / "react_agent.py").read_text(encoding="utf-8")
