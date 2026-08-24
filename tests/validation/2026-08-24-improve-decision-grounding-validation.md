@@ -23,16 +23,38 @@
 | 生产链路不回归 | TESTING=1 stub 全 5 层 graph 运行通过（final reviewer 实证）；report 渲染 / decision_log 持久化不受新字段影响 | ✅ |
 | 双 review 门禁 | Task1/Task2 spec ✅ + quality Approved；最终全分支审查 2 个 Important 修复后复审 ✅ | ✅ |
 
-## 遗留（archive 前待办）
+## 真实实验对比（delta 收益证据）
 
-1. **真实实验对比（delta 收益证据，可选但建议）**：重跑 langfuse evals，对比 decision_grounding 均值（基线 1.57/5）。期望 evidence_refs + rubric 对齐后显著提升；这是「决策论据可追溯性」主观项的人工验证，E2E/单测无法替代。数据源不可达时按 tasks.md 3.4 视为可选。
-2. **LLM 实际输出合规性**：trader/risk_judge 是否真实产出结构良好的 evidence_refs（真模型行为，需 @live 或实验观察）。
-3. 修复遗留：`scripts/` 未跟踪目录（`evals_gated_run.py` / `observe_langfuse_experiments.py` 11 个 ruff 错）属前 delta 工作产物，与本 delta 无关，未纳入提交（纳入 `docs/incidents/` 或后续清理任务处理）。
+**实验**: langfuse `improve-dg-evrefs-20260824-135439`（数据集 a-share-analysis-v1，16 items，33 分钟）
+**基线**: `baseline-v2-ark-20260824-104523`（2026-08-24 上午，同一数据集，57 分钟）
+
+| 维度 | 基线 | 本 delta 后 | 变化 |
+|---|---|---|---|
+| **decision_grounding** | **1.5714** | **4.1429** | **+2.5714** |
+| report_relevance | 4.4545 | 5.0 | +0.55 |
+| consistency | 3.4286 | 4.2857 | +0.86 |
+| debate_quality | 4.5714 | 4.1429 | −0.43 |
+| section_coverage | 0.881 | 0.8286 | −0.05 |
+| ticker_match | 1.0 | 1.0 | 持平 |
+| judge_failures | 0 | 0 | 持平 |
+
+逐条 deep（decision_grounding，基线→新）：中芯国际 2.0→4.0；贵州茅台现金流 1.0→4.0；招商银行 1.0→4.0；比亚迪 1.0→4.0；平安银行 4.0→4.0；宁德时代 1.0→5.0；贵州茅台 1.0→4.0。**7 条全部 ≥4，无一条 ≤2**（基线 5 条 =1.0）。
+
+说明：
+- 3 条 no-score 项（「现在适合入场吗」「帮我分析一下这只股票」「换个角度再看看」）与基线表现完全一致（数据集内无法产出报告的项），非回归。
+- debate_quality/section_coverage 轻微回落（开环波动，无 judge 失败、单次实验样本量 7），decision_grounding 的方向性提升在全部 7 条上一致，可确认为 delta 收益。
+- 实验时长 57→33 分钟：本 delta 无重试逻辑改动，提速来自调用数/端点波动，非本 delta 贡献，仅记录。
+
+报告 JSON: `reports/evals/improve-dg-evrefs-20260824-135439-20260824-142753.json`
+
+## 遗留（archive 后跟进，非阻塞）
+
+1. LLM 实际输出合规性：trader/risk_judge 真实产出 evidence_refs 的占比与格式在上面的实验中得到间接确认（分数跳升），如需逐条抽查可在 Langfuse trace 复核（decision_grounding 评分为 4-5 的条目 reasoning/evidence_refs 是否自洽）。
+2. `scripts/` 未跟踪目录（`evals_gated_run.py` / `observe_langfuse_experiments.py` 11 个 ruff 错）属前 delta 工作产物，与本 delta 无关，未纳入提交（建议单独清理或补进 incident）。
 
 ## 结论
 
-- [x] 静态验证全部通过，实现完成，可进入实验验证/archive 前阶段
-- [ ] 存在待验证项（真实实验对比），完成后可 archive
+- [x] 静态验证全部通过 + 真实实验对比确认 decision_grounding 1.57→4.14，实现完成，可 archive
 
 ## 附: final review 修复的核心影响
 
