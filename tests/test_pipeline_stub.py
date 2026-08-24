@@ -100,6 +100,7 @@ class TestCallLlmStreamingStub:
         answer = self._run_stub("trader")
         decision = TradeDecision.model_validate(parse_json_response(answer))
         assert decision.action in ("buy", "sell", "hold", "watch")
+        assert decision.evidence_refs == []
 
     def test_fund_manager_answer_has_approve_decision(self, testing_env):
         """fund_manager stub 必须返回 approve，确保管线确定性走 generate_report。"""

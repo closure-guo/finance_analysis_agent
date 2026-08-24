@@ -56,6 +56,7 @@ _STUB_TRADE_DECISION: dict = {
     "action": "hold",
     "confidence": 0.6,
     "reasoning": "STUB 交易决策：多因素均衡，建议持有观察（测试数据）",
+    "evidence_refs": [],
 }
 
 

@@ -52,6 +52,51 @@ class DebateMessage(BaseModel):
     key_arguments: list[str]
 
 
+# TradeDecision.evidence_refs 的 source 规范枚举（improve-decision-grounding）
+TRADE_EVIDENCE_SOURCES = frozenset(
+    {
+        "technical",
+        "macro",
+        "fundamental",
+        "sentiment",
+        "debate_bull",
+        "debate_bear",
+        "research_manager",
+    }
+)
+
+# LLM 输出常见别名 → 规范 source（归一不拒绝，见 TradeEvidenceRef validator）
+_SOURCE_ALIASES = {
+    "technical_analyst": "technical",
+    "macro_analyst": "macro",
+    "fundamental_analyst": "fundamental",
+    "sentiment_analyst": "sentiment",
+    "bull": "debate_bull",
+    "bear": "debate_bear",
+    "research_manager_conclusion": "research_manager",
+}
+
+
+class TradeEvidenceRef(BaseModel):
+    """交易决策的论据引用 — 决策论据到来源的可核对映射。
+
+    source 宽松接收：仅做大小写/别名归一，未知值原样保留（LLM 抖动
+    不炸管线——judge 自会因无法核对而判低分；与 action/confidence 的
+    硬校验相反，此处是「降级不中断」路线）。
+    """
+
+    claim: str
+    source: str
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _normalize_source(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        norm = value.strip().lower()
+        return _SOURCE_ALIASES.get(norm, norm)
+
+
 class TradeDecision(BaseModel):
     """Layer III (Trader) / Layer IV (Risk Judge) 的交易决策。
 
@@ -66,6 +111,7 @@ class TradeDecision(BaseModel):
     entry_price: float | None = None
     stop_loss: float | None = None
     target_price: float | None = None
+    evidence_refs: list[TradeEvidenceRef] = Field(default_factory=list)
 
 
 class FundManagerDecision(BaseModel):
