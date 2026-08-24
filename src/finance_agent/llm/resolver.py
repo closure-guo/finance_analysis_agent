@@ -95,9 +95,15 @@ def _provider_options_from_request(provider: str, llm_config: dict[str, Any]) ->
 
     白名单来源两处：顶层白名单键（如 ``thinking``）+ 可选 ``provider_options``
     dict；白名单外的 key 抛 ValueError 家族，禁止请求级覆盖受管配置。
+
+    ark 端点（model 含 glm）走 ark-glm 白名单——registry 白名单在
+    "ark-glm" 名下，但 resolver 请求分支 provider 前缀是 "openai"
+    （env:openai/glm-5.3 同理，model 名才是识别锚点）；其余走 provider 白名单。
     """
-    merged = dict(DEFAULT_PROVIDER_OPTIONS.get(provider, {}))
-    whitelist = REQUEST_OVERRIDABLE.get(provider, set())
+    raw_model = str(llm_config.get("model") or "")
+    options_key = "ark-glm" if "glm" in raw_model.lower() else provider
+    merged = dict(DEFAULT_PROVIDER_OPTIONS.get(options_key, {}))
+    whitelist = REQUEST_OVERRIDABLE.get(options_key, set())
     for key in whitelist:
         if key in llm_config:
             merged[key] = llm_config[key]
@@ -108,26 +114,33 @@ def _provider_options_from_request(provider: str, llm_config: dict[str, Any]) ->
         for key, value in raw.items():
             if key not in whitelist:
                 raise IncompleteLLMConfigError(
-                    f"provider_options 键 '{key}' 不在 {provider} 请求级白名单 "
+                    f"provider_options 键 '{key}' 不在 {options_key} 请求级白名单 "
                     f"{sorted(whitelist)} —— 禁止请求级覆盖受管 provider 配置"
                 )
             merged[key] = value
-    return _validate_options(provider, merged)
+    return _validate_options(options_key, merged)
 
 
 def _provider_options_from_env(env: Mapping[str, str], model: str) -> dict[str, Any]:
-    """环境变量分支（§7.1）：deepseek 模型 → registry defaults + LLM_* 覆盖。"""
-    if not model.startswith("deepseek/"):
-        return {}
-    merged = dict(DEFAULT_PROVIDER_OPTIONS.get("deepseek", {}))
-    for key, env_key in (
-        ("thinking", "LLM_THINKING"),
-        ("reasoning_effort", "LLM_REASONING_EFFORT"),
-    ):
-        value = env.get(env_key, "")
+    """环境变量分支（§7.1）：deepseek/ark-glm 模型 → registry defaults + LLM_* 覆盖。"""
+    lower = model.lower()
+    if lower.startswith("deepseek/"):
+        merged = dict(DEFAULT_PROVIDER_OPTIONS.get("deepseek", {}))
+        for key, env_key in (
+            ("thinking", "LLM_THINKING"),
+            ("reasoning_effort", "LLM_REASONING_EFFORT"),
+        ):
+            value = env.get(env_key, "")
+            if value:
+                merged[key] = value
+        return _validate_options("deepseek", merged)
+    if "glm" in lower:
+        merged = dict(DEFAULT_PROVIDER_OPTIONS.get("ark-glm", {}))
+        value = env.get("LLM_REASONING_EFFORT", "")
         if value:
-            merged[key] = value
-    return _validate_options("deepseek", merged)
+            merged["reasoning_effort"] = value
+        return _validate_options("ark-glm", merged)
+    return {}
 
 
 def _merge_probe_facts(profile: ModelProfile) -> ModelProfile:

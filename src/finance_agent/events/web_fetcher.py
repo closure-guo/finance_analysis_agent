@@ -10,7 +10,7 @@ from finance_agent.events.config import (
     ALLOWED_DOMAINS,
     WEBSEARCH_QUERY_TEMPLATE,
 )
-from finance_agent.llm import call_llm
+from finance_agent.llm.gateway import complete_text
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +132,21 @@ def fetch_events_from_web(stock_code: str, stock_name: str) -> list[dict] | None
         )
 
         # LLM 提取结构化事件
-        raw = call_llm(
-            _EXTRACTION_PROMPT.replace("{content}", content),
-            system="你是财经信息提取专家。只输出 JSON 数组，不要 Markdown 代码块标记。",
+        text, meta = complete_text(
+            [
+                {
+                    "role": "system",
+                    "content": "你是财经信息提取专家。只输出 JSON 数组，不要 Markdown 代码块标记。",
+                },
+                {"role": "user", "content": _EXTRACTION_PROMPT.replace("{content}", content)},
+            ],
+            purpose="deep",
             temperature=0.1,
-            agent="web_fetcher",
+            llm_config=None,
+            trace={"name": "web_fetcher", "metadata": {"agent": "web_fetcher"}},
         )
+        # legacy 行为保留：content 为空时回退 reasoning_content
+        raw = text or meta.get("raw_reasoning") or ""
 
         # 解析 JSON
         parsed = json.loads(raw)

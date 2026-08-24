@@ -1,8 +1,10 @@
 """实验回归工作流(spec Requirement「实验回归工作流」)。
 
 用法:
-    uv run python -m evals.run "<实验名>"            # langfuse dataset.run_experiment
-    uv run python -m evals.run "<实验名>" --local    # 无 langfuse 本地循环
+    uv run python -m evals.run "<实验名>"   # 经 langfuse dataset.run_experiment 执行
+
+run_experiment 是实验唯一执行入口:无 langfuse(Langfuse 未配置/不可达)时
+打印明确错误并以非零退出码终止,不提供本地循环降级路径。
 
 产出:终端结果表 + reports/evals/<name>-<ts>.json(per-item 明细 + 均值 +
 judge 失败数 + prompt_versions)。该 JSON 是 Judge 校准(Req 5,人工)的输入。
@@ -12,13 +14,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
-from evals.dataset_seed import DATASET_NAME, load_items
+from evals.dataset_seed import DATASET_NAME
 from evals.evaluators import make_evaluation, section_coverage, ticker_match
 from evals.judges import run_judge
 from evals.task import run_task
+from finance_agent.langfuse_tracing import get_langfuse
 
 _PROMPT_NAMES = [
     "macro_analyst",
@@ -91,75 +95,6 @@ def all_evaluators() -> list:
     return [eval_section_coverage, eval_ticker_match] + [_judge_adapter(d) for d in _JUDGE_DIMS]
 
 
-# ── 本地降级路径(无 langfuse)──
-
-
-def _local_scores(output: dict, expected: dict) -> tuple[dict, int]:
-    scores: dict = {}
-    failures = 0
-    for result in (
-        section_coverage(output.get("report"), expected),
-        ticker_match(output.get("ticker"), expected),
-    ):
-        if result:
-            scores[result["name"]] = result["value"]
-    mode = output.get("mode")
-    for dim in _JUDGE_DIMS:
-        if mode == "quick" and dim in _JUDGE_DEEP_ONLY:
-            continue
-        if not output.get("report"):
-            continue
-        result = run_judge(dim, output.get("judge_vars") or {})
-        if result["score"] is None:
-            failures += 1
-        else:
-            scores[dim] = result["score"]
-    return scores, failures
-
-
-def run_local(items: list[dict], experiment_name: str) -> list[dict]:
-    rows: list[dict] = []
-    for item in items:
-        # 单条隔离：一条 dataset 失败（如 OutputTruncated 耗尽重试）记录为
-        # skipped=error 后继续，不炸整批——否则 16 条基线对比被单条坏输出绑架。
-        try:
-            output = run_task(item=item, expected_output=item.get("expected_output"))
-        except Exception as exc:  # noqa: BLE001 -- 记录后继续下一条
-            print(f"[run] item 失败（已隔离继续）: {type(exc).__name__}: {exc}")
-            rows.append(
-                {
-                    "item": item["input"]["query"],
-                    "mode": item["input"]["mode"],
-                    "skipped": f"error:{type(exc).__name__}",
-                    "scores": {},
-                    "judge_failures": 0,
-                }
-            )
-            continue
-        if output.get("skipped"):
-            rows.append(
-                {
-                    "item": item["input"]["query"],
-                    "mode": item["input"]["mode"],
-                    "skipped": output["skipped"],
-                    "scores": {},
-                    "judge_failures": 0,
-                }
-            )
-            continue
-        scores, failures = _local_scores(output, item.get("expected_output") or {})
-        rows.append(
-            {
-                "item": item["input"]["query"],
-                "mode": item["input"]["mode"],
-                "skipped": None,
-                "scores": scores,
-                "judge_failures": failures,
-            }
-        )
-    return rows
-
-
 def _mean_rows(rows: list[dict]) -> dict:
     """各 Score 均值(None 不计入)+ judge 失败总数。"""
     buckets: dict[str, list[float]] = {}
@@ -214,47 +149,44 @@ def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="evals 实验回归")
     parser.add_argument("name", help="实验名(如 baseline-v1)")
-    parser.add_argument("--local", action="store_true", help="无 langfuse 本地循环")
     args = parser.parse_args()
+
+    # run_experiment 是实验唯一执行入口(spec「实验回归工作流」Scenario「无 Langfuse 时显式报错」):
+    # langfuse 不可用时显式报错并退出,绝不降级为本地循环产出不可对比的分数。
+    client = get_langfuse()
+    if client is None:
+        sys.exit(
+            "错误: Langfuse 未配置/不可达，实验必须经 run_experiment 执行。"
+            "请配置 LANGFUSE_PUBLIC_KEY/SECRET_KEY 且服务可达。"
+        )
 
     prompt_versions = _collect_prompt_versions()
     print("prompt_versions:", json.dumps(prompt_versions, ensure_ascii=False))
 
-    client = None
-    if not args.local:
-        from finance_agent.langfuse_tracing import get_langfuse
-
-        client = get_langfuse()
-
-    if client is not None:
-        dataset = client.get_dataset(DATASET_NAME)
-        result = dataset.run_experiment(
-            name=args.name,
-            task=run_task,
-            evaluators=all_evaluators(),
-            max_concurrency=1,  # 管线分钟级,禁高并发
-            metadata={"prompt_versions": prompt_versions},
-        )
-        rows = [
-            {
-                "item": str(r.item.input.get("query")),
-                "mode": r.item.input.get("mode"),
-                "skipped": None,
-                "scores": {e.name: e.value for e in r.evaluations if e.value is not None},
-                "judge_failures": sum(1 for e in r.evaluations if e.value is None),
-            }
-            for r in result.item_results
-        ]
-    else:
-        print("langfuse 未配置(或 --local),走本地循环")
-        rows = run_local(load_items(), args.name)
+    dataset = client.get_dataset(DATASET_NAME)
+    result = dataset.run_experiment(
+        name=args.name,
+        task=run_task,
+        evaluators=all_evaluators(),
+        max_concurrency=1,  # 管线分钟级,禁高并发
+        metadata={"prompt_versions": prompt_versions},
+    )
+    rows = [
+        {
+            "item": str(r.item.input.get("query")),
+            "mode": r.item.input.get("mode"),
+            "skipped": None,
+            "scores": {e.name: e.value for e in r.evaluations if e.value is not None},
+            "judge_failures": sum(1 for e in r.evaluations if e.value is None),
+        }
+        for r in result.item_results
+    ]
 
     means = _mean_rows(rows)
     _print_table(rows, means)
     path = _write_report(rows, means, args.name, prompt_versions)
     print(f"结果已写入 {path}")
-    if client is not None:
-        client.flush()
+    client.flush()
 
 
 if __name__ == "__main__":

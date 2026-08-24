@@ -34,6 +34,12 @@ class TestPresets:
         assert p.capability.reasoning_forced is True
         assert p.capability.reasoning_must_echo_on_tool is False
 
+    def test_ark_glm_max_tokens_aligned_official_default(self):
+        """方舟 GLM-5.3 max_tokens 对齐官方默认 65536（docs.bigmodel.cn）。"""
+        p = get_profile_preset("ark-glm")
+        assert p.capability.max_output == 65536
+        assert p.default_params == {"max_tokens": 65536}
+
     def test_unknown_preset_raises(self):
         with pytest.raises(KeyError):
             get_profile_preset("no-such-preset")

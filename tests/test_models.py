@@ -180,3 +180,81 @@ class TestFundManagerDecision:
     def test_reasoning_optional(self):
         """reasoning 缺省为空串，不阻塞校验。"""
         assert FundManagerDecision(decision="approve").reasoning == ""
+
+
+class TestTradeDecisionEvidenceRefs:
+    """TradeDecision.evidence_refs 结构化论据引用（improve-decision-grounding）。"""
+
+    def test_evidence_refs_parsed(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "buy",
+                "confidence": 0.75,
+                "reasoning": "理由",
+                "evidence_refs": [
+                    {"claim": "ROE 3.4% 高于行业均值", "source": "fundamental"},
+                    {"claim": "股价站上 60 日均线", "source": "technical"},
+                ],
+            }
+        )
+        assert len(decision.evidence_refs) == 2
+        assert decision.evidence_refs[0].source == "fundamental"
+        assert decision.evidence_refs[0].claim == "ROE 3.4% 高于行业均值"
+
+    def test_evidence_refs_default_empty(self):
+        decision = TradeDecision.model_validate(
+            {"action": "hold", "confidence": 0.5, "reasoning": "理由"}
+        )
+        assert decision.evidence_refs == []
+
+    def test_source_aliases_normalized(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "buy",
+                "confidence": 0.6,
+                "reasoning": "理由",
+                "evidence_refs": [
+                    {"claim": "a", "source": "Technical_Analyst"},
+                    {"claim": "b", "source": "BULL"},
+                    {"claim": "c", "source": "research_manager_conclusion"},
+                    {"claim": "d", "source": " sentiment "},
+                ],
+            }
+        )
+        sources = [r.source for r in decision.evidence_refs]
+        assert sources == ["technical", "debate_bull", "research_manager", "sentiment"]
+
+    def test_unknown_source_lenient(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "buy",
+                "confidence": 0.6,
+                "reasoning": "理由",
+                "evidence_refs": [{"claim": "a", "source": "risk_debater"}],
+            }
+        )
+        assert decision.evidence_refs[0].source == "risk_debater"
+
+    def test_evidence_refs_none_scrubbed_to_empty(self):
+        decision = TradeDecision.model_validate(
+            {"action": "hold", "confidence": 0.5, "reasoning": "理由", "evidence_refs": None}
+        )
+        assert decision.evidence_refs == []
+
+    def test_malformed_evidence_refs_items_dropped(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "hold",
+                "confidence": 0.5,
+                "reasoning": "理由",
+                "evidence_refs": [
+                    None,
+                    {"claim": "缺 source"},
+                    {"source": "缺 claim"},
+                    {"claim": "正常", "source": "fundamental"},
+                    "not-a-dict",
+                ],
+            }
+        )
+        assert [r.claim for r in decision.evidence_refs] == ["正常"]
+        assert decision.evidence_refs[0].source == "fundamental"

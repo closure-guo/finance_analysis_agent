@@ -301,6 +301,43 @@ def derive_output_budget(capability: Capability, requested: int | None = None) -
     return capability.max_output
 
 
+_RESUME_INSTRUCTION = "你正在续写一份分析报告，直接无缝继续输出剩余部分，不要重复以上已输出的内容。"
+
+
+def _estimate_tokens(text: str) -> int:
+    """正文 token 估算（续写预算派生用）：仅需近似值。"""
+    return max(1, len(text) // 4)
+
+
+def build_resume_kwargs(
+    request_kwargs: dict[str, Any],
+    prior_text: str,
+    progress_annotation: str | None = None,
+) -> dict[str, Any]:
+    """构造断点续写请求 kwargs（delta Task 1.1，design D1/D2）。
+
+    基于原 request_kwargs 克隆（外层 dict 与 messages 列表新建，内嵌
+    消息对象引用共享；本函数不突变内嵌对象）：messages 末尾合成 1 条
+    user 续写指令消息，content 布局为「进度标注（非 None 时在前）→
+    已生成内容尾部（prior_text 尾部 4000 字符，design D1 尾部注入基线，
+    供模型无缝续写）→ 续写指令」；max_tokens 取剩余配额
+    max(1, 原预算 - _estimate_tokens(完整 prior_text))（design D2：
+    第一次生成已消耗的配额）。其余 key（model/api_key/endpoint/超时）
+    原样保留。
+    """
+    out = dict(request_kwargs)
+    out["messages"] = list(request_kwargs.get("messages", []))
+    parts: list[str] = []
+    if progress_annotation:
+        parts.append(progress_annotation)
+    parts.append(f"已生成内容尾部：\n{prior_text[-4000:]}")
+    parts.append(_RESUME_INSTRUCTION)
+    out["messages"] = out["messages"] + [{"role": "user", "content": "\n\n".join(parts)}]
+    base_budget = int(request_kwargs.get("max_tokens") or 4096)
+    out["max_tokens"] = max(1, base_budget - _estimate_tokens(prior_text))
+    return out
+
+
 def normalize_exception(exc: Exception) -> LLMError:
     """litellm 异常 → typed error 归一化（delta Task 2.4）。
 
@@ -366,16 +403,36 @@ def guard_params_supported(
         )
 
 
+def _provider_options_key(profile: ModelProfile) -> str | None:
+    """识别 provider_options 归属的 registry schema key（§7.1）。
+
+    - deepseek 官方 prefix → ``deepseek``
+    - ark-glm：provider=openai 且（name 含 ``ark``——preset 名 ark-glm——
+      或 model 含 ``glm``——env/request 分支构造的 env:openai/glm-5.3）
+      → ``ark-glm``
+    - 其余 provider → None（schema 查无 → 不消费）
+    """
+    name = (profile.name or "").lower()
+    model = (profile.model or "").lower()
+    if profile.provider == "deepseek":
+        return "deepseek"
+    if profile.provider == "openai" and ("ark" in name or "glm" in model):
+        return "ark-glm"
+    return None
+
+
 def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     """provider_options 唯一消费点：校验并转为请求 kwargs（设计档案 §7.1）。
 
     registry schema 校验（非法值/未知 key → pydantic ValidationError）。
-    provider=="deepseek" 且 capability.extra_body_allowed 时产出：
-    - ``extra_body.thinking.type``：thinking 显式设置时携带
-    - ``reasoning_effort``：显式设置时携带
-    - ``suppress_temperature: True``：thinking=="enabled" 时携带 —— 内部
-      契约标志（非 litellm 参数），gateway 据此不发送 temperature
-      （deepseek thinking 模式拒收 temperature，对齐 legacy deep 分支）。
+    - deepseek（capability.extra_body_allowed 时）：
+      ``extra_body.thinking.type``（thinking 显式设置时携带）、
+      ``reasoning_effort``（显式设置时携带）、``suppress_temperature: True``
+      （thinking=="enabled" 时携带，adapter→gateway 内部契约标志，deepseek
+      thinking 模式拒收 temperature，对齐 legacy deep 分支）。
+    - ark-glm（provider=openai + name 含 ark / model 含 glm）：
+      仅产出 ``reasoning_effort`` 请求参数（官方 max/high/low 三档）；
+      thinking/suppress_temperature 是 deepseek 专属，不透传。
     其他 provider / 空 provider_options → ``{}``。
     """
     options = dict(getattr(profile, "provider_options", None) or {})
@@ -383,22 +440,30 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
         return {}
     from finance_agent.llm.registry import PROVIDER_OPTIONS_SCHEMAS
 
-    schema = PROVIDER_OPTIONS_SCHEMAS.get(profile.provider)
-    if schema is None:
+    key = _provider_options_key(profile)
+    if key is None or key not in PROVIDER_OPTIONS_SCHEMAS:
         return {}
-    validated = schema.model_validate(options)
-    if profile.provider != "deepseek" or not profile.capability.extra_body_allowed:
-        return {}
+    validated = PROVIDER_OPTIONS_SCHEMAS[key].model_validate(options)
     out: dict[str, Any] = {}
-    thinking = getattr(validated, "thinking", None)
     effort = getattr(validated, "reasoning_effort", None)
-    if thinking is not None:
-        out["extra_body"] = {"thinking": {"type": thinking}}
+    if key == "ark-glm":
+        # 实证（方舟 GLM-5.3）：顶层 reasoning_effort 被 litellm openai 路由
+        # 判 UnsupportedParamsError 拒绝；必须放 extra_body 才透传到端点
+        # （OpenAI 兼容扩展字段）。官方三档 max/high/low。
+        if effort is not None:
+            out["extra_body"] = {"reasoning_effort": effort}
+        return out
     if effort is not None:
         out["reasoning_effort"] = effort
-    # 内部契约标志：告知 gateway 不发送 temperature（非 litellm 参数）
-    if thinking == "enabled":
-        out["suppress_temperature"] = True
+    if key == "deepseek":
+        if not profile.capability.extra_body_allowed:
+            return {}
+        thinking = getattr(validated, "thinking", None)
+        if thinking is not None:
+            out["extra_body"] = {"thinking": {"type": thinking}}
+        # 内部契约标志：告知 gateway 不发送 temperature（非 litellm 参数）
+        if thinking == "enabled":
+            out["suppress_temperature"] = True
     return out
 
 

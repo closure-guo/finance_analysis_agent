@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from typing import Any
 
 # ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
 #
@@ -54,6 +56,7 @@ _STUB_TRADE_DECISION: dict = {
     "action": "hold",
     "confidence": 0.6,
     "reasoning": "STUB 交易决策：多因素均衡，建议持有观察（测试数据）",
+    "evidence_refs": [],
 }
 
 
@@ -174,6 +177,101 @@ def focus_hint(state: dict) -> str:
     return f"用户关注点: {focus}"
 
 
+# ── migrate-off-legacy-llm-shim Task 2：直连 gateway.complete_stream ──
+#
+# call_llm_streaming 不再经 legacy.call_llm_stream 薄壳，直接消费
+# gateway.complete_stream 的 CanonicalEvent 流：
+#   reasoning → ("thinking", ev.reasoning) → stream writer 实时转发
+#   text      → ("answer", ev.text)        → answer 拼接返回
+#   finished  → 忽略（不 yield）
+#   error     → 按 ev.finish_reason（typed 类名字符串，errors 模块内类名即
+#               finish_reason）经 getattr 查表还原为 typed error 后 raise
+#               （查不到 → UnknownLLMError）——对齐 legacy._ERROR_CLASS_BY_NAME。
+# 请求构造逐条复刻 gateway 合约（purpose=deep /
+# temperature=0.3 / max_tokens=65536（GLM 官方默认）/ 请求级 llm_config dict /
+# trace.name + metadata），截断翻倍至 131072（官方上限）重试 fallback 行为不变。
+
+_DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
+
+
+def _llm_model_for_name(llm_config: Any, quick: bool = False) -> str:
+    """trace 命名用 model 解析（镜像 legacy._llm_model_for_name）。"""
+    cfg_model = None
+    if isinstance(llm_config, dict):
+        cfg_model = llm_config.get("model")
+    elif llm_config is not None:
+        cfg_model = getattr(llm_config, "model", None)
+    return (
+        cfg_model or os.environ.get("LLM_QUICK_MODEL" if quick else "LLM_MODEL") or _DEFAULT_MODEL
+    )
+
+
+def _generation_metadata(
+    prompt_name: str | None,
+    prompt_version: str | int | None,
+    agent: str = "",
+    session_id: str | None = None,
+    stock_code: str | None = None,
+) -> dict:
+    """Langfuse generation metadata（复刻 legacy._generation_metadata）。
+
+    prompt 元数据 + agent/session/stock 过滤字段仅在显式提供时写入
+    （向后兼容约定，不污染 metadata 命名空间）。
+    """
+    md: dict = {}
+    if prompt_name:
+        md["prompt_name"] = prompt_name
+    if prompt_version is not None:
+        md["prompt_version"] = prompt_version
+    if agent:
+        md["agent"] = agent
+    if session_id:
+        md["session_id"] = session_id
+    if stock_code:
+        md["stock_code"] = stock_code
+    return md
+
+
+def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
+    """LLMConfig / dict → gateway 请求级 llm_config dict（复刻 legacy._request_config_dict）。
+
+    - 无 model → None（complete_stream 经 env/preset 解析）
+    - baseUrl 缺 → env LLM_BASE_URL；apiKey 缺 → llm_config.apiKey → api_key
+      参数 → LLM_API_KEY → DEEPSEEK_API_KEY（镜像 legacy 回退链）
+    - thinking / apiForm 仅在显式设置时携带
+    """
+    if isinstance(llm_config, dict):
+        model = llm_config.get("model")
+        base_url = llm_config.get("baseUrl")
+        key = llm_config.get("apiKey")
+        thinking = llm_config.get("thinking")
+        api_form = llm_config.get("apiForm")
+    elif llm_config is not None:
+        model = getattr(llm_config, "model", None)
+        base_url = getattr(llm_config, "baseUrl", None)
+        key = getattr(llm_config, "apiKey", None)
+        thinking = getattr(llm_config, "thinking", None)
+        api_form = getattr(llm_config, "apiForm", None)
+    else:
+        return None
+    if not model:
+        return None
+    cfg: dict = {"model": model}
+    effective_base = base_url or os.environ.get("LLM_BASE_URL", "")
+    if effective_base:
+        cfg["baseUrl"] = effective_base
+    effective_key = (
+        key or api_key or os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+    )
+    if effective_key:
+        cfg["apiKey"] = effective_key
+    if thinking:
+        cfg["thinking"] = thinking
+    if api_form:
+        cfg["apiForm"] = api_form
+    return cfg
+
+
 def call_llm_streaming(
     prompt: str,
     system: str = "",
@@ -186,19 +284,19 @@ def call_llm_streaming(
 ) -> str:
     """Like call_llm but streams thinking tokens via LangGraph custom stream writer.
 
-    Uses call_llm_stream to get real LLM reasoning_content (thinking) and answer.
-    Thinking tokens are forwarded to the LangGraph stream writer for real-time display.
-    Returns the complete answer string (same interface as call_llm).
+    直连 gateway.complete_stream 消费 CanonicalEvent（migrate-off-legacy-llm-shim
+    Task 2）：reasoning 事件经 stream writer 转发实时展示，text 事件拼接为
+    answer 返回（同一接口）。error 事件按 finish_reason（typed 类名字符串）
+    还原为 typed error 并 raise；finished 事件忽略。
 
-    llm_config（LLMConfig | None）透传给 call_llm_stream，实现请求级配置注入。
+    llm_config（LLMConfig | dict | None）经请求级 dict 注入（复刻
+    legacy._request_config_dict，实现请求级配置注入）。
 
-    prompt_name / prompt_version（ADR-0015 Task 4）：透传给 call_llm_stream，
-    经 metadata 挂到 Langfuse generation，兑现「Prompt 元数据可追溯」。
-
-    node_name 透传给 call_llm_stream 的 agent 参数（Langfuse generation 命名），
-    stock_code 原样透传（Langfuse 过滤字段）。
+    prompt_name / prompt_version（ADR-0015 Task 4）与 node_name / stock_code
+    经 trace.metadata 挂到 Langfuse generation（Prompt 元数据可追溯 +
+    Langfuse 过滤字段）。
     """
-    from finance_agent.llm import call_llm_stream
+    from finance_agent.llm.gateway import complete_stream
 
     try:
         from langgraph.config import get_stream_writer
@@ -231,6 +329,18 @@ def call_llm_streaming(
             time.sleep(delay)
         return _stub_pipeline_answer(node_name)
 
+    # 请求构造（复刻 legacy.call_llm_stream 薄壳：system+prompt → messages，
+    # llm_config/api_key → 请求级 dict，node_name → trace.name，metadata 过滤字段）。
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    cfg_dict = _request_config_dict(llm_config, api_key)
+    trace = {
+        "name": node_name or f"litellm:{_llm_model_for_name(llm_config)}",
+        "metadata": _generation_metadata(prompt_name, prompt_version, node_name, None, stock_code),
+    }
+
     # retryable LLMError（OutputTruncated/EmptyLLMOutput/超时/限流）重试一次：
     # gateway 按 Task 2.2 合同把截断/空输出归一为 typed error，但管线节点直调
     # 本函数无兜底（evals 跑批暴露：一次 finish_reason=length 炸整跑批）。
@@ -238,32 +348,44 @@ def call_llm_streaming(
     # 截断特例（Task 2.2「预算复核」）：重试时预算加倍（16384→32768）——
     # reasoning 与正文共享配额的端点（方舟 GLM，incident 017 同族）16384 对
     # 长 JSON 节点不够，原预算复读大概率再截。
+    from finance_agent.llm import errors as _llm_errors
     from finance_agent.llm.errors import LLMError, OutputTruncatedError
 
+    # complete_stream 基线参数：对齐 gateway 合约（purpose=deep / temperature=0.3 /
+    # max_tokens=65536——GLM 官方默认，deep 长 JSON 节点 reasoning 与正文共享配额，
+    # 16k 在长节点会 reasoning 吃空触发 length 截断；65536 给足余量）。
+    _call_base: dict = {
+        "purpose": "deep",
+        "temperature": 0.3,
+        "max_tokens": 65536,
+        "llm_config": cfg_dict,
+        "trace": trace,
+    }
     escalate: dict = {}
     for attempt in range(2):
         answer_parts: list[str] = []
         try:
-            for kind, text in call_llm_stream(
-                prompt,
-                system=system,
-                api_key=api_key,
-                llm_config=llm_config,
-                prompt_name=prompt_name,
-                prompt_version=prompt_version,
-                agent=node_name,
-                stock_code=stock_code,
-                **escalate,
-            ):
-                if kind == "thinking" and writer:
-                    writer({"type": "thinking", "node": node_name, "token": text})
-                elif kind == "answer":
-                    answer_parts.append(text)
+            # _call_base + escalate 合并下发（escalate 覆盖 max_tokens：
+            # 截断翻倍至官方上限 131072）。不能在调用处裸拼 **_call_base, **escalate——
+            # 两处同键（max_tokens）会抛 TypeError，须先经 dict display 合并。
+            for ev in complete_stream(messages, **{**_call_base, **escalate}):
+                if ev.kind == "reasoning" and writer:
+                    writer({"type": "thinking", "node": node_name, "token": ev.reasoning})
+                elif ev.kind == "text":
+                    answer_parts.append(ev.text)
+                elif ev.kind == "error":
+                    # error 事件 finish_reason 是 typed 错误类名字符串（errors
+                    # 模块内类名即 finish_reason），getattr 查表还原；查不到 →
+                    # UnknownLLMError（对齐 legacy._ERROR_CLASS_BY_NAME 缺省）。
+                    err_cls = getattr(
+                        _llm_errors, ev.finish_reason or "", _llm_errors.UnknownLLMError
+                    )
+                    raise err_cls(ev.raw.get("error") or ev.finish_reason or "LLM error")
             return "".join(answer_parts)
         except OutputTruncatedError:
             if attempt == 1:
                 raise
-            escalate = {"max_tokens": 32768}  # 预算复核：截断→加倍重试
+            escalate = {"max_tokens": 131072}  # 预算复核：截断→翻倍至官方上限
         except LLMError as exc:
             if not exc.retryable or attempt == 1:
                 raise

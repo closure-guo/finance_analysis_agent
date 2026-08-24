@@ -1,7 +1,7 @@
 """Dataset 建库(spec Requirement「评估 Dataset 与覆盖矩阵」)。
 
 幂等:以 (input.query, input.mode) 为去重键,已存在 item 跳过不覆盖。
-langfuse 未配置时返回 error,不抛异常(CI/本地可无 langfuse 跑 --local)。
+langfuse 未配置时返回 error,不抛异常(seed 仅建库;实验一律经 run_experiment 执行)。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ _ITEMS_PATH = Path(__file__).parent / "dataset_items.json"
 
 
 def load_items(path: Path | None = None) -> list[dict]:
-    """读取 dataset items(seed 与 --local 实验共用的 source of truth)。"""
+    """读取 dataset items(seed 建库用的 source of truth)。"""
     items: list[dict] = json.loads((path or _ITEMS_PATH).read_text(encoding="utf-8"))
     return items
 

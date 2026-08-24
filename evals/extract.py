@@ -56,8 +56,33 @@ def _summarize_analyst_reports(reports: dict) -> str:
         text = rep.get("summary") or rep.get("conclusion") or ""
         if not text:
             text = json.dumps(rep, ensure_ascii=False)[:500]
+        claims = _format_claims(rep.get("claims") or [])
+        if claims:
+            text = f"{text}\n论据: {claims}"
         parts.append(f"【{name}】{text}")
     return "\n".join(parts)
+
+
+def _format_claims(claims: list) -> str:
+    """把报告 Claim 列表压缩成 judge 可核对的一行（论据 + 数值）。
+
+    judge 需要具体数值核对 evidence_refs 的 claim（delta 根因 2：摘要
+    抹掉数值导致「无中生有」误判）。interpretation 缺失时退回 stated_value。
+    """
+    items: list[str] = []
+    for c in claims:
+        c = _as_dict(c)
+        if not c:
+            continue
+        interp = c.get("interpretation", "")
+        value = c.get("stated_value", "")
+        if interp and value not in ("", None):
+            items.append(f"{interp}({value})")
+        elif interp:
+            items.append(interp)
+        elif value not in ("", None):
+            items.append(str(value))
+    return "; ".join(items)
 
 
 def _summarize_debate(history: list) -> str:

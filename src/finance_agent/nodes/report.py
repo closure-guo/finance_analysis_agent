@@ -13,9 +13,10 @@ import contextlib
 import os
 import tempfile
 from datetime import datetime
+from typing import Any
 
 from finance_agent.charts import collect_chart_data, generate_all_charts
-from finance_agent.llm import call_llm
+from finance_agent.llm.gateway import complete_text
 from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
 
 # ── focus -> 结构化标签（规则驱动，可测试） ──
@@ -99,6 +100,48 @@ _FUND_MANAGER_ANNOTATIONS: dict[str, str] = {
 # ── 研究聚焦摘要（LLM 生成，有兜底） ──
 
 
+def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
+    """请求级 llm_config（dict / LLMConfig）→ gateway 请求级 dict。
+
+    复刻 legacy._request_config_dict 语义（5.1-B2 薄壳适配）：
+    - 无 model → None（complete_text 经 env/preset 解析）
+    - baseUrl 缺 → env LLM_BASE_URL；apiKey 缺 → cfg.apiKey → api_key 参数
+      → LLM_API_KEY → DEEPSEEK_API_KEY（镜像 legacy _build_kwargs 回退链）
+    - thinking 仅在显式设置时携带
+    """
+    if isinstance(llm_config, dict):
+        model = llm_config.get("model")
+        base_url = llm_config.get("baseUrl")
+        key = llm_config.get("apiKey")
+        thinking = llm_config.get("thinking")
+        api_form = llm_config.get("apiForm")
+    elif llm_config is not None:
+        # LLMConfig dataclass（camelCase 字段）
+        model = getattr(llm_config, "model", None)
+        base_url = getattr(llm_config, "baseUrl", None)
+        key = getattr(llm_config, "apiKey", None)
+        thinking = getattr(llm_config, "thinking", None)
+        api_form = getattr(llm_config, "apiForm", None)
+    else:
+        return None
+    if not model:
+        return None
+    cfg: dict = {"model": model}
+    effective_base = base_url or os.environ.get("LLM_BASE_URL", "")
+    if effective_base:
+        cfg["baseUrl"] = effective_base
+    effective_key = (
+        key or api_key or os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+    )
+    if effective_key:
+        cfg["apiKey"] = effective_key
+    if thinking:
+        cfg["thinking"] = thinking
+    if api_form:
+        cfg["apiForm"] = api_form
+    return cfg
+
+
 def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
     """用 LLM 生成围绕用户关注点的开篇摘要，失败时回退到结构化拼接。"""
     api_key = state.get("api_key")
@@ -141,15 +184,16 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
         f"各层分析产出:\n" + "\n".join(materials)
     )
     with contextlib.suppress(Exception):
-        resp = call_llm(
-            prompt,
-            system=system,
-            api_key=api_key,
+        text, meta = complete_text(
+            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            purpose="quick",
             max_tokens=400,
-            quick=True,
-            llm_config=state.get("llm_config"),
-            agent="report",
+            temperature=0.3,
+            llm_config=_request_config_dict(state.get("llm_config"), api_key),
+            trace={"name": "report", "metadata": {"agent": "report"}},
         )
+        # legacy 行为保留：content 为空时回退 reasoning_content
+        resp = text or meta.get("raw_reasoning") or ""
         resp = (resp or "").strip()
         if resp:
             return resp

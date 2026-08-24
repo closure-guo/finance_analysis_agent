@@ -302,7 +302,7 @@ class TestApiFormPrefix:
         assert profile.capability.tools != "none"  # deepseek 静态表支持工具
 
     def test_merge_preserves_max_output(self):
-        """合并不回退 capability 特化 max_output（ark-glm 16384）。"""
+        """合并不回退 capability 特化 max_output（ark-glm 65536）。"""
         env = {
             "LLM_MODEL": "glm-5.2",
             "LLM_BASE_URL": "https://ark.example/api/v3",
@@ -318,5 +318,5 @@ class TestApiFormPrefix:
         )
         profile = resolve_profile(purpose="deep", _env=env)
         assert profile.model == "openai/glm-5.2"
-        assert profile.capability.max_output == 16384
+        assert profile.capability.max_output == 65536
         assert profile.probe_required is False

@@ -37,6 +37,11 @@ class TestRubricContract:
         assert "Fund Manager" in RUBRICS["consistency"]
         assert "Risk Judge" in RUBRICS["consistency"]
 
+    def test_decision_grounding_rubric_mentions_evidence_refs(self):
+        rubric = RUBRICS["decision_grounding"]
+        assert "evidence_refs" in rubric
+        assert "无引用" in rubric or "按以下原规则" in rubric
+
 
 class TestRunJudge:
     @patch(_GATEWAY)

@@ -51,13 +51,13 @@ class TestClassifyOutcome:
 
 class TestOutputBudget:
     def test_budget_from_capability(self):
-        """预算从 capability 派生：方舟 GLM（reasoning_forced）16384，普通 8192。"""
+        """预算从 capability 派生：方舟 GLM（reasoning_forced）65536，普通 8192。"""
         from finance_agent.llm.adapters.litellm_adapter import (
             capability_for_model,
             derive_output_budget,
         )
 
-        assert derive_output_budget(capability_for_model("openai/glm-5.2")) == 16384
+        assert derive_output_budget(capability_for_model("openai/glm-5.2")) == 65536
         assert derive_output_budget(capability_for_model("openai/gpt-4o")) == 8192
 
     def test_explicit_request_wins(self):
