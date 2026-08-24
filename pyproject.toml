@@ -20,6 +20,7 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.30.0",
     "apscheduler>=3.11.3",
+    "weasyprint>=62.0",
 ]
 
 [tool.uv]

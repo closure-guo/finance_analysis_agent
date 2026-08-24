@@ -3,13 +3,12 @@
 from unittest.mock import patch
 
 
-@patch("finance_agent.nodes.output.markdown_to_docx")
-@patch("finance_agent.nodes.output.markdown_to_pptx")
-def test_generate_file_returns_paths(mock_pptx, mock_docx, tmp_path):
+@patch("finance_agent.export.service.markdown_to_docx")
+@patch("finance_agent.export.service.markdown_to_pptx")
+def test_generate_file_returns_paths(mock_pptx, mock_docx, tmp_path, monkeypatch):
     from finance_agent.nodes.output import generate_file
 
-    mock_docx.return_value = str(tmp_path / "test.docx")
-    mock_pptx.return_value = str(tmp_path / "test.pptx")
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
 
     state = {
         "final_report": "# Report",
@@ -34,8 +33,8 @@ def test_generate_file_empty_report():
     assert result["file_paths"] is None
 
 
-@patch("finance_agent.nodes.output.markdown_to_docx")
-@patch("finance_agent.nodes.output.markdown_to_pptx")
+@patch("finance_agent.export.service.markdown_to_docx")
+@patch("finance_agent.export.service.markdown_to_pptx")
 def test_generate_file_creates_nested_reports_dir(mock_pptx, mock_docx, monkeypatch, tmp_path):
     """REPORTS_DIR 的父目录不存在时，generate_file 应递归创建而非崩溃（issue #46）。
 

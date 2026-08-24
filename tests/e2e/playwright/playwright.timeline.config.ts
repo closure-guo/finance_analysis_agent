@@ -25,6 +25,8 @@ export default defineConfig({
     'resume-pipeline-across-sessions.spec.ts',
     'persist-full-session-timeline.spec.ts',
     'harden-react-path-resilience.spec.ts',
+    // 报告导出抽屉：依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175）
+    'report-export.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },

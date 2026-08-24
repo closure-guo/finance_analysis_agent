@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
 import { ChartsSection } from './Charts'
+import { ReportFileDrawer } from './ReportFileDrawer'
 import { SearchBanner } from './SearchBanner'
 import { nodeDisplayName } from './timeline'
 import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations } from './eta'
@@ -241,6 +242,14 @@ export default function App() {
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
   // 临时警告提示（如"该会话正在生成中"）
   const [warningMessage, setWarningMessage] = useState<string | null>(null)
+  // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
+  const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
+  // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
+  // 避免抽屉仍显示旧会话的下载按钮、点击导出旧会话文件。currentSessionId 为 null（新建
+  // 分析/首屏）时同样置 null（幂等，无副作用）。
+  useEffect(() => {
+    setDrawerMessage(null)
+  }, [currentSessionId])
   const showWarning = useCallback((text: string) => {
     setWarningMessage(text)
     setTimeout(() => setWarningMessage(null), 3000)
@@ -700,7 +709,7 @@ export default function App() {
                   return true;
                 })
                 .map(msg => (
-                  <MessageRenderer key={msg.id} msg={msg} />
+                  <MessageRenderer key={msg.id} msg={msg} onOpenFiles={setDrawerMessage} />
                 ))}
             </div>
 
@@ -767,6 +776,11 @@ export default function App() {
           onDeleteProfile={handleDeleteProfile}
           onClose={() => setShowSettings(false)}
         />
+      )}
+
+      {/* 报告导出抽屉（「全部文件」横幅入口） */}
+      {drawerMessage && (
+        <ReportFileDrawer drawerMessage={drawerMessage} onClose={() => setDrawerMessage(null)} />
       )}
     </>
   )
@@ -1122,7 +1136,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
 }
 
 // ── Message Renderer ──
-function MessageRenderer({ msg }: { msg: UIMessage }) {
+function MessageRenderer({ msg, onOpenFiles }: { msg: UIMessage; onOpenFiles?: (msg: UIMessage) => void }) {
   if (msg.type === 'user') {
     return (
       <div className="flex justify-end animate-slide-in">
@@ -1252,7 +1266,7 @@ function MessageRenderer({ msg }: { msg: UIMessage }) {
   }
 
   if (msg.type === 'report') {
-    return <ReportCard msg={msg} />
+    return <ReportCard msg={msg} onOpenFiles={onOpenFiles} />
   }
 
   return null
@@ -1574,7 +1588,7 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Report Card ──
-function ReportCard({ msg }: { msg: UIMessage }) {
+function ReportCard({ msg, onOpenFiles }: { msg: UIMessage; onOpenFiles?: (msg: UIMessage) => void }) {
   return (
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
@@ -1607,26 +1621,18 @@ function ReportCard({ msg }: { msg: UIMessage }) {
                     <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · {(msg.durationMs ?? 0) > 0 ? `耗时 ${Math.round((msg.durationMs ?? 0) / 1000)}s` : '耗时未知'}</p>
                   </div>
                   <div className="flex gap-2">
-                    {msg.filePaths?.docx && (
-                      <a href={`/api/files/${msg.filePaths.docx.split(/[\\/]/).pop()}`} download
-                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors" title="导出 Word"
-                        style={{ background: 'var(--bg-base-secondary)', color: 'var(--icon-secondary)' }}
-                        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
-                        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-base-secondary)'}}
-                      >
-                        <i className="fas fa-file-word text-xs"></i>
-                      </a>
-                    )}
-                    {msg.filePaths?.pptx && (
-                      <a href={`/api/files/${msg.filePaths.pptx.split(/[\\/]/).pop()}`} download
-                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors" title="导出 PPT"
-                        style={{ background: 'var(--bg-base-secondary)', color: 'var(--icon-secondary)' }}
-                        onMouseEnter={(e) => {e.currentTarget.style.background = 'var(--bg-overlay-l1)'}}
-                        onMouseLeave={(e) => {e.currentTarget.style.background = 'var(--bg-base-secondary)'}}
-                      >
-                        <i className="fas fa-file-powerpoint text-xs"></i>
-                      </a>
-                    )}
+                    <button
+                      onClick={() => onOpenFiles?.(msg)}
+                      data-testid="open-files-banner"
+                      className="h-8 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium transition-colors"
+                      title="查看并导出文件"
+                      style={{ background: 'var(--bg-base-secondary)', color: 'var(--icon-secondary)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-base-secondary)' }}
+                    >
+                      <i className="fas fa-folder-open text-xs"></i>
+                      <span>全部文件</span>
+                    </button>
                   </div>
                 </div>
               </div>
