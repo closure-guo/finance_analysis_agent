@@ -53,13 +53,14 @@ async def test_live_reasoning_streamed_in_thinking_mode():
 
 
 def test_live_tool_calls_returned():
-    """真实 DeepSeek tool calling：call_llm_with_tools 返回结构含 tool_calls。
+    """真实 DeepSeek tool calling：complete_with_tools 返回结构含 tool_calls。
 
-    对应 spec「LLM Generation 工具调用决策可观测」：call_llm_with_tools 走
-    非流式 litellm.completion（disable_thinking），返回完整 response，
-    tool_calls 在 choices[0].message.tool_calls。
+    对应 spec「LLM Generation 工具调用决策可观测」：complete_with_tools 走
+    非流式 litellm.completion，返回完整 response，tool_calls 在
+    choices[0].message.tool_calls（migrate-off-legacy-llm-shim Task 3：
+    原 call_llm_with_tools 直调 gateway.complete_with_tools）。
     """
-    from finance_agent.llm import call_llm_with_tools
+    from finance_agent.llm.gateway import complete_with_tools
 
     tools = [
         {
@@ -78,12 +79,16 @@ def test_live_tool_calls_returned():
         }
     ]
 
-    resp = call_llm_with_tools(
-        prompt="贵州茅台（600519）现在多少钱？请调用工具查询。",
+    # 请求级 llm_config：复刻 legacy._request_config_dict 语义（baseUrl 回退 env）
+    llm_config: dict = {"model": _LIVE_MODEL, "apiKey": os.environ["DEEPSEEK_API_KEY"]}
+    if os.environ.get("LLM_BASE_URL"):
+        llm_config["baseUrl"] = os.environ["LLM_BASE_URL"]
+
+    resp = complete_with_tools(
+        [{"role": "user", "content": "贵州茅台（600519）现在多少钱？请调用工具查询。"}],
         tools=tools,
         tool_choice="auto",
-        model=_LIVE_MODEL,
-        api_key=os.environ["DEEPSEEK_API_KEY"],
+        llm_config=llm_config,
     )
 
     message = resp.choices[0].message

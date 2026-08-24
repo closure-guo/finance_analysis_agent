@@ -61,18 +61,26 @@ RUBRICS: dict[str, str] = {
 1 = 单方输出或内容空洞,无实质辩论
 """
     + _JSON_TAIL,
-    "decision_grounding": """你是投资决策依据评审专家。
+    "decision_grounding": (
+        """你是投资决策依据评审专家。
 【分析师结论】{{analyst_reports}}
 【Research Manager 结论】{{research_manager_decision}}
 【交易决策】{{trade_decision}}
 评估交易决策的论据是否有前文支撑:
+若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对：
+- claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager）的结论中找到出处，
+  且 reasoning 的主要论据都能在 evidence_refs 中找到对应项 → 4-5 分；
+- source 与论据对不上、claim 数值在来源中不存在（无中生有）、或 evidence_refs 缺失
+  reasoning 中大量论据的引用 → 1-2 分。
+无 evidence_refs 时按以下原规则从自由文本推断（不因缺字段报错）:
 5 = 决策的每条论据都能在分析师结论/辩论结论中找到出处
 4 = 主要论据有出处,个别细节无明确支撑
 3 = 部分论据有出处,存在未论证的跳跃
 2 = 论据与前文关联薄弱,或与前文结论有张力未解释
 1 = 决策与前文矛盾,或论据无中生有
 """
-    + _JSON_TAIL,
+        + _JSON_TAIL
+    ),
     "consistency": """你是投资报告一致性评审专家。
 【分析师章节结论】{{analyst_reports}}
 【Research Manager 结论】{{research_manager_decision}}

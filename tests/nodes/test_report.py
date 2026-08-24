@@ -118,8 +118,8 @@ class TestGenerateReport:
         """focus 命中维度时：重点分析师前置并标星，非重点折叠，出现研究聚焦摘要。"""
         from finance_agent.nodes import report as report_mod
 
-        # 打桩 LLM 摘要调用，避免真实请求
-        monkeypatch.setattr(report_mod, "call_llm", lambda *a, **k: "围绕估值的摘要文本")
+        # 打桩 LLM 摘要调用（complete_text 返回 (text, metadata) 元组），避免真实请求
+        monkeypatch.setattr(report_mod, "complete_text", lambda *a, **k: ("围绕估值的摘要文本", {}))
 
         state = {
             "stock_name": "贵州茅台",

@@ -84,7 +84,9 @@ def _build_risk_context(state: dict) -> str:
 
     # Trader 方案
     plan = state.get("trader_plan") or {}
-    if isinstance(plan, dict):
+    if hasattr(plan, "model_dump"):
+        plan = plan.model_dump()
+    if isinstance(plan, dict) and plan:
         sections.append(f"交易方案: {json.dumps(plan, ensure_ascii=False)}")
 
     # 风控指标

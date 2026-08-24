@@ -6,7 +6,7 @@ import json
 import re
 
 from finance_agent.app_search import search_stocks
-from finance_agent.llm import call_llm
+from finance_agent.llm.gateway import complete_text
 
 
 def resolve_stock(query: str, api_key: str | None = None) -> dict | None:
@@ -74,9 +74,17 @@ def _resolve_with_llm(query: str, api_key: str | None = None) -> dict | None:
 - 不要编造不存在的股票代码"""
 
     try:
-        resp = call_llm(
-            query, system=system, api_key=api_key, max_tokens=100, agent="intent_parser"
+        text, meta = complete_text(
+            [{"role": "system", "content": system}, {"role": "user", "content": query}],
+            purpose="deep",
+            max_tokens=100,
+            temperature=0.3,
+            # 无 llm_config：legacy._request_config_dict(None, api_key) 返回 None
+            llm_config=None,
+            trace={"name": "intent_parser", "metadata": {"agent": "intent_parser"}},
         )
+        # legacy 行为保留：content 为空时回退 reasoning_content
+        resp = text or meta.get("raw_reasoning") or ""
         # Extract JSON from response
         json_match = re.search(r"\{[^}]+\}", resp)
         if json_match:

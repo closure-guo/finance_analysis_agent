@@ -99,3 +99,24 @@ class TestRiskFieldValidation:
         )
         with pytest.raises(ValidationError):
             risk_judge({"trader_plan": {}, "risk_debate_history": []})
+
+
+class TestRiskContextCarriesTraderPlan:
+    """_build_risk_context 必须携带 trader 方案（含 evidence_refs）——final review F1。"""
+
+    def test_risk_judge_context_contains_trader_plan_when_pydantic(self):
+        from finance_agent.models import TradeDecision
+        from finance_agent.nodes.risk import _build_risk_context
+
+        plan = TradeDecision.model_validate(
+            {
+                "action": "buy",
+                "confidence": 0.75,
+                "reasoning": "理由",
+                "evidence_refs": [{"claim": "ROE 3.4%", "source": "fundamental"}],
+            }
+        )
+        context = _build_risk_context({"trader_plan": plan})
+        assert "交易方案" in context
+        assert "evidence_refs" in context
+        assert "fundamental" in context

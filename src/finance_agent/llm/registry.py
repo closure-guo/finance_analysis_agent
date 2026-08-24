@@ -19,8 +19,8 @@ from finance_agent.llm.types import Capability, ModelProfile
 class DeepSeekOptions(BaseModel):
     """deepseek provider_options schema（设计档案 §7.1 示例）。
 
-    pydantic v2 默认 ignore 未知 key——本 schema 显式 extra="forbid"
-    拒绝（未知配置项必须显式报错，禁止静默吞掉）。
+    pydantic v2 默认 ignore 未知 key——本 schema 显式 extra="forbid" 拒绝
+    （未知配置项必须显式报错，禁止静默吞掉）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -29,19 +29,35 @@ class DeepSeekOptions(BaseModel):
     reasoning_effort: Literal["low", "high", "max"] | None = None
 
 
+class ArkGLMOptions(BaseModel):
+    """ark-glm（方舟 GLM-5.3）provider_options schema。
+
+    docs.bigmodel.cn：GLM-5.3 reasoning_effort 仅 max/high/low 三档，
+    官方默认 max；thinking 强制开启（无开关入口，勿配置）。显式
+    extra="forbid" 拒绝未知配置项（如 deepseek 专属 thinking）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reasoning_effort: Literal["max", "high", "low"] | None = None
+
+
 # provider_options 校验 schema（§7.1 registry 静态三件套之一）
 PROVIDER_OPTIONS_SCHEMAS: dict[str, type[BaseModel]] = {
     "deepseek": DeepSeekOptions,
+    "ark-glm": ArkGLMOptions,
 }
 
 # provider 静态默认 options（对齐 legacy deep 分支行为）
 DEFAULT_PROVIDER_OPTIONS: dict[str, dict] = {
     "deepseek": {"thinking": "enabled", "reasoning_effort": "max"},
+    "ark-glm": {"reasoning_effort": "max"},
 }
 
 # 请求级 llm_config 允许覆盖的白名单；未登记 provider 请求级不可覆盖
 REQUEST_OVERRIDABLE: dict[str, set[str]] = {
     "deepseek": {"thinking", "reasoning_effort"},
+    "ark-glm": {"reasoning_effort"},
 }
 
 _NO_REASONING = {
@@ -102,10 +118,11 @@ _PRESETS: dict[str, ModelProfile] = {
             reasoning_forced=True,
             # 方舟 GLM 支持函数调用 / tool_choice=required（force_tool ReAct 轮）
             tool_choice_required=True,
-            # reasoning 与正文共享配额，预算必须覆盖 reasoning 峰值（incident 017）
-            max_output=16384,
+            # reasoning 与正文共享配额，预算必须覆盖 reasoning 峰值（incident 017）；
+            # 官方默认 max_tokens=65536（最大 131072，docs.bigmodel.cn）
+            max_output=65536,
         ),
-        default_params={"max_tokens": 16384},
+        default_params={"max_tokens": 65536},
     ),
     "openai-compatible": ModelProfile(
         name="openai-compatible",

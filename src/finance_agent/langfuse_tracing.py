@@ -55,6 +55,10 @@ def get_callback_handler():
 
     供图调用边界使用：Send() 扇出会自动把 callback 传播到并行节点，
     使 5 层管线拓扑在 Langfuse 里显示为 span 树（节点骨架）。
+
+    langchain 为可选依赖（仅 langchain-core 时 graph 可跑，但 langfuse
+    的 CallbackHandler 强依赖完整 langchain）——缺失时静默降级返回 None，
+    只留 DEBUG 记录（WARNING 级 exc_info 刷屏会在每次 graph 调用污染日志）。
     """
     client = get_langfuse()
     if client is None:
@@ -63,6 +67,11 @@ def get_callback_handler():
         from langfuse.langchain import CallbackHandler
 
         return CallbackHandler()
+    except ModuleNotFoundError:
+        logging.getLogger("finance_agent.langfuse").debug(
+            "Langfuse CallbackHandler 不可用（缺 langchain 可选依赖），静默降级为 None"
+        )
+        return None
     except Exception:
         logging.getLogger("finance_agent.langfuse").warning(
             "Langfuse CallbackHandler 创建失败", exc_info=True
