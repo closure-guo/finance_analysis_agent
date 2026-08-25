@@ -336,6 +336,52 @@ def append_session_event(session_id: str, event: dict) -> int:
     raise lastError if lastError else RuntimeError("append_session_event failed")
 
 
+def append_session_events(session_id: str, events: list[dict]) -> list[int]:
+    """批量写入多个 SSE 事件到事件日志，返回分配的 seq 列表（会话内从 1 单调递增）。
+
+    语义与 append_session_event 一致（seq 原子分配 + 锁竞争重试），区别是
+    整批共用一个连接/事务：单条一次事务在 Windows Docker 卷上实测 ~76ms
+    （fsync 主导），高频 thinking_token 逐条落库会把消费端限速到事件积压
+    （线上 601700 深研会话永远 running 的根因）。批量合并 fsync 后吞吐
+    提升一个数量级以上，且「先落库再 fan-out」契约由调用方保持。
+    """
+    if not events:
+        return []
+    payload = [
+        (session_id, json.dumps(ev, ensure_ascii=False, default=str), datetime.now().isoformat())
+        for ev in events
+    ]
+    lastError: Exception | None = None
+
+    for _attempt in range(_EVENT_APPEND_MAX_RETRIES):
+        conn = _get_db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS base FROM session_events WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            base = int(row["base"])
+            conn.executemany(
+                "INSERT INTO session_events (session_id, seq, event_json, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                [(sid, base + i + 1, js, ts) for i, (sid, js, ts) in enumerate(payload)],
+            )
+            conn.commit()
+            return list(range(base + 1, base + 1 + len(payload)))
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as e:
+            lastError = e
+            with contextlib.suppress(Exception):
+                conn.rollback()
+            time.sleep(_EVENT_APPEND_RETRY_SLEEP)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+
+    logger.error("append_session_events 重试耗尽，%d 条事件丢失: %s", len(events), lastError)
+    raise lastError if lastError else RuntimeError("append_session_events failed")
+
+
 def list_session_events(session_id: str, after_seq: int = 0) -> list[dict]:
     """返回会话中 seq > after_seq 的事件列表，按 seq 升序。
 
