@@ -8,7 +8,7 @@
 
 ### Requirement: 分析师反幻觉硬规则
 
-每个分析师提示词（fundamental、macro、technical、sentiment）MUST 包含反幻觉硬规则段，要求 LLM 仅基于输入数据推理，以数据最新日期为"现在"，不得编造数据。
+每个分析师提示词（fundamental、macro、technical、sentiment）MUST 包含反幻觉硬规则段，要求 LLM 仅基于输入数据推理，以数据最新日期为"现在"，不得编造数据；各分析师方法论 MUST 体现周期感知与数据时效意识。
 
 #### Scenario: 分析师输出基于输入数据
 
@@ -22,6 +22,13 @@
 - **WHEN** 分析师收到的输入数据缺失或不足以支持某项分析
 - **THEN** 分析师 MUST 在报告中显式标注数据不足
 - **AND** MUST NOT 编造缺失数据填补分析
+
+#### Scenario: 分析师方法论周期感知
+
+- **WHEN** 加载 fundamental_analyst 提示词
+- **THEN** 模板中 ROE/负债率等阈值表述为"同业相对 + 周期调整"语义（如"与同业中位数对比并按当前利率/通胀环境调整"），而非孤立绝对值
+- **AND** 加载 technical_analyst 提示词时模板包含"强趋势中 RSI/KDJ 可能钝化、以 MA 趋势为主"类提示
+- **AND** 加载 macro_analyst 提示词时模板包含"M1/M2 剪刀差判读"与"数据滞后时标注时效并降级结论"类提示
 
 ### Requirement: 辩论者对抗性指令
 
@@ -83,6 +90,12 @@ research_manager 提示词 MUST 要求 LLM 给出明确的看多/看空/中性�
 - **WHEN** 加载 report.py 摘要 prompt 或 deep_mode 提示词
 - **THEN** 模板中包含"仅使用所提供材料中的数据"约束
 - **AND** 模板中包含"不得引入材料外/工具输出外的数值"约束
+
+#### Scenario: 摘要不得引用过期宏观数据作为最新值
+
+- **WHEN** 管线上游宏观数据（PMI/CPI）最新日期与当前日期相差超过 3 个月
+- **THEN** 摘要/分析 MUST 标注该指标数据时效滞后，不得将其表述为当前最新状态
+- **AND** 相关结论 MUST 降低置信度或明示基于滞后数据
 
 ### Requirement: 股票解析收敛单一实现
 
