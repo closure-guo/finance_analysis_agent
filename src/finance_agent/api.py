@@ -1035,6 +1035,7 @@ def _run_graph_streaming(
                     agent_process=agent_process,
                     analyst_summaries=analyst_summaries,
                     duration_ms=duration_ms,
+                    file_paths=file_paths,
                     status="completed",
                 )
                 # 旁路落库批准的 TradeDecision(失败仅 ERROR,不阻断报告)
