@@ -793,6 +793,31 @@ async def stream_session(session_id: str, request: Request):
 # ── Graph streaming (encapsulated as a reusable tool) ──
 
 
+def _report_ready_event(
+    analysis_id: str,
+    session_id: str,
+    report_markdown: str,
+    chart_data: dict,
+    file_paths: dict,
+    stock_code: str,
+    stock_name: str,
+    duration_ms: int,
+) -> dict:
+    """构造 report_ready SSE 事件载荷（供 _run_graph_streaming 下发）。"""
+    return {
+        "type": "report_ready",
+        "analysis_id": analysis_id,
+        "session_id": session_id,
+        "report_markdown": report_markdown,
+        "chart_data": chart_data,
+        "file_paths": file_paths,
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "duration_ms": duration_ms,
+        "timestamp": _now(),
+    }
+
+
 def _run_graph_streaming(
     stock_code: str,
     stock_name: str,
@@ -1016,17 +1041,16 @@ def _run_graph_streaming(
                 _persist_decision_log(accumulated, session_id, stock_code, stock_name_final)
 
                 yield _sse(
-                    {
-                        "type": "report_ready",
-                        "analysis_id": analysis_id,
-                        "session_id": session_id,
-                        "report_markdown": report_md,
-                        "chart_data": accumulated.get("chart_data") or {},
-                        "file_paths": file_paths,
-                        "stock_name": stock_name_final,
-                        "duration_ms": duration_ms,
-                        "timestamp": _now(),
-                    }
+                    _report_ready_event(
+                        analysis_id,
+                        session_id,
+                        report_md,
+                        accumulated.get("chart_data") or {},
+                        file_paths,
+                        stock_code,
+                        stock_name_final,
+                        duration_ms,
+                    )
                 )
 
     except Exception as e:
