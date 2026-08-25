@@ -27,6 +27,7 @@
 | 017  | 2026-08-16 | [方舟 GLM-5.2 reasoning 吃满 max_tokens 配额 — 截断/空输出炸行](017-ark-glm-reasoning-token-starvation.md) | 已修复 |
 | 018  | 2026-08-17 | [LLM Provider 迁移连环兼容性故障 - 7 bug 全景与 Gateway 根治重构](018-llm-provider-migration-gateway-refactor.md) | 已修复(表层)/重构落地 |
 | 019  | 2026-08-24 | [LLM 输出截断治理 — 静默截断、重试空转与 reasoning 配额吃空](019-llm-output-truncation-governance.md) | 阶段修复 |
+| 020  | 2026-08-25 | [深研管线「假卡死」— 事件落库限速终态迟到 + 管线超时空转](020-deep-analysis-session-stuck.md) | 已修复 |
 
 ---
 
@@ -52,3 +53,8 @@
 
 - [010](010-frontend-interaction-bugs-missing-spec-20260723.md) 测试从实现反推、e2e 形同虚设、缺少行为 spec 约束 → 引入 OpenSpec + Superpowers SDD 体系
 - [013](013-sse-concurrent-text-corruption-20260804.md) 并发 bug 用静态推理修不好（必须 E2E 复现 + 运行时证据）；测试/生产共用 SQLite 导致数据不可恢复 → 补并发 E2E + DB 环境变量隔离
+
+### 流式与持久化性能
+
+- [014](014-refresh-clears-session-list-20260716.md) 高频同步 SQLite 写冻结事件循环
+- [020](020-deep-analysis-session-stuck.md) 逐事件落库 fsync 限速 → 终态事件积压会话假卡死；双时间线对照法（Langfuse 生产端 vs journal 消费端）定位消费端积压
