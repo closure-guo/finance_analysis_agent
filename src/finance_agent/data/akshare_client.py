@@ -480,13 +480,44 @@ class AKShareClient:
 
     # ── 宏观指标 ──
 
-    def fetch_macro_indicators(self) -> dict:
+    @staticmethod
+    def _with_freshness(key: str, records: list[dict]) -> dict:
+        """为指标 records 附加 as_of_date + freshness。
+
+        最新日期取自 records[0] 首列（已降序）；解析失败按 stale 处理（fail-safe）。
+        """
+        raw = records[0].get(next(iter(records[0])))  # 首列的键值
+        as_of = None
+        if isinstance(raw, str):
+            import re
+
+            m = re.search(r"(\d{4})[-年/.]?(\d{1,2})", raw)
+            if m:
+                try:
+                    as_of = date(int(m.group(1)), int(m.group(2)), 1)
+                except ValueError:
+                    as_of = None
+            else:
+                as_of = None
+        elif isinstance(raw, (date, datetime)):
+            as_of = raw.date() if isinstance(raw, datetime) else raw
+        if as_of is None:
+            logger.warning("macro %s as_of_date 解析失败，按 stale 处理", key)
+        days = (datetime.now().date() - as_of).days if as_of else 10**9
+        return {
+            "as_of_date": as_of.isoformat() if as_of else None,
+            "freshness": "fresh" if days <= 90 else "stale",
+            "records": records,
+        }
+
+    def fetch_macro_indicators(self) -> dict[str, list[dict] | dict]:
         """拉取宏观经济指标：CPI、PMI、M2、LPR。
 
-        返回 dict，每个指标取最近 6 个月数据。
+        返回 dict，每个指标取最近 6 个月数据，并附加 as_of_date + freshness
+        时效守卫（90 天界，各指标独立计算）。
         失败的指标返回空列表，不阻塞流程。
         """
-        result: dict[str, list[dict]] = {}
+        result: dict[str, list[dict] | dict] = {}
 
         def _safe_macro(key: str, func):
             df = _call_ak(func)
@@ -501,7 +532,8 @@ class AKShareClient:
                     for k, v in r.items():
                         if isinstance(v, (date, datetime)):
                             r[k] = v.isoformat()
-                result[key] = records
+                # ── 时效守卫：as_of_date + freshness（90 天界，各指标独立）──
+                result[key] = self._with_freshness(key, records)
             else:
                 result[key] = []
 

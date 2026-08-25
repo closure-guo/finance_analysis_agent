@@ -48,7 +48,7 @@ class TestFetchMacroIndicators:
 
     @patch("finance_agent.data.akshare_client.ak")
     def test_fetch_macro_indicators_takes_newest(self, mock_ak):
-        """降序输入下应取最新 6 期，result['cpi'][0] 为最新一期（首行值）。"""
+        """降序输入下应取最新 6 期，result['cpi']['records'][0] 为最新一期（首行值）。"""
         df = _make_desc_macro_df()
         mock_ak.macro_china_cpi.return_value = df
         mock_ak.macro_china_pmi.return_value = df
@@ -57,7 +57,7 @@ class TestFetchMacroIndicators:
 
         result = AKShareClient().fetch_macro_indicators()
 
-        cpi = result["cpi"]
+        cpi = result["cpi"]["records"]
         assert len(cpi) == 6
         # index 0 应为最新一期（首行 2026年07月份 的值）
         assert cpi[0]["月份"] == "2026年07月份"
@@ -165,3 +165,65 @@ class TestBuildFundamentalContext:
             assert date in context, f"财务指标近3年应包含 {date}"
         for date in ["2021-12-31", "2022-12-31"]:
             assert date not in context, f"财务指标近3年不应包含最老年份 {date}"
+
+
+class TestMacroFreshness:
+    """fetch_macro_indicators 时效守卫：as_of_date + freshness。"""
+
+    def _fresh_df(self):
+        # 首列为"月份"字符串（akshare 真实格式：2026年07月份），第一条 = 本月
+        cur = pd.Timestamp.now()
+        m1 = f"{cur.year}年{cur.month:02d}月份"
+        prev = cur - pd.DateOffset(months=1)
+        m2 = f"{prev.year}年{prev.month:02d}月份"
+        return pd.DataFrame({"月份": [m1, m2], "制造业-指数": [50.2, 49.8]})
+
+    def _stale_df(self):
+        # 首列"月份"，最新一条距今 > 90 天
+        old = pd.Timestamp.now() - pd.DateOffset(months=5)
+        older = old - pd.DateOffset(months=1)
+        return pd.DataFrame(
+            {
+                "月份": [
+                    f"{old.year}年{old.month:02d}月份",
+                    f"{older.year}年{older.month:02d}月份",
+                ],
+                "制造业-指数": [49.4, 49.1],
+            }
+        )
+
+    def test_mark_fresh_and_stale_by_recency(self):
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+
+            def fake_call(func, *a, **k):
+                if func.__name__ == "macro_china_pmi":
+                    return self._stale_df()
+                return self._fresh_df()
+
+            m._call_ak = fake_call
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["pmi"]["freshness"] == "stale"
+            assert result["m2"]["freshness"] == "fresh"
+            assert result["cpi"]["freshness"] == "fresh"
+            # as_of_date 解析出年份月份（stale 那条 = 5 个月前）
+            assert result["pmi"]["as_of_date"].startswith(
+                str((pd.Timestamp.now() - pd.DateOffset(months=5)).year)
+            )
+        finally:
+            m._call_ak = orig
+
+    def test_failure_returns_empty_list(self):
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+            m._call_ak = lambda func, *a, **k: None
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["cpi"] == []
+        finally:
+            m._call_ak = orig
