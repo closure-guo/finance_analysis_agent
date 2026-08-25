@@ -77,3 +77,43 @@ class TestAfterCitation:
         """重试次数达上限（3 次），强制渲染。"""
         state = {"citation_pass": False, "iteration_count": 3}
         assert after_citation(state) == "render"
+
+
+class TestAfterCitationDeescalation:
+    """citation-retry-policy delta：失败率无显著改善时提前放行渲染。
+
+    线上事故（601700 深研）：三轮失败率 35%→38%→31%，重试零收益，
+    每轮全量重跑 4 分析师白烧 ~40 分钟。
+    """
+
+    def test_fail_rate_stagnant_returns_render(self):
+        """最新失败率 ≥ 上一轮的 80%（无显著改善）时不再重试。"""
+        state = {
+            "citation_pass": False,
+            "iteration_count": 2,
+            "citation_fail_rates": [0.35, 0.31],
+        }
+        assert after_citation(state) == "render"
+
+    def test_fail_rate_improved_returns_retry(self):
+        """失败率显著改善（< 上一轮 80%）时按上限继续重试。"""
+        state = {
+            "citation_pass": False,
+            "iteration_count": 2,
+            "citation_fail_rates": [0.60, 0.20],
+        }
+        assert after_citation(state) == "retry"
+
+    def test_single_round_failure_still_retries(self):
+        """首轮失败（无历史失败率）不降级，按既有行为重试。"""
+        state = {
+            "citation_pass": False,
+            "iteration_count": 1,
+            "citation_fail_rates": [0.9],
+        }
+        assert after_citation(state) == "retry"
+
+    def test_cap_still_enforced_without_rates(self):
+        """无失败率历史时上限语义不变（< 3 重试，>= 3 放行）。"""
+        assert after_citation({"citation_pass": False, "iteration_count": 2}) == "retry"
+        assert after_citation({"citation_pass": False, "iteration_count": 3}) == "render"

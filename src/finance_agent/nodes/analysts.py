@@ -136,6 +136,42 @@ def technical_analyst(state: dict) -> dict:
     return {"analyst_reports": {"technical": report}}
 
 
+# analyst-context-budget delta：技术指标 context 窗口。250 期全窗口指标 JSON
+# 使 technical_analyst 单次 LLM 调用 11.5~14 分钟（601700 深研事故）；60 期
+# 足够覆盖 MA60/趋势/背离分析（macro_analyst 同理只取近 3 期）。
+_TECHNICAL_CONTEXT_WINDOW = 60
+
+
+def _trim_series(values: list, window: int) -> list:
+    """序列裁剪到最近 window 期；不超过 window 期时原样返回。"""
+    return values[-window:] if isinstance(values, list) and len(values) > window else values
+
+
+def _trim_technical_indicators(
+    indicators: dict, window: int = _TECHNICAL_CONTEXT_WINDOW
+) -> tuple[dict, bool]:
+    """各指标序列裁剪为最近 window 期，返回（裁剪后结构, 是否发生裁剪）。
+
+    结构为 {指标组: {序列名: list}} 两层（MA/MACD/RSI/BOLL/KDJ 均如此），
+    非常规形态原样保留（防御）。
+    """
+    trimmed_any = False
+    out: dict = {}
+    for group, series in indicators.items():
+        if isinstance(series, dict):
+            trimmed_group: dict = {}
+            for key, values in series.items():
+                new = _trim_series(values, window)
+                trimmed_any = trimmed_any or (new is not values)
+                trimmed_group[key] = new
+            out[group] = trimmed_group
+        else:
+            new = _trim_series(series, window)
+            trimmed_any = trimmed_any or (new is not series)
+            out[group] = new
+    return out, trimmed_any
+
+
 def _build_technical_context(state: dict) -> str:
     """构建技术面分析的 LLM context。"""
     sections = []
@@ -150,12 +186,15 @@ def _build_technical_context(state: dict) -> str:
 
     indicators = state.get("technical_indicators") or {}
     if indicators:
-        # 修 A（fix-citation-contract-diseases）：明示负索引约定，使 LLM 引用与
-        # 校验器解析按「长度无关」语义对齐，context 裁剪窗口此后怎么改都不影响校验
+        # analyst-context-budget（裁剪）+ fix-citation-contract-diseases（负索引）：
+        # 序列裁剪到最近窗口期控制 token；负索引约定（-1=最新一期）使 LLM 引用与
+        # 校验器解析按「长度无关」语义对齐，裁剪窗口此后怎么改都不影响校验。
+        trimmed, did_trim = _trim_technical_indicators(indicators)
+        note = f"各序列为最近 {_TECHNICAL_CONTEXT_WINDOW} 期，更早历史已省略；" if did_trim else ""
         sections.append(
             "技术指标数据（state 键 technical_indicators；"
-            "field_ref 引用序列值时用负索引：-1=最新一期）:\n"
-            f"{json.dumps(indicators, ensure_ascii=False, default=str)}"
+            f"{note}field_ref 引用序列值时用负索引：-1=最新一期）:\n"
+            f"{json.dumps(trimmed, ensure_ascii=False, default=str)}"
         )
 
     return "\n\n".join(sections)
