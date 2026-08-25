@@ -121,3 +121,25 @@ class TestStockParsingConvergence:
     def test_react_system_prompt_removed(self):
         ra = (SRC_DIR / "react_agent.py").read_text(encoding="utf-8")
         assert "REACT_SYSTEM_PROMPT" not in ra
+
+
+class TestCycleFitMethodology:
+    """周期适配方法论契约（update-agent-prompt-cycle-fit）。"""
+
+    def test_fundamental_relative_and_cycle_aware(self):
+        text = _load("fundamental_analyst.md")
+        assert "同业" in text
+        assert "周期" in text or "环境" in text
+
+    def test_technical_mandates_rsa_blunting_in_strong_trend(self):
+        text = _load("technical_analyst.md")
+        assert "钝化" in text
+        assert "趋势" in text
+
+    def test_macro_mandates_m1_m2_scissors(self):
+        text = _load("macro_analyst.md")
+        assert "剪刀差" in text
+
+    def test_macro_mandates_stale_downweight(self):
+        text = _load("macro_analyst.md")
+        assert "滞后" in text
