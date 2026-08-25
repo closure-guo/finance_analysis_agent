@@ -1,9 +1,12 @@
-"""批量导入本地 prompts/*.md 到 Langfuse（ADR-0016）。
+"""批量部署本地 prompts/*.md 到 Langfuse production label（ADR-0016）。
+
+正式部署入口：本地 .md（git 跟踪）是提示词唯一权威源，Langfuse 为部署产物。
+修改 prompt 后必须执行本脚本发布，否则 eval 门禁（_verify_prompt_sync）会拒绝运行。
 
 用法：
-    .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py
-    .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py --dry-run
-    .venv/Scripts/python.exe tests/scripts/import_prompts_to_langfuse.py --exclude quick_mode
+    uv run python scripts/deploy_prompts.py
+    uv run python scripts/deploy_prompts.py --dry-run
+    uv run python scripts/deploy_prompts.py --exclude quick_mode
 
 前提：已设置环境变量 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST。
 若同名 prompt 已存在，Langfuse 会自动作为新版本添加（不会报错）。
@@ -20,9 +23,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-PROMPTS_DIR = Path(__file__).resolve().parents[2] / "src" / "finance_agent" / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src" / "finance_agent" / "prompts"
 
 DEFAULT_EXCLUDE: set[str] = set()
 
