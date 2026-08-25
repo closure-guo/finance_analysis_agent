@@ -193,15 +193,20 @@ def _build_macro_context(state: dict) -> str:
 
     macro = state.get("macro_indicators") or {}
     if macro:
-        # 只取最近 3 个月数据，减少 token 消耗
-        # 宏观数据降序（index 0 = 最新），从 0 开始取 → 子集与 claim 的
-        # `cpi.0` 引用对齐（此前 records[-3:] 假设升序取到最老 3 期）。
+        # 只取最近 3 个月数据，减少 token 消耗；records 现挂在 "records" 键下（fetch 守卫结构）。
         trimmed = {}
-        for key, records in macro.items():
-            if isinstance(records, list):
-                trimmed[key] = records[:3]
+        for key, value in macro.items():
+            if isinstance(value, dict):
+                recs = value.get("records") or []
+                freshness = value.get("freshness")
+                as_of = value.get("as_of_date")
+                trimmed[key] = recs[:3]
+                if freshness == "stale":
+                    trimmed[f"{key} 数据滞后"] = (
+                        f"最新至 {as_of or '未知日期'}，请按滞后数据处理并降级结论"
+                    )
             else:
-                trimmed[key] = records
+                trimmed[key] = value
         sections.append(
             f"宏观经济指标（近3期）:\n{json.dumps(trimmed, ensure_ascii=False, default=str)}"
         )

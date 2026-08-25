@@ -110,15 +110,27 @@ class TestBuildMacroContext:
             {"月份": m, "全国-当月-同比增长": 10.0 + i * 0.1}
             for i, m in enumerate(_DESC_MONTHS[:6])
         ]
-        state = {"macro_indicators": {"cpi": records}}
-
+        state = {
+            "macro_indicators": {
+                "cpi": {"as_of_date": "2026-07-01", "freshness": "fresh", "records": records}
+            }
+        }
         context = _build_macro_context(state)
         payload = context.split("宏观经济指标（近3期）:\n", 1)[1]
         trimmed = json.loads(payload)
-
-        assert len(trimmed["cpi"]) == 3
-        # records[-3:] 会取到 2026年03月/02月/01月；正确应取 07/06/05 月
         assert [r["月份"] for r in trimmed["cpi"]] == _DESC_MONTHS[:3]
+
+    def test_macro_context_marks_stale_indicators(self):
+        """stale 指标须确定性附加"数据滞后"标注（不依赖 LLM 自觉）。"""
+        records = [{"月份": "2025年08月份", "今值": 49.4}]
+        state = {
+            "macro_indicators": {
+                "pmi": {"as_of_date": "2025-08-01", "freshness": "stale", "records": records}
+            }
+        }
+        context = _build_macro_context(state)
+        assert "pmi 数据滞后" in context
+        assert "2025-08" in context
 
 
 class TestBuildFundamentalContext:
