@@ -1463,6 +1463,19 @@ async def _run_react_analysis(
 
         lastPersistTime = time.time()
         PERSIST_INTERVAL = 10
+        # thinking_token 批量落库（假卡死根因修复）：单条一次 SQLite 事务
+        # （fsync 主导）会把消费端限速到事件积压、终态事件迟到
+        # （601700 深研会话永远 running）。缓冲后经 publish_many 单事务
+        # 批量写入；非 thinking 事件/心跳/缓冲满时冲刷，保持 seq 顺序。
+        pendingTokens: list[dict] = []
+        TOKEN_BATCH_MAX = 32
+
+        async def _flush_tokens() -> None:
+            nonlocal pendingTokens
+            if pendingTokens:
+                await registry.publish_many(session_id, pendingTokens)
+                pendingTokens = []
+
         async for sse_str in stream_agent_to_sse(
             agent,
             userQuery,
@@ -1473,17 +1486,28 @@ async def _run_react_analysis(
         ):
             data = _parse_sse_data(sse_str)
             if data is None:
+                # SSE 心跳注释：借机冲刷批量缓冲，空闲期 token 不滞留 journal
+                await _flush_tokens()
                 continue
             collector.feed(data)
             if data.get("type") == "report_ready":
                 analysisExecuted = True
                 data["session_id"] = session_id
                 data["duration_ms"] = int((time.time() - start_time) * 1000)
-            await registry.publish(session_id, data)
+            if data.get("type") == "thinking_token":
+                pendingTokens.append(data)
+                if len(pendingTokens) >= TOKEN_BATCH_MAX:
+                    await _flush_tokens()
+            else:
+                await _flush_tokens()
+                await registry.publish(session_id, data)
             now = time.time()
             if now - lastPersistTime >= PERSIST_INTERVAL:
                 await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
                 lastPersistTime = now
+
+        # 流结束：冲刷残余缓冲
+        await _flush_tokens()
 
         # 最终持久化（upsert 语义，避免与增量重复落库）
         await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)

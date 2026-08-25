@@ -335,11 +335,32 @@ class PipelineRunner:
         start_time = time.time()
         # 终态是否已发布（cancel/超时/异常时为 True，finally 不再发 done）
         terminalPublished = False
+        # thinking_token 批量落库（假卡死根因修复）：单条一次 SQLite 事务
+        # （fsync 主导）会把消费端限速到事件积压、终态事件迟到
+        # （601700 深研会话永远 running）。缓冲后经 publish_many 单事务
+        # 批量写入；非 thinking 事件/心跳/缓冲满时冲刷，保持 seq 顺序。
+        pending: list[dict] = []
+        TOKEN_BATCH_MAX = 32
+
+        def _flush_pending() -> None:
+            if pending and loop is not None:
+                batch = pending[:]
+                pending.clear()
+                asyncio.run_coroutine_threadsafe(
+                    stream_registry.publish_many(session_id, batch), loop
+                ).result(timeout=5)
+
+        # thinking 高频时序写节流（对齐 agent_factory._background_consume 的
+        # TIMELINE_PERSIST_INTERVAL）：每 token 全量序列化写库既是 SQLite
+        # 锁竞争源也是 O(n²) 写放大；节点边界/结束时仍即时冲刷（下方分支）。
+        lastTimelinePersist = 0.0
+        TIMELINE_PERSIST_INTERVAL = 0.5
         try:
             for sse_str in event_source():
                 # 取消检查：cancel() 置位后在下一次事件迭代前终止
                 if state is not None and state.cancel_event.is_set():
                     if loop is not None:
+                        _flush_pending()
                         asyncio.run_coroutine_threadsafe(
                             stream_registry.publish(
                                 session_id, {"type": "interrupted", "session_id": session_id}
@@ -354,6 +375,7 @@ class PipelineRunner:
                         session_id, "failed", failure_reason="管线执行超时"
                     )
                     if loop is not None:
+                        _flush_pending()
                         asyncio.run_coroutine_threadsafe(
                             stream_registry.publish(
                                 session_id,
@@ -368,13 +390,22 @@ class PipelineRunner:
                         terminalPublished = True
                     break
                 event = cls._parse_event(sse_str)
+                # SSE 心跳注释：借机冲刷批量缓冲，空闲期 token 不滞留 journal
+                if event is None and loop is not None:
+                    _flush_pending()
                 # 事件分发：loop 存在时经 publish 桥接到 journal（先落库再 fan-out），
                 # 使恢复端点能重放 Fast path 事件；否则累积到内存队列（get_events 消费式拉取）
                 if loop is not None:
                     if event is not None:
-                        asyncio.run_coroutine_threadsafe(
-                            stream_registry.publish(session_id, event), loop
-                        ).result(timeout=5)
+                        if event.get("type") == "thinking_token":
+                            pending.append(event)
+                            if len(pending) >= TOKEN_BATCH_MAX:
+                                _flush_pending()
+                        else:
+                            _flush_pending()
+                            asyncio.run_coroutine_threadsafe(
+                                stream_registry.publish(session_id, event), loop
+                            ).result(timeout=5)
                 elif state is not None:
                     with state.lock:
                         state.events.append(sse_str)
@@ -386,7 +417,10 @@ class PipelineRunner:
                     nodeTimelines = apply_pipeline_thinking_token(
                         nodeTimelines, event.get("node") or "", event.get("token", "")
                     )
-                    session_store.update_pipeline_timelines(session_id, nodeTimelines)
+                    now_p = time.time()
+                    if now_p - lastTimelinePersist >= TIMELINE_PERSIST_INTERVAL:
+                        lastTimelinePersist = now_p
+                        session_store.update_pipeline_timelines(session_id, nodeTimelines)
                 elif eventType in ("search_start", "search_result", "search_error"):
                     nodeTimelines = apply_pipeline_search_event(nodeTimelines, currentNode, event)
                     session_store.update_pipeline_timelines(session_id, nodeTimelines)
@@ -422,6 +456,7 @@ class PipelineRunner:
                 session_id, "failed", failure_reason=f"{type(e).__name__}: {e}"
             )
             if loop is not None:
+                _flush_pending()
                 asyncio.run_coroutine_threadsafe(
                     stream_registry.publish(
                         session_id,
@@ -435,10 +470,18 @@ class PipelineRunner:
                 ).result(timeout=5)
                 terminalPublished = True
         finally:
+            # 节流可能跳过末尾 thinking chunk 的时序写，结束时补写完整时序
+            # （对齐 agent_factory._background_consume 正常结束分支的 flush）
+            if nodeTimelines:
+                try:
+                    session_store.update_pipeline_timelines(session_id, nodeTimelines)
+                except Exception:  # noqa: S110 -- 补写失败不阻断终态发布
+                    logger.warning("管线时序补写失败 session=%s", session_id)
             if state is not None:
                 state.done = True
             # loop 存在且未发终态时发布 done（正常完成）
             if loop is not None and not terminalPublished:
+                _flush_pending()
                 asyncio.run_coroutine_threadsafe(
                     stream_registry.publish(session_id, {"type": "done", "session_id": session_id}),
                     loop,

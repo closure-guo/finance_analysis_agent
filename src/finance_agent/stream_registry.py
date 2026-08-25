@@ -125,16 +125,45 @@ class StreamRegistry:
         stream = self._streams.get(session_id)
         if stream:
             stream.lastSeq = seq
-            # fan-out：满队列的订阅者被断开
-            for q in list(stream.subscribers):
-                try:
-                    q.put_nowait(event)
-                except asyncio.QueueFull:
-                    _logger.warning("慢订阅者断开 session=%s seq=%d", session_id, seq)
-                    stream.subscribers.remove(q)
-                    with contextlib.suppress(asyncio.QueueFull):
-                        q.put_nowait(None)
+            self._fanout(session_id, stream, event)
         return seq
+
+    async def publish_many(self, session_id: str, events: list[dict]) -> list[int]:
+        """批量先落 journal 再按序 fan-out（高频 thinking_token 的限速根因修复）。
+
+        与 publish 同契约：终态 per-run CAS 按序检查（批内后续终态被过滤），
+        整批经 append_session_events 单事务落库（seq 连续），随后按原顺序
+        逐个 fan-out——订阅者看到的顺序与 seq 顺序一致，且每个事件 fan-out
+        前必然已持久化。空批次返回 []。
+        """
+        passed: list[dict] = []
+        for ev in events:
+            if self._try_mark_terminal(session_id, ev):
+                passed.append(ev)
+        if not passed:
+            return []
+        seqs = await asyncio.to_thread(session_store.append_session_events, session_id, passed)
+        stream = self._streams.get(session_id)
+        out: list[int] = []
+        for ev, seq in zip(passed, seqs, strict=True):
+            ev["seq"] = seq
+            out.append(seq)
+            if stream:
+                stream.lastSeq = seq
+                self._fanout(session_id, stream, ev)
+        return out
+
+    @staticmethod
+    def _fanout(session_id: str, stream: SessionStream, event: dict) -> None:
+        """fan-out：满队列的订阅者被断开。"""
+        for q in list(stream.subscribers):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                _logger.warning("慢订阅者断开 session=%s seq=%s", session_id, event.get("seq"))
+                stream.subscribers.remove(q)
+                with contextlib.suppress(asyncio.QueueFull):
+                    q.put_nowait(None)
 
     def _publish_sync(self, session_id: str, event: dict) -> int:
         """同步版 publish：直接调用 session_store（不 await），用于 CancelledError 块。"""
