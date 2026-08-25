@@ -457,6 +457,8 @@ export class StreamStore {
             reportMarkdown: data.report_markdown,
             chartData: data.chart_data,
             stockName: data.stock_name,
+            stockCode: data.stock_code,
+            filePaths: data.file_paths || undefined,
             durationMs: data.duration_ms,
             sessionId: data.session_id,
           }
