@@ -102,6 +102,9 @@ class AnalysisState(TypedDict, total=False):
     citation_report: dict  # CitationReport 序列化
     citation_pass: bool
     iteration_count: int  # 重试次数（上限 3）
+    # 各轮校验失败率历史（citation-retry-policy delta）：失败率停滞时
+    # after_citation 提前放行渲染，不再全量重跑分析师
+    citation_fail_rates: list[float]
 
     # ── URL 信源溯源（Kimi 风格引用）──
     web_sources: list[dict]  # [{"query","title","url","content"}]

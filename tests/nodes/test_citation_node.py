@@ -179,3 +179,64 @@ class TestVerifyCitations:
         # 重试上限已达 -> after_citation 必须返回 render，不再 retry
         assert state["citation_pass"] is False
         assert after_citation(state) == "render"
+
+
+class TestFailRateHistory:
+    """citation-retry-policy delta：verify_citations 记录各轮失败率供路由降级。"""
+
+    def _failing_state(self, prior_rates: list | None = None, iteration: int = 1) -> dict:
+        report = AnalystReport(
+            agent_name="fundamental",
+            summary="基本面分析",
+            key_findings=["资产负债率 45%"],
+            claims=[
+                Claim(
+                    claim_type="numerical",
+                    source_type="data",
+                    field_ref="solvency_metrics.资产负债率.2024",
+                    stated_value=45.0,  # 与数据 40.0 不符 → FAIL
+                    interpretation="资产负债率 45%",
+                ),
+            ],
+            markdown="## 基本面分析",
+        )
+        state = {
+            "analyst_reports": {"fundamental": report},
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+            "iteration_count": iteration,
+        }
+        if prior_rates is not None:
+            state["citation_fail_rates"] = prior_rates
+        return state
+
+    def test_appends_fail_rate_to_history(self):
+        result = verify_citations(self._failing_state(prior_rates=[0.35]))
+        assert result["citation_fail_rates"] == [0.35, 1.0]
+        assert result["iteration_count"] == 2
+
+    def test_pass_records_zero_rate(self):
+        state = {
+            "analyst_reports": {},  # 零 claim → all_passed=True
+            "iteration_count": 1,
+        }
+        result = verify_citations(state)
+        assert result["citation_pass"] is True
+        assert result["citation_fail_rates"] == [0.0]
+
+    def test_deescalation_marks_span(self, monkeypatch):
+        """降级触发时 verify_citations SHALL 在 span 上留可判读标记。"""
+        from finance_agent.nodes import citation_node
+
+        marks: list[dict] = []
+
+        def fake_update_span(**kwargs):
+            marks.append(kwargs)
+
+        monkeypatch.setattr(citation_node, "update_current_span", fake_update_span)
+
+        # 上一轮 0.5，本轮 1.0（≥ 0.5×0.8 且轮次未达上限）→ 路由将降级放行
+        verify_citations(self._failing_state(prior_rates=[0.5], iteration=1))
+
+        degraded = [m for m in marks if m.get("metadata", {}).get("citation_retry_deescalated")]
+        assert degraded, f"降级决策须落 span 标记，实际 marks: {marks}"
+        assert degraded[0]["metadata"]["fail_rates"] == [0.5, 1.0]

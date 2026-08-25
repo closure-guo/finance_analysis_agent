@@ -200,3 +200,61 @@ class TestAnalystSpanMetadata:
         # 埋点失败被 update_current_span 吞掉，业务照常降级产出报告
         assert report.parse_degraded is True
         assert report.claims == []
+
+
+class TestTechnicalContextBudget:
+    """analyst-context-budget delta：技术指标序列裁剪为最近 60 期。
+
+    线上事故（601700 深研）：250 期全窗口指标 JSON 进 prompt，
+    technical_analyst 单次 LLM 调用 11.5~14 分钟。
+    """
+
+    def _indicators(self, n: int) -> dict:
+        full = [None] * 59 + [float(i) for i in range(n)]  # 前 59 期预热 null
+        series = full[:n]
+        return {
+            "MA": {"5": list(series), "10": list(series)},
+            "MACD": {"DIF": list(series), "DEA": list(series), "histogram": list(series)},
+            "RSI": {"14": list(series)},
+        }
+
+    def test_full_window_series_trimmed_to_60(self):
+        """250 期序列裁剪为最近 60 期，context 含窗口说明。"""
+        from finance_agent.nodes.analysts import _build_technical_context
+
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "technical_indicators": self._indicators(250),
+        }
+        ctx = _build_technical_context(state)
+
+        assert "更早历史已省略" in ctx, "context 必须携带窗口说明，避免 LLM 误认截断窗口为全部历史"
+        payload = ctx.split("技术指标数据", 1)[1].split(":\n", 1)[1]
+        data = json.loads(payload)
+        assert len(data["MA"]["5"]) == 60
+        assert len(data["MACD"]["DIF"]) == 60
+        # 序列值规则：index i（>=59）的值为 i-59；最近 60 期首元素为 index 190 → 131.0
+        assert data["MA"]["5"][0] == 131.0
+
+    def test_short_window_series_kept_intact(self):
+        """不足 60 期的窗口保持完整。"""
+        from finance_agent.nodes.analysts import _build_technical_context
+
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "technical_indicators": self._indicators(45),
+        }
+        ctx = _build_technical_context(state)
+        payload = ctx.split("技术指标数据", 1)[1].split(":\n", 1)[1]
+        data = json.loads(payload)
+        assert len(data["MA"]["5"]) == 45
+        assert len(data["RSI"]["14"]) == 45
+
+    def test_missing_indicators_keeps_fallback(self):
+        """无 technical_indicators 时 context 不含指标段（既有兜底）。"""
+        from finance_agent.nodes.analysts import _build_technical_context
+
+        ctx = _build_technical_context({"stock_name": "X", "stock_code": "1"})
+        assert "技术指标数据" not in ctx
