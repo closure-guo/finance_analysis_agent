@@ -428,7 +428,15 @@ def _make_run_deep_analysis(
 
             try:
                 while True:
-                    item = await asyncio.wait_for(chunk_queue.get(), timeout=pipeline_timeout)
+                    # 墙钟超时（spec pipeline-events「管线超时与中断检测」：自管线
+                    # 启动起算的全局预算，默认 600s）：原实现为单次空闲超时，
+                    # thinking token 持续流动时永不触发——线上 601700 深研管线
+                    # 跑了 71 分钟无人拦截。剩余预算耗尽即抛 TimeoutError，
+                    # 走下方既有 failed + failure_reason 分支。
+                    _remaining = pipeline_timeout - (_time_module.time() - _pipeline_start_time)
+                    if _remaining <= 0:
+                        raise TimeoutError(f"管线执行超过 {pipeline_timeout}s 全局预算")
+                    item = await asyncio.wait_for(chunk_queue.get(), timeout=_remaining)
                     if item is None:
                         break
                     if isinstance(item, Exception):
