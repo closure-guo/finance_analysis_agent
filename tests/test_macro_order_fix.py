@@ -119,6 +119,8 @@ class TestBuildMacroContext:
         payload = context.split("宏观经济指标（近3期）:\n", 1)[1]
         trimmed = json.loads(payload)
         assert [r["月份"] for r in trimmed["cpi"]] == _DESC_MONTHS[:3]
+        # fresh 数据不标记滞后，不打扰闭环
+        assert "数据滞后" not in context
 
     def test_macro_context_marks_stale_indicators(self):
         """stale 指标须确定性附加"数据滞后"标注（不依赖 LLM 自觉）。"""
@@ -237,5 +239,37 @@ class TestMacroFreshness:
             client = AKShareClient()
             result = client.fetch_macro_indicators()
             assert result["cpi"] == []
+        finally:
+            m._call_ak = orig
+
+    def test_iso_date_first_column_fresh(self):
+        """首列为 ISO 日期（2026-08-20）也能解析 → fresh，as_of_date 归一到当月 1 号。"""
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+            df = pd.DataFrame({"date": ["2026-08-20", "2026-07-20"], "制造业-指数": [50.2, 49.8]})
+            m._call_ak = lambda func, *a, **k: df
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["cpi"]["freshness"] == "fresh"
+            assert result["cpi"]["as_of_date"] == "2026-08-01"
+        finally:
+            m._call_ak = orig
+
+    def test_parse_failure_marks_stale(self):
+        """首列无法解析（如 unknown）→ stale + as_of_date=None（fail-safe）。"""
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+            df = pd.DataFrame(
+                {"month": ["unknown", "also-not-a-date"], "制造业-指数": [49.4, 49.1]}
+            )
+            m._call_ak = lambda func, *a, **k: df
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["cpi"]["freshness"] == "stale"
+            assert result["cpi"]["as_of_date"] is None
         finally:
             m._call_ak = orig

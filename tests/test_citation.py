@@ -259,3 +259,75 @@ class TestNumericalRobustness:
         )
         results = verify_claims([claim], state)
         assert results[0].status == "FAIL"
+
+
+class TestMacroClaimNewStructure:
+    """fetch 守卫新结构下 macro claim 的 field_ref 解析回归（final review Critical #1）。
+
+    旧结构 macro_indicators.cpi 为 list；新守卫结构为
+    {"as_of_date", "freshness", "records"}。_resolve_field_ref 须在遇到含
+    records 键的 dict 时自动下钻 records，保持后续 .index.column 路径语义，
+    否则 cpi.0 取 dict.get("0") = None → 数值校验 FAIL → 全分析师 3 倍重试。
+    """
+
+    def _state(self) -> dict:
+        return {
+            "macro_indicators": {
+                "cpi": {
+                    "as_of_date": "2026-07-01",
+                    "freshness": "fresh",
+                    "records": [{"月份": "2026年07月份", "全国-当月-同比增长": 0.4}],
+                }
+            }
+        }
+
+    def test_macro_claim_resolves_in_new_structure(self):
+        from finance_agent.citation import _resolve_field_ref
+
+        val = _resolve_field_ref("macro_indicators.cpi.0.全国-当月-同比增长", self._state())
+        assert val == 0.4
+
+    def test_macro_numerical_claim_pass(self):
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="macro_indicators.cpi.0.全国-当月-同比增长",
+            stated_value=0.4,
+            interpretation="CPI 环比 0.4%",
+        )
+        results = verify_claims([claim], self._state())
+        assert len(results) == 1
+        assert results[0].status == "PASS"
+
+
+class TestFieldRefRecordsGuard:
+    """field_ref 显式引用 records 键仍可解析（守卫结构向后兼容）。"""
+
+    def test_explicit_records_key_still_resolves(self):
+        from finance_agent.citation import _resolve_field_ref
+
+        val = _resolve_field_ref(
+            "macro_indicators.cpi.records.0.全国-当月-同比增长", self_cpi_state()
+        )
+        assert val == 0.4
+
+    def test_plain_dict_behavior_unchanged(self):
+        from finance_agent.citation import _resolve_field_ref
+
+        # 普通 dict 无 records 键时按原样 get，不破坏既有行为
+        state = {"solvency_metrics": {"资产负债率": {"2024": 40.0}}}
+        assert _resolve_field_ref("solvency_metrics.资产负债率.2024", state) == 40.0
+        assert _resolve_field_ref("solvency_metrics.资产负债率", state) == {"2024": 40.0}
+
+
+def self_cpi_state() -> dict:
+    """TestFieldRefRecordsGuard 用 state fixture（避免重复构建）。"""
+    return {
+        "macro_indicators": {
+            "cpi": {
+                "as_of_date": "2026-07-01",
+                "freshness": "fresh",
+                "records": [{"月份": "2026年07月份", "全国-当月-同比增长": 0.4}],
+            }
+        }
+    }

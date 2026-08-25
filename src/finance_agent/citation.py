@@ -68,9 +68,17 @@ class CitationReport(BaseModel):
 
 
 def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
-    """按 "." 分割路径，逐层遍历 state dict / list。"""
+    """按 "." 分割路径，逐层遍历 state dict / list。
+
+    兼容 fetch 守卫结构：dict 形如 {"records": [...], "as_of_date", "freshness"}
+    时，若当前 part 不是该 dict 的键，先自动下钻 records 再解析，保持 field_ref
+    语义（macro_indicators.cpi.0.<列>）不变；part == "records" 或其他守卫键
+    （as_of_date/freshness）仍按原始键解析。
+    """
     current: object = state
     for part in field_ref.split("."):
+        if isinstance(current, dict) and "records" in current and part not in current:
+            current = current["records"]
         if isinstance(current, dict):
             current = current.get(part)
         elif isinstance(current, list):
