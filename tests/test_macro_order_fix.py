@@ -243,17 +243,30 @@ class TestMacroFreshness:
             m._call_ak = orig
 
     def test_iso_date_first_column_fresh(self):
-        """首列为 ISO 日期（2026-08-20）也能解析 → fresh，as_of_date 归一到当月 1 号。"""
+        """首列为 ISO 日期（今天往前 5 天）也能解析 → fresh，as_of_date 归一到当月 1 号。"""
         import finance_agent.data.akshare_client as m
 
+        cur = pd.Timestamp.now()
+        iso = (cur - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+        prev_iso = (cur - pd.Timedelta(days=35)).strftime("%Y-%m-%d")
+        df = pd.DataFrame({"TRADE_DATE": [iso, prev_iso], "LPR1Y": [3.0, 3.0]})
         orig = m._call_ak
         try:
-            df = pd.DataFrame({"date": ["2026-08-20", "2026-07-20"], "制造业-指数": [50.2, 49.8]})
-            m._call_ak = lambda func, *a, **k: df
+
+            def fake_call(func, *a, **k):
+                if func.__name__ == "macro_china_lpr":
+                    return df
+                # 其它指标给当前月份 df，全部 fresh，避免干扰断言
+                mth = f"{cur.year}年{cur.month:02d}月份"
+                prev_m = (cur - pd.DateOffset(months=1)).strftime("%Y年%m月份")
+                return pd.DataFrame({"月份": [mth, prev_m], "指数": [50.0, 49.0]})
+
+            m._call_ak = fake_call
             client = AKShareClient()
             result = client.fetch_macro_indicators()
-            assert result["cpi"]["freshness"] == "fresh"
-            assert result["cpi"]["as_of_date"] == "2026-08-01"
+            assert result["lpr"]["freshness"] == "fresh"
+            expected = (cur - pd.Timedelta(days=5)).replace(day=1).date().isoformat()
+            assert result["lpr"]["as_of_date"] == expected
         finally:
             m._call_ak = orig
 
