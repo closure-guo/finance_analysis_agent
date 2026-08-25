@@ -149,6 +149,35 @@ class TestRunDeepAnalysisStreaming:
         assert tool_result.metadata["chart_data"] == chart_data
 
     @pytest.mark.asyncio
+    async def test_final_event_metadata_contains_file_paths(self):
+        """最终事件 metadata 包含 file_paths（ReAct 报告产物链路）。
+
+        生产链路中 file_paths 由 generate_file 节点更新写入 graph 状态，
+        _merge_update 合并进 accumulated，最终透传到 TOOL_RESULT metadata。
+        """
+        file_paths = {
+            "md": "/tmp/600519_x_report.md",  # noqa: S108  fixture 值非真实临时文件
+            "docx": "/tmp/600519_x_report.docx",  # noqa: S108  fixture 值非真实临时文件
+        }
+        chunks = [
+            _make_node_chunk("check_cache"),
+            _make_node_chunk("generate_file", file_paths=file_paths),
+            _make_final_chunk(report="# 报告", chart_data={}, analyst_reports={}),
+        ]
+        fake_graph = FakeGraph(chunks)
+
+        with patch("finance_agent.graph.build_5layer_graph", return_value=fake_graph):
+            tool_fn = _make_run_deep_analysis(api_key="test")
+            events = []
+            async for event in tool_fn(stock_code="600519"):
+                events.append(event)
+
+        tool_result = events[-1].tool_result
+        assert tool_result.metadata is not None
+        assert "file_paths" in tool_result.metadata
+        assert tool_result.metadata["file_paths"] == file_paths
+
+    @pytest.mark.asyncio
     async def test_node_start_emitted_before_node_complete(self):
         """agent 路径：每个图节点首次出现时先产出 node_start，再产出 node_complete。"""
         chunks = [
