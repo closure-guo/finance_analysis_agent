@@ -43,6 +43,8 @@ _PROMPT_NAMES = [
 _JUDGE_DIMS = ["report_relevance", "debate_quality", "decision_grounding", "consistency"]
 # quick 模式无辩论/决策层:只有 report_relevance 适用(design §7 过滤器)
 _JUDGE_DEEP_ONLY = {"debate_quality", "decision_grounding", "consistency"}
+# 本地 prompts/*.md（git 跟踪）是唯一权威源（模块级常量便于测试注入）
+_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src/finance_agent/prompts"
 
 
 def _collect_prompt_versions() -> dict[str, str]:
@@ -56,6 +58,35 @@ def _collect_prompt_versions() -> dict[str, str]:
         except Exception:
             versions[name] = "unknown"
     return versions
+
+
+def _verify_prompt_sync(client) -> list[str]:
+    """校验 Langfuse production prompt 与本地 prompts/*.md 一致（CRLF 归一化逐字比对）。
+
+    本地 .md（git 跟踪）是提示词唯一权威源；Langfuse production 是部署产物。
+    不一致说明「改了未发布」，eval 前必须拦截（防测错版本造成不可对比的分数）。
+    返回不一致的 prompt 名列表；空列表 = 全部一致。
+    """
+    mismatched: list[str] = []
+    for name in _PROMPT_NAMES:
+        try:
+            # newline="" 保留原文行尾,使 .replace 成为真实归一化路径(否则 universal-newlines 读入即转 LF,replace 成死代码)
+            local = (
+                (_PROMPTS_DIR / f"{name}.md")
+                .read_text(encoding="utf-8", newline="")
+                .replace("\r\n", "\n")
+            )
+        except OSError:
+            mismatched.append(f"{name} (本地文件缺失)")
+            continue
+        try:
+            remote = str(getattr(client.get_prompt(name), "prompt", "")).replace("\r\n", "\n")
+        except Exception:  # noqa: BLE001 - 拉取失败归为不一致,保守拦截
+            mismatched.append(f"{name} (Langfuse 拉取失败)")
+            continue
+        if local != remote:
+            mismatched.append(name)
+    return mismatched
 
 
 # ── langfuse evaluator 适配器(签名 (*, input, output, expected_output, metadata))──
@@ -162,6 +193,17 @@ def main() -> None:
 
     prompt_versions = _collect_prompt_versions()
     print("prompt_versions:", json.dumps(prompt_versions, ensure_ascii=False))
+
+    mismatched = _verify_prompt_sync(client)
+    if mismatched:
+        if all("拉取失败" in m for m in mismatched):
+            hint = "请检查 Langfuse 连通性/凭证后重试（所有 prompt 均拉取失败）。"
+        else:
+            hint = "请先执行 `uv run python scripts/deploy_prompts.py` 发布后再运行。"
+        sys.exit(
+            "错误: 以下 prompt 的 Langfuse 当前版本（运行时将加载的版本）与本地 .md 不一致，"
+            "拒绝运行实验（防测错版本）:\n  - " + "\n  - ".join(mismatched) + "\n" + hint
+        )
 
     dataset = client.get_dataset(DATASET_NAME)
     result = dataset.run_experiment(

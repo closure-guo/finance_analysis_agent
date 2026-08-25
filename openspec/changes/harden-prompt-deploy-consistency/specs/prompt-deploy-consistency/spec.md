@@ -33,7 +33,7 @@ prompt 发布脚本 MUST 存在于正式脚本目录 `scripts/`（而非 tests/�
 - **GIVEN** 至少一个 prompt 的 Langfuse production 文本与本地 .md 不一致（如本地已改未发布）
 - **WHEN** 运行 `uv run python -m evals.run "<实验名>"`
 - **THEN** 进程以非零退出码终止
-- **AND** 错误信息列出每个不一致的 prompt 名与差异摘要
+- **AND** 错误信息列出每个不一致的 prompt 名
 - **AND** 提示先执行 `scripts/deploy_prompts.py` 发布
 
 #### Scenario: 未配置 Langfuse 时门禁跳过
