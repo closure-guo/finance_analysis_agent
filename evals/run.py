@@ -58,6 +58,27 @@ def _collect_prompt_versions() -> dict[str, str]:
     return versions
 
 
+def _verify_prompt_sync(client) -> list[str]:
+    """校验 Langfuse production prompt 与本地 prompts/*.md 一致（CRLF 归一化逐字比对）。
+
+    本地 .md（git 跟踪）是提示词唯一权威源；Langfuse production 是部署产物。
+    不一致说明「改了未发布」，eval 前必须拦截（防测错版本造成不可对比的分数）。
+    返回不一致的 prompt 名列表；空列表 = 全部一致。
+    """
+    prompts_dir = Path(__file__).resolve().parents[1] / "src/finance_agent/prompts"
+    mismatched: list[str] = []
+    for name in _PROMPT_NAMES:
+        local = (prompts_dir / f"{name}.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+        try:
+            remote = str(getattr(client.get_prompt(name), "prompt", "")).replace("\r\n", "\n")
+        except Exception:  # noqa: BLE001 - 拉取失败归为不一致,保守拦截
+            mismatched.append(f"{name} (Langfuse 拉取失败)")
+            continue
+        if local != remote:
+            mismatched.append(name)
+    return mismatched
+
+
 # ── langfuse evaluator 适配器(签名 (*, input, output, expected_output, metadata))──
 
 
@@ -162,6 +183,15 @@ def main() -> None:
 
     prompt_versions = _collect_prompt_versions()
     print("prompt_versions:", json.dumps(prompt_versions, ensure_ascii=False))
+
+    mismatched = _verify_prompt_sync(client)
+    if mismatched:
+        sys.exit(
+            "错误: 以下 prompt 的 Langfuse production 版本与本地 .md 不一致，"
+            "拒绝运行实验（防测错版本）:\n  - "
+            + "\n  - ".join(mismatched)
+            + "\n请先执行 `uv run python scripts/deploy_prompts.py` 发布后再运行。"
+        )
 
     dataset = client.get_dataset(DATASET_NAME)
     result = dataset.run_experiment(

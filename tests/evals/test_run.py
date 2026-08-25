@@ -1,6 +1,7 @@
 """run_experiment:evaluator 装配、quick 模式 judge 跳过、langfuse 必达、结果表。"""
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import evals.run
@@ -100,8 +101,55 @@ class TestLangfuseRequired:
         fake_result = MagicMock()
         fake_result.item_results = []
         fake.get_dataset.return_value.run_experiment.return_value = fake_result
-        with patch("evals.run.get_langfuse", return_value=fake), patch("evals.run._write_report"):
+        with (
+            patch("evals.run.get_langfuse", return_value=fake),
+            patch("evals.run._write_report"),
+            patch("evals.run._verify_prompt_sync", return_value=[]),  # 门禁放行
+        ):
             evals.run.main()
         fake.get_dataset.assert_called_once_with(DATASET_NAME)
         fake.get_dataset.return_value.run_experiment.assert_called_once()
         fake.flush.assert_called_once()
+
+
+class TestVerifyPromptSync:
+    """eval 前置门禁：Langfuse production vs 本地 .md 一致性校验。"""
+
+    def _mock_client(self, texts: dict):
+        client = MagicMock()
+
+        def fake_get(name):
+            p = MagicMock()
+            p.prompt = texts.get(name, "")
+            return p
+
+        client.get_prompt.side_effect = fake_get
+        return client
+
+    def test_all_consistent_returns_empty(self):
+        from evals import run
+
+        prompts_dir = Path(__file__).resolve().parents[2] / "src/finance_agent/prompts"
+        local = {
+            n: (prompts_dir / f"{n}.md").read_text(encoding="utf-8") for n in run._PROMPT_NAMES
+        }
+        client = self._mock_client(local)
+        assert run._verify_prompt_sync(client) == []
+
+    def test_mismatch_lists_differing_prompt(self):
+        from evals import run
+
+        texts = dict.fromkeys(run._PROMPT_NAMES, "x")
+        client = self._mock_client(texts)
+        result = run._verify_prompt_sync(client)
+        assert len(result) == len(run._PROMPT_NAMES)
+        assert run._PROMPT_NAMES[0] in result
+
+    def test_get_prompt_failure_marks_mismatch(self):
+        from evals import run
+
+        client = self._mock_client({})
+        client.get_prompt.side_effect = RuntimeError("boom")
+        result = run._verify_prompt_sync(client)
+        assert len(result) == len(run._PROMPT_NAMES)
+        assert all("拉取失败" in r for r in result)
