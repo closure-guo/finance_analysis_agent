@@ -19,4 +19,4 @@
 
 - [x] 4.1 `uv run pytest`（非 live 全量）通过；`uv run ruff check` + `uv run mypy` 无新增
 - [x] 4.2 真机验证：临时改一个 .md 不发布 → eval 被拦（非零退出 + 差异列表）；恢复并 deploy → 放行；验证记录落 tests/validation/
-- [ ] 4.3 `openspec validate --strict` 通过
+- [x] 4.3 `openspec validate --all --strict` 通过

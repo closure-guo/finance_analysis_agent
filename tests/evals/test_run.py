@@ -153,3 +153,29 @@ class TestVerifyPromptSync:
         result = run._verify_prompt_sync(client)
         assert len(result) == len(run._PROMPT_NAMES)
         assert all("拉取失败" in r for r in result)
+
+    def test_crlf_local_crlf_remote_lf_not_mismatched(self, monkeypatch, tmp_path):
+        """本地 CRLF .md vs Langfuse LF 文本 → 归一化后应一致（不误报）。"""
+        from evals import run
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        # 复制全部 .md 到 tmp（本地侧固定为纯 CRLF），远端为同一内容的 LF 版；
+        # 归一化后逐字一致，保证测试确定性与磁盘现状无关。
+        real = Path(__file__).resolve().parents[2] / "src/finance_agent/prompts"
+        for name in run._PROMPT_NAMES:
+            content = (real / f"{name}.md").read_bytes()
+            crlf = content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            (prompts_dir / f"{name}.md").write_bytes(crlf)
+
+        def fake_get(name):
+            p = MagicMock()
+            text = (prompts_dir / f"{name}.md").read_text(encoding="utf-8")
+            p.prompt = text.replace("\r\n", "\n")
+            return p
+
+        client = MagicMock()
+        client.get_prompt.side_effect = fake_get
+        monkeypatch.setattr(run, "_PROMPTS_DIR", prompts_dir)
+        # 本地全 CRLF、远端全 LF：差异仅在行尾 → 门禁不得误报
+        assert run._verify_prompt_sync(client) == []
