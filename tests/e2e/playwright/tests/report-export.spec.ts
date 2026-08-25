@@ -50,7 +50,9 @@ test.describe('报告导出入口', () => {
     await page.getByTestId('send-button').click()
 
     // 4. 报告完成后的稳定终态：报告卡标题出现「贵州茅台（600519）」组合
-    await expect(page.getByText('贵州茅台（600519）')).toBeVisible({ timeout: 150_000 })
+    await expect(
+      page.getByRole('heading', { name: '贵州茅台（600519）' }),
+    ).toBeVisible({ timeout: 150_000 })
 
     // 5. 报告卡头部不再有「全部文件」导出按钮（旧入口已移除）
     await expect(page.getByTestId('open-files-banner')).toHaveCount(0)
