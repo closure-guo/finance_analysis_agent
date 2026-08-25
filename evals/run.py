@@ -70,7 +70,12 @@ def _verify_prompt_sync(client) -> list[str]:
     mismatched: list[str] = []
     for name in _PROMPT_NAMES:
         try:
-            local = (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+            # newline="" 保留原文行尾,使 .replace 成为真实归一化路径(否则 universal-newlines 读入即转 LF,replace 成死代码)
+            local = (
+                (_PROMPTS_DIR / f"{name}.md")
+                .read_text(encoding="utf-8", newline="")
+                .replace("\r\n", "\n")
+            )
         except OSError:
             mismatched.append(f"{name} (本地文件缺失)")
             continue
