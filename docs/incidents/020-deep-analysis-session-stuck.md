@@ -80,6 +80,13 @@ session_events journal 时间戳（消费端落库、被限速）。两者在 R3
    收尾因 analysisExecuted=False 走澄清分支覆盖状态并发 awaiting_input。
    修复：收尾读取当前状态，failed 终态保留、不发 awaiting_input。
 
+5. **错误观测缺口**：同步流式/非流式路径错误收口只落异常类名
+   （metadata.error_type），消息文本仅存进程内事件——Langfuse 上 ERROR 级别
+   无原因可读（汉森制药 002412 复盘：截断+升级重试两连败原因全靠代码还原）。
+   修复：complete_stream 三个错误出口与 complete_text 异常分支对齐 async
+   路径，落 output.error + status_message（截断含预算说明，异常路径保留
+   部分正文）。
+
 ## 关联
 
 - delta spec: `openspec/changes/improve-analyst-throughput/`、

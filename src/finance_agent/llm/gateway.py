@@ -325,8 +325,15 @@ def complete_text(
         if _gen is not None:
             from contextlib import suppress
 
-            with suppress(Exception):  # 观测失败不阻断
-                _gen.update(metadata={"error_type": type(exc).__name__}, level="ERROR")
+            with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                # 错误原因落观测（对齐 async 路径）：output.error + status_message，
+                # Langfuse UI 错误原因列直接可读，不再只有类名标记
+                _gen.update(
+                    output={"error": str(exc)},
+                    metadata={"error_type": type(exc).__name__},
+                    level="ERROR",
+                    status_message=str(exc)[:500],
+                )
         _close_observation(_gen_cm)
         raise normalize_exception(exc) from exc
     # Langfuse output.answer 与 legacy call_llm 对齐：content 为空时用
@@ -766,6 +773,10 @@ def complete_stream(
                                 "truncated": True,
                             },
                             level="ERROR",
+                            status_message=(
+                                "输出截断：finish_reason=length 且续写（resume 上限 1）"
+                                f"后仍未完成（预算 {budget} tokens）"
+                            ),
                         )
                 yield CanonicalEvent(
                     kind="error",
@@ -777,6 +788,17 @@ def complete_stream(
         try:
             classify_outcome(finish, saw_text_delta=saw_text)
         except Exception as exc:  # noqa: BLE001
+            if _gen is not None:
+                from contextlib import suppress
+
+                with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
+                    # 空输出等合同失败也须落可读原因（此前该出口完全没有观测更新）
+                    _gen.update(
+                        output={"error": str(exc)},
+                        metadata={"error_type": type(exc).__name__},
+                        level="ERROR",
+                        status_message=str(exc)[:500],
+                    )
             yield CanonicalEvent(
                 kind="error", finish_reason=type(exc).__name__, raw={"error": str(exc)}
             )
@@ -791,7 +813,20 @@ def complete_stream(
             from contextlib import suppress
 
             with suppress(Exception):  # noqa: S110 -- 观测失败不阻断
-                _gen.update(metadata={"error_type": type(err).__name__}, level="ERROR")
+                # 错误原因落观测（对齐 async 路径）：部分正文一并保留，
+                # 便于从 trace 直接诊断截断/半失败现场
+                from finance_agent.langfuse_tracing import truncate_for_trace
+
+                _err_out: dict[str, Any] = {"error": str(err)}
+                if _answer or _reasoning:
+                    _err_out["answer"] = truncate_for_trace(_answer)
+                    _err_out["reasoning"] = truncate_for_trace(_reasoning)
+                _gen.update(
+                    output=_err_out,
+                    metadata={"error_type": type(err).__name__},
+                    level="ERROR",
+                    status_message=str(err)[:500],
+                )
         yield CanonicalEvent(
             kind="error", finish_reason=type(err).__name__, raw={"error": str(err)}
         )
