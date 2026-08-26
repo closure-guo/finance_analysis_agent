@@ -92,6 +92,12 @@ session_events journal 时间戳（消费端落库、被限速）。两者在 R3
    重跑 34 分钟再失败）。修复（delta `truncation-escalate-resume`）：升级
    改走 gateway 续写机制——携带首轮正文尾部 + 翻倍剩余配额，两轮拼接返回。
 
+7. **失败路径空标题覆盖**：run_deep_analysis 超时/异常 TOOL_RESULT 不带股票
+   字段 → on_resolved("","") 把会话标题覆盖为 "()"、stock_code 清空（汉森制药
+   复盘；search_stock 解析成功只发事件不落库，会话字段仅在管线完成时写回）。
+   修复：超时/异常 metadata 携带股票字段；on_resolved 空值防护；存储层
+   update_session_for_clarify 空串/退化标题("()")不覆盖。
+
 ## 关联
 
 - delta spec: `openspec/changes/improve-analyst-throughput/`、

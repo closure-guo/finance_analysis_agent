@@ -656,7 +656,13 @@ def _make_run_deep_analysis(
                             tool_call_id="",
                             name="run_deep_analysis",
                             output=_timeout_note,
-                            metadata={"pipeline_timeout": True},
+                            # 携带股票字段：失败路径 on_resolved 据此更新会话标题，
+                            # 不把标题覆盖为 "()"（汉森制药复盘）
+                            metadata={
+                                "pipeline_timeout": True,
+                                "stock_code": stock_code,
+                                "stock_name": stock_name or stock_code,
+                            },
                         ),
                     )
                 )
@@ -687,7 +693,11 @@ def _make_run_deep_analysis(
                             tool_call_id="",
                             name="run_deep_analysis",
                             output=_error_note,
-                            metadata={"pipeline_error": True},
+                            metadata={
+                                "pipeline_error": True,
+                                "stock_code": stock_code,
+                                "stock_name": stock_name or stock_code,
+                            },
                         ),
                     )
                 )
@@ -1396,7 +1406,9 @@ async def stream_agent_to_sse(
                         if sse_type == "report_ready" or tr.name == "run_deep_analysis":
                             stock_code = tr.metadata.get("stock_code", "")
                             stock_name = tr.metadata.get("stock_name", "")
-                            if on_resolved:
+                            # 空解析不得触发 on_resolved（汉森制药复盘：失败路径
+                            # 空值会把会话标题覆盖为 "()"）
+                            if on_resolved and stock_code and stock_name:
                                 on_resolved(stock_code, stock_name)
                             yield _sse(
                                 {

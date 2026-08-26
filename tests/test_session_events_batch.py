@@ -305,3 +305,26 @@ async def test_failed_session_not_overwritten_by_clarifying(tmp_path, monkeypatc
     # failed 会话不应再收到 awaiting_input（前端会误提示等待关注点输入）
     types = [json.loads(r["event_json"]).get("type") for r in store.list_session_events(sid, 0)]
     assert "awaiting_input" not in types
+
+
+@pytest.mark.asyncio
+async def test_clarify_update_ignores_empty_stock_fields(tmp_path, monkeypatch):
+    """update_session_for_clarify SHALL NOT 用空串覆盖已有股票字段/标题。
+
+    汉森制药复盘：run_deep_analysis 超时 TOOL_RESULT 无股票字段 →
+    on_resolved("","") → 标题被写成 "()"、stock_code 被清空。
+    """
+    from finance_agent import session_store as store
+
+    _setup_db(tmp_path, monkeypatch)
+    sid = store.create_session(stock_code="002412", stock_name="汉森制药", status="running")
+    # 先写一个正常标题
+    store.update_session_for_clarify(sid, stock_code="002412", stock_name="汉森制药")
+    store.update_session_for_clarify(
+        sid, stock_code="002412", stock_name="汉森制药", display_name="汉森制药(002412)"
+    )
+    # 空值更新（模拟失败路径 on_resolved("","")）不得覆盖
+    store.update_session_for_clarify(sid, stock_code="", stock_name="", display_name="()")
+    row = store.get_session(sid)
+    assert row["stock_code"] == "002412"
+    assert row["display_name"] == "汉森制药(002412)"

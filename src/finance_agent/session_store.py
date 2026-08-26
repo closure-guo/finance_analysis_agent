@@ -256,16 +256,21 @@ def update_session_for_clarify(
     pending_intent: str | None = None,
     status: str | None = None,
 ) -> bool:
-    """更新澄清阶段的 session 字段。"""
+    """更新澄清阶段的 session 字段。
+
+    股票字段/标题空串不更新（汉森制药复盘：失败路径 on_resolved("","")
+    会把标题覆盖为 "()"、stock_code 清空——空值 SHALL NOT 覆盖已有值）。
+    """
     updates = []
     values = []
-    if stock_code is not None:
+    if stock_code:
         updates.append("stock_code = ?")
         values.append(stock_code)
-    if stock_name is not None:
+    if stock_name:
         updates.append("stock_name = ?")
         values.append(stock_name)
-    if display_name is not None:
+    if display_name and display_name.strip("() \t"):
+        # "()" 等退化标题（f"{name}({code})" 缺内容）视为空，不覆盖已有标题
         updates.append("display_name = ?")
         values.append(display_name)
     if focus is not None:

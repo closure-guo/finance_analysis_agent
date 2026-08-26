@@ -181,3 +181,33 @@ def test_pipeline_timeout_default_is_2400s():
     src_pr = inspect.getsource(PipelineRunner._run)
     assert "PIPELINE_TIMEOUT_DEFAULT_SECONDS" in src_af
     assert "PIPELINE_TIMEOUT_DEFAULT_SECONDS" in src_pr
+
+
+@pytest.mark.asyncio
+async def test_timeout_tool_result_carries_stock_metadata(tmp_path, monkeypatch):
+    """超时 TOOL_RESULT metadata SHALL 携带股票字段，失败时不把标题覆盖为 '()'。
+
+    汉森制药复盘：超时分支 metadata 只带 pipeline_timeout，on_resolved 拿到空值
+    把会话标题刷成 '()'。修复后 metadata 带 stock_code/stock_name。
+    """
+    monkeypatch.setenv("PIPELINE_TIMEOUT_SECONDS", "0.5")
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "test.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="贵州茅台", status="running")
+
+    def _steady_stream(initial_state, config=None, session_id=None):
+        for i in range(40):
+            yield ("custom", {"type": "thinking", "node": "trader", "token": f"t{i}"})
+            time.sleep(0.05)
+
+    monkeypatch.setattr("finance_agent.agent_factory._stream_graph", _steady_stream)
+
+    tool = _make_run_deep_analysis(api_key="fake", session_id=sid)
+    events = []
+    async for ev in tool("600519", "贵州茅台"):
+        events.append(ev)
+
+    tool_results = [e for e in events if e.event_type.value == "tool_result"]
+    md = tool_results[-1].tool_result.metadata
+    assert md.get("stock_code") == "600519", f"超时 TOOL_RESULT 须带 stock_code: {md}"
+    assert md.get("stock_name") == "贵州茅台", f"超时 TOOL_RESULT 须带 stock_name: {md}"
