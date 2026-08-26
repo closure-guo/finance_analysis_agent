@@ -341,10 +341,12 @@ def _make_run_deep_analysis(
         # session_id 非空时才写快照/状态（理论空路径保持现状行为）
         _track_snapshot = bool(session_id)
         # 管线全局超时（环境变量可配置，默认 2400s = 40 分钟；
-        # raise-pipeline-timeout-default delta：600s 与 LLM 端点耗时方差不匹配）
+        # raise-pipeline-timeout-default delta：600s 与 LLM 端点耗时方差不匹配；
+        # <=0 显式禁用——用户决策 2026-08-26：端点方差下预算误伤合法分析）
         pipeline_timeout = float(
             os.environ.get("PIPELINE_TIMEOUT_SECONDS", str(PIPELINE_TIMEOUT_DEFAULT_SECONDS))
         )
+        _timeout_disabled = pipeline_timeout <= 0
         _tree: list[dict] = build_layer_tree() if _track_snapshot else []
         # 管线节点时序（persist-full-session-timeline）：thinking chunk 按 node 分组
         # 持久化到 sessions.pipeline_timelines，写入节奏与 _persist_snapshot 一致
@@ -444,14 +446,16 @@ def _make_run_deep_analysis(
             try:
                 while True:
                     # 墙钟超时（spec pipeline-events「管线超时与中断检测」：自管线
-                    # 启动起算的全局预算，默认 600s）：原实现为单次空闲超时，
-                    # thinking token 持续流动时永不触发——线上 601700 深研管线
-                    # 跑了 71 分钟无人拦截。剩余预算耗尽即抛 TimeoutError，
+                    # 启动起算的全局预算）：剩余预算耗尽即抛 TimeoutError，
                     # 走下方既有 failed + failure_reason 分支。
-                    _remaining = pipeline_timeout - (_time_module.time() - _pipeline_start_time)
-                    if _remaining <= 0:
-                        raise TimeoutError(f"管线执行超过 {pipeline_timeout}s 全局预算")
-                    item = await asyncio.wait_for(chunk_queue.get(), timeout=_remaining)
+                    # PIPELINE_TIMEOUT_SECONDS<=0 显式禁用：不限时长等 chunk。
+                    if _timeout_disabled:
+                        item = await chunk_queue.get()
+                    else:
+                        _remaining = pipeline_timeout - (_time_module.time() - _pipeline_start_time)
+                        if _remaining <= 0:
+                            raise TimeoutError(f"管线执行超过 {pipeline_timeout}s 全局预算")
+                        item = await asyncio.wait_for(chunk_queue.get(), timeout=_remaining)
                     if item is None:
                         break
                     if isinstance(item, Exception):

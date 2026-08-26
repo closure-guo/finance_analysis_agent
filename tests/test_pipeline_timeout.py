@@ -211,3 +211,36 @@ async def test_timeout_tool_result_carries_stock_metadata(tmp_path, monkeypatch)
     md = tool_results[-1].tool_result.metadata
     assert md.get("stock_code") == "600519", f"超时 TOOL_RESULT 须带 stock_code: {md}"
     assert md.get("stock_name") == "贵州茅台", f"超时 TOOL_RESULT 须带 stock_name: {md}"
+
+
+@pytest.mark.asyncio
+async def test_timeout_disabled_with_zero_env(tmp_path, monkeypatch):
+    """PIPELINE_TIMEOUT_SECONDS=0 SHALL 显式禁用超时：慢流完整跑完不判失败。
+
+    用户决策（2026-08-26）：端点耗时方差下 40 分钟预算仍误伤合法分析，
+    部署层选择取消时间限制；默认安全网仅在未显式禁用时生效。
+    """
+    monkeypatch.setenv("PIPELINE_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "test.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="600519", stock_name="贵州茅台", status="running")
+
+    def _slow_stream(initial_state, config=None, session_id=None):
+        # 3 秒慢流（远超任何旧预算基准），最终正常产出报告
+        for i in range(30):
+            yield ("custom", {"type": "thinking", "node": "trader", "token": f"t{i}"})
+            time.sleep(0.1)
+        yield ("updates", {"generate_report": {"final_report": "# 报告"}})
+
+    monkeypatch.setattr("finance_agent.agent_factory._stream_graph", _slow_stream)
+
+    tool = _make_run_deep_analysis(api_key="fake", session_id=sid)
+    events = []
+    async for ev in tool("600519", "贵州茅台"):
+        events.append(ev)
+
+    row = session_store.get_session(sid)
+    assert row["status"] == "completed", (
+        f"禁用超时后慢流应完整跑完并置 completed: {row['status']}, {row.get('failure_reason')}"
+    )
+    assert any(e.event_type.value == "tool_result" for e in events)

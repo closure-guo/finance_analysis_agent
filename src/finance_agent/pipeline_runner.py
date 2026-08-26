@@ -370,7 +370,8 @@ class PipelineRunner:
                         terminalPublished = True
                     break
                 # 超时检查：事件间检测，长时间无事件时标记 failed
-                if time.time() - start_time > pipeline_timeout:
+                # 超时检查：<=0 显式禁用（PIPELINE_TIMEOUT_SECONDS=0，用户决策 2026-08-26）
+                if pipeline_timeout > 0 and time.time() - start_time > pipeline_timeout:
                     session_store.update_session_status(
                         session_id, "failed", failure_reason="管线执行超时"
                     )

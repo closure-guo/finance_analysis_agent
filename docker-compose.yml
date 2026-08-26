@@ -38,6 +38,10 @@ services:
       LANGFUSE_HOST: http://langfuse-web:3000
       # Tavily 搜索 API（从宿主机环境变量或 .env 读取）
       TAVILY_API_KEY: ${TAVILY_API_KEY}
+      # 管线全局超时（用户决策 2026-08-26：本部署取消时间限制。
+      # 方舟端点单次生成方差 3~16 分钟，2400s 预算仍误伤合法分析；
+      # 0=禁用。代码默认 2400s 安全网仅对未显式配置的部署生效）
+      PIPELINE_TIMEOUT_SECONDS: "0"
     volumes:
       - ./reports:/app/reports
       - ./data:/app/data

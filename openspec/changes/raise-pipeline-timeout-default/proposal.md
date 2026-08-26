@@ -15,6 +15,10 @@
 - 默认预算 600s（10 分钟）→ 2400s（40 分钟），覆盖合法 R1+R2 双轮最坏包络
   并留余量；环境变量 `PIPELINE_TIMEOUT_SECONDS` 仍可覆盖，语义不变
   （自管线启动起算的全局墙钟预算，耗尽即终止并置 failed + failure_reason）。
+- 复盘追加（2026-08-26 晚）：2400s 默认下汉森制药仍两度误伤（端点单次生成
+  12~16 分钟），用户决策在本部署显式禁用超时——`PIPELINE_TIMEOUT_SECONDS=0`
+  表示不限时长（不判 failed、不终止），默认安全网仅在未禁用时生效；
+  docker-compose 后端环境置 0 落地该决策。
 
 ## Capabilities
 

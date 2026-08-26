@@ -21,6 +21,12 @@
 - WHEN 管线执行时间超过该环境变量配置的值
 - THEN 超时判定 SHALL 以环境变量配置为准（默认值仅作未配置时兜底）
 
+#### Scenario: 显式禁用超时
+
+- GIVEN 部署方设置 PIPELINE_TIMEOUT_SECONDS=0（或负值）
+- WHEN 管线执行任意时长
+- THEN 系统 SHALL NOT 判定超时（不置 failed、不终止管线），默认安全网仅在未显式禁用时生效
+
 #### Scenario: 管线异常中断原因持久化
 
 - GIVEN 管线执行过程中发生异常（数据拉取失败、LLM 调用失败、节点异常等）
