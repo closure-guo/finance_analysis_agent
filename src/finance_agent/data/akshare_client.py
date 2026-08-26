@@ -31,6 +31,9 @@ _AK_TIMEOUT = 15  # 单次 AKShare 调用超时秒数
 _AK_MAX_RETRIES = 3  # 通用 AKShare 调用重试次数（应对 RemoteDisconnected 限频）
 _AK_RETRY_DELAY = 1.5  # 重试退避秒数
 
+# 基准指数回退链（fetch_benchmark_kline）：沪深300 → 中证800 → 中证500
+_BENCHMARK_FALLBACK_CHAIN = ("000300", "000906", "000905")
+
 
 def _call_ak(func, *args, **kwargs):
     """带超时 + 重试的 AKShare 调用包装。
@@ -475,8 +478,31 @@ class AKShareClient:
         return df.tail(days).reset_index(drop=True)
 
     def fetch_benchmark_kline(self, days: int = 250) -> pd.DataFrame:
-        """沪深 300 日 K(fetch_index_kline 的 000300 特化,行为与原来一致)。"""
-        return self.fetch_index_kline("000300", days=days)
+        """沪深 300 基准日 K，主源失败时回退中证 800/中证 500。
+
+        回退链（沪深300 → 中证800 → 中证500）延续既有「主源失败→备用源」
+        降级模式（fetch_kline 东财→新浪、fetch_industry 东财→cninfo）。
+        2026-08-26 天力锂能复盘：index_zh_a_hist(000300) 超时(15s)+
+        ConnectionError 三连败导致基准缺失、risk beta 不可算。
+        """
+        from datetime import datetime, timedelta
+
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+
+        for index_code in _BENCHMARK_FALLBACK_CHAIN:
+            bench_df: pd.DataFrame | None = _call_ak(
+                ak.index_zh_a_hist,
+                symbol=index_code,
+                period="daily",
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if bench_df is not None and not bench_df.empty:
+                bench_df = bench_df.sort_values("日期").reset_index(drop=True)
+                return bench_df.tail(days).reset_index(drop=True)
+        logger.error("基准K线全部失败: %s", ",".join(_BENCHMARK_FALLBACK_CHAIN))
+        return pd.DataFrame()
 
     # ── 宏观指标 ──
 

@@ -179,3 +179,35 @@ class TestMinYearCheck:
     def test_exactly_2_years_ok(self, client):
         df = pd.DataFrame({"报告日": ["20241231", "20231231"], "value": [1, 2]})
         client._check_min_years(df, "600519")  # should not raise
+
+
+class TestBenchmarkKlineFallback:
+    """基准K线降级回退（天力锂能复盘）：沪深300 主源失败自动切换备用指数。
+
+    2026-08-26 日志实证：index_zh_a_hist(000300) 超时(15s)+ConnectionError
+    三连败 → 基准缺失、risk beta 不可算。回退链延续既有「主源失败→备用源」
+    降级模式（fetch_kline 东财→新浪）。
+    """
+
+    def test_falls_back_to_csi800_when_300_unavailable(self, client, monkeypatch):
+        csi800 = pd.DataFrame({"日期": ["2024-01-01"], "收盘": [1.0]})
+        calls: list[str] = []
+
+        def fake_call(func, *args, **kwargs):
+            sym = kwargs.get("symbol")
+            calls.append(sym)
+            if sym == "000300":
+                return None
+            return csi800
+
+        monkeypatch.setattr("finance_agent.data.akshare_client._call_ak", fake_call)
+        result = client.fetch_benchmark_kline()
+        assert not result.empty
+        assert result["收盘"].iloc[0] == 1.0
+        assert calls[0] == "000300"
+        assert calls[1] == "000906", f"回退链应尝试中证800: {calls}"
+
+    def test_all_benchmarks_fail_returns_empty(self, client, monkeypatch):
+        monkeypatch.setattr("finance_agent.data.akshare_client._call_ak", lambda *a, **k: None)
+        result = client.fetch_benchmark_kline()
+        assert result.empty
