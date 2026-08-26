@@ -80,14 +80,28 @@ session_events journal 时间戳（消费端落库、被限速）。两者在 R3
    收尾因 analysisExecuted=False 走澄清分支覆盖状态并发 awaiting_input。
    修复：收尾读取当前状态，failed 终态保留、不发 awaiting_input。
 
+5. **错误观测缺口**：同步流式/非流式路径错误收口只落异常类名
+   （metadata.error_type），消息文本仅存进程内事件——Langfuse 上 ERROR 级别
+   无原因可读（汉森制药 002412 复盘：截断+升级重试两连败原因全靠代码还原）。
+   修复：complete_stream 三个错误出口与 complete_text 异常分支对齐 async
+   路径，落 output.error + status_message（截断含预算说明，异常路径保留
+   部分正文）。
+
+6. **截断升级重试从头重跑浪费**：升级层（call_llm_streaming）收到截断后
+   用原始 messages + 131072 从头重生成（汉森制药 17 分钟部分正文被丢弃、
+   重跑 34 分钟再失败）。修复（delta `truncation-escalate-resume`）：升级
+   改走 gateway 续写机制——携带首轮正文尾部 + 翻倍剩余配额，两轮拼接返回。
+
 ## 关联
 
 - delta spec: `openspec/changes/improve-analyst-throughput/`、
   `openspec/changes/parse-ark-text-tool-call/`
 - 预存在测试隔离地雷顺带修复：`api.TESTING` 模块级冻结常量与导入顺序耦合
   （test_pipeline_stub.testing_env 显式 patch）
-- 未修（记录）：akshare fetch 阶段 ConnectionError 重试（网络环境问题）；
-  aiohttp `Unclosed client session`（第三方库泄漏，src 无直接引用）
+- 未修（记录）：akshare fetch 阶段 ConnectionError 重试（网络环境问题，已由
+  fetch_benchmark_kline 回退链缓解——沪深300 失败自动切中证800/中证500，
+  其余接口仍走既有 N/A 降级）；aiohttp `Unclosed client session`（第三方库
+  泄漏，src 无直接引用）
 - 遗留观察：单节点生成耗时方差大（3.7~15.7 分钟实测，端点侧问题）
   → 默认预算经 delta `raise-pipeline-timeout-default` 上调至 2400s（40 分钟），
   覆盖合法 R1+R2 双轮最坏包络；极端场景仍可经 PIPELINE_TIMEOUT_SECONDS 覆盖
