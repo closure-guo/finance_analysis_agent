@@ -266,3 +266,42 @@ def test_pipeline_runner_batches_thinking_tokens(tmp_path, monkeypatch):
     assert tokens == [f"t{i}" for i in range(40)], "token 顺序不得被批量打乱"
     seqs = [r["seq"] for r in rows]
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+
+
+@pytest.mark.asyncio
+async def test_failed_session_not_overwritten_by_clarifying(tmp_path, monkeypatch):
+    """管线超时/异常置 failed 后，ReAct 收尾 SHALL NOT 用 clarifying 覆盖。
+
+    601700 复盘：墙钟超时把会话置 failed（failure_reason=管线执行超时），
+    随后 _run_react_analysis 因 analysisExecuted=False 走澄清分支，把状态
+    覆盖为 clarifying 并发 awaiting_input——失败语义丢失、前端还提示等输入。
+    """
+    import time as time_mod
+
+    import finance_agent.agent_factory as agent_factory
+    import finance_agent.api as api_mod
+    from finance_agent import session_store as store
+
+    _setup_db(tmp_path, monkeypatch)
+    sid = store.create_session(status="running")
+
+    async def fake_stream(agent, user_input, **kwargs):
+        # 无 report_ready、无 stock 解析 → analysisExecuted=False 走澄清分支。
+        # 流中模拟 run_deep_analysis 工具的超时分支置 failed（真实时序：
+        # _run_react_analysis 开头会重置 running，failed 发生在流内）
+        store.update_session_status(sid, "failed", failure_reason="管线执行超时")
+        yield "data: " + json.dumps({"type": "thinking_token", "token": "思考"}) + "\n\n"
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kw: object())
+    monkeypatch.setattr(agent_factory, "stream_agent_to_sse", fake_stream)
+
+    req = api_mod.AnalyzeRequest(query="再试一次")
+    await api_mod._run_react_analysis(sid, req, "aid", time_mod.time(), None, None)
+
+    row = store.get_session(sid)
+    assert row["status"] == "failed", f"failed 不得被 clarifying 覆盖: {row['status']}"
+    assert row["failure_reason"] == "管线执行超时"
+
+    # failed 会话不应再收到 awaiting_input（前端会误提示等待关注点输入）
+    types = [json.loads(r["event_json"]).get("type") for r in store.list_session_events(sid, 0)]
+    assert "awaiting_input" not in types

@@ -58,10 +58,36 @@ session_events journal 时间戳（消费端落库、被限速）。两者在 R3
 4. 放大器治理（delta `improve-analyst-throughput`）：技术指标裁剪最近 60 期 +
    citation 失败率停滞提前放行（`f808c94`）
 
+## 修复后复查（2026-08-26 上午，带修复重启后的首次真实运行）
+
+墙钟超时/裁剪/降级均按设计生效（technical 3.7min vs 昨日 11.5min；超时精确
+601s 触发），但暴露三个后续缺陷，已修：
+
+1. **超时空 TOOL_RESULT**：超时分支只发 PROGRESS 不发 TOOL_RESULT，Agent
+   上下文里工具结果为空 → 误判「临时故障」盲目重试、用户看不到失败原因。
+   修复：超时/异常分支均发携带原因与 PIPELINE_TIMEOUT_SECONDS 指引的
+   TOOL_RESULT。
+2. **方舟文本格式工具调用泄漏**：Agent 的重试意图以
+   `<tool_call>NAME<arg_key>K</arg_key><arg_value>V</arg_value></tool_call>`
+   文本输出（方舟 GLM 原生格式，非结构化 tool_calls），harness 不识别 →
+   XML 直接作为最终回答流给用户、重试从未执行。修复：新增流式识别过滤器
+   `harness/ark_tool_call_text`（有界保持、跨增量识别、未闭合块原样返回），
+   chat_stream 将其转为结构化工具调用执行（delta `parse-ark-text-tool-call`）。
+3. **超时后孤儿图线程继续烧 LLM**：executor 线程无法强杀，消费端停止后
+   生产端继续拉流（R2 分析师又跑了 3 分钟）。修复：`graph_cancel` 协作式
+   取消——超时/异常置位后生产端在下一 chunk 停止拉流并 close 生成器。
+4. **failed 被 clarifying 覆盖**：超时置 failed 后，`_run_react_analysis`
+   收尾因 analysisExecuted=False 走澄清分支覆盖状态并发 awaiting_input。
+   修复：收尾读取当前状态，failed 终态保留、不发 awaiting_input。
+
 ## 关联
 
-- delta spec: `openspec/changes/improve-analyst-throughput/`
+- delta spec: `openspec/changes/improve-analyst-throughput/`、
+  `openspec/changes/parse-ark-text-tool-call/`
 - 预存在测试隔离地雷顺带修复：`api.TESTING` 模块级冻结常量与导入顺序耦合
   （test_pipeline_stub.testing_env 显式 patch）
 - 未修（记录）：akshare fetch 阶段 ConnectionError 重试（网络环境问题）；
   aiohttp `Unclosed client session`（第三方库泄漏，src 无直接引用）
+- 遗留观察：fundamental_analyst 单次调用耗时方差大（3min~8.6min），端点侧
+  问题，墙钟预算需按最坏情况配置（当前默认 600s 偏紧，可经
+  PIPELINE_TIMEOUT_SECONDS 调整）
