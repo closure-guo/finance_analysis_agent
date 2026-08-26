@@ -30,6 +30,13 @@ from finance_agent.timeline_builder import (
     apply_pipeline_tool_event,
 )
 
+# 管线全局超时默认预算（raise-pipeline-timeout-default delta）：
+# 2400s（40 分钟）覆盖合法 R1+R2 双轮最坏包络——LLM 端点（方舟 GLM-5.3）
+# 单节点生成耗时实测 3.7~15.7 分钟（2026-08-26 天力锂能 fundamental 940s），
+# 四分析师并行 R1 单轮可达 ~16 分钟。600s 默认会把「合理但偏慢」的分析
+# 误判为超时。部署可用 PIPELINE_TIMEOUT_SECONDS 环境变量覆盖。
+PIPELINE_TIMEOUT_DEFAULT_SECONDS = 2400
+
 logger = logging.getLogger(__name__)
 
 _SSE_DATA_RE = re.compile(r"^data: (.*)$", re.MULTILINE)
@@ -321,8 +328,10 @@ class PipelineRunner:
         # search/tool 事件不带 node 字段，归入「当前运行节点」：
         # node_start 置位、node_complete 清空（用户决策 2026-07-30）
         currentNode = ""
-        # 管线全局超时（环境变量可配置，默认 600 秒）
-        pipeline_timeout = float(os.environ.get("PIPELINE_TIMEOUT_SECONDS", "600"))
+        # 管线全局超时（环境变量可配置，默认 2400s = 40 分钟）
+        pipeline_timeout = float(
+            os.environ.get("PIPELINE_TIMEOUT_SECONDS", str(PIPELINE_TIMEOUT_DEFAULT_SECONDS))
+        )
         start_time = time.time()
         # 终态是否已发布（cancel/超时/异常时为 True，finally 不再发 done）
         terminalPublished = False

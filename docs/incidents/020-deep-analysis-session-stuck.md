@@ -88,6 +88,6 @@ session_events journal 时间戳（消费端落库、被限速）。两者在 R3
   （test_pipeline_stub.testing_env 显式 patch）
 - 未修（记录）：akshare fetch 阶段 ConnectionError 重试（网络环境问题）；
   aiohttp `Unclosed client session`（第三方库泄漏，src 无直接引用）
-- 遗留观察：fundamental_analyst 单次调用耗时方差大（3min~8.6min），端点侧
-  问题，墙钟预算需按最坏情况配置（当前默认 600s 偏紧，可经
-  PIPELINE_TIMEOUT_SECONDS 调整）
+- 遗留观察：单节点生成耗时方差大（3.7~15.7 分钟实测，端点侧问题）
+  → 默认预算经 delta `raise-pipeline-timeout-default` 上调至 2400s（40 分钟），
+  覆盖合法 R1+R2 双轮最坏包络；极端场景仍可经 PIPELINE_TIMEOUT_SECONDS 覆盖
