@@ -162,3 +162,22 @@ async def test_pipeline_timeout_stops_producer_thread(tmp_path, monkeypatch):
     # 40 条 × 50ms 全量约 2s；超时 0.5s + 取消检查间隔后应停在 ~13 条
     assert pulled["n"] < 20, f"取消后生产端仍在拉流: pulled={pulled['n']}"
     assert elapsed < 1.5, f"工具应在超时后立即结束而非等完全部流: {elapsed:.2f}s"
+
+
+def test_pipeline_timeout_default_is_2400s():
+    """默认预算 SHALL 为 2400s（40 分钟）：覆盖合法 R1+R2 双轮最坏包络。
+
+    raise-pipeline-timeout-default delta 之前默认 600s，与 LLM 端点耗时方差
+    （单节点 3.7~15.7 分钟实测）不匹配，把合理但偏慢的分析误判为超时。
+    该常量须同时被 agent_factory 与 pipeline_runner 引用。
+    """
+    from finance_agent.pipeline_runner import PIPELINE_TIMEOUT_DEFAULT_SECONDS, PipelineRunner
+
+    assert PIPELINE_TIMEOUT_DEFAULT_SECONDS == 2400
+    # 两处调用点不得自行内联默认值（防止一处收窄回归）
+    import inspect
+
+    src_af = inspect.getsource(_make_run_deep_analysis)
+    src_pr = inspect.getsource(PipelineRunner._run)
+    assert "PIPELINE_TIMEOUT_DEFAULT_SECONDS" in src_af
+    assert "PIPELINE_TIMEOUT_DEFAULT_SECONDS" in src_pr

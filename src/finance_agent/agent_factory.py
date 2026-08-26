@@ -325,6 +325,7 @@ def _make_run_deep_analysis(
         )
         from finance_agent.harness import ActionType, StreamEvent, ToolResult
         from finance_agent.pipeline_runner import (
+            PIPELINE_TIMEOUT_DEFAULT_SECONDS,
             _current_node,
             _progress,
             apply_node_event,
@@ -339,8 +340,11 @@ def _make_run_deep_analysis(
 
         # session_id 非空时才写快照/状态（理论空路径保持现状行为）
         _track_snapshot = bool(session_id)
-        # 管线全局超时（环境变量可配置，默认 600 秒）
-        pipeline_timeout = float(os.environ.get("PIPELINE_TIMEOUT_SECONDS", "600"))
+        # 管线全局超时（环境变量可配置，默认 2400s = 40 分钟；
+        # raise-pipeline-timeout-default delta：600s 与 LLM 端点耗时方差不匹配）
+        pipeline_timeout = float(
+            os.environ.get("PIPELINE_TIMEOUT_SECONDS", str(PIPELINE_TIMEOUT_DEFAULT_SECONDS))
+        )
         _tree: list[dict] = build_layer_tree() if _track_snapshot else []
         # 管线节点时序（persist-full-session-timeline）：thinking chunk 按 node 分组
         # 持久化到 sessions.pipeline_timelines，写入节奏与 _persist_snapshot 一致
