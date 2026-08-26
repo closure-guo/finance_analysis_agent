@@ -1493,25 +1493,31 @@ async def _run_react_analysis(
             analysisExecuted = True
 
         if not analysisExecuted:
-            # 分析未执行：Agent 仍在澄清阶段，保存状态并通知前端等待输入
-            if currentFocus:
-                await asyncio.to_thread(
-                    update_session_for_clarify,
+            # 分析未执行：Agent 仍在澄清阶段，保存状态并通知前端等待输入。
+            # 管线超时/异常已置 failed 的会话除外——failed 是终态语义，
+            # 被 clarifying 覆盖会丢失失败原因且误发 awaiting_input（601700 复盘）。
+            _session_now = await asyncio.to_thread(get_session, session_id) or {}
+            if _session_now.get("status") != "failed":
+                if currentFocus:
+                    await asyncio.to_thread(
+                        update_session_for_clarify,
+                        session_id,
+                        focus=accumulatedFocus,
+                        status="clarifying",
+                    )
+                else:
+                    await asyncio.to_thread(
+                        update_session_for_clarify, session_id, status="clarifying"
+                    )
+                await registry.publish(
                     session_id,
-                    focus=accumulatedFocus,
-                    status="clarifying",
+                    {
+                        "type": "awaiting_input",
+                        "session_id": session_id,
+                        "pending_intent": "awaiting_focus",
+                        "timestamp": _now(),
+                    },
                 )
-            else:
-                await asyncio.to_thread(update_session_for_clarify, session_id, status="clarifying")
-            await registry.publish(
-                session_id,
-                {
-                    "type": "awaiting_input",
-                    "session_id": session_id,
-                    "pending_intent": "awaiting_focus",
-                    "timestamp": _now(),
-                },
-            )
         # 分析已执行：session 状态已被 _run_graph_streaming 更新为 completed
 
         # done 终态（完整展示字段；registry._run_task 的自动 done 被终态 CAS 拒绝）

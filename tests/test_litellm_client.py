@@ -259,3 +259,33 @@ async def test_trace_metadata_omits_unset_keys(monkeypatch):
     trace = rec.calls[0]["trace"]
     assert trace["name"] == "litellm:deepseek/deepseek-chat"
     assert trace["metadata"] == {}
+
+
+# ── 方舟文本格式工具调用识别（parse-ark-text-tool-call delta）──
+
+
+@pytest.mark.asyncio
+async def test_ark_text_tool_call_converted_to_structured(monkeypatch):
+    """文本流中的 <tool_call> 块 SHALL 转为结构化调用，XML 不进正文。"""
+    ark_text = (
+        "深度分析管线首次调用返回空结果，我重试一次。<tool_call>run_deep_analysis"
+        "<arg_key>stock_code</arg_key><arg_value>601700</arg_value>"
+        "<arg_key>stock_name</arg_key><arg_value>风范股份</arg_value></tool_call>"
+    )
+    # 按 7 字符切块模拟标签跨增量分割
+    events = [FakeEvent(kind="text", text=ark_text[i : i + 7]) for i in range(0, len(ark_text), 7)]
+    events.append(_finished_ev())
+    rec = GatewayRecorder(events)
+    client = LiteLLMClient(model="deepseek/deepseek-chat", api_key="fake")
+    out = await _run(monkeypatch, client, rec)
+
+    joined_text = "".join(r.text_delta for r in out)
+    assert "<tool_call>" not in joined_text, "XML 块不得漏进正文"
+    assert joined_text.startswith("深度分析管线首次调用返回空结果，我重试一次。")
+
+    tool_resp = [r for r in out if r.tool_calls]
+    assert tool_resp, f"应产出结构化工具调用: {out}"
+    call = tool_resp[0].tool_calls[0]
+    assert call.name == "run_deep_analysis"
+    assert call.arguments == {"stock_code": "601700", "stock_name": "风范股份"}
+    assert tool_resp[0].is_finished is True

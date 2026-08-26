@@ -122,6 +122,13 @@ class LiteLLMClient:
             "metadata": _generation_metadata(self.prompt_name, self.prompt_version, self.agent),
         }
 
+        from finance_agent.harness.ark_tool_call_text import ArkToolCallTextFilter
+
+        # 方舟 GLM 偶发把工具调用以 <tool_call>…</tool_call> 文本格式输出在
+        # content（而非结构化 tool_calls）：不识别则 XML 直接漏进正文、意图中的
+        # 调用不执行（601700 复盘，incidents 018/020 家族）。过滤器有界保持，
+        # 正常正文下发延迟不超过一个标签前缀长度。
+        _ark_tool_text = ArkToolCallTextFilter()
         finished_yielded = False
         _gen = complete_stream_async(
             messages,
@@ -144,7 +151,9 @@ class LiteLLMClient:
                 if ev.kind == "reasoning":
                     yield LLMResponse(reasoning_delta=ev.reasoning)
                 elif ev.kind == "text":
-                    yield LLMResponse(text_delta=ev.text)
+                    _piece = _ark_tool_text.feed(ev.text)
+                    if _piece:
+                        yield LLMResponse(text_delta=_piece)
                 elif ev.kind == "tool_call":
                     calls: list[ToolCallRequest] = []
                     for i, tc in enumerate((ev.tool_call or {}).get("calls", [])):
@@ -166,6 +175,21 @@ class LiteLLMClient:
                     yield LLMResponse(tool_calls=calls, is_finished=True)
                     finished_yielded = True
                 elif ev.kind == "finished":
+                    _tail = _ark_tool_text.finish()
+                    if _tail:
+                        yield LLMResponse(text_delta=_tail)
+                    if _ark_tool_text.calls:
+                        # 文本格式工具调用：转为结构化调用，由 Agent 主循环执行
+                        ark_calls = [
+                            ToolCallRequest(
+                                id=f"ark_text_{i}",
+                                name=c["name"],
+                                arguments=dict(c["arguments"]),
+                            )
+                            for i, c in enumerate(_ark_tool_text.calls)
+                        ]
+                        yield LLMResponse(tool_calls=ark_calls, is_finished=True)
+                        finished_yielded = True
                     if not finished_yielded:
                         yield LLMResponse(is_finished=True)
                     return
