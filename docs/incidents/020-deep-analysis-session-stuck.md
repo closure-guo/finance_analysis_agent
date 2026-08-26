@@ -87,6 +87,11 @@ session_events journal 时间戳（消费端落库、被限速）。两者在 R3
    路径，落 output.error + status_message（截断含预算说明，异常路径保留
    部分正文）。
 
+6. **截断升级重试从头重跑浪费**：升级层（call_llm_streaming）收到截断后
+   用原始 messages + 131072 从头重生成（汉森制药 17 分钟部分正文被丢弃、
+   重跑 34 分钟再失败）。修复（delta `truncation-escalate-resume`）：升级
+   改走 gateway 续写机制——携带首轮正文尾部 + 翻倍剩余配额，两轮拼接返回。
+
 ## 关联
 
 - delta spec: `openspec/changes/improve-analyst-throughput/`、

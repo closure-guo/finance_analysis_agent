@@ -215,4 +215,4 @@ def test_truncation_retry_escalates_budget():
         from finance_agent.nodes._llm_utils import call_llm_streaming
 
         assert call_llm_streaming("p", node_name="trader") == "ok"
-    assert captured == [65536, 131072]
+    assert captured == [65536, 131071]
