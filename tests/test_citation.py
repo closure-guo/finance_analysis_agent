@@ -7,6 +7,9 @@ fixture 数据手算验证（来自 conftest.py）：
 - 2024: 资产总计=1000, 负债合计=400 → 资产负债率 = 40%
 """
 
+import pandas as pd
+import pytest
+
 from finance_agent.citation import CitationReport, Claim, verify_claims
 from finance_agent.metrics.dupont import calc_dupont
 
@@ -331,3 +334,177 @@ def self_cpi_state() -> dict:
             }
         }
     }
+
+
+class TestComputationalRegistryCoverage:
+    """注册表全覆盖：metrics/ 全部纯函数指标族可重算（spec 计算型声明重算注册表全覆盖）。"""
+
+    def _state(self, balance_sheet, income_statement, cash_flow, indicators):
+        kline = pd.DataFrame(
+            {
+                "日期": pd.date_range("2025-01-01", periods=80, freq="D").strftime("%Y-%m-%d"),
+                "开盘": [10.0] * 80,
+                "收盘": [10.0 + i * 0.1 for i in range(80)],
+                "最高": [10.5 + i * 0.1 for i in range(80)],
+                "最低": [9.5 + i * 0.1 for i in range(80)],
+                "成交量": [1000.0] * 80,
+            }
+        )
+        bench = kline.copy()
+        return {
+            "balance_sheet": balance_sheet,
+            "income_statement": income_statement,
+            "cash_flow_statement": cash_flow,
+            "financial_indicators": indicators,
+            "kline": kline,
+            "benchmark_kline": bench,
+        }
+
+    def test_registry_covers_all_metric_families(self):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+
+        expected = {
+            "dupont_tree",
+            "solvency_metrics",
+            "profitability_metrics",
+            "efficiency_metrics",
+            "cashflow_metrics",
+            "technical_indicators",
+            "risk_metrics",
+        }
+        assert expected <= set(_COMPUTATIONAL_RECALC)
+
+    def test_solvency_recalc_pass_and_fail(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+        from finance_agent.metrics.solvency import calc_solvency
+
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = _COMPUTATIONAL_RECALC["solvency_metrics"](state)
+        assert (
+            truth["资产负债率"]["2024"]
+            == calc_solvency(balance_sheet, income_statement, indicators)["资产负债率"]["2024"]
+        )
+        ok = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=float(truth["资产负债率"]["2024"]),
+            interpretation="",
+        )
+        bad = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=float(truth["资产负债率"]["2024"]) * 2,
+            interpretation="",
+        )
+        results = verify_claims([ok, bad], state)
+        assert results[0].status == "PASS"
+        assert results[1].status == "FAIL"
+
+    def test_profitability_recalc(self, balance_sheet, income_statement, cash_flow, indicators):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = _COMPUTATIONAL_RECALC["profitability_metrics"](state)
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="profitability_metrics.净利率.2024",
+            stated_value=float(truth["净利率"]["2024"]),
+            interpretation="",
+        )
+        assert verify_claims([claim], state)[0].status == "PASS"
+
+    def test_efficiency_recalc(self, balance_sheet, income_statement, cash_flow, indicators):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = _COMPUTATIONAL_RECALC["efficiency_metrics"](state)
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="efficiency_metrics.总资产周转率.2024",
+            stated_value=float(truth["总资产周转率"]["2024"]),
+            interpretation="",
+        )
+        assert verify_claims([claim], state)[0].status == "PASS"
+
+    def test_cashflow_recalc(self, balance_sheet, income_statement, cash_flow, indicators):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = _COMPUTATIONAL_RECALC["cashflow_metrics"](state)
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="cashflow_metrics.经营现金流/净利润.2024",
+            stated_value=float(truth["经营现金流/净利润"]["2024"]),
+            interpretation="",
+        )
+        assert verify_claims([claim], state)[0].status == "PASS"
+
+    def test_technical_recalc_with_list_index(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
+        """technical_indicators 值为等长 list，子路径须支持 list index。"""
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        from finance_agent.metrics.technical import calc_technical
+
+        truth = calc_technical(state["kline"])
+        ma5_last = truth["MA"]["5"][-1]
+        assert ma5_last is not None
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref=f"technical_indicators.MA.5.{len(truth['MA']['5']) - 1}",
+            stated_value=float(ma5_last),
+            interpretation="",
+        )
+        result = verify_claims([claim], state)[0]
+        assert result.status == "PASS"
+        assert result.ground_truth == pytest.approx(ma5_last)
+
+    def test_risk_recalc(self, balance_sheet, income_statement, cash_flow, indicators):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = _COMPUTATIONAL_RECALC["risk_metrics"](state)
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="risk_metrics.max_drawdown",
+            stated_value=float(truth["max_drawdown"]),
+            interpretation="",
+        )
+        assert verify_claims([claim], state)[0].status == "PASS"
+
+    def test_unregistered_root_counts_coverage_gap(self):
+        state = {"balance_sheet": pd.DataFrame(), "income_statement": pd.DataFrame()}
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="unknown_metrics.某指标.2024",
+            stated_value=1.0,
+            interpretation="",
+        )
+        results = verify_claims([claim], state)
+        report = CitationReport.from_results(results)
+        assert results[0].status == "UNVERIFIABLE"
+        assert report.coverage_gaps == 1
+
+    def test_registered_root_no_coverage_gap(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
+        state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="dupont_tree.L1.2024.ROE",
+            stated_value=0.28,
+            interpretation="",
+        )
+        report = CitationReport.from_results(verify_claims([claim], state))
+        assert report.coverage_gaps == 0

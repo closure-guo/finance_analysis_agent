@@ -11,7 +11,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
+from finance_agent.metrics.efficiency import calc_efficiency
+from finance_agent.metrics.profitability import calc_profitability
+from finance_agent.metrics.risk import calc_risk
+from finance_agent.metrics.solvency import calc_solvency
+from finance_agent.metrics.technical import calc_technical
 
 
 class Claim(BaseModel):
@@ -39,6 +45,7 @@ class CitationResult(BaseModel):
     claim: Claim
     ground_truth: float | str | None = None
     delta: float | None = None
+    coverage_gap: bool = False  # 计算型 claim 根键未注册 → True（覆盖缺口指标）
 
 
 class CitationReport(BaseModel):
@@ -49,6 +56,7 @@ class CitationReport(BaseModel):
     passed: int = 0
     failed: int = 0
     unverifiable: int = 0
+    coverage_gaps: int = 0
     all_passed: bool = False
 
     @classmethod
@@ -63,6 +71,7 @@ class CitationReport(BaseModel):
             passed=passed,
             failed=failed,
             unverifiable=unverifiable,
+            coverage_gaps=sum(1 for r in results if r.coverage_gap),
             all_passed=failed == 0,
         )
 
@@ -92,9 +101,24 @@ def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
 
 
 # ── 计算型 claim 重算注册表 ──
-# field_ref 根键 → 从 state 原始数据重算的函数
+# field_ref 根键 → 从 state 原始数据重算的函数。
+# 覆盖 metrics/ 全部纯函数指标族；未注册根键 → UNVERIFIABLE + coverage_gap 计数。
 _COMPUTATIONAL_RECALC: dict[str, Callable[[dict], dict]] = {
     "dupont_tree": lambda s: calc_dupont(s["balance_sheet"], s["income_statement"]),
+    "solvency_metrics": lambda s: calc_solvency(
+        s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
+    ),
+    "profitability_metrics": lambda s: calc_profitability(
+        s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
+    ),
+    "efficiency_metrics": lambda s: calc_efficiency(
+        s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
+    ),
+    "cashflow_metrics": lambda s: calc_cashflow(
+        s["balance_sheet"], s["income_statement"], s["cash_flow_statement"]
+    ),
+    "technical_indicators": lambda s: calc_technical(s["kline"]),
+    "risk_metrics": lambda s: calc_risk(s["kline"], s.get("benchmark_kline")),
 }
 
 
@@ -106,18 +130,23 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
 
     recalc_fn = _COMPUTATIONAL_RECALC.get(root)
     if recalc_fn is None:
-        return CitationResult(status="UNVERIFIABLE", claim=claim)
+        return CitationResult(status="UNVERIFIABLE", claim=claim, coverage_gap=True)
 
     try:
         recalculated = recalc_fn(state)
     except (KeyError, TypeError):
         return CitationResult(status="UNVERIFIABLE", claim=claim)
 
-    # 从重算结果中按 sub_path 取值
+    # 从重算结果中按 sub_path 取值（dict 键 + list 序号，与 _resolve_field_ref 语义一致）
     current: object = recalculated
     for part in sub_path:
         if isinstance(current, dict):
             current = current.get(part)
+        elif isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return CitationResult(status="UNVERIFIABLE", claim=claim)
         else:
             return CitationResult(status="UNVERIFIABLE", claim=claim)
         if current is None:
