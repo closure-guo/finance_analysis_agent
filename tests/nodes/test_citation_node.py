@@ -4,7 +4,10 @@
 1. 从 analyst_reports 中提取所有 Claim
 2. 调用 verify_claims 校验
 3. 返回 citation_report + citation_pass
+4. 上报 citation_pass / citation_unverifiable_ratio 两个 Langfuse Score
 """
+
+import logging
 
 from finance_agent.citation import Claim
 from finance_agent.models import AnalystReport
@@ -179,3 +182,99 @@ class TestVerifyCitations:
         # 重试上限已达 -> after_citation 必须返回 render，不再 retry
         assert state["citation_pass"] is False
         assert after_citation(state) == "render"
+
+
+class TestUnverifiableRatioScore:
+    """spec「UNVERIFIABLE 占比监控」Scenario「占比上报」。"""
+
+    def _run_node(self, claims_payload, state):
+        report_dict = {
+            "claims": claims_payload,
+        }
+        state = {**state, "analyst_reports": {"fundamental": report_dict}}
+        return verify_citations(state)
+
+    def test_ratio_score_reported(self, monkeypatch):
+        from finance_agent.nodes import citation_node
+
+        captured = {}
+
+        class _Client:
+            def score_current_trace(self, **kwargs):
+                captured[kwargs["name"]] = kwargs
+
+            def update_current_span(self, **kwargs):
+                pass
+
+        monkeypatch.setattr(citation_node, "get_langfuse", lambda: _Client())
+        claims = [
+            {
+                "claim_type": "numerical",
+                "source_type": "data",
+                "field_ref": "solvency_metrics.资产负债率.2024",
+                "stated_value": 40.0,
+                "interpretation": "",
+            },
+            {
+                "claim_type": "numerical",
+                "source_type": "llm_inference",
+                "field_ref": "x",
+                "stated_value": 1.0,
+                "interpretation": "",
+            },
+        ]
+        state = {"solvency_metrics": {"资产负债率": {"2024": 40.0}}}
+        self._run_node(claims, state)
+        assert "citation_unverifiable_ratio" in captured
+        assert captured["citation_unverifiable_ratio"]["value"] == 0.5
+        assert captured["citation_pass"]["value"] == 1.0
+
+    def test_zero_claims_ratio_is_zero(self, monkeypatch):
+        from finance_agent.nodes import citation_node
+
+        captured = {}
+
+        class _Client:
+            def score_current_trace(self, **kwargs):
+                captured[kwargs["name"]] = kwargs
+
+            def update_current_span(self, **kwargs):
+                pass
+
+        monkeypatch.setattr(citation_node, "get_langfuse", lambda: _Client())
+        verify_citations({"analyst_reports": {}})
+        assert captured["citation_unverifiable_ratio"]["value"] == 0.0
+
+    def test_langfuse_failure_warns_not_raises(self, monkeypatch, caplog):
+        from finance_agent.nodes import citation_node
+
+        class _Boom:
+            def score_current_trace(self, **kwargs):
+                raise RuntimeError("langfuse down")
+
+            def update_current_span(self, **kwargs):
+                raise RuntimeError("langfuse down")
+
+        monkeypatch.setattr(citation_node, "get_langfuse", lambda: _Boom())
+        state = {
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+            "analyst_reports": {
+                "a": {
+                    "claims": [
+                        {
+                            "claim_type": "numerical",
+                            "source_type": "data",
+                            "field_ref": "solvency_metrics.资产负债率.2024",
+                            "stated_value": 40.0,
+                            "interpretation": "",
+                        }
+                    ]
+                }
+            },
+        }
+        caplog.set_level(logging.WARNING, logger="finance_agent.citation")
+        result = verify_citations(state)  # 不抛异常
+        assert result["citation_pass"] is True
+        # spec：Langfuse 不可用 SHALL 记 WARN（非 debug）且不阻断业务管线
+        warn_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Langfuse" in r.message for r in warn_records)
