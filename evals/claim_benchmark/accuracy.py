@@ -1,7 +1,8 @@
 """校验器准度测量与门禁（spec evaluation「校验器准度测量与门禁」）。
 
 FAIL 为正类（校验器的可执行产出就是拦截错误 claim）。门禁：整体 F1 ≥ 0.90
-方可宣称校验结果可信；擦边（±5%）与 hedged 子集召回单独披露，不设硬门禁。
+方可宣称校验结果可信；擦边（±5%）与 hedged 子集的分项召回（子集内 FAIL 类
+召回）单独披露，不设硬门禁；子集内整体一致率另字段披露。
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ class AccuracyReport(BaseModel):
     accuracy: float
     borderline_recall: float | None = None
     hedged_recall: float | None = None
+    borderline_subset_agreement: float | None = None
+    hedged_subset_agreement: float | None = None
     gate_passed: bool
     gate_note: str
 
@@ -76,14 +79,27 @@ def measure(entries: list[BenchmarkEntry], *, seed: int = 42) -> AccuracyReport:
     else:
         lo = hi = 0.0
 
-    def _subset_recall(name: str) -> float | None:
+    def _subset_fail_recall(name: str) -> float | None:
+        """子集内 FAIL 类召回：子集中 label==FAIL 的条目里 predicted==FAIL 的比例。
+
+        子集无 FAIL 标注条目时召回不可计算，返回 None（区别于子集为空）。
+        """
+        sub = [(lab, pr) for lab, pr, ss in rows if name in ss]
+        fails = [pr for lab, pr in sub if lab == "FAIL"]
+        if not fails:
+            return None
+        return sum(1 for pr in fails if pr == "FAIL") / len(fails)
+
+    def _subset_agreement(name: str) -> float | None:
         sub = [(lab, pr) for lab, pr, ss in rows if name in ss]
         if not sub:
             return None
         return sum(1 for lab, pr in sub if lab == pr) / len(sub)
 
-    borderline = _subset_recall("borderline")
-    hedged = _subset_recall("hedged")
+    borderline = _subset_fail_recall("borderline")
+    hedged = _subset_fail_recall("hedged")
+    borderline_agreement = _subset_agreement("borderline")
+    hedged_agreement = _subset_agreement("hedged")
     gate_passed = f1 >= F1_GATE
     return AccuracyReport(
         n=len(rows),
@@ -94,6 +110,10 @@ def measure(entries: list[BenchmarkEntry], *, seed: int = 42) -> AccuracyReport:
         accuracy=round(accuracy, 4),
         borderline_recall=None if borderline is None else round(borderline, 4),
         hedged_recall=None if hedged is None else round(hedged, 4),
+        borderline_subset_agreement=(
+            None if borderline_agreement is None else round(borderline_agreement, 4)
+        ),
+        hedged_subset_agreement=None if hedged_agreement is None else round(hedged_agreement, 4),
         gate_passed=gate_passed,
         gate_note=(
             "校验器准度可信（F1 ≥ 0.90）"
@@ -112,8 +132,11 @@ def main() -> None:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         **report.model_dump(),
         "disclosure": (
-            "擦边子集（stated_value 真值 ±5% 内对抗 claim）召回单独披露，不设硬门禁；"
-            "hedged 子集（约/可能/接近措辞）召回单独披露。"
+            "borderline_recall/hedged_recall 为子集内 FAIL 类召回"
+            "（子集中 label==FAIL 的条目里预测为 FAIL 的比例；子集无 FAIL 条目时为 null）；"
+            "borderline_subset_agreement/hedged_subset_agreement 为子集内整体一致率（原口径）。"
+            "擦边子集（stated_value 真值 ±5% 内对抗 claim）与 hedged 子集（约/可能/接近措辞）"
+            "均单独披露，不设硬门禁。"
         ),
     }
     out_dir = Path("reports/claim_benchmark")

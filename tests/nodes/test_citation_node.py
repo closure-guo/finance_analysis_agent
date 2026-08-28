@@ -278,3 +278,30 @@ class TestUnverifiableRatioScore:
         # spec：Langfuse 不可用 SHALL 记 WARN（非 debug）且不阻断业务管线
         warn_records = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert any("Langfuse" in r.message for r in warn_records)
+
+    def test_langfuse_unconfigured_warns_not_raises(self, monkeypatch, caplog):
+        """get_langfuse 返回 None（未配置）时 SHALL 记 WARN 且不阻断。"""
+        from finance_agent.nodes import citation_node
+
+        monkeypatch.setattr(citation_node, "get_langfuse", lambda: None)
+        state = {
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+            "analyst_reports": {
+                "a": {
+                    "claims": [
+                        {
+                            "claim_type": "numerical",
+                            "source_type": "data",
+                            "field_ref": "solvency_metrics.资产负债率.2024",
+                            "stated_value": 40.0,
+                            "interpretation": "",
+                        }
+                    ]
+                }
+            },
+        }
+        caplog.set_level(logging.WARNING, logger="finance_agent.citation")
+        result = verify_citations(state)  # 不抛异常
+        assert result["citation_pass"] is True
+        warn_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Langfuse 未配置" in r.message for r in warn_records)

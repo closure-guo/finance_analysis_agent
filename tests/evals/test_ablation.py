@@ -50,6 +50,30 @@ class TestAggregate:
             == "该层价值未获统计支持"
         )
 
+    def test_citation_pass_rate_increment_with_ci(self):
+        """citation_pass 率层增量须带配对 bootstrap CI（spec：消融以带 CI 的 pass 率衡量）。"""
+        runs = (
+            self._runs("analysts", [False] * 6, [2.0] * 6)
+            + self._runs("plus_debate", [True] * 6, [4.0] * 6)
+            + self._runs("full", [True] * 6, [4.5] * 6)
+        )
+        report = aggregate_results(runs)
+        rate = report["layers"]["debate"]["citation_pass_rate"]
+        assert rate["prev"] == 0.0
+        assert rate["current"] == 1.0
+        assert rate["ci"][0] > 0
+        assert rate["conclusion"] == "显著改进"
+
+    def test_citation_pass_rate_without_support(self):
+        """逐 ticker pass 率交错（t0 降、t1 升）→ CI 含 0 → 未获统计支持。"""
+        runs = self._runs("analysts", [True, False], [3.0, 3.0]) + self._runs(
+            "plus_debate", [False, True], [3.0, 3.0]
+        )
+        report = aggregate_results(runs)
+        rate = report["layers"]["debate"]["citation_pass_rate"]
+        assert rate["ci"][0] <= 0 <= rate["ci"][1]
+        assert rate["conclusion"] == "该层价值未获统计支持"
+
 
 class TestConclusionWording:
     def test_ci_contains_zero_wording(self):

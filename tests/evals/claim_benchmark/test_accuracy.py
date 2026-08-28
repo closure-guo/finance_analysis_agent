@@ -57,17 +57,31 @@ class TestMeasure:
         assert report.f1 < 0.90  # 3/4 召回仍过不了 0.90 门禁（P=1 时 F1≈0.857）
 
     def test_subsets_recall_reported(self):
+        """borderline/hedged_recall 为子集内 FAIL 类召回；子集一致率另字段披露。"""
         report = measure(
             [
                 _entry("FAIL", "FAIL", ["borderline"]),
                 _entry("FAIL", "PASS", ["borderline"]),
                 _entry("PASS", "PASS", ["hedged"]),
+                _entry("FAIL", "PASS", ["hedged"]),
             ]
         )
+        # 子集内 FAIL 召回：borderline 1/2；hedged 0/1
         assert report.borderline_recall == 0.5
-        assert report.hedged_recall == 1.0
+        assert report.hedged_recall == 0.0
+        # 子集一致率（原口径，继续披露）：borderline 1/2；hedged 1/2
+        assert report.borderline_subset_agreement == 0.5
+        assert report.hedged_subset_agreement == 0.5
+
+    def test_subset_without_fail_entries_recall_none(self):
+        """子集非空但无 FAIL 标注条目 → FAIL 召回不可计算为 None；一致率照常披露。"""
+        report = measure([_entry("PASS", "PASS", ["hedged"]), _entry("PASS", "PASS", ["hedged"])])
+        assert report.hedged_recall is None
+        assert report.hedged_subset_agreement == 1.0
 
     def test_empty_subset_recall_is_none(self):
         report = measure([_entry("PASS", "PASS")])
         assert report.borderline_recall is None
         assert report.hedged_recall is None
+        assert report.borderline_subset_agreement is None
+        assert report.hedged_subset_agreement is None

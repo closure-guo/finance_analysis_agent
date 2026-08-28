@@ -260,11 +260,25 @@ def aggregate_results(runs: list[dict], *, B: int = 10_000, seed: int = 42) -> d
                 "ci": (round(lo, 4), round(hi, 4)),
                 "conclusion": conclusion_for_layer((lo, hi)),
             }
-        # citation_pass 率差值（点估计披露，不设 CI 门禁）
-        layer["citation_pass_rate"] = {
+        # citation_pass 率层增量：点估计披露 + 按 ticker pass 率配对 bootstrap CI
+        # （spec：消融报告以带 CI 的 citation_pass 率衡量层增量，口径同 judge 维度）
+        prev_rate_by_ticker = _by_ticker_pass_rate(runs, prev)
+        cur_rate_by_ticker = _by_ticker_pass_rate(runs, variant)
+        pass_common = sorted(set(prev_rate_by_ticker) & set(cur_rate_by_ticker))
+        citation_rate: dict[str, Any] = {
             "prev": report["variants"][prev]["citation_pass_rate"],
             "current": report["variants"][variant]["citation_pass_rate"],
         }
+        if pass_common:
+            lo, hi = paired_bootstrap_ci(
+                [cur_rate_by_ticker[t] for t in pass_common],
+                [prev_rate_by_ticker[t] for t in pass_common],
+                B=B,
+                seed=seed,
+            )
+            citation_rate["ci"] = (round(lo, 4), round(hi, 4))
+            citation_rate["conclusion"] = conclusion_for_layer((lo, hi))
+        layer["citation_pass_rate"] = citation_rate
         report["layers"][layer_names[variant]] = layer
     return report
 
@@ -289,6 +303,15 @@ def _by_ticker_median(runs: list[dict], variant: str) -> dict[str, dict[str, flo
             for dim in JUDGE_DIMS
         }
     return out
+
+
+def _by_ticker_pass_rate(runs: list[dict], variant: str) -> dict[str, float]:
+    """按 ticker 聚合 citation_pass 布尔均值为 pass 率序列（bootstrap 配对单元）。"""
+    passes: dict[str, list[float]] = {}
+    for r in runs:
+        if r["variant"] == variant:
+            passes.setdefault(r["ticker"], []).append(float(bool(r["citation_pass"])))
+    return {t: sum(v) / len(v) for t, v in passes.items()}
 
 
 def run_ablation(

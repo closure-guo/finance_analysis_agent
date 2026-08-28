@@ -498,13 +498,18 @@ class TestComputationalRegistryCoverage:
     def test_registered_root_no_coverage_gap(
         self, balance_sheet, income_statement, cash_flow, indicators
     ):
+        from finance_agent.citation import _COMPUTATIONAL_RECALC
+
         state = self._state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = _COMPUTATIONAL_RECALC["dupont_tree"](state)
         claim = Claim(
             claim_type="computational",
             source_type="data",
             field_ref="dupont_tree.L1.2024.ROE",
-            stated_value=0.28,
+            stated_value=float(truth["L1"]["2024"]["ROE"]),
             interpretation="",
         )
-        report = CitationReport.from_results(verify_claims([claim], state))
+        results = verify_claims([claim], state)
+        report = CitationReport.from_results(results)
+        assert results[0].status == "PASS"
         assert report.coverage_gaps == 0

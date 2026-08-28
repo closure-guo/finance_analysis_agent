@@ -51,6 +51,7 @@ def _report_to_langfuse(report: CitationReport) -> None:
     try:
         client = get_langfuse()
         if client is None:
+            logger.warning("Langfuse 未配置, citation score 未上报")
             return
         fail_count = sum(1 for r in report.results if r.status == "FAIL")
         total = len(report.results)

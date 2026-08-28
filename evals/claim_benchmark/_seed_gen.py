@@ -1,8 +1,8 @@
 """确定性生成 seed.jsonl（不调 LLM；真值由 citation 契约从 fixture 重算得出）。
 
-覆盖：numerical PASS/FAIL、computational 7 根键 PASS/FAIL、borderline（真值
-±2%~-1% 与 +1%~+4.9% 的对抗 FAIL claim）、hedged 措辞、llm_inference
-UNVERIFIABLE、comparative、event。
+覆盖：numerical PASS/FAIL（含 borderline/hedged 对抗条目）、computational 7 根键
+PASS/FAIL/borderline/hedged、llm_inference UNVERIFIABLE、未注册根键 UNVERIFIABLE。
+comparative/event 类型暂未生成，待生产基准集滚动补库时补齐。
 """
 
 from __future__ import annotations
@@ -214,7 +214,8 @@ def main() -> None:
             },
             ensure_ascii=False,
             indent=2,
-        ),
+        )
+        + "\n",
         encoding="utf-8",
     )
     print(f"生成 {len(entries)} 条 → seed.jsonl / meta.json")
