@@ -25,10 +25,25 @@ class TestDisclosureDeadline:
         with pytest.raises(ValueError, match="季末"):
             disclosure_deadline("20240115")
 
+    def test_dashed_period_end_normalized(self):
+        # 真实 fetch_quarterly_income 的报告日为 "2024-09-30"（akshare str[:10] 带横线）
+        assert disclosure_deadline("2024-09-30") == "20241031"
+        assert disclosure_deadline("2024-12-31") == "20250430"
+        assert disclosure_deadline("2024-03-31") == "20240430"
+
+    def test_unnormalizable_period_end_raises_value_error(self):
+        # 归一化后非 8 位数字 → 保持显式 ValueError（由截断层捕获并剔除该行）
+        with pytest.raises(ValueError):
+            disclosure_deadline("N/A")
+        with pytest.raises(ValueError):
+            disclosure_deadline("")
+        with pytest.raises(ValueError):
+            disclosure_deadline("2024")
+
 
 class TestMacroTruncation:
     def test_future_months_truncated(self):
-        macro = {
+        macro: dict = {
             "cpi": {
                 "records": [
                     {"月份": "2024-12", "全国": 0.1},
@@ -153,6 +168,51 @@ class TestTruncateState:
         out = truncate_state(state, "2025-01-14")
         assert [n["title"] for n in out["news_list"]] == ["a"]
         assert [e["title"] for e in out["key_events"]] == ["e1"]
+
+
+class TestRealDataFormats:
+    """真实 akshare 输出格式兼容：横线报告日 / 「日期」列名 / datetime 键。
+
+    fixture 均按 src/finance_agent/data/akshare_client.py 实际产出构造。
+    """
+
+    def test_quarterly_income_dashed_report_date_truncated(self):
+        # fetch_quarterly_income 报告日 "2024-09-30" 带横线，此前 int(period_end[4:6]) 得 0 → 崩
+        qi = pd.DataFrame(
+            {"报告日": ["2024-09-30", "2023-06-30"], "归母净利润(单季)": [100.0, 80.0]}
+        )
+        out = truncate_state({"quarterly_income": qi}, "2024-08-31")
+        # 2024 Q3 披露截止 2024-10-31 > 决策日 → 剔除；2023 H1 截止 2023-08-31 ≤ 决策日 → 保留
+        assert list(out["quarterly_income"]["报告日"]) == ["2023-06-30"]
+
+    def test_reports_with_bad_date_rows_dropped_without_crash(self):
+        # 单行日期非法（如 "N/A"/空串）→ 剔除该行继续，不让整表崩溃（宁缺勿前视）
+        qi = pd.DataFrame(
+            {"报告日": ["N/A", "2024-09-30", ""], "归母净利润(单季)": [1.0, 2.0, 3.0]}
+        )
+        out = truncate_state({"quarterly_income": qi}, "2025-03-01")
+        assert list(out["quarterly_income"]["报告日"]) == ["2024-09-30"]
+
+    def test_financial_indicators_date_column_truncated(self):
+        # fetch_indicators 输出列名为「日期」（值 "2024-12-31" 年报期末），无「报告日」列
+        fi = pd.DataFrame({"日期": ["2024-12-31", "2023-12-31"], "净资产收益率": [20.0, 18.0]})
+        state = {"financial_indicators": fi}
+        # 2024 年报披露截止 2025-04-30 > 决策日 2025-03-01 → 剔除，只剩 2023
+        out = truncate_state(state, "2025-03-01")
+        assert list(out["financial_indicators"]["日期"]) == ["2023-12-31"]
+        out2 = truncate_state(state, "2025-05-01")
+        assert list(out2["financial_indicators"]["日期"]) == ["2024-12-31", "2023-12-31"]
+
+    def test_news_with_datetime_key_filtered_by_date(self):
+        # fetch_news 输出日期键名为 datetime（col_map 发布时间→datetime）
+        state = {
+            "news_list": [
+                {"title": "old", "datetime": "2025-01-10 09:30:00"},
+                {"title": "future", "datetime": "2025-01-20 08:00:00"},
+            ]
+        }
+        out = truncate_state(state, "2025-01-14")
+        assert [n["title"] for n in out["news_list"]] == ["old"]
 
 
 class TestBuildSnapshotMetadata:

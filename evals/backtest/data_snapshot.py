@@ -28,8 +28,15 @@ class SnapshotResult:
 
 
 def disclosure_deadline(period_end: str) -> str:
-    """A 股法定披露截止日近似（报告期期末 → 最晚披露日）。"""
-    year, month = int(period_end[:4]), int(period_end[4:6])
+    """A 股法定披露截止日近似（报告期期末 → 最晚披露日）。
+
+    period_end 兼容 "20240930" 与 "2024-09-30" 等格式：入口先归一化
+    （去非数字字符取前 8 位）；归一后非 8 位数字或月份非季末 → 显式 ValueError。
+    """
+    digits = re.sub(r"\D", "", str(period_end))[:8]
+    if len(digits) != 8:
+        raise ValueError(f"报告期归一化后须为 8 位日期(YYYYMMDD), got {period_end!r}")
+    year, month = int(digits[:4]), int(digits[4:6])
     deadline = {3: "0430", 6: "0831", 9: "1031", 12: "0430"}.get(month)
     if deadline is None:
         raise ValueError(f"报告期须为季末日期(0331/0630/0930/1231), got {period_end!r}")
@@ -44,10 +51,23 @@ def _truncate_kline(df: pd.DataFrame, decision_date: str) -> pd.DataFrame:
 
 
 def _truncate_reports(df: pd.DataFrame, decision_date: str) -> pd.DataFrame:
-    # 报告日缺失的行日期不可判 → 保守剔除（且避免 astype/解析崩溃）
-    df = df.dropna(subset=["报告日"])
-    deadlines = df["报告日"].astype(str).map(lambda d: disclosure_deadline(d))
-    keep = deadlines <= decision_date.replace("-", "")
+    """按披露截止截断财报/指标表；日期列兼容「报告日」与「日期」两种列名。
+
+    报告日缺失/非法的行日期不可判 → 保守剔除（宁缺勿前视），不让整表崩溃。
+    """
+    date_col = next((c for c in ("报告日", "日期") if c in df.columns), None)
+    if date_col is None:
+        return df.copy()
+    df = df.dropna(subset=[date_col])
+    cutoff = decision_date.replace("-", "")
+
+    def _disclosed_by(value: Any) -> bool:
+        try:
+            return disclosure_deadline(str(value)) <= cutoff
+        except ValueError:
+            return False
+
+    keep = df[date_col].map(_disclosed_by)
     return df[keep].copy()
 
 
@@ -59,7 +79,7 @@ def _truncate_dated_list(items: Any, decision_date: str) -> list:
     for item in items:
         if not isinstance(item, dict):
             continue
-        date = str(item.get("date") or item.get("发布时间") or "")[:10]
+        date = str(item.get("date") or item.get("发布时间") or item.get("datetime") or "")[:10]
         if date and date <= decision_date:
             out.append(item)
     return out
@@ -117,10 +137,7 @@ def truncate_state(full_state: dict, decision_date: str) -> dict:
             "financial_indicators",
             "quarterly_income",
         ) and isinstance(value, pd.DataFrame):
-            if "报告日" in value.columns:
-                out[key] = _truncate_reports(value, decision_date)
-            else:
-                out[key] = value.copy()
+            out[key] = _truncate_reports(value, decision_date)
         elif key in ("news_list", "key_events"):
             out[key] = _truncate_dated_list(value, decision_date)
         elif key == "macro_indicators":
