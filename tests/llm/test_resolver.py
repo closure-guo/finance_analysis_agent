@@ -320,3 +320,57 @@ class TestApiFormPrefix:
         assert profile.model == "openai/glm-5.2"
         assert profile.capability.max_output == 65536
         assert profile.probe_required is False
+
+
+class TestContextLengthOverride:
+    """请求级 contextLength / LLM_MAX_CONTEXT 覆盖 capability.max_context（add-context-length-config）。"""
+
+    @staticmethod
+    def _request(**kw) -> dict:
+        cfg = {
+            "model": "openai/gpt-4o",
+            "baseUrl": "https://api.openai.com/v1",
+            "apiKey": "sk-test",
+            "apiForm": "chat_completion",
+        }
+        cfg.update(kw)
+        return cfg
+
+    def test_request_override_max_context(self):
+        """请求级 contextLength 覆盖 capability.max_context。"""
+        profile = resolve_profile(purpose="deep", llm_config=self._request(contextLength=200000))
+        assert profile.capability.max_context == 200000
+        # 其余能力字段不变
+        assert profile.capability.tools != "none"
+
+    def test_env_override_when_no_request_value(self):
+        """无请求级值 + LLM_MAX_CONTEXT → env 覆盖默认。"""
+        env = {"LLM_MAX_CONTEXT": "300000"}
+        profile = resolve_profile(purpose="deep", llm_config=self._request(), _env=env)
+        assert profile.capability.max_context == 300000
+
+    def test_request_takes_priority_over_env(self):
+        """请求级 contextLength 优先于 env LLM_MAX_CONTEXT。"""
+        env = {"LLM_MAX_CONTEXT": "300000"}
+        profile = resolve_profile(
+            purpose="deep", llm_config=self._request(contextLength=200000), _env=env
+        )
+        assert profile.capability.max_context == 200000
+
+    def test_invalid_request_value_raises(self):
+        """contextLength 0/负数 → 显式配置错误，不静默忽略。"""
+        for bad in (0, -5):
+            with pytest.raises(IncompleteLLMConfigError):
+                resolve_profile(purpose="deep", llm_config=self._request(contextLength=bad))
+
+    def test_invalid_env_value_raises(self):
+        """LLM_MAX_CONTEXT 非正整数 → 显式配置错误。"""
+        with pytest.raises(IncompleteLLMConfigError):
+            resolve_profile(
+                purpose="deep", llm_config=self._request(), _env={"LLM_MAX_CONTEXT": "abc"}
+            )
+
+    def test_empty_follows_registry_default(self):
+        """请求与 env 均未配置 → registry 静态 max_context（openai-compatible 128000）。"""
+        profile = resolve_profile(purpose="deep", llm_config=self._request())
+        assert profile.capability.max_context == 128000

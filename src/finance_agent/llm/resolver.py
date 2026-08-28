@@ -174,9 +174,57 @@ def resolve_profile(
     - llm_config：请求级配置（model/baseUrl/apiKey），必须完整
     - _env：环境映射注入（默认 os.environ），每次调用实时读取
     - probe 缓存命中 → capability 以 probe 事实为准；未命中 → probe_required
+    - contextLength 覆盖：请求级 llm_config.contextLength（正整数）优先，
+      否则环境变量 LLM_MAX_CONTEXT（正整数）；无则跟随 registry 静态 max_context
     """
-    return _merge_probe_facts(
-        _resolve_profile_static(purpose=purpose, llm_config=llm_config, preset=preset, _env=_env)
+    profile = _resolve_profile_static(
+        purpose=purpose, llm_config=llm_config, preset=preset, _env=_env
+    )
+    profile = _apply_context_length_override(profile, llm_config, _env)
+    return _merge_probe_facts(profile)
+
+
+def _parse_context_length(value: Any, source: str) -> int:
+    """解析 contextLength / LLM_MAX_CONTEXT 为合法正整数，非法值显式报错不静默忽略。
+
+    :param value: 原始值（int 或可解析的十进制字符串）
+    :param source: 配置来源（用于错误信息，如 "contextLength" / "LLM_MAX_CONTEXT"）
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise IncompleteLLMConfigError(f"{source} 必须为正整数，收到 {value!r}")
+    if isinstance(value, str):
+        if not value.strip().isdigit():
+            raise IncompleteLLMConfigError(f"{source} 必须为正整数，收到 {value!r}")
+        value = int(value.strip())
+    if value <= 0:
+        raise IncompleteLLMConfigError(f"{source} 必须为正整数，收到 {value!r}")
+    return value
+
+
+def _apply_context_length_override(
+    profile: ModelProfile,
+    llm_config: dict[str, Any] | None,
+    _env: Mapping[str, str] | None,
+) -> ModelProfile:
+    """请求级 contextLength 优先、其次 env LLM_MAX_CONTEXT，覆盖 capability.max_context。
+
+    无任何覆盖时原样返回（registry 静态 max_context 保持不变）。
+    """
+    env = _env if _env is not None else os.environ
+    context_length: int | None = None
+    if llm_config:
+        raw = llm_config.get("contextLength")
+        if raw is not None:
+            context_length = _parse_context_length(raw, "contextLength")
+    if context_length is None:
+        env_raw = env.get("LLM_MAX_CONTEXT")
+        if env_raw:
+            context_length = _parse_context_length(env_raw, "LLM_MAX_CONTEXT")
+    if context_length is None or context_length == profile.capability.max_context:
+        return profile
+    return dataclasses.replace(
+        profile,
+        capability=dataclasses.replace(profile.capability, max_context=context_length),
     )
 
 

@@ -115,6 +115,7 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         key = llm_config.get("apiKey")
         thinking = llm_config.get("thinking")
         api_form = llm_config.get("apiForm")
+        context_length = llm_config.get("contextLength")
     elif llm_config is not None:
         # LLMConfig dataclass（camelCase 字段）
         model = getattr(llm_config, "model", None)
@@ -122,6 +123,7 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         key = getattr(llm_config, "apiKey", None)
         thinking = getattr(llm_config, "thinking", None)
         api_form = getattr(llm_config, "apiForm", None)
+        context_length = getattr(llm_config, "contextLength", None)
     else:
         return None
     if not model:
@@ -139,6 +141,8 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         cfg["thinking"] = thinking
     if api_form:
         cfg["apiForm"] = api_form
+    if context_length is not None:
+        cfg["contextLength"] = context_length
     return cfg
 
 
