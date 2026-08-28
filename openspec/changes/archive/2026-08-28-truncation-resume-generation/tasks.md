@@ -24,7 +24,7 @@
 
 - [x] 4.1 全量后端测试通过：`uv run pytest tests/ -m "not live"`（含既有 gateway/_llm_utils/evals 用例不回归）
 - [x] 4.2 `uv run ruff check` / `uv run mypy` 通过（新增模块零告警）
-- [ ] 4.3 手工验证（可选，数据源可达时）：deep 节点真实触发截断 → 续写完成、Langfuse generation 可见 `resume_count=1`、`reports/` 导出完整报告
+- [x] 4.3 手工验证（可选，数据源可达时）：deep 节点真实触发截断 → 续写完成、Langfuse generation 可见 `resume_count=1`、`reports/` 导出完整报告 —— 数据源当前不可达，按「可选」跳过；自动化证据与后续待补项见 `tests/validation/2026-08-28-truncation-resume-generation-validation.md`
 
 ## 5. 文档收尾
 

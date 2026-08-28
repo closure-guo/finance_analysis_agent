@@ -12,7 +12,7 @@
 - [x] 2.1 `src/finance_agent/data/akshare_client.py` `fetch_macro_indicators`：`_safe_macro` 内显式 `sort_values(首列, ascending=False)` 后 `head(6)`（替换 `tail(6)`）
 - [x] 2.2 `src/finance_agent/nodes/analysts.py` `_build_macro_context`：`records[-3:]` → `records[:3]`
 - [x] 2.3 `src/finance_agent/nodes/analysts.py` `_build_fundamental_context`：`df.tail(3)` → `df.head(3)`、`indicators.tail(3)` → `indicators.head(3)`
-- [ ] 2.4 核实财务三表 fetch（`_sina_report`/`_trim_years`）与 `financial_indicators`（compute_metrics）顺序符合降序契约；如未显式排序则补（记录偏离）
+- [x] 2.4 核实财务三表 fetch（`_sina_report`/`_trim_years`）与 `financial_indicators`（compute_metrics）顺序符合降序契约；如未显式排序则补（记录偏离）
 
 ## 3. 验证与收尾
 
