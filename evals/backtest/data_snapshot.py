@@ -7,13 +7,18 @@ stock_quote / industry_pe 等纯当下数据剔除并在 metadata.excluded_field
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-_EXCLUDED_POINT_IN_TIME = ("stock_quote", "industry_pe")
+_EXCLUDED_POINT_IN_TIME = ("stock_quote", "industry_pe", "peer_financials")
+
+# 宏观记录第一个键（月份列）的值兼容 "2024-01" 与 "2024年1月" 两种格式
+_MONTH_RE = re.compile(r"(\d{4})\s*[-年/.]\s*(\d{1,2})")
 
 
 @dataclass
@@ -25,7 +30,9 @@ class SnapshotResult:
 def disclosure_deadline(period_end: str) -> str:
     """A 股法定披露截止日近似（报告期期末 → 最晚披露日）。"""
     year, month = int(period_end[:4]), int(period_end[4:6])
-    deadline = {(3,): "0430", (6,): "0831", (9,): "1031", (12,): "0430"}[(month,)]
+    deadline = {3: "0430", 6: "0831", 9: "1031", 12: "0430"}.get(month)
+    if deadline is None:
+        raise ValueError(f"报告期须为季末日期(0331/0630/0930/1231), got {period_end!r}")
     if month == 12:
         return f"{year + 1}{deadline}"
     return f"{year}{deadline}"
@@ -37,22 +44,61 @@ def _truncate_kline(df: pd.DataFrame, decision_date: str) -> pd.DataFrame:
 
 
 def _truncate_reports(df: pd.DataFrame, decision_date: str) -> pd.DataFrame:
+    # 报告日缺失的行日期不可判 → 保守剔除（且避免 astype/解析崩溃）
+    df = df.dropna(subset=["报告日"])
     deadlines = df["报告日"].astype(str).map(lambda d: disclosure_deadline(d))
     keep = deadlines <= decision_date.replace("-", "")
     return df[keep].copy()
 
 
 def _truncate_dated_list(items: Any, decision_date: str) -> list:
+    """只保留日期可判 ≤ T 的条目；无日期/非 dict 条目保守剔除（可能前视）。"""
     if not isinstance(items, list):
         return []
     out = []
     for item in items:
-        if isinstance(item, dict):
-            date = str(item.get("date") or item.get("发布时间") or "")[:10]
-            if not date or date <= decision_date:
-                out.append(item)
-        else:
+        if not isinstance(item, dict):
+            continue
+        date = str(item.get("date") or item.get("发布时间") or "")[:10]
+        if date and date <= decision_date:
             out.append(item)
+    return out
+
+
+def _record_month(record: dict) -> str | None:
+    """从记录第一个键的值提取 year-month（"2025-01"）；无法解析返回 None。"""
+    if not record:
+        return None
+    first_value = next(iter(record.values()))
+    m = _MONTH_RE.search(str(first_value))
+    if not m:
+        return None
+    year, month = int(m.group(1)), int(m.group(2))
+    if not 1 <= month <= 12:
+        return None
+    return f"{year:04d}-{month:02d}"
+
+
+def _truncate_macro(macro: Any, decision_date: str) -> Any:
+    """宏观指标按 月份 ≤ decision_date 月份 截断。
+
+    每个指标为 {records: [...], as_of_date, freshness}；失败指标为空 list 原样。
+    无法解析月份的条目剔除（保守：宁缺勿前视）。
+    """
+    if not isinstance(macro, dict):
+        return macro
+    cutoff = decision_date[:7]
+    out: dict = {}
+    for key, value in macro.items():
+        if not isinstance(value, dict) or not isinstance(value.get("records"), list):
+            out[key] = value
+            continue
+        records = [
+            r
+            for r in value["records"]
+            if isinstance(r, dict) and (month := _record_month(r)) is not None and month <= cutoff
+        ]
+        out[key] = {**value, "records": records}
     return out
 
 
@@ -77,13 +123,16 @@ def truncate_state(full_state: dict, decision_date: str) -> dict:
                 out[key] = value.copy()
         elif key in ("news_list", "key_events"):
             out[key] = _truncate_dated_list(value, decision_date)
+        elif key == "macro_indicators":
+            out[key] = _truncate_macro(value, decision_date)
         else:
             out[key] = value
     return out
 
 
 def build_snapshot(code: str, decision_date: str, *, client: Any = None) -> SnapshotResult:
-    """拉全量数据 → 截断 → 快照 + 审计元信息。"""
+    """拉全量数据 → 截断 → 快照 + 审计元信息（prompt/模型版本随快照落盘，保证可复现审计）。"""
+    from evals.run import _collect_prompt_versions
     from finance_agent.nodes.fetch import fetch_data
 
     base = {"stock_code": code, "enable_web_search": False}
@@ -95,6 +144,8 @@ def build_snapshot(code: str, decision_date: str, *, client: Any = None) -> Snap
         "data_cutoff": decision_date,
         "disclosure_rule": "legal-deadline-approx(Q1:0430,H1:0831,Q3:1031,FY:next-0430)",
         "excluded_fields": list(_EXCLUDED_POINT_IN_TIME),
+        "prompt_versions": _collect_prompt_versions(),
+        "model": os.getenv("LLM_MODEL") or "unspecified",
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
     }
     return SnapshotResult(state=state, metadata=metadata)

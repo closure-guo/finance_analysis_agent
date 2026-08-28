@@ -49,8 +49,9 @@ def replay_decision(
     snapshot: SnapshotResult | None = None,
     client: Any = None,
     full_kline: pd.DataFrame | None = None,
+    full_benchmark: pd.DataFrame | None = None,
 ) -> dict:
-    """单次回放：快照（截断）→ compute_metrics → 完整 5 层 → 结算（全量 K 线）。"""
+    """单次回放：快照（截断）→ compute_metrics → 完整 5 层 → 结算（全量 K 线/基准）。"""
     snap = snapshot or build_snapshot(code, decision_date, client=client)
     state = {**snap.state}
     state.update(compute_metrics(state))  # type: ignore[arg-type]
@@ -59,9 +60,11 @@ def replay_decision(
     decision = final.get("final_trade_decision") or {}
     kline: pd.DataFrame | None = full_kline if full_kline is not None else state.get("kline")
     entry_price = _close_on_or_before(kline, decision_date)
-    action = str(decision.get("action", ""))
+    raw_action = decision.get("action")
+    # 口径统一：action 缺失记 "unknown"（与 replay_with_consistency 计数一致）
+    action = str(raw_action or "unknown")
     # kline is None 运行时被 entry_price is None 覆盖,显式列出仅为类型收窄
-    if entry_price is None or not action or kline is None:
+    if entry_price is None or not raw_action or kline is None:
         return {
             "decision": decision,
             "settlement": None,
@@ -74,7 +77,8 @@ def replay_decision(
     record = build_decision_record(
         decision, entry_price=entry_price, decision_date=decision_date, code=code
     )
-    settlement = evaluate_decision(record, kline, state.get("benchmark_kline"))
+    benchmark = full_benchmark if full_benchmark is not None else state.get("benchmark_kline")
+    settlement = evaluate_decision(record, kline, benchmark)
     return {
         "decision": decision,
         "settlement": settlement.__dict__ if settlement else None,
@@ -94,14 +98,18 @@ def replay_with_consistency(
     snapshot: SnapshotResult | None = None,
     client: Any = None,
     full_kline: pd.DataFrame | None = None,
+    full_benchmark: pd.DataFrame | None = None,
 ) -> dict:
     """同一快照重复回放 n 次：决策方向一致率 + 首次结算结果（一致性独立维度披露）。"""
     snap = snapshot or build_snapshot(code, decision_date, client=client)
     actions: list[str] = []
     first: dict | None = None
     for _ in range(n):
-        result = replay_decision(code, decision_date, snapshot=snap, full_kline=full_kline)
-        actions.append(str((result.get("decision") or {}).get("action", "hold")))
+        result = replay_decision(
+            code, decision_date, snapshot=snap, full_kline=full_kline, full_benchmark=full_benchmark
+        )
+        # 口径统一：action 缺失记 "unknown"（与 replay_decision 返回一致）
+        actions.append(str(result.get("action") or "unknown"))
         if first is None:
             first = result
     return {
