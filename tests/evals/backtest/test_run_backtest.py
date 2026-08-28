@@ -1,0 +1,302 @@
+"""回测编排聚合逻辑测试：注入 fake replay_fn，不调 LLM/网络。"""
+
+import pandas as pd
+import pytest
+from evals.backtest.run_backtest import _trade_daily_returns, run_backtest
+
+
+def _kline(closes: list[float], start_date: str = "2024-01-01") -> pd.DataFrame:
+    dates = pd.date_range(start_date, periods=len(closes), freq="D").strftime("%Y-%m-%d").tolist()
+    return pd.DataFrame(
+        {
+            "日期": dates,
+            "开盘": closes,
+            "收盘": closes,
+            "最高": [c * 1.01 for c in closes],
+            "最低": [c * 0.99 for c in closes],
+        }
+    )
+
+
+def _closes(n: int, up: float, down: float, start: float = 10.0) -> list[float]:
+    """交替 up/down 日涨幅的收盘序列（控制 Sharpe 量级）。"""
+    closes = [start]
+    for i in range(1, n):
+        closes.append(closes[-1] * (1.0 + (up if i % 2 else down)))
+    return closes
+
+
+def _settlement(settle_date: str, settle_price: float) -> dict:
+    return {
+        "status": "expired",
+        "settle_date": settle_date,
+        "settle_price": settle_price,
+        "hold_days": 10,
+        "decision_return": 0.05,
+        "benchmark_return": None,
+        "decision_excess": None,
+        "decision_hit": True,
+    }
+
+
+def _outcome(
+    code: str,
+    decision_date: str,
+    *,
+    action: str,
+    settle_date: str,
+    settle_price: float,
+    entry_price: float,
+    agreement: float = 1.0,
+) -> dict:
+    """形如 replay_with_consistency（透传修复后）的返回。"""
+    return {
+        "code": code,
+        "decision_date": decision_date,
+        "actions": [action] * 3,
+        "agreement": agreement,
+        "settlement": _settlement(settle_date, settle_price),
+        "entry_price": entry_price,
+        "action": action,
+        "snapshot_metadata": {},
+    }
+
+
+def _fake_replay(outcomes: dict[str, dict], calls: list | None = None):
+    def replay(code, decision_date, *, n=3, full_kline=None, full_benchmark=None):
+        if calls is not None:
+            calls.append(
+                {
+                    "code": code,
+                    "decision_date": decision_date,
+                    "n": n,
+                    "full_kline": full_kline,
+                    "full_benchmark": full_benchmark,
+                }
+            )
+        return outcomes[code]
+
+    return replay
+
+
+class TestTradeDailyReturns:
+    def _dates(self, n: int) -> list[str]:
+        return pd.date_range("2024-01-01", periods=n, freq="D").strftime("%Y-%m-%d").tolist()
+
+    def test_buy_rising_window_with_settle_price_override(self):
+        kline = _kline([100.0, 110.0, 121.0, 108.9, 118.0])
+        result = {
+            "settlement": _settlement("2024-01-04", 112.0),
+            "entry_price": 100.0,
+            "action": "buy",
+            "decision_date": "2024-01-01",
+        }
+        rets = _trade_daily_returns(result, kline)
+        # 持有 T+1..settle：[110, 121, 108.9→按结算价 112 修正]
+        assert rets == pytest.approx([0.10, 0.10, 112.0 / 121.0 - 1.0])
+
+    def test_sell_negates_returns(self):
+        kline = _kline([100.0, 110.0, 121.0, 108.9, 118.0])
+        buy = _trade_daily_returns(
+            {
+                "settlement": _settlement("2024-01-04", 112.0),
+                "entry_price": 100.0,
+                "action": "buy",
+                "decision_date": "2024-01-01",
+            },
+            kline,
+        )
+        sell = _trade_daily_returns(
+            {
+                "settlement": _settlement("2024-01-04", 112.0),
+                "entry_price": 100.0,
+                "action": "sell",
+                "decision_date": "2024-01-01",
+            },
+            kline,
+        )
+        assert sell == pytest.approx([-r for r in buy])
+
+    def test_entry_price_taken_from_result(self):
+        kline = _kline([100.0, 110.0, 121.0])
+        rets = _trade_daily_returns(
+            {
+                "settlement": _settlement("2024-01-02", 110.0),
+                "entry_price": 105.0,
+                "action": "buy",
+                "decision_date": "2024-01-01",
+            },
+            kline,
+        )
+        assert rets == pytest.approx([110.0 / 105.0 - 1.0])
+
+    def test_no_settlement_empty(self):
+        kline = _kline([100.0, 110.0])
+        assert (
+            _trade_daily_returns(
+                {
+                    "settlement": None,
+                    "entry_price": 100.0,
+                    "action": "buy",
+                    "decision_date": "2024-01-01",
+                },
+                kline,
+            )
+            == []
+        )
+
+    def test_nonpositive_entry_empty(self):
+        kline = _kline([100.0, 110.0])
+        assert (
+            _trade_daily_returns(
+                {
+                    "settlement": _settlement("2024-01-02", 110.0),
+                    "entry_price": 0.0,
+                    "action": "buy",
+                    "decision_date": "2024-01-01",
+                },
+                kline,
+            )
+            == []
+        )
+
+    def test_settle_on_decision_date_empty(self):
+        # 结算日不晚于决策日（数据异常）→ 空窗口 → []
+        kline = _kline([100.0, 110.0])
+        assert (
+            _trade_daily_returns(
+                {
+                    "settlement": _settlement("2024-01-01", 100.0),
+                    "entry_price": 100.0,
+                    "action": "buy",
+                    "decision_date": "2024-01-01",
+                },
+                kline,
+            )
+            == []
+        )
+
+
+class TestRunBacktest:
+    def _setup(self, up: float, down: float, *, actions: tuple[str, str] = ("buy", "sell")):
+        """2 只一致标的（bull/bear）+ 1 只低一致率标的（sideways）。"""
+        n = 90
+        closes = _closes(n, up, down)
+        dates = pd.date_range("2024-01-01", periods=n, freq="D").strftime("%Y-%m-%d").tolist()
+        decision_date, settle_date = dates[30], dates[40]
+        settle_price = closes[40]
+        sample = [
+            {"code": "600000", "regime": "bull", "decision_date": decision_date},
+            {"code": "600001", "regime": "bear", "decision_date": decision_date},
+            {"code": "600002", "regime": "sideways", "decision_date": decision_date},
+        ]
+        outcomes = {
+            "600000": _outcome(
+                "600000",
+                decision_date,
+                action=actions[0],
+                settle_date=settle_date,
+                settle_price=settle_price,
+                entry_price=closes[30],
+            ),
+            "600001": _outcome(
+                "600001",
+                decision_date,
+                action=actions[1],
+                settle_date=settle_date,
+                settle_price=settle_price,
+                entry_price=closes[30],
+            ),
+            # 一致率 1/3 < 2/3：剔除绩效、单独披露
+            "600002": _outcome(
+                "600002",
+                decision_date,
+                action="buy",
+                settle_date=settle_date,
+                settle_price=settle_price,
+                entry_price=closes[30],
+                agreement=0.3333,
+            ),
+        }
+        klines = {c: _kline(closes) for c in outcomes}
+        return sample, outcomes, klines, settle_price
+
+    def test_aggregation_excludes_low_consistency(self):
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        calls: list[dict] = []
+        report = run_backtest(sample, klines, repeats=3, replay_fn=_fake_replay(outcomes, calls))
+        assert report["n_sample"] == 3
+        assert report["n_consistent"] == 2
+        excluded = report["consistency"]["excluded_low_consistency"]
+        assert [e["code"] for e in excluded] == ["600002"]
+        assert excluded[0]["agreement"] == 0.3333
+        assert excluded[0]["actions"] == ["buy", "buy", "buy"]
+        assert report["consistency"]["mean_agreement"] == round((1.0 + 1.0 + 0.3333) / 3, 4)
+        # replay_fn 收到全量 K 线通道与 repeats
+        assert all(c["n"] == 3 for c in calls)
+        assert all(c["full_kline"] is klines[c["code"]] for c in calls)
+
+    def test_perf_table_covers_system_and_four_baselines(self):
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
+        assert set(report["perf_table"]) == {"system", "buy_hold", "macd", "kdj", "rsi"}
+        for metrics in report["perf_table"].values():
+            assert set(metrics) == {"CR", "ARR", "Sharpe", "MDD"}
+        assert report["best_baseline"] in {"buy_hold", "macd", "kdj", "rsi"}
+        assert set(report["perf_by_regime"]) == {"bull", "bear"}
+        assert report["sanity"] == "valid"
+        assert not report["conclusion"].startswith("invalid")
+        assert set(report["block_length_sensitivity"]) == {"10", "20", "40"}
+
+    def test_paired_ci_truncation_recorded(self):
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
+        ci = report["sharpe_excess_ci"]
+        assert ci is not None and len(ci) == 2 and ci[0] <= ci[1]
+        trunc = report["methodology"]["ci_truncation"]
+        assert trunc["used"] == min(trunc["system_len"], trunc["baseline_len"])
+        assert trunc["system_len"] > 0 and trunc["baseline_len"] > 0
+
+    def test_high_sharpe_without_note_marked_invalid(self):
+        # 同向交替 +2%/+1% → Sharpe ≈ 45 > 3，无 sanity note → invalid
+        sample, outcomes, klines, _ = self._setup(up=0.02, down=0.01, actions=("buy", "buy"))
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
+        assert report["perf_table"]["system"]["Sharpe"] > 3
+        assert report["sanity"] == "invalid"
+        assert report["conclusion"].startswith("invalid")
+
+    def test_high_sharpe_with_note_valid(self):
+        sample, outcomes, klines, _ = self._setup(up=0.02, down=0.01, actions=("buy", "buy"))
+        report = run_backtest(
+            sample,
+            klines,
+            sanity_note="样本期横跨牛熊；MDD 18%；月度换手",
+            replay_fn=_fake_replay(outcomes),
+        )
+        assert report["sanity"] == "valid"
+        assert not report["conclusion"].startswith("invalid")
+
+    def test_no_consistent_samples_degrades_gracefully(self):
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        low = {code: {**out, "agreement": 0.3333} for code, out in outcomes.items()}
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(low))
+        assert report["n_consistent"] == 0
+        assert report["perf_table"]["system"] == {"CR": 0.0, "ARR": 0.0, "Sharpe": 0.0, "MDD": 0.0}
+        assert report["sharpe_excess_ci"] is None
+        assert report["block_length_sensitivity"] is None
+        assert report["conclusion"] == "样本不足，无法判定"
+        assert report["perf_by_regime"] == {}
+
+    def test_missing_kline_skipped_without_crash(self):
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        klines.pop("600001")  # 一致标的缺 K 线 → 跳过不崩
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
+        assert report["n_consistent"] == 2
+        assert set(report["perf_by_regime"]) == {"bull"}
+
+    def test_report_serializable(self):
+        import json
+
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
+        assert json.loads(json.dumps(report, ensure_ascii=False))["n_sample"] == 3

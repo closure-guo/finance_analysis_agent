@@ -100,7 +100,11 @@ def replay_with_consistency(
     full_kline: pd.DataFrame | None = None,
     full_benchmark: pd.DataFrame | None = None,
 ) -> dict:
-    """同一快照重复回放 n 次：决策方向一致率 + 首次结算结果（一致性独立维度披露）。"""
+    """同一快照重复回放 n 次：决策方向一致率 + 首次结算结果（一致性独立维度披露）。
+
+    结算上下文（settlement/entry_price/action/decision_date）取首轮回放透传，
+    供回测编排把单笔结算摊成持有期日收益（Task 10 _trade_daily_returns）。
+    """
     snap = snapshot or build_snapshot(code, decision_date, client=client)
     actions: list[str] = []
     first: dict | None = None
@@ -118,6 +122,8 @@ def replay_with_consistency(
         "actions": actions,
         "agreement": round(direction_agreement(actions), 4),
         "settlement": (first or {}).get("settlement"),
+        "entry_price": (first or {}).get("entry_price"),
+        "action": (first or {}).get("action"),
         "snapshot_metadata": snap.metadata,
     }
 

@@ -168,3 +168,55 @@ class TestFullBenchmarkChannel:
             full_benchmark=full_bench,
         )
         assert received == [full_bench, full_bench, full_bench]
+
+
+class TestFirstReplayPassthrough:
+    """Task 10：replay_with_consistency 透传首轮回放的结算上下文（entry_price/action）。"""
+
+    def test_consistency_surfaces_first_replay_entry_and_action(self, monkeypatch):
+        settlement = {
+            "status": "hit_target",
+            "settle_date": "2025-01-20",
+            "settle_price": 14.2,
+            "hold_days": 4,
+            "decision_return": 0.352,
+            "benchmark_return": None,
+            "decision_excess": None,
+            "decision_hit": True,
+        }
+
+        def fake_replay(
+            code, decision_date, *, snapshot=None, client=None, full_kline=None, full_benchmark=None
+        ):
+            return {
+                "decision": {"action": "buy"},
+                "settlement": settlement,
+                "entry_price": 10.5,
+                "action": "buy",
+                "decision_date": decision_date,
+                "snapshot_metadata": {},
+            }
+
+        monkeypatch.setattr(rp, "replay_decision", fake_replay)
+        out = rp.replay_with_consistency(
+            "600519", "2025-01-14", n=3, snapshot=SnapshotResult(state={}, metadata={})
+        )
+        assert out["entry_price"] == 10.5
+        assert out["action"] == "buy"
+        assert out["decision_date"] == "2025-01-14"
+        assert out["settlement"] == settlement
+
+    def test_consistency_passthrough_tolerates_missing_keys(self, monkeypatch):
+        """回放失败路径（无 entry_price/action 键）→ 透传 None 而非崩溃。"""
+
+        def fake_replay(
+            code, decision_date, *, snapshot=None, client=None, full_kline=None, full_benchmark=None
+        ):
+            return {"decision": {}, "settlement": None}
+
+        monkeypatch.setattr(rp, "replay_decision", fake_replay)
+        out = rp.replay_with_consistency(
+            "600519", "2025-01-14", n=1, snapshot=SnapshotResult(state={}, metadata={})
+        )
+        assert out["entry_price"] is None
+        assert out["action"] is None
