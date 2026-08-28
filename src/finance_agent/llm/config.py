@@ -25,3 +25,4 @@ class LLMConfig:
     apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
     thinking: str | None = None
     apiForm: str | None = None  # noqa: N815  # API 形式：chat_completion / messages / responses，None 自动路由
+    contextLength: int | None = None  # noqa: N815  # 请求级上下文长度（tokens），None 跟随 registry 静态 max_context

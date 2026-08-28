@@ -1,0 +1,7 @@
+{
+  "version": "0.1.0-seed",
+  "n_reports": 33,
+  "n_claims": 33,
+  "kappa": null,
+  "notes": "种子集为合成确定性数据（synthetic-seed），用于准度测量管线端到端验证；生产基准集（30-50 份历史报告 × 20-30 claim，双人背对背标注 + 仲裁，κ 上报）在此基础上滚动补库替换——补库时追加行并递增 version。"
+}

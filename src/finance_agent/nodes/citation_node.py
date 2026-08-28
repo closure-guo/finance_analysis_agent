@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from finance_agent.citation import CitationReport, Claim, verify_claims
+from finance_agent.langfuse_tracing import get_langfuse
 from finance_agent.models import AnalystReport
 
 logger = logging.getLogger("finance_agent.citation")
@@ -42,12 +43,15 @@ def verify_citations(state: dict) -> dict:
 
 
 def _report_to_langfuse(report: CitationReport) -> None:
-    """上报 citation 校验结果到 Langfuse（trace 级 boolean score + span 明细）。"""
-    try:
-        from finance_agent.langfuse_tracing import get_langfuse
+    """上报 citation 校验结果到 Langfuse（trace 级 boolean score + span 明细）。
 
+    citation_unverifiable_ratio（spec「UNVERIFIABLE 占比监控」）是数据层退化的
+    先行指标；上报失败记 WARN（spec：Langfuse 不可用 SHALL 记 WARN 且不阻断）。
+    """
+    try:
         client = get_langfuse()
         if client is None:
+            logger.warning("Langfuse 未配置, citation score 未上报")
             return
         fail_count = sum(1 for r in report.results if r.status == "FAIL")
         total = len(report.results)
@@ -58,11 +62,18 @@ def _report_to_langfuse(report: CitationReport) -> None:
             comment=f"{'PASS' if report.all_passed else 'FAIL'}: {fail_count}/{total} claims failed",
             metadata={"all_passed": report.all_passed, "fail_count": fail_count, "total": total},
         )
+        ratio = (report.unverifiable / total) if total else 0.0
+        client.score_current_trace(
+            name="citation_unverifiable_ratio",
+            value=round(ratio, 4),
+            data_type="NUMERIC",
+            comment=f"UNVERIFIABLE {report.unverifiable}/{total}; coverage_gaps={report.coverage_gaps}",
+        )
         client.update_current_span(
             metadata={"citation_report": report.model_dump()},
         )
     except Exception as e:
-        logger.debug("Langfuse citation score 上报失败: %s", e)
+        logger.warning("Langfuse citation score 上报失败: %s", e)
 
 
 def _extract_claims(report: AnalystReport | dict) -> list[Claim]:

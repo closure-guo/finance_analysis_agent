@@ -134,3 +134,43 @@ def test_llm_config_request_rejects_invalid_api_form():
 
     with pytest.raises(ValidationError):
         LLMConfigRequest.model_validate({"apiForm": "bogus"})
+
+
+# ── contextLength（add-context-length-config）──
+
+
+def test_llm_config_request_accepts_positive_context_length():
+    """合法正整数 contextLength 通过校验。"""
+    req = LLMConfigRequest.model_validate({"contextLength": 200000})
+    assert req.contextLength == 200000
+
+
+def test_llm_config_request_null_context_length_allowed():
+    """contextLength 缺省/null → None（跟随 registry 静态默认）。"""
+    assert LLMConfigRequest().contextLength is None
+    assert LLMConfigRequest.model_validate({"contextLength": None}).contextLength is None
+
+
+def test_llm_config_request_rejects_non_positive_context_length():
+    """contextLength 为 0 / 负数 / 非整数 → ValidationError（HTTP 422），不静默忽略。"""
+    import pytest
+    from pydantic import ValidationError
+
+    for bad in (0, -5, 1.5, "abc"):
+        with pytest.raises(ValidationError):
+            LLMConfigRequest.model_validate({"contextLength": bad})
+
+
+def test_llm_config_dataclass_carries_context_length():
+    """LLMConfig dataclass 携带 contextLength，_to_llm_config 透传。"""
+    from finance_agent.api import _to_llm_config
+
+    req = LLMConfigRequest(
+        model="openai/gpt-4o",
+        baseUrl="https://api.openai.com/v1",
+        apiKey="sk-x",
+        contextLength=200000,
+    )
+    cfg = _to_llm_config(req)
+    assert cfg is not None
+    assert cfg.contextLength == 200000

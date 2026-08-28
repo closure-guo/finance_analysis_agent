@@ -1947,6 +1947,8 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
   // 思考模式：已保存值优先，其次后端默认，最后内置 enabled
   const [thinking, setThinking] = useState<string>(config.thinking || backendDefaults.thinking || 'enabled')
   const [apiForm, setApiForm] = useState<string>(config.apiForm || DEFAULT_API_FORM)
+  // 上下文长度（tokens）：空串=未设置（跟随 registry 静态 max_context）
+  const [contextLength, setContextLength] = useState<string>(config.contextLength ? String(config.contextLength) : '')
   // 配置管理：另存为输入（delta Decision 10）
   const [profileName, setProfileName] = useState('')
 
@@ -1974,6 +1976,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
     setBaseUrl(active.config.baseUrl)
     setThinking(active.config.thinking || backendDefaults.thinking || 'enabled')
     setApiForm(active.config.apiForm || DEFAULT_API_FORM)
+    setContextLength(active.config.contextLength ? String(active.config.contextLength) : '')
     setCapability(active.config.capability ?? null)
     setTestWarnings([])
     setTestStatus('idle')
@@ -2076,6 +2079,9 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
   }
 
   const handleSave = () => {
+    // contextLength：仅正整数携带；空串/非法（0/负数/非整数）视为未设置（后端直接调用仍 422 拦截）
+    const parsedContextLength = Number(contextLength)
+    const hasValidContextLength = contextLength.trim() !== '' && Number.isInteger(parsedContextLength) && parsedContextLength > 0
     onSave({
       apiKey: apiKey.trim(),
       model: model.trim(),
@@ -2083,6 +2089,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
       // 非 DeepSeek 模型不持久化 thinking（开关已隐藏）
       thinking: showThinkingToggle ? thinking : '',
       apiForm: apiForm,
+      contextLength: hasValidContextLength ? parsedContextLength : undefined,
       // 携带当前 probe 事实（连接三要素未变时保留；变更则由父级 clearCapability 清空）
       capability,
     })
@@ -2120,6 +2127,19 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
+
+        {/* 上下文长度（add-context-length-config）：请求级覆盖，留空跟随静态默认 */}
+        <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>上下文长度（tokens）</label>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          placeholder="留空跟随默认（如 128000）"
+          value={contextLength}
+          onChange={e => setContextLength(e.target.value)}
+          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          style={{ color: 'var(--text-default)' }}
+        />
 
         {/* API Key（保留原有密码输入） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Key</label>

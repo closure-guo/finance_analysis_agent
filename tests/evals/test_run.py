@@ -1,6 +1,7 @@
 """run_experiment:evaluator 装配、quick 模式 judge 跳过、langfuse 必达、结果表。"""
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import evals.run
@@ -100,8 +101,85 @@ class TestLangfuseRequired:
         fake_result = MagicMock()
         fake_result.item_results = []
         fake.get_dataset.return_value.run_experiment.return_value = fake_result
-        with patch("evals.run.get_langfuse", return_value=fake), patch("evals.run._write_report"):
+        with (
+            patch("evals.run.get_langfuse", return_value=fake),
+            patch("evals.run._write_report"),
+            patch("evals.run._verify_prompt_sync", return_value=[]),  # 门禁放行
+        ):
             evals.run.main()
         fake.get_dataset.assert_called_once_with(DATASET_NAME)
         fake.get_dataset.return_value.run_experiment.assert_called_once()
         fake.flush.assert_called_once()
+
+
+class TestVerifyPromptSync:
+    """eval 前置门禁：Langfuse production vs 本地 .md 一致性校验。"""
+
+    def _mock_client(self, texts: dict):
+        client = MagicMock()
+
+        def fake_get(name):
+            p = MagicMock()
+            p.prompt = texts.get(name, "")
+            return p
+
+        client.get_prompt.side_effect = fake_get
+        return client
+
+    def test_all_consistent_returns_empty(self):
+        from evals import run
+
+        prompts_dir = Path(__file__).resolve().parents[2] / "src/finance_agent/prompts"
+        local = {
+            n: (prompts_dir / f"{n}.md").read_text(encoding="utf-8") for n in run._PROMPT_NAMES
+        }
+        client = self._mock_client(local)
+        assert run._verify_prompt_sync(client) == []
+
+    def test_mismatch_lists_differing_prompt(self):
+        from evals import run
+
+        texts = dict.fromkeys(run._PROMPT_NAMES, "x")
+        client = self._mock_client(texts)
+        result = run._verify_prompt_sync(client)
+        assert len(result) == len(run._PROMPT_NAMES)
+        assert run._PROMPT_NAMES[0] in result
+
+    def test_get_prompt_failure_marks_mismatch(self):
+        from evals import run
+
+        client = self._mock_client({})
+        client.get_prompt.side_effect = RuntimeError("boom")
+        result = run._verify_prompt_sync(client)
+        assert len(result) == len(run._PROMPT_NAMES)
+        assert all("拉取失败" in r for r in result)
+
+    def test_crlf_both_sides_literal_normalized_not_mismatched(self, monkeypatch, tmp_path):
+        """本地/远端都为字面 CRLF 文本 → 两侧 .replace 归一化后应一致（不误报）。
+
+        突变敏感：删除生产端任一 .replace 本用例即红。
+        """
+        from evals import run
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        # 复制全部 .md 到 tmp（本地侧固定为纯 CRLF）；远端 fake 侧以 newline=""
+        # 读出同一内容的字面 CRLF（模拟 Langfuse 存储原始 CRLF）。两侧都保留
+        # CRLF 原文、都依赖 .replace("\r\n","\n") 归一化 → 删除任一 replace 都会红。
+        real = Path(__file__).resolve().parents[2] / "src/finance_agent/prompts"
+        for name in run._PROMPT_NAMES:
+            content = (real / f"{name}.md").read_bytes()
+            crlf = content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            (prompts_dir / f"{name}.md").write_bytes(crlf)
+
+        def fake_get(name):
+            p = MagicMock()
+            # 远端 = 本地文件内容的 CRLF 字面版（newline="" 不触发 universal-newlines 归一化）
+            p.prompt = (prompts_dir / f"{name}.md").read_text(encoding="utf-8", newline="")
+            return p
+
+        client = MagicMock()
+        client.get_prompt.side_effect = fake_get
+        monkeypatch.setattr(run, "_PROMPTS_DIR", prompts_dir)
+        # 本地/远端读入都是字面 CRLF：靠 .replace 归一化后一致 → 门禁不得误报
+        assert run._verify_prompt_sync(client) == []

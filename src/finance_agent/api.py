@@ -181,6 +181,7 @@ class LLMConfigRequest(BaseModel):  # noqa: N815  # 字段 camelCase 为前端 J
     apiKey: str | None = None  # noqa: N815  # camelCase 为前端 JSON 契约
     thinking: str | None = None
     apiForm: str | None = None  # noqa: N815  # API 形式：chat_completion / messages / responses，null=litellm 自动路由
+    contextLength: int | None = None  # noqa: N815  # 请求级上下文长度（tokens），null 跟随 registry 静态 max_context
 
     @field_validator("apiForm")
     @classmethod
@@ -189,6 +190,13 @@ class LLMConfigRequest(BaseModel):  # noqa: N815  # 字段 camelCase 为前端 J
             raise ValueError(
                 f"apiForm 必须为 chat_completion / messages / responses 之一，收到 {v!r}"
             )
+        return v
+
+    @field_validator("contextLength")
+    @classmethod
+    def _context_length_positive(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"contextLength 必须为正整数，收到 {v!r}")
         return v
 
 
@@ -249,9 +257,10 @@ def _to_llm_config(req: LLMConfigRequest | None) -> LLMConfig | None:
         apiKey=req.apiKey,
         thinking=req.thinking,
         apiForm=req.apiForm,
+        contextLength=req.contextLength,
     )
     # 全 None 时返回 None，避免无意义的空配置传播
-    if not any([cfg.model, cfg.baseUrl, cfg.apiKey, cfg.thinking]):
+    if not any([cfg.model, cfg.baseUrl, cfg.apiKey, cfg.thinking, cfg.contextLength]):
         return None
     return cfg
 

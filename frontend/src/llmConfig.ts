@@ -10,6 +10,8 @@ export interface LLMConfig {
   thinking: string // "enabled" | "disabled" | ""（空表示未设置，回退后端默认）
   // API 形式：chat_completion / messages / responses；undefined/空=未设置（litellm 自动路由）
   apiForm?: string
+  // 请求级上下文长度（tokens）；undefined/0=未设置（跟随 registry 静态 max_context）
+  contextLength?: number
   // /api/llm-config/test probe 得到的能力矩阵（camelCase JSON 的 capability 字段）。
   // undefined/null 均表示未探测（门禁放行，不误伤）。
   capability?: CapabilityMatrix | null
@@ -80,6 +82,7 @@ export interface LLMConfigPayload {
   apiKey?: string
   thinking?: string
   apiForm?: string
+  contextLength?: number
 }
 
 // API 形式选项（add-llm-api-form）：下拉框展示文案 + 存储值。
@@ -178,6 +181,10 @@ export function buildLlmConfigPayload(cfg: LLMConfig): LLMConfigPayload | null {
   if (cfg.thinking === 'enabled' || cfg.thinking === 'disabled') payload.thinking = cfg.thinking
   // apiForm 仅显式合法值时携带（后端据此前缀推导 + 设 litellm api 参数）
   if (typeof cfg.apiForm === 'string' && API_FORM_VALUES.has(cfg.apiForm)) payload.apiForm = cfg.apiForm
+  // contextLength 仅在正整数时携带（后端校验非法值 422）
+  if (typeof cfg.contextLength === 'number' && Number.isInteger(cfg.contextLength) && cfg.contextLength > 0) {
+    payload.contextLength = cfg.contextLength
+  }
   // 全空（无任何真实配置字段）时返回 null —— apiForm 默认值本身不构成配置，
   // 否则仅下发 {apiForm} 会触发后端「缺 model」报错，破坏 env 回退路径。
   if (!model && !baseUrl && !apiKey && payload.thinking === undefined) return null

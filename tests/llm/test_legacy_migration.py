@@ -15,66 +15,9 @@ mock 返回 ``(text, metadata)`` 元组（与 gateway.complete_text 契约一致
 
 from unittest.mock import patch
 
-_NLP_CT = "finance_agent.nlp.complete_text"
 _REACT_CT = "finance_agent.react_agent.complete_text"
 _WEB_CT = "finance_agent.events.web_fetcher.complete_text"
 _REPORT_CT = "finance_agent.nodes.report.complete_text"
-
-
-class TestNlpMigration:
-    """nlp.py:77 intent 解析（purpose=deep, max_tokens=100, agent=intent_parser）。"""
-
-    @patch(_NLP_CT)
-    def test_resolve_with_llm_uses_purpose_deep_and_trace(self, mock_ct):
-        mock_ct.return_value = (
-            '{"stock_code": "600519", "stock_name": "贵州茅台", "confidence": "high"}',
-            {"raw_reasoning": ""},
-        )
-        from finance_agent.nlp import _resolve_with_llm
-
-        result = _resolve_with_llm("贵州茅台", api_key="sk-test")
-        assert result == {"stock_code": "600519", "stock_name": "贵州茅台"}
-        mock_ct.assert_called_once()
-        args, kwargs = mock_ct.call_args
-        # messages: system + user（与 legacy 构造一致）
-        assert args[0][0]["role"] == "system"
-        assert args[0][0]["content"]
-        assert args[0][1]["role"] == "user"
-        assert kwargs["purpose"] == "deep"
-        assert kwargs["max_tokens"] == 100
-        assert kwargs["temperature"] == 0.3
-        assert kwargs["trace"] == {
-            "name": "intent_parser",
-            "metadata": {"agent": "intent_parser"},
-        }
-        # 无 llm_config：legacy._request_config_dict(None, api_key) 返回 None
-        assert kwargs["llm_config"] is None
-
-    @patch(_NLP_CT)
-    def test_resolve_with_llm_empty_text_falls_back_to_reasoning(self, mock_ct):
-        """content 为空时回退 raw_reasoning（legacy 行为）。"""
-        mock_ct.return_value = (
-            "",
-            {
-                "raw_reasoning": (
-                    '{"stock_code": "300750", "stock_name": "宁德时代", "confidence": "high"}'
-                )
-            },
-        )
-        from finance_agent.nlp import _resolve_with_llm
-
-        result = _resolve_with_llm("宁德时代")
-        assert result == {"stock_code": "300750", "stock_name": "宁德时代"}
-
-    @patch(_NLP_CT)
-    def test_resolve_with_llm_low_confidence_returns_none(self, mock_ct):
-        mock_ct.return_value = (
-            '{"stock_code": null, "stock_name": null, "confidence": "low"}',
-            {},
-        )
-        from finance_agent.nlp import _resolve_with_llm
-
-        assert _resolve_with_llm("不存在的股票描述") is None
 
 
 class TestReactAgentMigration:

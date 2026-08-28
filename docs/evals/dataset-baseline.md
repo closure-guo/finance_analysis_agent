@@ -74,6 +74,23 @@
 
 逐条 dg：中芯国际 2.0→4.0、茅台现金流 1.0→4.0、招商银行 1.0→4.0、比亚迪 1.0→4.0、平安银行 4.0→4.0、宁德时代 1.0→5.0、贵州茅台 1.0→4.0（7/7 ≥4）。
 
+**实验**: `post-prompt-enhancement-v2-langfuse`（2026-08-25 10:14 起，16 items）
+**JSON**: `reports/evals/post-prompt-enhancement-v2-langfuse-20260825-112800.json`（gitignored）
+**变更**: `enhance-agent-prompt-quality` delta（分析师方法论+反幻觉硬规则、辩论对抗指令、决策语义契约、research_manager 评级表态、摘要接地）同步至 Langfuse production label（prompt_versions 全 ver=2）
+
+| 维度 | 基线 08-24 | evrefs 08-24 | 本轮 v2 08-25 | 变化(vs 基线) |
+|---|---|---|---|---|
+| decision_grounding | 1.5714 | 4.1429 | **4.0** | +2.43 |
+| report_relevance | 4.4545 | 5.0 | 4.9091 | +0.45 |
+| consistency | 3.4286 | 4.2857 | 4.0 | +0.57 |
+| debate_quality | 4.5714 | 4.1429 | 4.0 | −0.57（开环波动） |
+| section_coverage | 0.881 | 0.8286 | 0.8762 | −0.005 |
+| judge_failures | 0 | 0 | 0 | 持平 |
+
+逐条 dg（本轮 v2 全 4.0）：中芯国际 4.0、茅台现金流 4.0、招商银行 4.0、比亚迪 4.0、平安银行 4.0、宁德时代 4.0、贵州茅台 4.0（7/7 =4.0，无 <4；对比基线 5/7 =1.0）。
+
+> 注意：① 首次实验 `post-prompt-enhancement-v1-20260825-102839` 因 Langfuse production label 为旧 ver=1（无 evidence_refs/本轮增强）而测的是旧 prompt，结果不反映本轮变更，仅作 prompt 版本漂移证据。② 本轮 debate_quality/consistency 相对 evrefs 有开环波动（−0.14/−0.29），dg 维持 4.0 档；判定增量以 dg 稳定 ≥4.0 与 judge_failures=0 为准。
+
 ## 登记规则
 
 1. 实验完成后，跑批脚本（`evals/run.py`）将 `means` 与 `rows` 写入 `reports/evals/<实验名>-<ts>.json`。

@@ -48,7 +48,7 @@ class TestFetchMacroIndicators:
 
     @patch("finance_agent.data.akshare_client.ak")
     def test_fetch_macro_indicators_takes_newest(self, mock_ak):
-        """降序输入下应取最新 6 期，result['cpi'][0] 为最新一期（首行值）。"""
+        """降序输入下应取最新 6 期，result['cpi']['records'][0] 为最新一期（首行值）。"""
         df = _make_desc_macro_df()
         mock_ak.macro_china_cpi.return_value = df
         mock_ak.macro_china_pmi.return_value = df
@@ -57,7 +57,7 @@ class TestFetchMacroIndicators:
 
         result = AKShareClient().fetch_macro_indicators()
 
-        cpi = result["cpi"]
+        cpi = result["cpi"]["records"]
         assert len(cpi) == 6
         # index 0 应为最新一期（首行 2026年07月份 的值）
         assert cpi[0]["月份"] == "2026年07月份"
@@ -110,15 +110,29 @@ class TestBuildMacroContext:
             {"月份": m, "全国-当月-同比增长": 10.0 + i * 0.1}
             for i, m in enumerate(_DESC_MONTHS[:6])
         ]
-        state = {"macro_indicators": {"cpi": records}}
-
+        state = {
+            "macro_indicators": {
+                "cpi": {"as_of_date": "2026-07-01", "freshness": "fresh", "records": records}
+            }
+        }
         context = _build_macro_context(state)
         payload = context.split("宏观经济指标（近3期）:\n", 1)[1]
         trimmed = json.loads(payload)
-
-        assert len(trimmed["cpi"]) == 3
-        # records[-3:] 会取到 2026年03月/02月/01月；正确应取 07/06/05 月
         assert [r["月份"] for r in trimmed["cpi"]] == _DESC_MONTHS[:3]
+        # fresh 数据不标记滞后，不打扰闭环
+        assert "数据滞后" not in context
+
+    def test_macro_context_marks_stale_indicators(self):
+        """stale 指标须确定性附加"数据滞后"标注（不依赖 LLM 自觉）。"""
+        records = [{"月份": "2025年08月份", "今值": 49.4}]
+        state = {
+            "macro_indicators": {
+                "pmi": {"as_of_date": "2025-08-01", "freshness": "stale", "records": records}
+            }
+        }
+        context = _build_macro_context(state)
+        assert "pmi 数据滞后" in context
+        assert "2025-08" in context
 
 
 class TestBuildFundamentalContext:
@@ -165,3 +179,110 @@ class TestBuildFundamentalContext:
             assert date in context, f"财务指标近3年应包含 {date}"
         for date in ["2021-12-31", "2022-12-31"]:
             assert date not in context, f"财务指标近3年不应包含最老年份 {date}"
+
+
+class TestMacroFreshness:
+    """fetch_macro_indicators 时效守卫：as_of_date + freshness。"""
+
+    def _fresh_df(self):
+        # 首列为"月份"字符串（akshare 真实格式：2026年07月份），第一条 = 本月
+        cur = pd.Timestamp.now()
+        m1 = f"{cur.year}年{cur.month:02d}月份"
+        prev = cur - pd.DateOffset(months=1)
+        m2 = f"{prev.year}年{prev.month:02d}月份"
+        return pd.DataFrame({"月份": [m1, m2], "制造业-指数": [50.2, 49.8]})
+
+    def _stale_df(self):
+        # 首列"月份"，最新一条距今 > 90 天
+        old = pd.Timestamp.now() - pd.DateOffset(months=5)
+        older = old - pd.DateOffset(months=1)
+        return pd.DataFrame(
+            {
+                "月份": [
+                    f"{old.year}年{old.month:02d}月份",
+                    f"{older.year}年{older.month:02d}月份",
+                ],
+                "制造业-指数": [49.4, 49.1],
+            }
+        )
+
+    def test_mark_fresh_and_stale_by_recency(self):
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+
+            def fake_call(func, *a, **k):
+                if func.__name__ == "macro_china_pmi":
+                    return self._stale_df()
+                return self._fresh_df()
+
+            m._call_ak = fake_call
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["pmi"]["freshness"] == "stale"
+            assert result["m2"]["freshness"] == "fresh"
+            assert result["cpi"]["freshness"] == "fresh"
+            # as_of_date 解析出年份月份（stale 那条 = 5 个月前）
+            assert result["pmi"]["as_of_date"].startswith(
+                str((pd.Timestamp.now() - pd.DateOffset(months=5)).year)
+            )
+        finally:
+            m._call_ak = orig
+
+    def test_failure_returns_empty_list(self):
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+            m._call_ak = lambda func, *a, **k: None
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["cpi"] == []
+        finally:
+            m._call_ak = orig
+
+    def test_iso_date_first_column_fresh(self):
+        """首列为 ISO 日期（今天往前 5 天）也能解析 → fresh，as_of_date 归一到当月 1 号。"""
+        import finance_agent.data.akshare_client as m
+
+        cur = pd.Timestamp.now()
+        iso = (cur - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+        prev_iso = (cur - pd.Timedelta(days=35)).strftime("%Y-%m-%d")
+        df = pd.DataFrame({"TRADE_DATE": [iso, prev_iso], "LPR1Y": [3.0, 3.0]})
+        orig = m._call_ak
+        try:
+
+            def fake_call(func, *a, **k):
+                if func.__name__ == "macro_china_lpr":
+                    return df
+                # 其它指标给当前月份 df，全部 fresh，避免干扰断言
+                mth = f"{cur.year}年{cur.month:02d}月份"
+                prev_m = (cur - pd.DateOffset(months=1)).strftime("%Y年%m月份")
+                return pd.DataFrame({"月份": [mth, prev_m], "指数": [50.0, 49.0]})
+
+            m._call_ak = fake_call
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["lpr"]["freshness"] == "fresh"
+            expected = (cur - pd.Timedelta(days=5)).replace(day=1).date().isoformat()
+            assert result["lpr"]["as_of_date"] == expected
+        finally:
+            m._call_ak = orig
+
+    def test_parse_failure_marks_stale(self):
+        """首列无法解析（如 unknown）→ stale + as_of_date=None（fail-safe）。"""
+        import finance_agent.data.akshare_client as m
+
+        orig = m._call_ak
+        try:
+            df = pd.DataFrame(
+                {"month": ["unknown", "also-not-a-date"], "制造业-指数": [49.4, 49.1]}
+            )
+            m._call_ak = lambda func, *a, **k: df
+            client = AKShareClient()
+            result = client.fetch_macro_indicators()
+            assert result["cpi"]["freshness"] == "stale"
+            assert result["cpi"]["as_of_date"] is None
+        finally:
+            m._call_ak = orig

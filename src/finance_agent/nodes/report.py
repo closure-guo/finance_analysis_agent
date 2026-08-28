@@ -115,6 +115,7 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         key = llm_config.get("apiKey")
         thinking = llm_config.get("thinking")
         api_form = llm_config.get("apiForm")
+        context_length = llm_config.get("contextLength")
     elif llm_config is not None:
         # LLMConfig dataclass（camelCase 字段）
         model = getattr(llm_config, "model", None)
@@ -122,6 +123,7 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         key = getattr(llm_config, "apiKey", None)
         thinking = getattr(llm_config, "thinking", None)
         api_form = getattr(llm_config, "apiForm", None)
+        context_length = getattr(llm_config, "contextLength", None)
     else:
         return None
     if not model:
@@ -139,6 +141,8 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
         cfg["thinking"] = thinking
     if api_form:
         cfg["apiForm"] = api_form
+    if context_length is not None:
+        cfg["contextLength"] = context_length
     return cfg
 
 
@@ -178,6 +182,7 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
     system = (
         "你是投研报告编辑。根据用户关注点和各层分析产出，写一段 150-200 字的研究聚焦摘要，"
         "紧扣用户关注点组织语言，点出最关键的结论与数据。纯文本，不使用 emoji，不输出标题。"
+        "内容仅基于所提供材料中的数据组织，不得引入材料外的数值或推测。"
     )
     prompt = (
         f"股票: {stock_name}\n用户关注点: {focus}\n关注维度: {tags_desc}\n\n"
