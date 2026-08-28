@@ -91,7 +91,8 @@ def run_backtest(
         )
         results.append({**item, **outcome})
     consistent = [r for r in results if r["agreement"] >= CONSISTENCY_FLOOR]
-    excluded = [
+    # spec「一致率报告」：逐只披露方向一致率（含被剔除标的），excluded 为其低一致率子集
+    per_symbol: list[dict[str, Any]] = [
         {
             "code": r["code"],
             "regime": r["regime"],
@@ -99,8 +100,8 @@ def run_backtest(
             "actions": r["actions"],
         }
         for r in results
-        if r["agreement"] < CONSISTENCY_FLOOR
     ]
+    excluded = [p for p in per_symbol if p["agreement"] < CONSISTENCY_FLOOR]
     system_returns: list[float] = []
     baseline_returns: dict[str, list[float]] = {s: [] for s in BASELINE_STRATEGIES}
     regime_returns: dict[str, list[float]] = {}
@@ -153,6 +154,7 @@ def run_backtest(
             "mean_agreement": (
                 round(sum(r["agreement"] for r in results) / len(results), 4) if results else None
             ),
+            "per_symbol": per_symbol,
             "excluded_low_consistency": excluded,
         },
         "perf_table": table,

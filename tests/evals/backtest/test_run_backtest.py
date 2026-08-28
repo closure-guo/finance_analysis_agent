@@ -236,6 +236,31 @@ class TestRunBacktest:
         assert all(c["n"] == 3 for c in calls)
         assert all(c["full_kline"] is klines[c["code"]] for c in calls)
 
+    def test_consistency_discloses_per_symbol_agreement(self):
+        # spec「一致率报告」：报告 SHALL 含各标的方向一致率与全池均值。
+        # per_symbol 覆盖全部标的（含被剔除的），与 mean_agreement /
+        # excluded_low_consistency 并存披露。
+        sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
+        report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
+        per_symbol = report["consistency"]["per_symbol"]
+        assert [p["code"] for p in per_symbol] == ["600000", "600001", "600002"]
+        by_code = {p["code"]: p for p in per_symbol}
+        assert by_code["600000"] == {
+            "code": "600000",
+            "regime": "bull",
+            "agreement": 1.0,
+            "actions": ["buy", "buy", "buy"],
+        }
+        assert by_code["600001"]["regime"] == "bear"
+        assert by_code["600001"]["actions"] == ["sell", "sell", "sell"]
+        assert by_code["600001"]["agreement"] == 1.0
+        # 一致率 1/3 被剔除的标的也在 per_symbol 中披露（不因剔除而隐去）
+        assert by_code["600002"]["agreement"] == 0.3333
+        assert by_code["600002"]["regime"] == "sideways"
+        # 既有披露字段保持不变
+        assert report["consistency"]["mean_agreement"] == round((1.0 + 1.0 + 0.3333) / 3, 4)
+        assert [e["code"] for e in report["consistency"]["excluded_low_consistency"]] == ["600002"]
+
     def test_perf_table_covers_system_and_four_baselines(self):
         sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
         report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
