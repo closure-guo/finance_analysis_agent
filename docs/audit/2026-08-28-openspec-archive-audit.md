@@ -39,19 +39,27 @@
 
 | 类别 | 数量 | 说明 |
 |---|---|---|
-| 已归档 | 11 | thinking-stream-banner-display、hide-tool-use-banner-during-web-search、fix-pipeline-banner-and-eta、fix-history-report-anchor、fix-node-timer-real-lifecycle、redesign-pipeline-hierarchical-timeline、remove-evals-local-nonlangfuse-path、harden-llm-gateway-governance、migrate-off-legacy-llm-shim、align-ark-glm-param-defaults、add-llm-api-form |
+| 已归档 | **16** | thinking-stream-banner-display、hide-tool-use-banner-during-web-search、fix-pipeline-banner-and-eta、fix-history-report-anchor、fix-node-timer-real-lifecycle、redesign-pipeline-hierarchical-timeline、remove-evals-local-nonlangfuse-path、harden-llm-gateway-governance、migrate-off-legacy-llm-shim、align-ark-glm-param-defaults、add-llm-api-form、agent-trace-content-fidelity、add-report-export、add-context-length-config（补实现后）、add-llm-provider-gateway、truncation-resume-generation |
 | 重复已删 | 1 | improve-decision-grounding（archive 已有 2026-08-24 副本） |
-| 主规范库 | 11 → 21 | 新增 llm-* 10 个 + 合并 evaluation/trace-observability/frontend/pipeline-events/session-persistence 内容 |
-| 新增验证报告 | 3 | 2026-08-28-{migrate-off-legacy-llm-shim, align-ark-glm-param-defaults, add-llm-api-form}-validation.md（自动化证据：后端 162 + 前端 54 测试通过，真实环境项标 ⬜ follow-up） |
-| 活跃变更 | 19 | 全部卡在「人工验证 / 真实 LLM·行情 / ADR（agent 不得新建）/ 校准门禁」等硬性人工关卡，或属 in-progress 功能工作 |
+| 主规范库 | 11 → 22 | 新增 llm-* 11 个 + report-export，合并 evaluation/trace-observability/frontend/pipeline-events/session-persistence 内容 |
+| 新增/重写验证报告 | 6 | 2026-08-28-{migrate, align, add-llm-api-form, truncation}-validation.md + add-context-length-config 失实报告重写 |
+| 活跃变更 | **14** | 全部卡在「真实 LLM / 真实 Langfuse 对账 / ADR（agent 不得新建）/ 校准 ≥80% / E2E 门禁」等硬性人工关卡，或属未实现 / in-progress 功能工作 |
+| 提交 | 3 | 542a009（归档+sync+回填+审计）、2d5fcc9（context-length 实现）、0bd6684（再归档 2 个） |
 
-**sync 大会战已完成**：主规范库覆盖全部 delta 能力域，唯一未 sync 的是 `add-context-length-config`（实现缺失，待决策：补实现走完整管线 或 撤销 delta + 失实验证报告）。
+**sync 大会战已完成**：主规范库覆盖全部 delta 能力域；add-context-length-config 已按用户决策补实现（TDD）+ 重写失实报告 + 归档。
 
-### 剩余 19 个活跃变更分类
-- **待决策**：add-context-length-config（3/3 勾但实现缺失，验证报告失实）
-- **0 勾选已实现（6）**：add-report-export、data-ordering-citation-contract、langfuse-trace-agent-attribution、decision-outcome-tracking、agent-trace-content-fidelity、agent-evaluation-suite——tasks 含校准≥80% / 人工 ADR / 真实行情对账等未完成人工关卡，不能虚勾
-- **近完成待人工门禁（3）**：truncation-resume-generation（4.3）、harden-llm-output-validation（6.5 真实 LLM）、enable-deepseek-thinking-mode（7.5 nightly + 7.6 ADR）
-- **in-progress**：harden-evaluation-rigor（17/20，当前分支工作）、add-custom-llm-api（64/66，9.6/9.7 真实 LLM 验证）、add-llm-provider-gateway（22/23）、refactor-frontend-stream-store（21/58）、restore-session-on-refresh（13/15）、fix-stream-event-routing（11/13）、fix-analysis-ux-polish（0/15 部分实现）、transparent-system-events（0/21 未实现）、fix-citation-contract-diseases（0/5 新建）
+### 剩余 14 个活跃变更（全部需人工/真实环境）
+| 卡点 | 变更 |
+|---|---|
+| 真实 LLM 人工验证 | add-custom-llm-api（9.6/9.7）、harden-llm-output-validation（6.5）、enable-deepseek-thinking-mode（7.5） |
+| 人工 ADR（agent 不得新建） | enable-deepseek-thinking-mode（7.6）、decision-outcome-tracking（前置）、harden-evaluation-rigor（1 项） |
+| 真实 Langfuse 对账 | langfuse-trace-agent-attribution（3.2/4.6） |
+| E2E + 人工验证（交互类） | restore-session-on-refresh（4.3/4.4）、fix-stream-event-routing（5.3/5.4） |
+| 校准 ≥80% + 托管 Evaluator | agent-evaluation-suite（2 项） |
+| 实跑对账 | data-ordering-citation-contract（3.2；2.4 已核实） |
+| in-progress | harden-evaluation-rigor（17/20，当前分支工作）、refactor-frontend-stream-store（21/58） |
+| 未实现 | transparent-system-events（0/21）、fix-analysis-ux-polish（0/15 部分） |
+| 进行中（用户 WIP） | fix-citation-contract-diseases（0/5，工作区未提交，含 3 个失败测试） |
 
 ## 2. 总览矩阵（28 个活跃变更）
 
