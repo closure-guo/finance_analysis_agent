@@ -18,6 +18,7 @@ import concurrent.futures
 import contextlib
 import json
 import os
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -324,6 +325,7 @@ def _make_run_deep_analysis(
         )
         from finance_agent.harness import ActionType, StreamEvent, ToolResult
         from finance_agent.pipeline_runner import (
+            PIPELINE_TIMEOUT_DEFAULT_SECONDS,
             _current_node,
             _progress,
             apply_node_event,
@@ -338,8 +340,11 @@ def _make_run_deep_analysis(
 
         # session_id 非空时才写快照/状态（理论空路径保持现状行为）
         _track_snapshot = bool(session_id)
-        # 管线全局超时（环境变量可配置，默认 600 秒）
-        pipeline_timeout = float(os.environ.get("PIPELINE_TIMEOUT_SECONDS", "600"))
+        # 管线全局超时（环境变量可配置，默认 2400s = 40 分钟；
+        # raise-pipeline-timeout-default delta：600s 与 LLM 端点耗时方差不匹配）
+        pipeline_timeout = float(
+            os.environ.get("PIPELINE_TIMEOUT_SECONDS", str(PIPELINE_TIMEOUT_DEFAULT_SECONDS))
+        )
         _tree: list[dict] = build_layer_tree() if _track_snapshot else []
         # 管线节点时序（persist-full-session-timeline）：thinking chunk 按 node 分组
         # 持久化到 sessions.pipeline_timelines，写入节奏与 _persist_snapshot 一致
@@ -397,13 +402,23 @@ def _make_run_deep_analysis(
         loop = asyncio.get_event_loop()
         chunk_queue: asyncio.Queue = asyncio.Queue()
 
+        # 超时/异常后协作式终止生产端（spec pipeline-events：超时 SHALL 终止管线
+        # 执行）。图跑在 executor 线程无法强杀；消费端停止后生产端若继续拉流，
+        # 会孤儿式烧完剩余 LLM 调用（601700 复盘：超时后 R2 分析师又跑了 3 分钟）。
+        graph_cancel = threading.Event()
+
         def _run_graph():
+            gen = _stream_graph(initial_state, session_id=session_id)
             try:
-                for mode, chunk in _stream_graph(initial_state, session_id=session_id):
+                for mode, chunk in gen:
+                    if graph_cancel.is_set():
+                        break
                     asyncio.run_coroutine_threadsafe(chunk_queue.put((mode, chunk)), loop)
             except Exception as e:
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(e), loop)
             finally:
+                with contextlib.suppress(BaseException):
+                    gen.close()  # GeneratorExit 传播关闭底层 graph.stream，阻断后续节点
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(None), loop)
 
         loop.run_in_executor(_pipeline_executor, _run_graph)
@@ -428,7 +443,15 @@ def _make_run_deep_analysis(
 
             try:
                 while True:
-                    item = await asyncio.wait_for(chunk_queue.get(), timeout=pipeline_timeout)
+                    # 墙钟超时（spec pipeline-events「管线超时与中断检测」：自管线
+                    # 启动起算的全局预算，默认 600s）：原实现为单次空闲超时，
+                    # thinking token 持续流动时永不触发——线上 601700 深研管线
+                    # 跑了 71 分钟无人拦截。剩余预算耗尽即抛 TimeoutError，
+                    # 走下方既有 failed + failure_reason 分支。
+                    _remaining = pipeline_timeout - (_time_module.time() - _pipeline_start_time)
+                    if _remaining <= 0:
+                        raise TimeoutError(f"管线执行超过 {pipeline_timeout}s 全局预算")
+                    item = await asyncio.wait_for(chunk_queue.get(), timeout=_remaining)
                     if item is None:
                         break
                     if isinstance(item, Exception):
@@ -607,7 +630,8 @@ def _make_run_deep_analysis(
                             )
                         )
             except TimeoutError:
-                # 管线全局超时：置 failed + failure_reason
+                # 管线全局超时：置 failed + failure_reason，并协作式终止生产端线程
+                graph_cancel.set()
                 if _track_snapshot:
                     _session_store.update_session_status(
                         session_id, "failed", failure_reason="管线执行超时"
@@ -617,8 +641,28 @@ def _make_run_deep_analysis(
                         content="分析失败：管线执行超时",
                     )
                 )
+                # 超时也必须给 Agent 主循环一个 TOOL_RESULT：空结果会让模型误判
+                # 「临时故障」盲目重试，且用户看不到失败原因（601700 复盘）。
+                _timeout_note = (
+                    f"深度分析管线执行超时：全局预算 {pipeline_timeout:.0f}s 已耗尽，"
+                    "管线已终止且会话标记为失败。如需继续可将环境变量 "
+                    "PIPELINE_TIMEOUT_SECONDS 调大后重新发起分析。"
+                )
+                _put_event(
+                    StreamEvent(
+                        event_type=ActionType.TOOL_RESULT,
+                        content=_timeout_note,
+                        tool_result=ToolResult(
+                            tool_call_id="",
+                            name="run_deep_analysis",
+                            output=_timeout_note,
+                            metadata={"pipeline_timeout": True},
+                        ),
+                    )
+                )
             except Exception as e:
-                # 异常兜底：置 failed + failure_reason（后台 Task 独立处理异常，不再 re-raise）
+                # 异常兜底：置 failed + failure_reason，并协作式终止生产端线程
+                graph_cancel.set()
                 if _track_snapshot:
                     await asyncio.to_thread(
                         _session_store.update_session_status,
@@ -627,9 +671,24 @@ def _make_run_deep_analysis(
                         failure_reason=f"{type(e).__name__}: {e}",
                     )
                 # 下发错误事件，使 SSE 转发层能感知异常（不 re-raise，仅通知）
+                _error_note = f"深度分析管线异常终止：{type(e).__name__}: {e}"
                 _put_event(
                     StreamEvent.progress(
                         content=f"分析失败：{type(e).__name__}: {e}",
+                    )
+                )
+                # 与超时同因：异常路径也必须发 TOOL_RESULT，Agent 才能向用户
+                # 转述失败原因而非拿到空结果
+                _put_event(
+                    StreamEvent(
+                        event_type=ActionType.TOOL_RESULT,
+                        content=_error_note,
+                        tool_result=ToolResult(
+                            tool_call_id="",
+                            name="run_deep_analysis",
+                            output=_error_note,
+                            metadata={"pipeline_error": True},
+                        ),
                     )
                 )
             else:

@@ -349,11 +349,16 @@ def call_llm_streaming(
     # gateway 按 Task 2.2 合同把截断/空输出归一为 typed error，但管线节点直调
     # 本函数无兜底（evals 跑批暴露：一次 finish_reason=length 炸整跑批）。
     # 与 call_llm_for_json 的「服务瞬时故障重试一次」同语义；非 retryable 直接上抛。
-    # 截断特例（Task 2.2「预算复核」）：重试时预算加倍（16384→32768）——
-    # reasoning 与正文共享配额的端点（方舟 GLM，incident 017 同族）16384 对
-    # 长 JSON 节点不够，原预算复读大概率再截。
+    # 截断特例（delta truncation-escalate-resume）：升级重试以续写进行——
+    # 复用 gateway 续写机制（已生成正文尾部注入 + 续写指令），配额取翻倍
+    # 预算（131072）扣除已生成部分。汉森制药复盘：从头重跑 34 分钟再失败，
+    # 首轮 17 分钟的部分正文被整段丢弃。
     from finance_agent.llm import errors as _llm_errors
+    from finance_agent.llm.adapters.litellm_adapter import build_resume_kwargs
     from finance_agent.llm.errors import LLMError, OutputTruncatedError
+
+    # 截断升级预算（官方上限）
+    _ESCALATE_BUDGET = 131072
 
     # complete_stream 基线参数：对齐 gateway 合约（purpose=deep / temperature=0.3 /
     # max_tokens=65536——GLM 官方默认，deep 长 JSON 节点 reasoning 与正文共享配额，
@@ -366,13 +371,16 @@ def call_llm_streaming(
         "trace": trace,
     }
     escalate: dict = {}
+    # 续写场景下的已完成正文累积（升级重试不从头重跑，返回值须拼接两轮）
+    carried_answer = ""
+    attempt_messages: list[dict] = messages
     for attempt in range(2):
         answer_parts: list[str] = []
         try:
             # _call_base + escalate 合并下发（escalate 覆盖 max_tokens：
-            # 截断翻倍至官方上限 131072）。不能在调用处裸拼 **_call_base, **escalate——
+            # 截断续写的翻倍剩余配额）。不能在调用处裸拼 **_call_base, **escalate——
             # 两处同键（max_tokens）会抛 TypeError，须先经 dict display 合并。
-            for ev in complete_stream(messages, **{**_call_base, **escalate}):
+            for ev in complete_stream(attempt_messages, **{**_call_base, **escalate}):
                 if ev.kind == "reasoning" and writer:
                     writer({"type": "thinking", "node": node_name, "token": ev.reasoning})
                 elif ev.kind == "text":
@@ -385,11 +393,20 @@ def call_llm_streaming(
                         _llm_errors, ev.finish_reason or "", _llm_errors.UnknownLLMError
                     )
                     raise err_cls(ev.raw.get("error") or ev.finish_reason or "LLM error")
-            return "".join(answer_parts)
+            return carried_answer + "".join(answer_parts)
         except OutputTruncatedError:
             if attempt == 1:
                 raise
-            escalate = {"max_tokens": 131072}  # 预算复核：截断→翻倍至官方上限
+            # 升级重试改续写（delta truncation-escalate-resume）：携带首轮
+            # 正文尾部 + 翻倍预算扣除已生成的剩余配额，不重发原始问题
+            prior_text = carried_answer + "".join(answer_parts)
+            resumed = build_resume_kwargs(
+                {"messages": list(messages), "max_tokens": _ESCALATE_BUDGET},
+                prior_text=prior_text,
+            )
+            attempt_messages = resumed["messages"]
+            escalate = {"max_tokens": resumed["max_tokens"]}
+            carried_answer = prior_text
         except LLMError as exc:
             if not exc.retryable or attempt == 1:
                 raise

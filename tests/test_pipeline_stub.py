@@ -24,11 +24,20 @@ os.environ.pop("LANGFUSE_SECRET_KEY", None)
 
 
 @pytest.fixture
-def testing_env():
-    """TESTING=1 + STUB_SCENARIO=pipeline 环境，测试后恢复。"""
-    env = {"TESTING": "1", "STUB_SCENARIO": "pipeline"}
-    with patch.dict(os.environ, env):
-        yield
+def testing_env(monkeypatch):
+    """TESTING=1 + STUB_SCENARIO=pipeline 环境，测试后恢复。
+
+    api.TESTING 是模块导入时冻结的常量（api.py:95）：若 finance_agent.api
+    被更早的无 TESTING 测试先导入，本 fixture 仅改环境变量时 build_agent
+    仍会拿到 TESTING=False 走真实 LLM 客户端（测试顺序耦合）。显式 patch
+    模块属性，使本 fixture 与导入顺序解耦。
+    """
+    import finance_agent.api as api_mod
+
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("STUB_SCENARIO", "pipeline")
+    monkeypatch.setattr(api_mod, "TESTING", True)
+    yield
 
 
 def _collect_events(tool) -> list:

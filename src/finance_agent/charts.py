@@ -64,6 +64,17 @@ def _safe_float(val, default=None):
         return default
 
 
+def _nan_series(values: list) -> list[float]:
+    """序列中 None 归一为 nan，供 bar/fill_between 消费。
+
+    数据契约中 None 合法（增速在基期缺失/为 0 时、股价涨幅在缺前年
+    数据时为 None）；plot 原生容忍 None，但 bar/fill_between 会因
+    object 数组抛 TypeError（线上 chart_growth_vs_price 缺图根因）。
+    nan 在两类图表中均按缺口的语义断开。
+    """
+    return [float("nan") if v is None else v for v in values]
+
+
 def _year_from_date(date_str) -> str:
     return str(date_str)[:4]
 
@@ -328,7 +339,7 @@ def _chart_roe(data: dict, out: str) -> str | None:
     roe = [a.get("roe") for a in annual]
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
-    ax.fill_between(range(len(years)), roe, alpha=0.15, color=_C_ORANGE)
+    ax.fill_between(range(len(years)), _nan_series(roe), alpha=0.15, color=_C_ORANGE)
     ax.plot(years, roe, marker="o", color=_C_ORANGE, linewidth=2.5, label="ROE")
     ax.axhline(y=15, color="#999", linewidth=1, linestyle="--", label="优秀线 15%")
     ax.set_ylabel("ROE（%）", fontsize=10)
@@ -460,9 +471,9 @@ def _chart_growth_vs_price(data: dict, out: str) -> str | None:
         else:
             price_vals.append(None)
 
-    ax.bar(x - w, rev_vals, w, label="营收增速", color=_C_BLUE, alpha=0.85)
-    ax.bar(x, profit_vals, w, label="净利润增速", color=_C_RED, alpha=0.85)
-    ax.bar(x + w, price_vals, w, label="股价涨幅", color=_C_GREEN, alpha=0.85)
+    ax.bar(x - w, _nan_series(rev_vals), w, label="营收增速", color=_C_BLUE, alpha=0.85)
+    ax.bar(x, _nan_series(profit_vals), w, label="净利润增速", color=_C_RED, alpha=0.85)
+    ax.bar(x + w, _nan_series(price_vals), w, label="股价涨幅", color=_C_GREEN, alpha=0.85)
     ax.set_ylabel("变化率（%）", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(growth_years)
@@ -689,7 +700,7 @@ def _chart_dashboard(data: dict, out: str) -> str | None:
     if gy:
         ax.bar(
             np.arange(len(gy)) - 0.15,
-            growth.get("revenue_growth", []),
+            _nan_series(growth.get("revenue_growth", [])),
             0.3,
             color=_C_BLUE,
             alpha=0.7,
@@ -697,7 +708,7 @@ def _chart_dashboard(data: dict, out: str) -> str | None:
         )
         ax.bar(
             np.arange(len(gy)) + 0.15,
-            growth.get("profit_growth", []),
+            _nan_series(growth.get("profit_growth", [])),
             0.3,
             color=_C_RED,
             alpha=0.7,
