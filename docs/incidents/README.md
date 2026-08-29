@@ -27,6 +27,7 @@
 | 017  | 2026-08-16 | [方舟 GLM-5.2 reasoning 吃满 max_tokens 配额 — 截断/空输出炸行](017-ark-glm-reasoning-token-starvation.md) | 已修复 |
 | 018  | 2026-08-17 | [LLM Provider 迁移连环兼容性故障 - 7 bug 全景与 Gateway 根治重构](018-llm-provider-migration-gateway-refactor.md) | 已修复(表层)/重构落地 |
 | 019  | 2026-08-24 | [LLM 输出截断治理 — 静默截断、重试空转与 reasoning 配额吃空](019-llm-output-truncation-governance.md) | 阶段修复 |
+| 020  | 2026-08-28 | [citation 校验器契约疾病 — 索引错位、词表分裂与容差失真制造大面积假 FAIL](020-citation-contract-diseases-20260828.md) | 已修复(待合并) |
 
 ---
 
@@ -36,6 +37,11 @@
 
 - [001](001-llm-hallucination-20260601.md) LLM 编造财务数字、行业PE无源、PE口径混淆
 - [019](019-llm-output-truncation-governance.md) 静默截断/重试空转/reasoning 配额吃空 → 续写 + 预算对齐官方治理
+
+### 引用校验（citation）
+
+- [006](006-citation-infinite-loop-20260716.md) 深度模式无响应 - citation 重试无限循环
+- [020](020-citation-contract-diseases-20260828.md) 考卷与答案册不同源：context 裁剪索引/中文词表/绝对容差 → 61% 假 FAIL；负索引约定 + 单一词表 + 相对容差，离线重判 41→5（残量全为真幻觉）
 
 ### 评分与分析模型
 

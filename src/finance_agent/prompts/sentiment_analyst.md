@@ -27,7 +27,7 @@
     {
       "claim_type": "entity",
       "source_type": "data",
-      "field_ref": "news_list.<index>.title",
+      "field_ref": "news_list.0.title",
       "stated_value": "茅台Q1营收增15%",
       "interpretation": "近期有正面业绩新闻"
     }

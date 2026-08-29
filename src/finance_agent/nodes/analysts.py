@@ -150,7 +150,13 @@ def _build_technical_context(state: dict) -> str:
 
     indicators = state.get("technical_indicators") or {}
     if indicators:
-        sections.append(f"技术指标数据:\n{json.dumps(indicators, ensure_ascii=False, default=str)}")
+        # 修 A（fix-citation-contract-diseases）：明示负索引约定，使 LLM 引用与
+        # 校验器解析按「长度无关」语义对齐，context 裁剪窗口此后怎么改都不影响校验
+        sections.append(
+            "技术指标数据（state 键 technical_indicators；"
+            "field_ref 引用序列值时用负索引：-1=最新一期）:\n"
+            f"{json.dumps(indicators, ensure_ascii=False, default=str)}"
+        )
 
     return "\n\n".join(sections)
 
@@ -208,10 +214,11 @@ def _build_macro_context(state: dict) -> str:
             else:
                 trimmed[key] = value
         sections.append(
-            f"宏观经济指标（近3期）:\n{json.dumps(trimmed, ensure_ascii=False, default=str)}"
+            f"宏观经济指标（state 键 macro_indicators，近3期）:\n"
+            f"{json.dumps(trimmed, ensure_ascii=False, default=str)}"
         )
     else:
-        sections.append("宏观经济指标: 数据暂不可用")
+        sections.append("宏观经济指标（state 键 macro_indicators）: 数据暂不可用")
 
     return "\n\n".join(sections)
 
@@ -259,13 +266,15 @@ def _build_fundamental_context(state: dict) -> str:
         df = state.get(key)
         if df is not None and not df.empty:
             recent = df.head(3) if len(df) > 3 else df
-            sections.append(f"{name}（近3年）:\n{recent.to_string(index=False)}")
+            sections.append(f"{name}（state 键 {key}，近3年）:\n{recent.to_string(index=False)}")
 
     # 预计算指标（由降序财报计算，继承降序；head = 最新 3 年）
     indicators = state.get("financial_indicators")
     if indicators is not None and not indicators.empty:
         recent = indicators.head(3) if len(indicators) > 3 else indicators
-        sections.append(f"预计算财务指标:\n{recent.to_string(index=False)}")
+        sections.append(
+            f"预计算财务指标（state 键 financial_indicators）:\n{recent.to_string(index=False)}"
+        )
 
     # 四维度指标
     for label, key in [
@@ -276,50 +285,70 @@ def _build_fundamental_context(state: dict) -> str:
     ]:
         val = state.get(key)
         if val:
-            sections.append(f"{label}:\n{json.dumps(val, ensure_ascii=False, default=str)}")
+            sections.append(
+                f"{label}（state 键 {key}）:\n{json.dumps(val, ensure_ascii=False, default=str)}"
+            )
 
     # 杜邦分析
     dupont = state.get("dupont_tree")
     if dupont:
-        sections.append(f"杜邦分析:\n{json.dumps(dupont, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"杜邦分析（state 键 dupont_tree）:\n{json.dumps(dupont, ensure_ascii=False, default=str)}"
+        )
 
     # 增长率
     growth = state.get("growth_rates")
     if growth:
-        sections.append(f"增长率:\n{json.dumps(growth, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"增长率（state 键 growth_rates）:\n{json.dumps(growth, ensure_ascii=False, default=str)}"
+        )
 
     # 红黄绿灯 + 异常
     lights = state.get("traffic_lights")
     if lights:
-        sections.append(f"红黄绿灯:\n{json.dumps(lights, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"红黄绿灯（state 键 traffic_lights）:\n{json.dumps(lights, ensure_ascii=False, default=str)}"
+        )
     anomalies = state.get("anomalies")
     if anomalies:
-        sections.append(f"异常检测:\n{json.dumps(anomalies, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"异常检测（state 键 anomalies）:\n{json.dumps(anomalies, ensure_ascii=False, default=str)}"
+        )
 
     # 健康度
     health = state.get("health_score")
     if health:
-        sections.append(f"健康度评分:\n{json.dumps(health, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"健康度评分（state 键 health_score）:\n{json.dumps(health, ensure_ascii=False, default=str)}"
+        )
 
     # 同业对比
     peer = state.get("peer_comparison")
     if peer:
-        sections.append(f"同业对比:\n{json.dumps(peer, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"同业对比（state 键 peer_comparison）:\n{json.dumps(peer, ensure_ascii=False, default=str)}"
+        )
 
     # 相对估值
     rval = state.get("relative_valuation")
     if rval:
-        sections.append(f"相对估值:\n{json.dumps(rval, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"相对估值（state 键 relative_valuation）:\n{json.dumps(rval, ensure_ascii=False, default=str)}"
+        )
 
     # GARP
     garp = state.get("garp_result")
     if garp:
-        sections.append(f"GARP估值:\n{json.dumps(garp, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"GARP估值（state 键 garp_result）:\n{json.dumps(garp, ensure_ascii=False, default=str)}"
+        )
 
     # 季度趋势
     qtrend = state.get("quarterly_trend")
     if qtrend:
-        sections.append(f"季度趋势:\n{json.dumps(qtrend, ensure_ascii=False, default=str)}")
+        sections.append(
+            f"季度趋势（state 键 quarterly_trend）:\n{json.dumps(qtrend, ensure_ascii=False, default=str)}"
+        )
 
     return "\n\n".join(sections)
 
@@ -373,14 +402,17 @@ def _build_sentiment_context(state: dict) -> str:
                 }
             )
         sections.append(
-            f"新闻资讯（最近{len(trimmed)}条）:\n{json.dumps(trimmed, ensure_ascii=False, default=str)}"
+            f"新闻资讯（state 键 news_list，最近{len(trimmed)}条）:\n"
+            f"{json.dumps(trimmed, ensure_ascii=False, default=str)}"
         )
     else:
-        sections.append("新闻资讯: 暂无数据")
+        sections.append("新闻资讯（state 键 news_list）: 暂无数据")
 
     # 关键事件
     events = state.get("key_events") or []
     if events:
-        sections.append(f"关键事件:\n{json.dumps(events[:10], ensure_ascii=False, default=str)}")
+        sections.append(
+            f"关键事件（state 键 key_events）:\n{json.dumps(events[:10], ensure_ascii=False, default=str)}"
+        )
 
     return "\n\n".join(sections)

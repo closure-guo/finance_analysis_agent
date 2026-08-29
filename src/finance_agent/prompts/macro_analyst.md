@@ -29,7 +29,7 @@
     {
       "claim_type": "numerical",
       "source_type": "data",
-      "field_ref": "macro_indicators.cpi.<index>.<column>",
+      "field_ref": "macro_indicators.cpi.0.全国-同比增长",
       "stated_value": 100.5,
       "interpretation": "CPI 同比上涨 0.5%"
     }
@@ -40,7 +40,7 @@
 
 ## 要求
 
-1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径
+1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径（宏观序列为降序：index 0=最新一期，如 macro_indicators.cpi.0.全国-同比增长）
 2. 如果宏观数据缺失，仍需基于已有信息给出分析
 3. markdown 中包含完整的宏观分析章节
 
