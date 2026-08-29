@@ -42,6 +42,28 @@
   --font-family-heading: "SF Pro Display", "PingFang SC", system-ui, sans-serif;
   --font-family-metric: "SF Pro Display", "PingFang SC", system-ui, sans-serif;
   --font-family-mono: "JetBrains Mono", "Cascadia Code", monospace;
+
+  /* ── shadcn semantic tokens（refactor-ui-design-system）：映射 TRAE 调色板 ── */
+  --background: #FFFFFF;
+  --foreground: #171717;
+  --card: #FFFFFF;
+  --card-foreground: #171717;
+  --popover: #FFFFFF;
+  --popover-foreground: #171717;
+  --primary: #4B3FE3;
+  --primary-foreground: #FFFFFF;
+  --secondary: #FAFAFA;
+  --secondary-foreground: #525252;
+  --muted: #F5F5F5;
+  --muted-foreground: #A3A3A3;
+  --accent: #EFEFEF;
+  --accent-foreground: #171717;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(115, 115, 115, 0.12);
+  --input: rgba(115, 115, 115, 0.20);
+  --ring: #4B3FE3;
+  --radius: 8px;
 }
 
 * { font-family: var(--font-family-default); }
