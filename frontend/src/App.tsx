@@ -14,6 +14,7 @@ import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRende
 import { useClickOutside } from './useClickOutside'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
+import { Toaster } from './components/ui/sonner'
 import {
   loadProfiles,
   saveProfiles,
@@ -802,6 +803,9 @@ export default function App() {
       {drawerMessage && (
         <ReportFileDrawer drawerMessage={drawerMessage} onClose={() => setDrawerMessage(null)} />
       )}
+
+      {/* 全局 toast 容器（shadcn/sonner 封装；仅挂载，暂无调用方） */}
+      <Toaster />
     </>
   )
 }
