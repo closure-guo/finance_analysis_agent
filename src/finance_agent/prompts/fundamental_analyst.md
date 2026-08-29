@@ -38,7 +38,7 @@
     {
       "claim_type": "numerical",
       "source_type": "data",
-      "field_ref": "profitability_metrics.roe.<index>",
+      "field_ref": "profitability_metrics.ROE.2025",
       "stated_value": 30.5,
       "interpretation": "ROE 为 30.5%"
     }
@@ -49,8 +49,7 @@
 
 ## 要求
 
-1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径
-2. claim_type: numerical（直接读值）、computational（重算指标）
+1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径（照抄各段标题中标注的 state 英文键；指标 dict 以年份为键如 2025，报表为「行键.列名」如 income_statement.20251231.营业总收入）
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. markdown 中包含完整的基本面分析章节
 5. 不要编造数据，只使用提供的数据
