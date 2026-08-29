@@ -1,32 +1,38 @@
 import { test, expect } from '@playwright/test'
 
 /**
- * 报告导出抽屉 E2E（add-report-export delta Task 8）
+ * 报告导出入口 E2E（update-file-export-entry delta Task 7）
  *
- * 覆盖：报告头部「全部文件」横幅 → 打开导出抽屉 → 格式下载列表 →
- * 预览正文面板 → 关闭抽屉（关闭按钮 → 隐藏）。
+ * 覆盖：深度分析完成后 → 报告卡标题「贵州茅台（600519）」→ 会话级三入口
+ * （报告名横幅 report-name-banner / 全部文件横幅 conversation-files-banner /
+ * 顶部栏按钮 topbar-files-button）均可见 → 点击顶部栏按钮打开导出抽屉 → 文件列表
+ * 列出已生成文件（download-file-<fmt>）→ 关闭后经「全部文件」横幅再开一次（双入口等价）。
  *
  * 环境：这是「5 层深度分析管线」E2E，必须在 STUB_SCENARIO=pipeline 的后端下运行——
  * 仅 StubLLMClient 吐 run_deep_analysis 工具调用才能触发真实管线并产出 report_ready
- * 与 file_paths 四键。因此本 spec 与其它管线 spec（pipeline-eta-banner 等）一致：
+ * 与 file_paths（generate_file 为真实图节点，md/docx/pptx 必然成功写盘 REPORTS_DIR；
+ * stub 只接管外部 LLM 调用）。因此本 spec 与其它管线 spec（pipeline-eta-banner 等）一致：
  *   - 导航到管线专用前端端点 http://localhost:5175（VITE_API_TARGET → 8002，STUB_SCENARIO=pipeline）
  *   - 由 playwright.timeline.config.ts 拉起该端口对；从默认 playwright.config.ts 的 testIgnore 排除
  *
- * Selector 来源：真实已提交前端 DOM（ReportFileDrawer.tsx / App.tsx ReportCard），
- * 与 Task 6/7 契约一致：
- *   - open-files-banner：报告 streaming=false 时才渲染的「全部文件」横幅按钮
- *   - export-drawer / drawer-backdrop / drawer-close / preview-open / drawer-preview
- *   - download-pdf / download-docx / download-md：格式下载项（缺文件时为 <button>，有文件时为 <a href>）
+ * Selector 来源：真实已提交前端 DOM（App.tsx ReportCard / ReportEntryBanners.tsx /
+ * ReportFileDrawer.tsx），与 Task 5/6 契约一致：
+ *   - 报告卡 <h3>：formatReportTitle 输出「名称（代码）」组合标题
+ *   - report-name-banner：每份已完成报告的报告名横幅（点击打开该报告文件抽屉）
+ *   - conversation-files-banner：会话尾部「全部文件」横幅（打开最后一份可导出报告）
+ *   - topbar-files-button：顶部栏「查看全部文件」按钮
+ *   - export-drawer / drawer-close / drawer-file-list / download-file-<fmt>
+ *   - open-files-banner：旧报告头部「全部文件」导出按钮已移除，断言 toHaveCount(0) 确保不存在
  *
- * 平台无关性说明：stub 管线预生成文件与否随平台而异（本机实测 file_paths 为空 → 三格式
- * 均为 <button> 走 POST /api/export 按需导出；CI Linux 下 md/docx 可能预生成 → <a href>）。
- * 两者皆为合法渲染，故下载项断言只断言「行存在」，不断言平台相关的 href/请求行为。
+ * 口径 B：报告完成（streaming=false）且 file_paths 含至少一个已生成文件时三入口才渲染。
+ * stub 管线下 generate_file 是真实图节点、必然成功写盘（本机实测 md/docx/pptx 均生成，
+ * 文件名含「名称_代码」前缀），故三入口可见、抽屉文件列表非空。
  */
 
 test.setTimeout(240_000)
 
-test.describe('报告导出抽屉', () => {
-  test('深度分析完成后可打开全部文件抽屉、预览正文并关闭', async ({ page }) => {
+test.describe('报告导出入口', () => {
+  test('深度分析完成后新三入口可见、抽屉列出已生成文件、关闭后双入口等价重开', async ({ page }) => {
     // 1. 进入应用并注入测试 API Key（管线 spec 端口对：5175 前端 → 8002 STUB_SCENARIO=pipeline 后端）
     await page.goto('http://localhost:5175')
     await page.evaluate(() => {
@@ -43,28 +49,29 @@ test.describe('报告导出抽屉', () => {
     await page.getByPlaceholder(/输入/).fill('深度分析600519')
     await page.getByTestId('send-button').click()
 
-    // 4. 稳定终态：管线跑完报告完成后，「全部文件」横幅可见（streaming=false 才渲染）
-    await expect(page.getByTestId('open-files-banner')).toBeVisible({ timeout: 150_000 })
+    // 4. 报告完成后的稳定终态：报告卡标题出现「贵州茅台（600519）」组合
+    await expect(
+      page.getByRole('heading', { name: '贵州茅台（600519）' }),
+    ).toBeVisible({ timeout: 150_000 })
 
-    // 5. 打开导出抽屉
-    await page.getByTestId('open-files-banner').click()
+    // 5. 报告卡头部不再有「全部文件」导出按钮（旧入口已移除）
+    await expect(page.getByTestId('open-files-banner')).toHaveCount(0)
+
+    // 6. 会话级入口：报告名横幅、全部文件横幅、顶部栏按钮均可见
+    await expect(page.getByTestId('report-name-banner')).toBeVisible()
+    await expect(page.getByTestId('conversation-files-banner')).toBeVisible()
+    await expect(page.getByTestId('topbar-files-button')).toBeVisible()
+
+    // 7. 点击顶部栏按钮打开抽屉，文件列表包含已生成文件（文件名含 名称_代码 前缀 + _report.md/.docx 后缀，时间戳不可固定）
+    await page.getByTestId('topbar-files-button').click()
     await expect(page.getByTestId('export-drawer')).toBeVisible()
+    await expect(page.getByTestId('drawer-file-list')).toBeVisible()
+    await expect(page.locator('[data-testid^="download-file-"]').first()).toBeVisible()
 
-    // 6. 格式下载列表稳定呈现（PDF/Word/Markdown 恒列出）。
-    //    注：stub 管线预生成文件与否随平台而异（本机实测 file_paths 为空 → 三格式均为
-    //    <button> 走 POST /api/export 按需导出；CI Linux 下 md/docx 可能预生成 → <a href>）。
-    //    两者皆为合法渲染，因此只断言「行存在且可点击」，不断言平台相关的 href/请求行为
-    //    （按需导出接口行为由后端单测 Task 5 与前端单测覆盖）。
-    await expect(page.getByTestId('download-pdf')).toBeVisible()
-    await expect(page.getByTestId('download-docx')).toBeVisible()
-    await expect(page.getByTestId('download-md')).toBeVisible()
-
-    // 7. 预览面板渲染报告正文
-    await page.getByTestId('preview-open').click()
-    await expect(page.getByTestId('drawer-preview')).toBeVisible()
-
-    // 8. 关闭抽屉（关闭按钮 → 抽屉隐藏）
+    // 8. 关闭抽屉后经「全部文件」横幅再开一次（双入口等价）
     await page.getByTestId('drawer-close').click()
-    await expect(page.getByTestId('export-drawer')).toBeHidden()
+    await expect(page.getByTestId('export-drawer')).toHaveCount(0)
+    await page.getByTestId('conversation-files-banner').click()
+    await expect(page.getByTestId('export-drawer')).toBeVisible()
   })
 })

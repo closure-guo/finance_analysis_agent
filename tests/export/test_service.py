@@ -58,3 +58,21 @@ def test_export_report_single_format(tmp_path, monkeypatch):
     assert result["md"] is not None
     content = Path(result["md"]).read_text(encoding="utf-8")
     assert "免责声明" in content
+
+
+def test_export_report_filename_contains_stock_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    result = export_report(_SAMPLE, "600519", "贵州茅台", formats=["md"])
+    assert result["md"] is not None
+    name = Path(result["md"]).name
+    assert name.startswith("贵州茅台_600519_")
+    assert name.endswith("_report.md")
+
+
+def test_export_report_filename_fallback_when_name_equals_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    result = export_report(_SAMPLE, "600519", "600519", formats=["md"])
+    assert result["md"] is not None
+    name = Path(result["md"]).name
+    assert name.startswith("600519_")
+    assert "600519_600519" not in name

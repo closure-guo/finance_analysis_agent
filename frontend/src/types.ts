@@ -47,6 +47,7 @@ export interface ReportReadyEvent {
   report_markdown: string
   chart_data: ChartData
   file_paths: Record<string, string>
+  stock_code: string
   stock_name: string
   duration_ms: number
   web_sources?: Array<{ query: string; title: string; url: string; content: string }>
@@ -315,6 +316,8 @@ export interface SessionDetail extends SessionMeta {
   pipeline_anchor?: number | null
   // 事件 journal 最大 seq，供前端断点续传使用
   last_seq?: number
+  // 导出产物文件名映射（refresh-recover-export-files；缺省为旧会话/无导出）
+  file_paths?: Record<string, string>
 }
 
 // Pipeline step definition
@@ -370,6 +373,7 @@ export interface UIMessage {
   chartData?: ChartData
   filePaths?: Record<string, string>
   stockName?: string
+  stockCode?: string
   durationMs?: number
   sessionId?: string
   streaming?: boolean

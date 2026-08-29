@@ -182,6 +182,7 @@ function applyReportEvent(messages: UIMessage[], event: SSEEvent): UIMessage[] {
         chartData: event.chart_data,
         filePaths: event.file_paths,
         stockName: event.stock_name,
+        stockCode: event.stock_code,
         durationMs: event.duration_ms,
         sessionId: event.session_id,
         webSources: event.web_sources || [],

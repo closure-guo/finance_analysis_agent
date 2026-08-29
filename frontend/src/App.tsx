@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
 import { ChartsSection } from './Charts'
 import { ReportFileDrawer } from './ReportFileDrawer'
+import { ReportNameBanner, AllFilesBanner, isExportableReport, formatReportTitle } from './ReportEntryBanners'
 import { SearchBanner } from './SearchBanner'
 import { nodeDisplayName } from './timeline'
 import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations } from './eta'
@@ -260,6 +261,10 @@ export default function App() {
   const stream = useSessionStream(currentSessionId)
   const messages = stream.messages
   const appState = deriveAppState(stream.phase, currentSessionId, messages, sessions)
+
+  // 会话级导出入口：口径 B（已完成报告且 filePaths 含已生成文件）
+  const exportableReports = messages.filter(isExportableReport)
+  const lastExportableReport = exportableReports[exportableReports.length - 1] ?? null
 
   // ── Session management ──
   // 返回加载到的会话数组（失败返回 null）：调用方可据此决定是否重试
@@ -689,6 +694,13 @@ export default function App() {
                 <span className="font-semibold text-sm tracking-wide" style={{ color: 'var(--text-default)' }}>FinAgent</span>
               </div>
               <div className="flex items-center gap-4">
+                {lastExportableReport && (
+                  <button data-testid="topbar-files-button"
+                    onClick={() => setDrawerMessage(lastExportableReport!)}
+                    className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm">
+                    <i className="fas fa-folder-open mr-1"></i>查看全部文件
+                  </button>
+                )}
                 <button className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm" onClick={() => setShowSettings(true)}>
                   <i className="fas fa-cog mr-1"></i>设置
                 </button>
@@ -709,8 +721,16 @@ export default function App() {
                   return true;
                 })
                 .map(msg => (
-                  <MessageRenderer key={msg.id} msg={msg} onOpenFiles={setDrawerMessage} />
+                  <MessageRenderer key={msg.id} msg={msg} />
                 ))}
+
+              {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
+              {exportableReports.map((msg) => (
+                <ReportNameBanner key={`rb-${msg.id}`} msg={msg} onOpen={setDrawerMessage} />
+              ))}
+              {lastExportableReport && (
+                <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
+              )}
             </div>
 
             {/* 「会话生成中」警告：fixed 顶部 toast，浮于 header(z-50)/输入框(z-40) 之上 */}
@@ -1136,7 +1156,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
 }
 
 // ── Message Renderer ──
-function MessageRenderer({ msg, onOpenFiles }: { msg: UIMessage; onOpenFiles?: (msg: UIMessage) => void }) {
+function MessageRenderer({ msg }: { msg: UIMessage }) {
   if (msg.type === 'user') {
     return (
       <div className="flex justify-end animate-slide-in">
@@ -1266,7 +1286,7 @@ function MessageRenderer({ msg, onOpenFiles }: { msg: UIMessage; onOpenFiles?: (
   }
 
   if (msg.type === 'report') {
-    return <ReportCard msg={msg} onOpenFiles={onOpenFiles} />
+    return <ReportCard msg={msg} />
   }
 
   return null
@@ -1588,7 +1608,7 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Report Card ──
-function ReportCard({ msg, onOpenFiles }: { msg: UIMessage; onOpenFiles?: (msg: UIMessage) => void }) {
+function ReportCard({ msg }: { msg: UIMessage }) {
   return (
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
@@ -1612,28 +1632,12 @@ function ReportCard({ msg, onOpenFiles }: { msg: UIMessage; onOpenFiles?: (msg: 
             {/* Report Header */}
             {!msg.streaming && (
               <div className="px-5 pt-4 pb-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{msg.stockName}</h3>
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold" style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>深度分析</span>
-                    </div>
-                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · {(msg.durationMs ?? 0) > 0 ? `耗时 ${Math.round((msg.durationMs ?? 0) / 1000)}s` : '耗时未知'}</p>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{formatReportTitle(msg)}</h3>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold" style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>深度分析</span>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => onOpenFiles?.(msg)}
-                      data-testid="open-files-banner"
-                      className="h-8 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium transition-colors"
-                      title="查看并导出文件"
-                      style={{ background: 'var(--bg-base-secondary)', color: 'var(--icon-secondary)' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-base-secondary)' }}
-                    >
-                      <i className="fas fa-folder-open text-xs"></i>
-                      <span>全部文件</span>
-                    </button>
-                  </div>
+                  <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>深度分析报告 · 5 层 Agent 架构 · {(msg.durationMs ?? 0) > 0 ? `耗时 ${Math.round((msg.durationMs ?? 0) / 1000)}s` : '耗时未知'}</p>
                 </div>
               </div>
             )}
