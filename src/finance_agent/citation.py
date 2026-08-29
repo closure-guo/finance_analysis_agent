@@ -7,11 +7,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, TypeGuard
 
 from pydantic import BaseModel
 
+from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
+from finance_agent.metrics.efficiency import calc_efficiency
+from finance_agent.metrics.profitability import calc_profitability
+from finance_agent.metrics.risk import calc_risk
+from finance_agent.metrics.solvency import calc_solvency
+from finance_agent.metrics.technical import calc_technical
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class Claim(BaseModel):
@@ -39,6 +48,7 @@ class CitationResult(BaseModel):
     claim: Claim
     ground_truth: float | str | None = None
     delta: float | None = None
+    coverage_gap: bool = False  # 计算型 claim 根键未注册 → True（覆盖缺口指标）
 
 
 class CitationReport(BaseModel):
@@ -49,6 +59,7 @@ class CitationReport(BaseModel):
     passed: int = 0
     failed: int = 0
     unverifiable: int = 0
+    coverage_gaps: int = 0
     all_passed: bool = False
 
     @classmethod
@@ -63,20 +74,55 @@ class CitationReport(BaseModel):
             passed=passed,
             failed=failed,
             unverifiable=unverifiable,
+            coverage_gaps=sum(1 for r in results if r.coverage_gap),
             all_passed=failed == 0,
         )
 
 
-def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
-    """按 "." 分割路径，逐层遍历 state dict / list。
+def _expand_brackets(field_ref: str) -> list[str]:
+    """展开 `[N]` 括号索引：`quarterly_trend.yoy[1]` → ["quarterly_trend", "yoy", "1"]。
 
-    兼容 fetch 守卫结构：dict 形如 {"records": [...], "as_of_date", "freshness"}
-    时，若当前 part 不是该 dict 的键，先自动下钻 records 再解析，保持 field_ref
-    语义（macro_indicators.cpi.0.<列>）不变；part == "records" 或其他守卫键
-    （as_of_date/freshness）仍按原始键解析。
+    fix-citation-contract-diseases 修 B：LLM 按数组语义书写下标，resolver
+    统一展开为路径段，负索引（-N）原样保留（list 负下标 = 倒数第 N 个）。
     """
+    import re
+
+    parts: list[str] = []
+    pattern = re.compile(r"^(.*?)\[(-?\d+)\]$")
+    for seg in field_ref.split("."):
+        m = pattern.match(seg)
+        if m:
+            base, idx = m.group(1), m.group(2)
+            if base:
+                parts.append(base)
+            parts.append(idx)
+        else:
+            parts.append(seg)
+    return parts
+
+
+def _is_dataframe(obj: object) -> TypeGuard[pd.DataFrame]:
+    """鸭子判定 DataFrame（columns + iloc）；TypeGuard 供 mypy 收窄，运行时不导入 pandas。"""
+    return hasattr(obj, "columns") and hasattr(obj, "iloc")
+
+
+def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
+    """按 "." 分割路径（含 `[N]` 括号展开），逐层遍历 state dict / list / DataFrame。
+
+    - 负索引（修 A）：list[-N] = 倒数第 N 个（-1 = 最新一期），与序列长度及
+      context 裁剪窗口解耦；
+    - DataFrame（修 B）：期望「行键.列名」两段——行键按任意列单元格值匹配
+      （如 报告日 20251231），列名须为真实列，如
+      income_statement.20251231.营业总收入；
+    - fetch 守卫结构兼容：dict 形如 {"records": [...], "as_of_date", "freshness"}
+      时，若当前 part 不是该 dict 的键，先自动下钻 records 再解析，保持
+      field_ref 语义（macro_indicators.cpi.0.<列>）不变。
+    """
+    parts = _expand_brackets(field_ref)
     current: object = state
-    for part in field_ref.split("."):
+    i = 0
+    while i < len(parts):
+        part = parts[i]
         if isinstance(current, dict) and "records" in current and part not in current:
             current = current["records"]
         if isinstance(current, dict):
@@ -86,15 +132,47 @@ def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
                 current = current[int(part)]
             except (ValueError, IndexError):
                 return None
+        elif _is_dataframe(current):
+            if i + 1 >= len(parts):
+                return None
+            col_name = parts[i + 1]
+            if col_name not in current.columns:
+                return None
+            mask = None
+            for col in current.columns:
+                mask = current[col].astype(str) == part
+                if mask.any():
+                    break
+            if mask is None or not mask.any():
+                return None
+            current = current[mask].iloc[0][col_name]
+            i += 2
+            continue
         else:
             return None
+        i += 1
     return current
 
 
 # ── 计算型 claim 重算注册表 ──
-# field_ref 根键 → 从 state 原始数据重算的函数
+# field_ref 根键 → 从 state 原始数据重算的函数。
+# 覆盖 metrics/ 全部纯函数指标族；未注册根键 → UNVERIFIABLE + coverage_gap 计数。
 _COMPUTATIONAL_RECALC: dict[str, Callable[[dict], dict]] = {
     "dupont_tree": lambda s: calc_dupont(s["balance_sheet"], s["income_statement"]),
+    "solvency_metrics": lambda s: calc_solvency(
+        s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
+    ),
+    "profitability_metrics": lambda s: calc_profitability(
+        s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
+    ),
+    "efficiency_metrics": lambda s: calc_efficiency(
+        s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
+    ),
+    "cashflow_metrics": lambda s: calc_cashflow(
+        s["balance_sheet"], s["income_statement"], s["cash_flow_statement"]
+    ),
+    "technical_indicators": lambda s: calc_technical(s["kline"]),
+    "risk_metrics": lambda s: calc_risk(s["kline"], s.get("benchmark_kline")),
 }
 
 
@@ -106,18 +184,23 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
 
     recalc_fn = _COMPUTATIONAL_RECALC.get(root)
     if recalc_fn is None:
-        return CitationResult(status="UNVERIFIABLE", claim=claim)
+        return CitationResult(status="UNVERIFIABLE", claim=claim, coverage_gap=True)
 
     try:
         recalculated = recalc_fn(state)
     except (KeyError, TypeError):
         return CitationResult(status="UNVERIFIABLE", claim=claim)
 
-    # 从重算结果中按 sub_path 取值
+    # 从重算结果中按 sub_path 取值（dict 键 + list 序号，与 _resolve_field_ref 语义一致）
     current: object = recalculated
     for part in sub_path:
         if isinstance(current, dict):
             current = current.get(part)
+        elif isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return CitationResult(status="UNVERIFIABLE", claim=claim)
         else:
             return CitationResult(status="UNVERIFIABLE", claim=claim)
         if current is None:
@@ -158,7 +241,10 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     except (TypeError, ValueError):
         return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
     delta = abs(gt_float - sv_float)
-    status: Literal["PASS", "FAIL"] = "PASS" if delta < 0.01 else "FAIL"
+    # fix-citation-contract-diseases 修 C：|delta|<0.01 或相对误差<0.5%
+    # （与计算型容差对齐；绝对 0.01 对亿元级数值是假阴性——LLM 须精确到分才过）
+    tol = max(0.01, abs(gt_float) * 0.005)
+    status: Literal["PASS", "FAIL"] = "PASS" if delta < tol else "FAIL"
     return CitationResult(status=status, claim=claim, ground_truth=gt_float, delta=delta)
 
 

@@ -7,7 +7,6 @@
 ## Purpose
 
 定义 React 前端（React 18 + Vite + TailwindCSS）的用户交互行为契约。覆盖空状态首页、API Key 管理、会话管理、深度/快速两种模式的 SSE 流式渲染、管线进度展示、报告渲染与文件下载。
-
 ## Requirements
 
 > 以下是前端 35 个行为契约，按 6 个行为域分组。每组覆盖一个独立的交互主题，可独立审阅。
@@ -272,7 +271,21 @@
 - **WHEN** 构建消息列表
 - **THEN** 按 chat_history 顺序重建消息：role='user' 的条目渲染为用户消息，其余渲染为助手消息
 - **AND** 助手消息包含 thinking 内容和 tool_calls 记录（若历史中存在）
-- **AND** 非 chat 类型的会话在第一个用户消息后插入报告消息（含 report_markdown、chart_data、stock_name、duration_ms）
+- **AND** 非 chat 类型的会话在管线触发锚点（pipeline_anchor，即 chat_history 第 N 条之后）插入报告消息（含 report_markdown、chart_data、stock_name、duration_ms）与管线完成时间轴
+- **AND** pipeline_anchor 缺失（旧会话）时回退为在第一个用户消息后插入报告消息
+
+#### Scenario: 多轮澄清会话的报告插入位置
+
+- **GIVEN** 非 chat 会话的 chat_history 为 [用户提问, 助手搜索思考, 用户确认股票]，且 pipeline_anchor 指向最后一条用户消息之后
+- **WHEN** 构建消息列表
+- **THEN** 消息顺序为：用户提问 → 助手思考/工具调用 → 用户确认 → 管线完成时间轴 → 报告消息
+- **AND** 报告消息 SHALL NOT 出现在任何用户消息之前
+
+#### Scenario: 报告后追问会话的报告插入位置
+
+- **GIVEN** 非 chat 会话的 chat_history 为 [用户提问, 用户追问, 助手追问回复]，且 pipeline_anchor 指向第一条用户消息之后
+- **WHEN** 构建消息列表
+- **THEN** 消息顺序为：用户提问 → 管线完成时间轴 → 报告消息 → 用户追问 → 助手追问回复
 
 #### Scenario: 会话时间格式化兜底
 
@@ -414,7 +427,7 @@
 #### Scenario: 思考过程在澄清阶段走对话流
 
 - **GIVEN** 深度分析 SSE 流进行中，pipelineMsgRef 为空（未进入管线模式）
-- **WHEN** 收到 thinking_token / thinking_replace / thinking_to_answer 事件
+- **WHEN** 收到 thinking_token 事件（来源为 LLM 原生 reasoning_content）
 - **THEN** 思考 token 追加到对话流消息 `agentTimeline` 末尾的 thinking item（若末尾非 thinking item 则新建），不写入管线消息
 
 #### Scenario: Agent 文本回复走对话流
@@ -500,46 +513,89 @@
 
 ### Requirement: Pipeline Progress Display
 
-系统 SHALL 在深度分析期间展示 6 阶段管线进度，每阶段映射到后端 LangGraph 节点。
+系统 SHALL 在深度分析期间以**分层时间轴**展示管线进度：顶层为 6 个 layer 节点（PREP / Layer I / Layer II / Trader / Risk / Fund），每个 layer 可展开显示其子节点列表。每个 layer 与子节点 SHALL 显示状态图标（等待/运行/完成/失败）与耗时，当前运行的子节点 SHALL 显示已运行时长并被高亮。无论 fast path 还是 agent 路径，后端 SHALL 为每个图节点发送 `node_start` 与 `node_complete` 事件对。节点计时 SHALL 优先使用后端提供的真实生命周期时间戳（server_start_ts / server_end_ts / server_duration_ms）；当后端未提供时（stub、fast path、历史会话），SHALL 回退到前端事件到达时间戳计算，保持向后兼容。
 
-#### Scenario: 管线 6 阶段定义
+#### Scenario: 分层时间轴结构
 
 - **GIVEN** 深度分析管线 UI 已渲染
-- **THEN** 展示 6 个阶段节点：PREP、Layer I、Layer II、Trader、Risk、Fund Manager
-- **AND** 每个阶段映射到后端节点：check_cache(PREP)、technical_analyst(Layer I)、bull_r1(Layer II)、trader(Trader)、aggressive_r1(Risk)、fund_manager(Fund Manager)
+- **THEN** 展示 6 个 layer 节点：PREP、Layer I、Layer II、Trader、Risk、Fund Manager
+- **AND** 每个 layer 节点显示状态图标（○ 等待 / ◐ 运行 / ●✓ 完成 / ✗ 失败）、层名与层耗时
+- **AND** 展开的 layer 内按执行顺序列出子节点（角色名中文化），各显示状态图标与节点耗时
 
-#### Scenario: 节点开始时更新阶段状态
+#### Scenario: layer 与子节点映射
+
+- **GIVEN** 分层时间轴已渲染
+- **THEN** PREP 子节点为 check_cache、fetch_data、compute_metrics、validate_financials、verify_citations
+- **AND** Layer I 子节点为 fundamental_analyst、technical_analyst、macro_analyst、sentiment_analyst（并行）
+- **AND** Layer II 子节点为 bull_r1、bear_r1、bull_r2、bear_r2、research_manager
+- **AND** Trader 子节点为 trader，Risk 子节点为风控辩论各节点，Fund 子节点为 fund_manager
+
+#### Scenario: 节点开始时更新状态
 
 - **GIVEN** 管线 UI 已渲染
 - **WHEN** 收到 node_start 事件
-- **THEN** 对应阶段状态更新为 'running'，显示当前节点 ID 和层级描述
-- **AND** 管线消息内容更新为"{layer}: {desc}..."
+- **THEN** 对应子节点状态更新为 'running'，所在 layer 状态更新为 'running'
+- **AND** 该子节点显示已运行时长（每秒刷新）
+- **AND** 该子节点所在 layer 自动展开并高亮当前节点
 
-#### Scenario: 节点完成时更新进度
+#### Scenario: 节点完成时更新状态
 
 - **GIVEN** 管线 UI 已渲染
 - **WHEN** 收到 node_complete 事件
-- **THEN** 对应阶段状态更新为 'completed'
-- **AND** 进度条更新为事件中的 progress 值
-- **AND** 节点输出记录到 nodeOutputs
-- **AND** 管线消息内容更新为"{layer}: {desc} ✓"
+- **THEN** 对应子节点状态更新为 'completed'，显示节点总耗时
+- **AND** 该 layer 全部子节点完成时，layer 状态更新为 'completed' 并显示层总耗时
+- **AND** 整体进度条按已完成节点数/总节点数更新
 
-#### Scenario: 阶段状态推断
+#### Scenario: Layer I 并行分析师独立状态
 
-- **GIVEN** 管线 UI 已渲染，某阶段的全部子节点均已 completed
-- **THEN** 该阶段状态为 'completed'
-- **WHEN** 某阶段有子节点正在 running
-- **THEN** 该阶段状态为 'running'
-- **AND** 其余阶段状态为 'pending'
+- **GIVEN** 管线进入 Layer I，4 个分析师并行执行
+- **WHEN** 收到某分析师（如 fundamental_analyst）的 node_start / node_complete
+- **THEN** 仅该分析师子节点状态更新，其余分析师状态不受影响
+- **AND** 各分析师完成后显示各自的一句话摘要（来自 node_complete 内容），摘要与分析师角色对应不错位
 
-#### Scenario: Layer I 分析师卡片展示
+#### Scenario: layer 展开折叠行为
 
-- **GIVEN** 管线进入 Layer I 阶段（check_cache 完成或 technical_analyst 运行中/完成）
-- **THEN** 展示 4 个分析师卡片（基本面/技术面/宏观/舆情）
-- **WHEN** technical_analyst 节点未完成
-- **THEN** 4 个卡片状态均为 'running' 或 'pending'，摘要为"分析中..."或"等待中..."
-- **WHEN** technical_analyst 节点完成
-- **THEN** 4 个卡片状态均为 'completed'，摘要更新为"XX分析完成"
+- **GIVEN** 管线运行中
+- **THEN** 当前运行 layer 默认展开，已完成 layer 默认折叠（显示层摘要行），未到 layer 折叠
+- **WHEN** 用户手动展开/折叠某 layer
+- **THEN** 本次会话内记住该偏好，不再自动改变该 layer 展开状态
+
+#### Scenario: 自动滚动定位当前节点
+
+- **GIVEN** 管线运行中，时间轴内容超出可视区域
+- **WHEN** 当前运行节点切换
+- **THEN** 时间轴平滑滚动使新当前节点进入可视区域
+- **AND** 若用户最近 3 秒内手动滚动过，则暂停自动滚动
+
+#### Scenario: agent 路径发送 node_start
+
+- **GIVEN** 深度分析经 agent 路径（harness ReAct）执行 run_deep_analysis 流式工具
+- **WHEN** graph.stream 迭代中某图节点的 updates chunk 首次出现
+- **THEN** 后端 SHALL 先发送该节点的 node_start 事件（携带 node、layer、desc），再发送 node_complete
+- **AND** 同一节点重复出现时不重复发送 node_start
+- **AND** Layer I 并行分析师各自的 chunk 拆分发送独立节点事件；无法拆分时回退整层 node_complete
+
+#### Scenario: 节点计时优先使用后端真实时间戳
+
+- **GIVEN** 管线 UI 已渲染且收到 node_complete 事件
+- **WHEN** 该事件携带 server_duration_ms（或 server_start_ts + server_end_ts）
+- **THEN** 对应节点的 durationMs SHALL 采用后端真实耗时
+- **AND** 快速节点显示真实毫秒级耗时（<1s 时 formatDurationMs 显示 "0:00"）
+- **AND** 慢节点（LLM）显示真实秒级耗时
+
+#### Scenario: 节点开始时间戳优先使用后端入口时间
+
+- **GIVEN** 收到 node_start 事件
+- **WHEN** 该事件携带 server_start_ts
+- **THEN** 节点的 startedAt SHALL 采用 server_start_ts 而非前端 Date.now()
+- **AND** 当前运行节点的实时已运行时长基于该时间戳计算
+
+#### Scenario: 无后端时间戳时回退前端计算
+
+- **GIVEN** 收到 node_complete 事件
+- **WHEN** 该事件未携带任何 server_* 时间戳字段（stub / fast path / 历史会话）
+- **THEN** 前端 SHALL 回退到现有 Date.now() 到达时间戳计算 durationMs
+- **AND** 现有 E2E 与单测行为不回归
 
 ### Requirement: Pipeline Message Visibility Filter
 
@@ -559,24 +615,38 @@
 
 ### Requirement: Pipeline Thinking Display
 
-系统 SHALL 在管线 UI 中按 agent 阶段分组展示思考过程，每个 agent 阶段内按时间序列排列该 agent 的 timeline items（思考/搜索/工具调用横幅），与管线进度区域分离。
+系统 SHALL 将各 agent 的思考过程归入分层时间轴的对应子节点下展示。当前运行节点 SHALL 内联显示实时思考摘要（单行预览），点击可展开完整 timeline；已完成节点的思考折叠到节点条目下。
 
-#### Scenario: 管线运行期间思考流式追加到对应阶段
+#### Scenario: 当前节点内联实时思考摘要
 
-- **GIVEN** 管线 UI 已渲染，pipelineMsgRef 不为空
-- **WHEN** 收到 `thinking_token` 事件（含 `node` 字段标识所属 agent）
-- **THEN** 将该 token 累加到对应 agent 阶段的 timeline 末尾 thinking item（或新建 thinking item）
-- **AND** 在该 agent 阶段区域内渲染 ThinkingBanner（可折叠，流式时展开）
+- **GIVEN** 管线运行中，节点 N 为当前 running 节点
+- **WHEN** 收到节点 N 的 thinking_token 事件
+- **THEN** 节点 N 条目下方内联显示最新思考内容单行预览（流式更新，超长截断）
 
-#### Scenario: 管线阶段分组展示
+#### Scenario: 展开节点完整思考
 
-- **GIVEN** 管线 UI 已渲染
+- **GIVEN** 管线 UI 已渲染，节点 N 有思考内容
+- **WHEN** 用户点击节点 N 条目
+- **THEN** 展开该节点的完整 timeline（思考/搜索/工具调用横幅按时间序列）
+- **AND** 再次点击折叠
+
+#### Scenario: 节点完成时思考横幅显式折叠
+
+- **GIVEN** 管线运行中，节点 N 的 thinking item 处于流式活动态
+- **WHEN** 收到节点 N 的 node_complete 事件
+- **THEN** 节点 N timeline 末尾的 thinking item 置为完成态（done=true）并折叠为"思考已完成"样式
+
+#### Scenario: 下一节点思考开始时上一节点横幅收口
+
+- **GIVEN** 管线运行中，节点 A 的 thinking item 因故未收到 node_complete 收口
+- **WHEN** 收到节点 B（B ≠ A）的 thinking_token 事件
+- **THEN** 节点 A 末尾未完成的 thinking item 置为完成态并折叠
+
+#### Scenario: 历史会话兼容
+
+- **GIVEN** 加载无节点级事件数据的旧会话
 - **WHEN** 渲染管线消息
-- **THEN** 保留阶段进度条
-- **AND** 每个 agent 阶段的 timeline items 归在该阶段下，阶段间用角色名标题分隔（如"多头分析师"、"空头分析师"、"Trader"）
-- **AND** 角色名标题为纯文本，非折叠框
-- **AND** 阶段内按时间序列排列该 agent 的思考/搜索/工具调用横幅
-- **AND** 当前活动阶段的横幅展开，已完成阶段的横幅折叠
+- **THEN** 回退为按既有 agentTimeline 分组渲染（角色名标题分隔），不报错
 
 ### Requirement: Pipeline Expandable Log
 
@@ -681,41 +751,67 @@
 
 ### Requirement: Conversation Stream Common Events
 
-系统 SHALL 在深度模式的澄清阶段和快速模式中共用同一套对话流事件处理逻辑，将 thinking、search、tool_call、chat 类事件写入 `agentTimeline` 数组（按事件时序）和 `chatResponse`（回答正文）。
+系统 SHALL 在深度模式的澄清阶段和快速模式中共用同一套对话流事件处理逻辑，将 thinking、search、tool_call、chat 类事件写入 `agentTimeline` 数组（按事件时序）和 `chatResponse`（回答正文）。思考内容来源于 DeepSeek 原生 `reasoning_content`（通过 `thinking_token` 事件下发），与回答内容（`chat_token` 事件）天然分离，不再使用 `thinking_to_answer` 剥离机制。搜索类工具（`web_search` / `batch_web_search`）的调用与结果 SHALL NOT 进入工具调用横幅，仅由独立搜索横幅承载。思考横幅 SHALL 在思考结束（出现后续事件）时显式置为完成态并自动折叠。
 
-#### Scenario: thinking_token 累积到 timeline 末尾 thinking item
+#### Scenario: thinking_token 累积原生思考内容
 
 - **GIVEN** 对话流进行中
-- **WHEN** 收到 `thinking_token` 事件
+- **WHEN** 收到 `thinking_token` 事件（来源为 LLM 原生 `reasoning_content`）
 - **THEN** 若 `agentTimeline` 末尾是 `thinking` 类型 item，将 token 累加到该 item 的 `content`
-- **AND** 否则新建 `{type:'thinking', content: token}` item 追加到 `agentTimeline`
+- **AND** 否则新建 `{type:'thinking', content: token, done:false}` item 追加到 `agentTimeline`
+- **AND** 思考链（thinking）是独立的思维内容，与回答（`chatResponse`，content）分离
 
-#### Scenario: thinking_replace 替换 timeline 末尾 thinking item 内容
+#### Scenario: 思考后接工具调用时思考横幅折叠
 
-- **GIVEN** 对话流进行中，`agentTimeline` 末尾是 `thinking` 类型 item
-- **WHEN** 收到 `thinking_replace` 事件
-- **THEN** 该 item 的 `content` 整体替换为事件中的 token（用于 DSML 清理等后处理）
+- **GIVEN** 对话流进行中，`agentTimeline` 末尾是未完成（done=false）的 thinking item
+- **WHEN** 收到 `tool_call` 事件
+- **THEN** 该 thinking item 置为完成态（done=true）
+- **AND** ThinkingBanner 从"思考中"切换为"思考已完成"并自动折叠
 
-#### Scenario: thinking_to_answer 将回答移至 chatResponse
+#### Scenario: 思考后接回答 token 时思考横幅折叠
 
-- **GIVEN** 对话流进行中，文本已作为 thinking_token 流式输出到 timeline 末尾 thinking item
-- **WHEN** 收到 `thinking_to_answer` 事件
-- **THEN** 将该 thinking item `content` 末尾与 answer 匹配的部分移至 `chatResponse`
-- **AND** 该 thinking item `content` 保留剩余部分（思考轨迹），避免回答重复
+- **GIVEN** 对话流进行中，`agentTimeline` 末尾是未完成（done=false）的 thinking item
+- **WHEN** 收到首个 `chat_token` 事件
+- **THEN** 该 thinking item 置为完成态（done=true）并自动折叠
 
-#### Scenario: tool_call 新建 tool_call item
+#### Scenario: thinking_to_answer 事件不再下发
+
+- **GIVEN** 对话流进行中，LLM 输出 reasoning_content 后输出 content
+- **WHEN** 思考与回答流式下发完成
+- **THEN** SHALL NOT 收到 thinking_to_answer 事件（reasoning 与 content 天然分离）
+- **AND** 前端无需执行思考剥离为回答的逻辑
+
+#### Scenario: thinking_replace 事件不再下发
 
 - **GIVEN** 对话流进行中
-- **WHEN** 收到 `tool_call` 事件（非 run_deep_analysis，非搜索类工具）
-- **THEN** 新建 `{type:'tool_call', name, args, done:false}` item 追加到 `agentTimeline`
+- **WHEN** LLM 原生 reasoning_content 流式输出
+- **THEN** SHALL NOT 收到 thinking_replace 事件（原生 reasoning 无需 DSML 清理后处理）
+- **AND** 思考内容直接流式展示，无需覆盖
 
-#### Scenario: tool_result 更新对应 tool_call item
+#### Scenario: tool_call 记录到工具调用横幅
 
-- **GIVEN** 对话流进行中，`agentTimeline` 已有 tool_call item
+- **GIVEN** 对话流进行中
+- **WHEN** 收到 `tool_call` 事件，且 name 不为 `run_deep_analysis`、`web_search`、`batch_web_search`
+- **THEN** 新建 `{type:'tool_call', name, args, done:false}` item 追加到 `agentTimeline`，渲染为 ToolCallEntry（含图标、标签、参数摘要、done=false）
+- **AND** 工具调用与思考过程分离展示
+
+#### Scenario: 搜索类 tool_call 不进入工具调用横幅
+
+- **GIVEN** 对话流进行中
+- **WHEN** 收到 `tool_call` 事件，且 name 为 `web_search` 或 `batch_web_search`
+- **THEN** SHALL NOT 在 `agentTimeline` 创建 tool_call item / ToolCallEntry
+- **AND** 该工具的状态与结果由 `search_start` / `search_result` 事件驱动搜索横幅展示
+- **AND** 不触发管线 UI
+
+#### Scenario: tool_result 附加到对应工具调用
+
+- **GIVEN** 对话流进行中，助手消息已有工具调用记录
 - **WHEN** 收到 `tool_result` 事件
-- **THEN** 优先更新同名且 `done=false` 的最近一次 tool_call item（设 `result` 和 `done=true`）
-- **AND** 若无同名未完成记录，回退到最近未完成的任意 tool_call item
-- **AND** 若无任何匹配记录且结果非空，新建一条仅含结果的 tool_call item
+- **THEN** 若事件对应 `web_search` / `batch_web_search` 工具，SHALL NOT 附加到任何工具调用记录、SHALL NOT 新建记录（其结果由 `search_result` 事件驱动搜索横幅展示）
+- **AND** 否则，优先附加到同名且未完成的最近一次工具调用记录（设 `result` 和 `done=true`）
+- **AND** 若无同名未完成记录，回退到最近未完成的任意工具调用
+- **AND** 若该记录已完成（已被 search_result/stock_resolved 等结构化事件先行附加），跳过避免重复
+- **AND** 若无任何匹配记录且结果非空，新建一条仅含结果的工具调用记录
 
 #### Scenario: search 事件生成 search item
 
@@ -727,7 +823,7 @@
 #### Scenario: chat_token 累积回答
 
 - **GIVEN** 对话流进行中
-- **WHEN** 收到 `chat_token` 事件
+- **WHEN** 收到 `chat_token` 事件（来源为 LLM content，与 reasoning 分离）
 - **THEN** token 追加到助手消息的 `chatResponse`
 
 #### Scenario: chat_done 结束流式
@@ -735,13 +831,14 @@
 - **GIVEN** 对话流进行中，助手消息 streaming=true
 - **WHEN** 收到 `chat_done` 事件
 - **THEN** 助手消息 streaming 设为 false
-- **AND** 所有 thinking item 用 `extractThinkingTitle` 提取标题写入 `title` 字段
+- **AND** 所有 thinking item 置为完成态（done=true），用 `extractThinkingTitle` 提取标题写入 `title` 字段
 
 #### Scenario: 对话流 error 事件
 
 - **GIVEN** 对话流进行中
 - **WHEN** 收到 `error` 事件
 - **THEN** 助手消息 `chatResponse` 设为"❌ {message}"，streaming 设为 false
+- **AND** 所有未完成 thinking item 置为完成态（done=true）
 
 ### Requirement: SSE Stream Abort Control
 
@@ -852,7 +949,7 @@
 
 ### Requirement: Report Card Rendering
 
-系统 SHALL 在报告消息中渲染报告头部、文件导出、财务图表、Markdown 正文、参考资料和免责声明。
+系统 SHALL 在报告消息中渲染报告头部、文件导出入口、财务图表、Markdown 正文、参考资料和免责声明。
 
 #### Scenario: 流式报告显示生成指示器
 
@@ -863,14 +960,14 @@
 
 - **GIVEN** 报告消息 streaming=false
 - **THEN** 显示股票名称（stockName）、"深度分析"标签、耗时信息
-- **AND** 若 filePaths 中有 docx，显示 Word 导出按钮
-- **AND** 若 filePaths 中有 pptx，显示 PPT 导出按钮
+- **AND** 报告头部显示「全部文件」入口横幅（图标 + "全部文件"文案），点击可打开文件导出抽屉
 
-#### Scenario: 文件导出
+#### Scenario: 打开导出抽屉
 
-- **GIVEN** 报告头部已渲染，存在 filePaths.docx 或 filePaths.pptx
-- **WHEN** 用户点击导出按钮
-- **THEN** 触发文件下载，URL 为 /api/files/{filename}
+- **GIVEN** 报告头部已渲染，展示「全部文件」入口横幅
+- **WHEN** 用户点击「全部文件」横幅
+- **THEN** 右侧文件导出抽屉滑出打开
+- **AND** 抽屉内列出该报告当前可用的导出文件（依据 filePaths 的 docx/pptx/pdf/md 键，带格式徽标与文件名）
 
 #### Scenario: 财务图表展示
 
@@ -1211,3 +1308,39 @@
 - **GIVEN** 用户从快速模式（chat）会话切换离开
 - **WHEN** 该会话无深度管线
 - **THEN** 前端维持现有 abortStreaming 行为（快速模式流无恢复价值）
+
+### Requirement: Pipeline ETA Display
+
+系统 SHALL 在管线进度区域显示动态预估时间，包括已用时长与预估剩余时间，替代静态文案。预估 SHALL 基于历史运行数据并随进度收敛。
+
+#### Scenario: 显示已用时长与预估剩余
+
+- **GIVEN** 深度分析管线运行中
+- **THEN** 进度区域显示"已用时 M:SS · 预计剩余 ~M:SS"格式文本，每秒刷新
+- **AND** 不显示硬编码静态预估文案（如"~90s"）
+
+#### Scenario: 基于历史中位数的初始预估
+
+- **GIVEN** localStorage 存在最近 N 次（最多 10 次）完整管线运行耗时记录
+- **WHEN** 新一次管线启动
+- **THEN** 初始预估总时长取历史记录的中位数
+- **AND** 若无历史记录，使用默认值 240 秒
+
+#### Scenario: 预估随进度线性收敛
+
+- **GIVEN** 管线运行中，已完成节点数占比 p = completed/total
+- **WHEN** 实际进度比例 p 超过 已用时长/预估总时长 所隐含的进度
+- **THEN** 用 已用时长/p 重新估算总时长
+- **AND** 预估剩余时间 = max(0, 重估总时长 - 已用时长)
+
+#### Scenario: 管线完成后记录耗时
+
+- **GIVEN** 管线运行中
+- **WHEN** 收到 report_ready 事件（管线完成）
+- **THEN** 将本次总耗时写入 localStorage 历史记录（最多保留 10 条，超出时淘汰最旧记录）
+
+#### Scenario: localStorage 不可用回退
+
+- **GIVEN** 浏览器环境 localStorage 不可用（隐私模式等）
+- **THEN** 预估使用默认值 240 秒，ETA 显示功能不阻塞、不报错
+

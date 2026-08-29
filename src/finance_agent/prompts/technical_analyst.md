@@ -22,7 +22,7 @@
     {
       "claim_type": "numerical",
       "source_type": "data",
-      "field_ref": "technical_indicators.MA.5.<index>",
+      "field_ref": "technical_indicators.MA.5.-1",
       "stated_value": 13.0,
       "interpretation": "MA5 为 13.0"
     }
@@ -34,9 +34,10 @@
 ## 要求
 
 1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径
-2. claim_type: numerical（直接读值）、computational（重算指标）
-3. source_type: data（来自数据）或 llm_inference（你的推断）
-4. markdown 中包含完整的技术面分析章节
+2. 技术指标序列引用一律用负索引（-1=最新一期，-N=倒数第 N 期），与序列长度无关
+3. claim_type: numerical（直接读值）、computational（重算指标）
+4. source_type: data（来自数据）或 llm_inference（你的推断）
+5. markdown 中包含完整的技术面分析章节
 
 ## 分析方法论
 

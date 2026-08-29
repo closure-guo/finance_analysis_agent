@@ -138,6 +138,29 @@ describe('buildLlmConfigPayload - 载荷构建', () => {
     const cfg: LLMConfig = { apiKey: '', model: '', baseUrl: '', thinking: 'disabled' }
     expect(buildLlmConfigPayload(cfg)).toEqual({ thinking: 'disabled' })
   })
+
+  it('contextLength 为正整数时携带', () => {
+    const cfg: LLMConfig = {
+      apiKey: 'sk-1',
+      model: 'openai/gpt-4o',
+      baseUrl: 'https://x/v1',
+      thinking: 'enabled',
+      contextLength: 200000,
+    }
+    expect(buildLlmConfigPayload(cfg)).toEqual({
+      model: 'openai/gpt-4o',
+      baseUrl: 'https://x/v1',
+      apiKey: 'sk-1',
+      thinking: 'enabled',
+      contextLength: 200000,
+    })
+  })
+
+  it('contextLength 未设置时不携带（跟随后端静态默认）', () => {
+    const cfg: LLMConfig = { apiKey: 'sk-1', model: 'openai/gpt-4o', baseUrl: 'https://x/v1', thinking: 'enabled' }
+    const payload = buildLlmConfigPayload(cfg)
+    expect(payload?.contextLength).toBeUndefined()
+  })
 })
 
 describe('isDeepSeekModel', () => {

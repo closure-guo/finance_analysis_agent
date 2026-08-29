@@ -116,7 +116,7 @@ class TestBuildMacroContext:
             }
         }
         context = _build_macro_context(state)
-        payload = context.split("宏观经济指标（近3期）:\n", 1)[1]
+        payload = context.split("宏观经济指标（state 键 macro_indicators，近3期）:\n", 1)[1]
         trimmed = json.loads(payload)
         assert [r["月份"] for r in trimmed["cpi"]] == _DESC_MONTHS[:3]
         # fresh 数据不标记滞后，不打扰闭环
