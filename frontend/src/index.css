@@ -34,6 +34,15 @@
   --status-success-default: #10B981;
   --status-primary-default: #4B3FE3;
 
+  /* ECharts 系列色（refactor-ui-design-system Task 5）：图表 option 运行时读取 */
+  --chart-coral: #F87454;
+  --chart-mint: #1DC981;
+  --chart-amber: #F5A623;
+  --chart-sky: #3B82F6;
+  --chart-violet: #8B5CF6;
+  --chart-rose: #EC4899;
+  --chart-teal: #14B8A6;
+
   --radius-8: 8px;
   --radius-12: 12px;
   --radius-full: 999px;

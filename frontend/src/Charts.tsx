@@ -1,25 +1,42 @@
 import ReactECharts from 'echarts-for-react'
 import type { ChartData, AnnualEntry } from './types'
 
-// ── ECharts light theme defaults (TRAE Work) ──
-const _textColor = '#525252'
-const _axisLabelColor = '#A3A3A3'
-const _splitLineColor = 'rgba(115, 115, 115, 0.08)'
-const _tooltipBg = '#FFFFFF'
-const _tooltipBorder = 'rgba(115, 115, 115, 0.12)'
-const _tooltipTextColor = '#171717'
+// ── ECharts 主题注入（refactor-ui-design-system Task 5）──
+// 每次构建 option 时从 CSS 变量实时读取，保证主题变更后图表跟随；
+// getComputedStyle 不可用或变量缺失时回退到原 TRAE Work light 十六进制值。
 
-// TRAE Work viz palette
-const _colors = {
-  brand: '#4B3FE3',
-  coral: '#F87454',
-  mint: '#1DC981',
-  amber: '#F5A623',
-  sky: '#3B82F6',
-  violet: '#8B5CF6',
-  rose: '#EC4899',
-  teal: '#14B8A6',
+function cssVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
 }
+
+export function getChartTheme() {
+  return {
+    textColor: cssVar('--muted-foreground', '#525252'),
+    axisLabelColor: cssVar('--muted-foreground', '#A3A3A3'),
+    tooltipBg: cssVar('--popover', '#FFFFFF'),
+    tooltipBorder: cssVar('--border', 'rgba(115, 115, 115, 0.12)'),
+    tooltipTextColor: cssVar('--foreground', '#171717'),
+    brand: cssVar('--primary', '#4B3FE3'),
+    coral: cssVar('--chart-coral', '#F87454'),
+    mint: cssVar('--chart-mint', '#1DC981'),
+    amber: cssVar('--chart-amber', '#F5A623'),
+    sky: cssVar('--chart-sky', '#3B82F6'),
+    violet: cssVar('--chart-violet', '#8B5CF6'),
+    rose: cssVar('--chart-rose', '#EC4899'),
+    teal: cssVar('--chart-teal', '#14B8A6'),
+    gridLine: cssVar('--muted-foreground', '#A3A3A3'),
+    splitLine: 'rgba(115, 115, 115, 0.08)',
+    heat: [
+      cssVar('--destructive', '#EF4444'),
+      cssVar('--status-warning-default', '#F5A623'),
+      cssVar('--status-success-default', '#10B981'),
+    ],
+  }
+}
+
+type ChartTheme = ReturnType<typeof getChartTheme>
 
 // ── Base chart wrapper ──
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
@@ -31,20 +48,22 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
   )
 }
 
-const _baseOption = {
-  textStyle: { color: _textColor, fontSize: 11 },
-  tooltip: { trigger: 'axis', backgroundColor: _tooltipBg, borderColor: _tooltipBorder, textStyle: { color: _tooltipTextColor } },
-  grid: { left: '8%', right: '8%', bottom: '12%', top: '15%' },
-  xAxis: {
-    type: 'category' as const,
-    axisLabel: { color: _axisLabelColor, fontSize: 10 },
-    axisLine: { lineStyle: { color: _splitLineColor } },
-  },
-  yAxis: {
-    type: 'value' as const,
-    axisLabel: { color: _axisLabelColor, fontSize: 10 },
-    splitLine: { lineStyle: { color: _splitLineColor } },
-  },
+function baseOption(theme: ChartTheme) {
+  return {
+    textStyle: { color: theme.textColor, fontSize: 11 },
+    tooltip: { trigger: 'axis', backgroundColor: theme.tooltipBg, borderColor: theme.tooltipBorder, textStyle: { color: theme.tooltipTextColor } },
+    grid: { left: '8%', right: '8%', bottom: '12%', top: '15%' },
+    xAxis: {
+      type: 'category' as const,
+      axisLabel: { color: theme.axisLabelColor, fontSize: 10 },
+      axisLine: { lineStyle: { color: theme.splitLine } },
+    },
+    yAxis: {
+      type: 'value' as const,
+      axisLabel: { color: theme.axisLabelColor, fontSize: 10 },
+      splitLine: { lineStyle: { color: theme.splitLine } },
+    },
+  }
 }
 
 // ── P0: Revenue & Profit ──
@@ -54,17 +73,18 @@ export function RevenueProfitChart({ data }: { data: ChartData }) {
   const years = annual.map(a => a.year)
   const revenue = annual.map(a => a.revenue ?? 0)
   const profit = annual.map(a => a.net_profit ?? 0)
+  const theme = getChartTheme()
 
   const option = {
-    ..._baseOption,
-    legend: { data: ['营业收入', '归母净利润'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
+    ...baseOption(theme),
+    legend: { data: ['营业收入', '归母净利润'], bottom: 0, textStyle: { color: theme.textColor, fontSize: 10 } },
     yAxis: [
-      { type: 'value', name: '营收(亿)', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
-      { type: 'value', name: '利润(亿)', axisLabel: { color: _axisLabelColor }, splitLine: { show: false } },
+      { type: 'value', name: '营收(亿)', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
+      { type: 'value', name: '利润(亿)', axisLabel: { color: theme.axisLabelColor }, splitLine: { show: false } },
     ],
     series: [
-      { name: '营业收入', type: 'bar', data: revenue, itemStyle: { color: _colors.brand } },
-      { name: '归母净利润', type: 'bar', yAxisIndex: 1, data: profit, itemStyle: { color: _colors.coral } },
+      { name: '营业收入', type: 'bar', data: revenue, itemStyle: { color: theme.brand } },
+      { name: '归母净利润', type: 'bar', yAxisIndex: 1, data: profit, itemStyle: { color: theme.coral } },
     ],
   }
 
@@ -80,13 +100,14 @@ export function GrowthChart({ data }: { data: ChartData }) {
   const g = data.growth
   if (g.years.length < 2) return null
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    legend: { data: ['营收增速', '净利润增速'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
-    yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    legend: { data: ['营收增速', '净利润增速'], bottom: 0, textStyle: { color: theme.textColor, fontSize: 10 } },
+    yAxis: { type: 'value', axisLabel: { color: theme.axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [
-      { name: '营收增速', type: 'line', data: g.revenue_growth, itemStyle: { color: _colors.brand }, symbol: 'circle', symbolSize: 6 },
-      { name: '净利润增速', type: 'line', data: g.profit_growth, itemStyle: { color: _colors.coral }, symbol: 'rect', symbolSize: 6 },
+      { name: '营收增速', type: 'line', data: g.revenue_growth, itemStyle: { color: theme.brand }, symbol: 'circle', symbolSize: 6 },
+      { name: '净利润增速', type: 'line', data: g.profit_growth, itemStyle: { color: theme.coral }, symbol: 'rect', symbolSize: 6 },
     ],
   }
 
@@ -105,13 +126,14 @@ export function MarginChart({ data }: { data: ChartData }) {
   const gm = annual.map(a => a.gross_margin ?? null)
   const nm = annual.map(a => a.net_margin ?? null)
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    legend: { data: ['毛利率', '净利率'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
-    yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    legend: { data: ['毛利率', '净利率'], bottom: 0, textStyle: { color: theme.textColor, fontSize: 10 } },
+    yAxis: { type: 'value', axisLabel: { color: theme.axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [
-      { name: '毛利率', type: 'line', data: gm, smooth: true, itemStyle: { color: _colors.mint }, symbol: 'circle', symbolSize: 6 },
-      { name: '净利率', type: 'line', data: nm, smooth: true, itemStyle: { color: _colors.brand }, symbol: 'circle', symbolSize: 6 },
+      { name: '毛利率', type: 'line', data: gm, smooth: true, itemStyle: { color: theme.mint }, symbol: 'circle', symbolSize: 6 },
+      { name: '净利率', type: 'line', data: nm, smooth: true, itemStyle: { color: theme.brand }, symbol: 'circle', symbolSize: 6 },
     ],
   }
 
@@ -129,20 +151,21 @@ export function RoeChart({ data }: { data: ChartData }) {
   const years = annual.map(a => a.year)
   const roe = annual.map(a => a.roe ?? null)
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    yAxis: { type: 'value', axisLabel: { color: theme.axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [{
       type: 'line', data: roe, smooth: true,
-      itemStyle: { color: _colors.amber },
+      itemStyle: { color: theme.amber },
       areaStyle: { opacity: 0.15 },
       symbol: 'circle', symbolSize: 6,
       markLine: {
         // lineStyle 属于 markLine 层级（应用到所有标线）；放进 data 会被 ECharts
         // 当作无坐标的数据点 → 读 coord of undefined → MarkLineView 崩溃
         // "Cannot read properties of undefined (reading 'coord')"，ROE 图渲染失败。
-        data: [{ yAxis: 15, label: { formatter: '优秀线 15%', color: _axisLabelColor } }],
-        lineStyle: { color: '#A3A3A3', type: 'dashed' },
+        data: [{ yAxis: 15, label: { formatter: '优秀线 15%', color: theme.axisLabelColor } }],
+        lineStyle: { color: theme.gridLine, type: 'dashed' },
       },
     }],
   }
@@ -161,12 +184,13 @@ export function CashflowChart({ data }: { data: ChartData }) {
   const years = annual.map(a => a.year)
   const ocf = annual.map(a => a.ocf ?? 0)
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    yAxis: { type: 'value', name: '亿元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    yAxis: { type: 'value', name: '亿元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [{
       type: 'bar', data: ocf,
-      itemStyle: { color: (p: any) => p.value >= 0 ? _colors.sky : _colors.coral },
+      itemStyle: { color: (p: any) => p.value >= 0 ? theme.sky : theme.coral },
     }],
   }
 
@@ -185,25 +209,26 @@ export function StockPriceChart({ data }: { data: ChartData }) {
   const closes = daily.map(d => d.close)
   const earningsDates = data.price.earnings_dates
 
+  const theme = getChartTheme()
   const markLines = earningsDates.map(ed => ({
     xAxis: ed,
     label: { show: false },
-    lineStyle: { color: _colors.coral, type: 'dashed', opacity: 0.5 },
+    lineStyle: { color: theme.coral, type: 'dashed', opacity: 0.5 },
   }))
 
   const option = {
-    ..._baseOption,
+    ...baseOption(theme),
     xAxis: {
       type: 'category',
       data: dates,
-      axisLabel: { color: _axisLabelColor, fontSize: 9, rotate: 30 },
-      axisLine: { lineStyle: { color: _splitLineColor } },
+      axisLabel: { color: theme.axisLabelColor, fontSize: 9, rotate: 30 },
+      axisLine: { lineStyle: { color: theme.splitLine } },
     },
-    yAxis: { type: 'value', name: '元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    yAxis: { type: 'value', name: '元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 15, bottom: 0 }],
     series: [{
       type: 'line', data: closes,
-      itemStyle: { color: _colors.brand },
+      itemStyle: { color: theme.brand },
       areaStyle: { opacity: 0.08 },
       symbol: 'none',
       markLine: { data: markLines, symbol: 'none' },
@@ -233,14 +258,15 @@ export function GrowthVsPriceChart({ data }: { data: ChartData }) {
     return null
   })
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    legend: { data: ['营收增速', '净利润增速', '股价涨幅'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
-    yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    legend: { data: ['营收增速', '净利润增速', '股价涨幅'], bottom: 0, textStyle: { color: theme.textColor, fontSize: 10 } },
+    yAxis: { type: 'value', axisLabel: { color: theme.axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [
-      { name: '营收增速', type: 'bar', data: g.revenue_growth, itemStyle: { color: _colors.brand } },
-      { name: '净利润增速', type: 'bar', data: g.profit_growth, itemStyle: { color: _colors.coral } },
-      { name: '股价涨幅', type: 'bar', data: priceChanges, itemStyle: { color: _colors.mint } },
+      { name: '营收增速', type: 'bar', data: g.revenue_growth, itemStyle: { color: theme.brand } },
+      { name: '净利润增速', type: 'bar', data: g.profit_growth, itemStyle: { color: theme.coral } },
+      { name: '股价涨幅', type: 'bar', data: priceChanges, itemStyle: { color: theme.mint } },
     ],
   }
 
@@ -259,13 +285,14 @@ export function AssetsChart({ data }: { data: ChartData }) {
   const assets = annual.map(a => a.total_assets ?? 0)
   const equity = annual.map(a => a.equity ?? 0)
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    legend: { data: ['总资产', '归母权益'], bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
-    yAxis: { type: 'value', name: '亿元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    legend: { data: ['总资产', '归母权益'], bottom: 0, textStyle: { color: theme.textColor, fontSize: 10 } },
+    yAxis: { type: 'value', name: '亿元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [
-      { name: '总资产', type: 'bar', data: assets, itemStyle: { color: _colors.teal } },
-      { name: '归母权益', type: 'bar', data: equity, itemStyle: { color: _colors.sky } },
+      { name: '总资产', type: 'bar', data: assets, itemStyle: { color: theme.teal } },
+      { name: '归母权益', type: 'bar', data: equity, itemStyle: { color: theme.sky } },
     ],
   }
 
@@ -284,10 +311,11 @@ export function ContractLiabChart({ data }: { data: ChartData }) {
   const years = annual.map(a => a.year)
   const cl = annual.map(a => a.contract_liab ?? 0)
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    yAxis: { type: 'value', name: '亿元', axisLabel: { color: _axisLabelColor }, splitLine: { lineStyle: { color: _splitLineColor } } },
-    series: [{ type: 'bar', data: cl, itemStyle: { color: _colors.rose } }],
+    ...baseOption(theme),
+    yAxis: { type: 'value', name: '亿元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
+    series: [{ type: 'bar', data: cl, itemStyle: { color: theme.rose } }],
   }
 
   return (
@@ -305,12 +333,13 @@ export function DebtRatioChart({ data }: { data: ChartData }) {
   const years = annual.map(a => a.year)
   const dr = annual.map(a => a.debt_ratio ?? null)
 
+  const theme = getChartTheme()
   const option = {
-    ..._baseOption,
-    yAxis: { type: 'value', axisLabel: { color: _axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: _splitLineColor } } },
+    ...baseOption(theme),
+    yAxis: { type: 'value', axisLabel: { color: theme.axisLabelColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: theme.splitLine } } },
     series: [{
       type: 'line', data: dr, smooth: true,
-      itemStyle: { color: _colors.coral },
+      itemStyle: { color: theme.coral },
       areaStyle: { opacity: 0.10 },
       symbol: 'circle', symbolSize: 6,
     }],
@@ -356,19 +385,20 @@ export function HeatmapChart({ data }: { data: ChartData }) {
     })
   })
 
+  const theme = getChartTheme()
   const option = {
     tooltip: { position: 'top' },
     grid: { left: '15%', right: '10%', bottom: '15%', top: '10%' },
     xAxis: {
       type: 'category',
       data: windows.map(w => `T${w >= 0 ? '+' : ''}${w}`),
-      axisLabel: { color: _axisLabelColor, fontSize: 10 },
+      axisLabel: { color: theme.axisLabelColor, fontSize: 10 },
       splitArea: { show: true },
     },
     yAxis: {
       type: 'category',
       data: yearLabels,
-      axisLabel: { color: _axisLabelColor, fontSize: 10 },
+      axisLabel: { color: theme.axisLabelColor, fontSize: 10 },
       splitArea: { show: true },
     },
     visualMap: {
@@ -377,8 +407,8 @@ export function HeatmapChart({ data }: { data: ChartData }) {
       orient: 'horizontal',
       left: 'center',
       bottom: 0,
-      textStyle: { color: _textColor, fontSize: 9 },
-      inRange: { color: ['#EF4444', '#F5A623', '#10B981'] },
+      textStyle: { color: theme.textColor, fontSize: 9 },
+      inRange: { color: theme.heat },
     },
     series: [{
       type: 'heatmap',
@@ -408,15 +438,16 @@ export function MarketShareChart({ data }: { data: ChartData }) {
     )
   }
 
+  const theme = getChartTheme()
   const option = {
     tooltip: { trigger: 'item' },
-    legend: { bottom: 0, textStyle: { color: _textColor, fontSize: 10 } },
+    legend: { bottom: 0, textStyle: { color: theme.textColor, fontSize: 10 } },
     series: [{
       type: 'pie',
       radius: ['40%', '70%'],
       data: ms.shares.map((s: any) => ({ name: s.name, value: s.value })),
-      label: { color: _textColor, fontSize: 10 },
-      color: [_colors.brand, _colors.coral, _colors.mint, _colors.amber, _colors.sky, _colors.violet, _colors.rose, _colors.teal],
+      label: { color: theme.textColor, fontSize: 10 },
+      color: [theme.brand, theme.coral, theme.mint, theme.amber, theme.sky, theme.violet, theme.rose, theme.teal],
     }],
   }
 
