@@ -31,6 +31,7 @@
 ## 验证
 
 - **离线重判：41 FAIL → 5，契约疾病归零**。残量 5 条全部为**真幻觉**（stated 值经来源序列全量搜索证伪：MA5=46.7 / MACD 柱=17.8、38 / RSI=6 / BOLL 上轨=94.7——股票价格 13 元量级下 MA5=46.7 物理不可能）；残量引用集合钉死为回归网（`tests/test_rejudge_offline.py`）
+- **真实端到端（2026-08-29，002412 修复后实跑）**：28 claims，**0 FAIL** / 25 PASS / 3 UNVERIFIABLE（coverage_gaps=0 → 全为 llm_inference 契约跳过）；`citation_pass=true`，`iteration_count=1` 零重试；全程 2.7 分钟（修复前分析师每轮 12~16 分钟且被假 FAIL 拖入重跑）。证据：`tests/validation/2026-08-29-fix-citation-contract-diseases-validation.md`
 - 全量 `pytest -m "not live"` **1411 passed** / ruff 0 / mypy 0（`_is_dataframe` 以 TypeGuard 收窄）
 - **fixture 修复插曲（方法论教训）**：初版假设运行时 K 线止于 08-25，离线重算后技术面全灭；用 MA5/MA20 两个独立方程解出的隐含收盘完全一致（13.09），证实运行时实际含 08-26 交易日，重算后 claim 期望逐值命中——**离线重放的数据快照假设必须数值验证，不能靠时间推断**
 
