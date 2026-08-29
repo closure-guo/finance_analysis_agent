@@ -1,4 +1,8 @@
-# Incident 020: 深研管线「假卡死」— 事件落库限速终态迟到 + 管线超时空转
+# Incident 021: 深研管线「假卡死」— 事件落库限速终态迟到 + 管线超时空转
+
+> 编号说明：本 incident 在 `fix/deep-analysis-stuck` 分支上曾编号 020，合入
+> main 时与 [020 citation 校验器契约疾病](020-citation-contract-diseases-20260828.md)
+> 撞号，改为 021。文中历史提案引用的「incident 020 复查」即本文。
 
 **日期**: 2026-08-25
 **环境**: Windows Docker Desktop 卷 / SQLite WAL / 方舟 GLM-5.3 / Langfuse 3.205.1
