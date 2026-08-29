@@ -421,3 +421,24 @@ describe('reduce - 事件序列 fixture', () => {
     expect(timeline.some((i) => i.type === 'tool_call' && i.name === 'search_stock')).toBe(true)
   })
 })
+
+describe('reduce - report_ready 携带股票代码', () => {
+  it('report_ready 消息记录 stockCode 与既有字段', () => {
+    const state = baseState()
+    const next = reduce(state, ev({
+      type: 'report_ready',
+      session_id: 's1',
+      report_markdown: '# 报告',
+      chart_data: {},
+      file_paths: { md: '/tmp/贵州茅台_600519_x_report.md' },
+      stock_name: '贵州茅台',
+      stock_code: '600519',
+      duration_ms: 1234,
+      timestamp: 't',
+    }))
+    const report = next.messages.find((m) => m.type === 'report')
+    expect(report?.stockCode).toBe('600519')
+    expect(report?.stockName).toBe('贵州茅台')
+    expect(report?.filePaths).toEqual({ md: '/tmp/贵州茅台_600519_x_report.md' })
+  })
+})

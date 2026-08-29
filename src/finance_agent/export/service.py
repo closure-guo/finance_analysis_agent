@@ -66,7 +66,9 @@ def export_report(
     reports_dir = Path(os.environ.get("REPORTS_DIR", "reports"))
     reports_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = str(reports_dir / f"{stock_code}_{date_str}_report")
+    name_part = (stock_name or "").strip()
+    stem = f"{name_part}_{stock_code}" if name_part and name_part != stock_code else stock_code
+    base_name = str(reports_dir / f"{stem}_{date_str}_report")
 
     converters = {
         "docx": (markdown_to_docx, ".docx"),

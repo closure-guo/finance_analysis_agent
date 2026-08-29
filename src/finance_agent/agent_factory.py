@@ -714,6 +714,7 @@ def _make_run_deep_analysis(
                         agent_process=accumulated.get("agent_process") or {},
                         analyst_summaries=accumulated.get("analyst_summaries") or {},
                         duration_ms=int((_time_module.time() - _pipeline_start_time) * 1000),
+                        file_paths=accumulated.get("file_paths") or {},
                         status="completed",
                     )
 
@@ -724,6 +725,7 @@ def _make_run_deep_analysis(
                     "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
                     "report_markdown": report_md,
                     "web_sources": web_sources or [],
+                    "file_paths": accumulated.get("file_paths") or {},
                     "sse_type": "report_ready",
                 }
 
@@ -1409,6 +1411,8 @@ async def stream_agent_to_sse(
                                     "type": "report_ready",
                                     "report_markdown": tr.metadata.get("report_markdown", ""),
                                     "chart_data": tr.metadata.get("chart_data", {}),
+                                    "file_paths": tr.metadata.get("file_paths", {}),
+                                    "stock_code": stock_code,
                                     "stock_name": stock_name,
                                     "web_sources": tr.metadata.get("web_sources", []),
                                     "timestamp": ts,

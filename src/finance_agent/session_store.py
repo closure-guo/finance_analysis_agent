@@ -102,6 +102,9 @@ def init_db() -> None:
         # 管线触发锚点：管线启动时 chat_history 中最后一条 user 消息索引 + 1，
         # 供前端历史重建定位报告消息插入位置（NULL = 旧会话，前端回退第一个 user 后）
         ("pipeline_anchor", "ALTER TABLE sessions ADD COLUMN pipeline_anchor INTEGER"),
+        # 报告文件产物（md/docx 等导出路径）：恢复会话后前端可还原导出入口。
+        # 对应 delta spec: update-file-export-entry
+        ("file_paths", "ALTER TABLE sessions ADD COLUMN file_paths TEXT"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -467,12 +470,14 @@ def update_session_report(
     analyst_reports: dict | None = None,
     agent_process: dict | None = None,
     analyst_summaries: dict | None = None,
+    file_paths: dict | None = None,
     duration_ms: int = 0,
     status: str = "completed",
 ) -> bool:
     """更新 session 的报告数据和状态。
 
     用于管线启动时先创建 running session，完成后再回填报告。
+    file_paths 记录报告文件产物路径（md/docx 等），供恢复会话还原导出入口。
     """
     conn = _get_db()
     cur = conn.execute(
@@ -483,6 +488,7 @@ def update_session_report(
             analyst_reports = ?,
             agent_process = ?,
             analyst_summaries = ?,
+            file_paths = ?,
             duration_ms = ?,
             status = ?
         WHERE session_id = ?
@@ -493,6 +499,7 @@ def update_session_report(
             json.dumps(analyst_reports or {}, ensure_ascii=False, default=str),
             json.dumps(agent_process or {}, ensure_ascii=False, default=str),
             json.dumps(analyst_summaries or {}, ensure_ascii=False, default=str),
+            json.dumps(file_paths or {}, ensure_ascii=False),
             duration_ms,
             status,
             session_id,
@@ -584,6 +591,13 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         if d.get(key):
             with contextlib.suppress(json.JSONDecodeError, TypeError):
                 d[key] = json.loads(d[key])
+    # file_paths：报告文件产物（update-file-export-entry）。与其它 JSON 列同款解析，
+    # 但 NULL/缺失（旧会话）一律回退 {}，保证 API 恒定返回该键，前端可安全读取。
+    raw_file_paths = d.get("file_paths")
+    d["file_paths"] = {}
+    if raw_file_paths:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            d["file_paths"] = json.loads(raw_file_paths)
     return d
 
 

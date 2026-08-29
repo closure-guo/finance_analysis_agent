@@ -1,23 +1,21 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { UIMessage } from './types'
 
-export interface ExportFormatMeta {
-  key: string
-  label: string
-  icon: string
-  apiFmt: string // POST /api/export 的 fmt 值
-}
-
-// 导出菜单：PDF / Word / Markdown（pptx 仅当 filePaths 存在时展示，不强制）
-export const EXPORT_FORMATS: ExportFormatMeta[] = [
-  { key: 'pdf', label: 'PDF', icon: 'fa-file-pdf', apiFmt: 'pdf' },
-  { key: 'docx', label: 'Word', icon: 'fa-file-word', apiFmt: 'word' },
-  { key: 'md', label: 'Markdown', icon: 'fa-file-code', apiFmt: 'markdown' },
-]
-
 const basename = (p?: string) => (p ? (String(p).split(/[\\/]/).pop() ?? '') : '')
+
+// 文件图标按扩展名映射
+const FILE_ICONS: Record<string, string> = {
+  pdf: 'fa-file-pdf',
+  docx: 'fa-file-word',
+  md: 'fa-file-code',
+  pptx: 'fa-file-powerpoint',
+}
+const extIcon = (name: string) => {
+  const ext = (name.split('.').pop() ?? '').toLowerCase()
+  return FILE_ICONS[ext] || 'fa-file'
+}
 
 export function ReportFileDrawer({ drawerMessage, onClose }: {
   drawerMessage: UIMessage | null
@@ -33,36 +31,12 @@ export function ReportFileDrawer({ drawerMessage, onClose }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [drawerMessage, onClose])
 
-  // 下载：已有文件直接跳 /api/files/<basename>；缺失文件先 POST /api/export 按需生成再下载
-  const handleDownload = useCallback(async (fmt: ExportFormatMeta) => {
-    if (!drawerMessage) return
-    const existing = drawerMessage.filePaths?.[fmt.key]
-    if (existing) {
-      const a = document.createElement('a')
-      a.href = `/api/files/${basename(existing)}`
-      a.download = basename(existing)
-      a.click()
-      return
-    }
-    const resp = await fetch('/api/export', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: drawerMessage.sessionId, fmt: fmt.apiFmt }),
-    })
-    if (!resp.ok) return
-    const data = await resp.json()
-    const a = document.createElement('a')
-    a.href = data.url
-    a.download = data.file_name
-    a.click()
-  }, [drawerMessage])
-
   if (!drawerMessage) return null
 
-  const fileList = [...EXPORT_FORMATS]
-  if (drawerMessage.filePaths?.pptx) {
-    fileList.push({ key: 'pptx', label: 'PPT', icon: 'fa-file-powerpoint', apiFmt: '' })
-  }
+  // 自上而下列出 filePaths 中已生成的文件，仅展示可下载条目（无 basename 的路径过滤掉）
+  const fileEntries = Object.entries(drawerMessage.filePaths || {})
+    .map(([fmt, path]) => ({ fmt, name: basename(path) }))
+    .filter((e) => e.name)
 
   return (
     <div className="fixed inset-0 z-[60]" data-testid="export-drawer">
@@ -87,36 +61,25 @@ export function ReportFileDrawer({ drawerMessage, onClose }: {
         </div>
 
         {view === 'list' ? (
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
-            {fileList.map(fmt => {
-              const existing = drawerMessage.filePaths?.[fmt.key]
-              return (
-                <div key={fmt.key} className="flex items-center gap-3 p-3 rounded-lg"
-                  style={{ background: 'var(--bg-base-secondary)' }}>
-                  <i className={`fas ${fmt.icon} text-sm`} style={{ color: 'var(--text-brand)' }}></i>
-                  <span className="flex-1 text-sm font-medium" style={{ color: 'var(--text-default)' }}>
-                    {fmt.label}
-                  </span>
-                  {fmt.key !== 'pptx' && (
-                    // 已有文件：直接渲染可下载链接；缺失文件：按钮触发 POST /api/export 后下载
-                    existing ? (
-                      <a href={`/api/files/${basename(existing)}`} download={basename(existing)}
-                        data-testid={`download-${fmt.key}`}
-                        className="text-xs px-2 py-1 rounded no-underline"
-                        style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>
-                        <i className="fas fa-download mr-1"></i>下载
-                      </a>
-                    ) : (
-                      <button onClick={() => handleDownload(fmt)} data-testid={`download-${fmt.key}`}
-                        className="text-xs px-2 py-1 rounded"
-                        style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>
-                        <i className="fas fa-download mr-1"></i>下载
-                      </button>
-                    )
-                  )}
+          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2" data-testid="drawer-file-list">
+            {fileEntries.length === 0 ? (
+              <p className="text-xs py-3 text-center" style={{ color: 'var(--text-tertiary)' }}>
+                暂无已生成文件
+              </p>
+            ) : (
+              fileEntries.map(({ fmt, name }) => (
+                <div key={fmt} data-testid={`file-row-${fmt}`}
+                  className="flex items-center gap-3 p-3 rounded-lg" style={{ background: 'var(--bg-base-secondary)' }}>
+                  <i className={`fas ${extIcon(name)} text-sm`} style={{ color: 'var(--text-brand)' }}></i>
+                  <span className="flex-1 text-sm font-medium truncate" style={{ color: 'var(--text-default)' }}>{name}</span>
+                  <a href={`/api/files/${name}`} download={name} data-testid={`download-file-${fmt}`}
+                    className="text-xs px-2 py-1 rounded no-underline"
+                    style={{ background: 'var(--bg-brand-popup)', color: 'var(--text-brand)' }}>
+                    <i className="fas fa-download mr-1"></i>下载
+                  </a>
                 </div>
-              )
-            })}
+              ))
+            )}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-4 py-3" data-testid="drawer-preview" style={{ maxHeight: 'calc(100vh - 56px)' }}>
