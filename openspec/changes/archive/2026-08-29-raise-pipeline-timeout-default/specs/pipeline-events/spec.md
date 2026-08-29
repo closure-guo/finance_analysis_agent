@@ -28,3 +28,10 @@
 - THEN 系统 SHALL 将会话 status 更新为 failed
 - AND SHALL 在 failure_reason 中记录异常类型与摘要信息
 - AND 客户端切回该会话时 SHALL 通过 GET /api/sessions/{id} 获取 failure_reason 并展示
+
+#### Scenario: 前端轮询展示中断原因
+
+- **GIVEN** 客户端切回一个 status=failed 的会话
+- **WHEN** 前端通过轮询获取到会话详情
+- **THEN** 前端 SHALL 展示 failure_reason 中的具体中断原因
+- **AND** SHALL NOT 仅显示笼统的"管线可能已中断"
