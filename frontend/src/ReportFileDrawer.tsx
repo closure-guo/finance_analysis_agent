@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { UIMessage } from './types'
+import { Button } from './components/ui/button'
 
 const basename = (p?: string) => (p ? (String(p).split(/[\\/]/).pop() ?? '') : '')
 
@@ -49,14 +50,12 @@ export function ReportFileDrawer({ drawerMessage, onClose }: {
           <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>全部文件</span>
           <div className="flex items-center gap-3">
             {/* 预览面板：抽屉级单一入口（预览 reportMarkdown 正文） */}
-            <button onClick={() => setView('preview')} data-testid="preview-open"
-              className="text-xs px-2 py-1 rounded" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)' }}>
+            <Button onClick={() => setView('preview')} data-testid="preview-open" variant="secondary" size="sm" className="h-7">
               预览
-            </button>
-            <button onClick={onClose} data-testid="drawer-close"
-              className="text-[var(--icon-secondary)] hover:text-[var(--text-default)]">
+            </Button>
+            <Button onClick={onClose} data-testid="drawer-close" variant="ghost" size="icon" className="h-6 w-6">
               <i className="fas fa-times"></i>
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -83,9 +82,9 @@ export function ReportFileDrawer({ drawerMessage, onClose }: {
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-4 py-3" data-testid="drawer-preview" style={{ maxHeight: 'calc(100vh - 56px)' }}>
-            <button onClick={() => setView('list')} className="text-xs mb-2" style={{ color: 'var(--text-brand)' }}>
+            <Button onClick={() => setView('list')} variant="link" className="mb-2 h-auto p-0 text-xs">
               <i className="fas fa-arrow-left mr-1"></i>返回文件列表
-            </button>
+            </Button>
             <div className="prose prose-sm max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}
                 components={{ img: () => null, a: (props) => <a {...props} target="_blank" rel="noreferrer" /> }}>

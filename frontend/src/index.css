@@ -143,10 +143,6 @@ input:focus, textarea:focus { outline: none; }
 .response-streaming.is-streaming .streaming-cursor { display: inline-block; vertical-align: middle; margin-left: 4px; }
 .response-streaming.is-streaming > :nth-last-child(2) { display: inline; }
 
-/* Chips */
-.chip { transition: all 0.2s ease; cursor: pointer; }
-.chip:hover { background: var(--bg-brand-popup); border-color: var(--bg-brand); transform: translateY(-1px); }
-
 /* Debate layout */
 .debate-bull { border-left: 3px solid var(--status-success-default); }
 .debate-bear { border-left: 3px solid var(--status-error-default); }

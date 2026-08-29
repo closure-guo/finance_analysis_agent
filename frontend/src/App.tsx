@@ -15,6 +15,10 @@ import { useClickOutside } from './useClickOutside'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import { Toaster } from './components/ui/sonner'
+import { Button } from './components/ui/button'
+import { Input } from './components/ui/input'
+import { Textarea } from './components/ui/textarea'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from './components/ui/dialog'
 import {
   loadProfiles,
   saveProfiles,
@@ -683,12 +687,13 @@ export default function App() {
               style={{ left: leftInset }}
             >
               <div className="flex items-center gap-3">
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setSidebarOpen(!sidebarOpen)}
-                  className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors"
                 >
                   <i className="fas fa-bars text-sm"></i>
-                </button>
+                </Button>
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
@@ -696,15 +701,14 @@ export default function App() {
               </div>
               <div className="flex items-center gap-4">
                 {lastExportableReport && (
-                  <button data-testid="topbar-files-button"
-                    onClick={() => setDrawerMessage(lastExportableReport!)}
-                    className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm">
+                  <Button data-testid="topbar-files-button" variant="ghost" size="sm"
+                    onClick={() => setDrawerMessage(lastExportableReport!)}>
                     <i className="fas fa-folder-open mr-1"></i>查看全部文件
-                  </button>
+                  </Button>
                 )}
-                <button className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm" onClick={() => setShowSettings(true)}>
+                <Button variant="ghost" size="sm" onClick={() => setShowSettings(true)}>
                   <i className="fas fa-cog mr-1"></i>设置
-                </button>
+                </Button>
                 <div className="w-7 h-7 rounded-full" style={{ background: 'var(--bg-overlay-l3)' }}></div>
               </div>
             </header>
@@ -752,14 +756,15 @@ export default function App() {
                 style={{ left: leftInset, bottom: '90px' }}
               >
                 {(appState === 'analyzing' || messages.some(m => m.streaming)) && currentSessionId && (
-                  <button
+                  <Button
+                    variant="destructive"
+                    size="sm"
                     onClick={stopGeneration}
-                    className="px-4 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-80"
-                    style={{ background: 'var(--status-error-default)', color: 'white' }}
+                    className="rounded-lg"
                   >
                     <i className="fas fa-stop text-[10px]"></i>
                     停止生成
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
@@ -786,6 +791,7 @@ export default function App() {
       {/* LLM 设置面板（取代旧版仅 API Key 的弹窗） */}
       {showSettings && (
         <SettingsModal
+          open
           config={llmConfig}
           backendDefaults={backendDefaults}
           profileStore={profileStore}
@@ -836,9 +842,9 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   if (!isOpen) {
     return (
       <div className="fixed left-0 top-0 bottom-0 w-12 flex flex-col items-center py-4 z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
-        <button onClick={onToggle} className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors">
+        <Button variant="ghost" size="icon" onClick={onToggle}>
           <i className="fas fa-bars"></i>
-        </button>
+        </Button>
       </div>
     )
   }
@@ -848,34 +854,30 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
       {/* Header */}
       <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
         <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
-        <button onClick={onToggle} className="text-[var(--text-tertiary)] hover:text-[var(--text-default)] transition-colors">
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle}>
           <i className="fas fa-times text-xs"></i>
-        </button>
+        </Button>
       </div>
 
       {/* New analysis button */}
       <div className="p-3">
-        <button
+        <Button
           onClick={onNew}
-          className="w-full py-2 rounded-xl text-white text-sm font-medium transition-all flex items-center justify-center gap-2"
-          style={{ background: 'var(--bg-brand)' }}
+          className="w-full rounded-xl text-sm font-medium"
         >
           <i className="fas fa-plus text-xs"></i>
           新建分析
-        </button>
+        </Button>
       </div>
 
       {/* Search */}
       <div className="px-3 pb-3">
-        <input
+        <Input
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="搜索股票..."
-          className="w-full rounded-lg px-3 py-2 text-xs outline-none transition-all"
-          style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', border: '1px solid transparent' }}
-          onFocus={e => { e.target.style.borderColor = 'var(--bg-brand)'; e.target.style.boxShadow = '0 0 0 3px var(--bg-brand-popup)' }}
-          onBlur={e => { e.target.style.borderColor = 'transparent'; e.target.style.boxShadow = 'none' }}
+          className="h-9 text-xs"
         />
       </div>
 
@@ -904,7 +906,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
               onMouseLeave={(e) => { if (currentSessionId !== s.session_id) e.currentTarget.style.background = 'transparent' }}
             >
               {editingId === s.session_id ? (
-                <input
+                <Input
                   type="text"
                   value={editText}
                   onChange={e => setEditText(e.target.value)}
@@ -921,8 +923,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                   }}
                   onClick={e => e.stopPropagation()}
                   autoFocus
-                  className="w-full rounded px-2 py-1 text-xs outline-none"
-                  style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-default)' }}
+                  className="h-7 rounded px-2 py-1 text-xs"
                 />
               ) : (
                 <>
@@ -944,18 +945,17 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                     <span>{s.stock_name}</span>
                     <span>{formatSessionTime(s.created_at)}</span>
                   </div>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={e => {
                       e.stopPropagation()
                       onDelete(s.session_id)
                     }}
-                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ color: 'var(--text-tertiary)' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--status-error-default)' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)' }}
+                    className="absolute right-2 top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive"
                   >
                     <i className="fas fa-trash text-xs"></i>
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
@@ -1036,7 +1036,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
           <div className="relative flex items-center gap-2 px-4 pt-1 pb-0" ref={rowRef}>
             <button
               onClick={() => { setLlmDropdownOpen(false); setDropdownOpen(!dropdownOpen) }}
-              className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+              className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-muted"
             >
               <span style={{ color: 'var(--text-tertiary)' }}>模式：</span>
               <i className={`fas ${currentMode.icon} ${currentMode.color}`}></i>
@@ -1053,8 +1053,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
                     onClick={() => { if (gate.allowed) { setMode(m.id); setDropdownOpen(false) } }}
                     disabled={!gate.allowed}
                     title={gate.allowed ? undefined : gate.reason}
-                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                    className={`w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m.id ? 'bg-accent' : ''}`}
                     onMouseEnter={(e) => { if (mode !== m.id && gate.allowed) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
                     onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                   >
@@ -1083,7 +1082,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
                   setDropdownOpen(false)
                   setLlmDropdownOpen(!llmDropdownOpen)
                 }}
-                className="flex items-center gap-1 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+                className="flex items-center gap-1 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-muted"
               >
                 <i className="fas fa-microchip text-[var(--text-tertiary)]"></i>
                 <span style={{ color: 'var(--text-secondary)' }}>{profileName}</span>
@@ -1095,8 +1094,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
                     <button
                       key={p.id}
                       onClick={() => { onSwitchProfile(p.id); setLlmDropdownOpen(false) }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
-                      style={{ background: p.id === activeProfileId ? 'var(--bg-overlay-l2)' : 'transparent' }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${p.id === activeProfileId ? 'bg-accent' : ''}`}
                     >
                       {p.id === activeProfileId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
                       <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
@@ -1107,36 +1105,37 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
             </div>
           </div>
           <div className="flex items-end gap-2">
-            <textarea
+            <Textarea
               rows={1}
               placeholder={mode === 'quick' ? '输入问题，如：茅台、宁德时代怎么样' : '输入股票名称或代码，如 茅台、300750'}
-              className="flex-1 bg-transparent px-4 py-3 resize-none outline-none text-sm leading-relaxed"
-              style={{ minHeight: '48px', maxHeight: '120px', color: 'var(--text-default)' }}
+              className="flex-1 border-0 bg-transparent px-4 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[48px] max-h-[120px]"
+              style={{ color: 'var(--text-default)' }}
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={handleKeydown}
             />
-            <button
+            <Button
               data-testid="send-button"
+              variant="default"
+              size="icon"
               onClick={handleSend}
-              className="w-10 h-10 rounded-xl flex items-center justify-center mb-1 mr-1"
-              style={{ background: 'var(--bg-brand)' }}
+              className="w-10 h-10 rounded-xl mb-1 mr-1"
             >
               <i className="fas fa-arrow-up text-white text-sm"></i>
-            </button>
+            </Button>
           </div>
         </div>
         {!apiKey ? (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-info-circle mr-1"></i>
             请先配置 LLM API 才能开始分析
-            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowSettings(true)}>去配置</button>
+            <Button variant="link" className="ml-1 h-auto p-0 text-xs" onClick={() => setShowSettings(true)}>去配置</Button>
           </p>
         ) : (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-check-circle mr-1" style={{ color: 'var(--status-success-default)' }}></i>
             LLM API 已配置
-            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowSettings(true)}>修改</button>
+            <Button variant="link" className="ml-1 h-auto p-0 text-xs" onClick={() => setShowSettings(true)}>修改</Button>
           </p>
         )}
       </div>
@@ -1828,7 +1827,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
           <div className="relative flex items-center gap-1 px-1 pb-1" ref={rowRef}>
             <button
               onClick={() => { setLlmDropdownOpen(false); setModeDropdownOpen(!modeDropdownOpen) }}
-              className="flex items-center gap-1.5 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+              className="flex items-center gap-1.5 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-muted"
             >
               <i className={`fas ${currentMode.icon} ${currentMode.color} text-[10px]`}></i>
               <span className={currentMode.color}>{currentMode.label}</span>
@@ -1844,8 +1843,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                     onClick={() => handleModeSelect(m.id)}
                     disabled={!gate.allowed}
                     title={gate.allowed ? undefined : gate.reason}
-                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                    className={`w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m.id ? 'bg-accent' : ''}`}
                     onMouseEnter={(e) => { if (mode !== m.id && gate.allowed) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
                     onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                   >
@@ -1877,7 +1875,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                   setModeDropdownOpen(false)
                   setLlmDropdownOpen(!llmDropdownOpen)
                 }}
-                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-muted"
               >
                 <i className="fas fa-microchip text-[10px]" style={{ color: 'var(--text-tertiary)' }}></i>
                 <span style={{ color: 'var(--text-secondary)' }}>{profileName}</span>
@@ -1889,8 +1887,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                     <button
                       key={p.id}
                       onClick={() => { onSwitchProfile(p.id); setLlmDropdownOpen(false) }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
-                      style={{ background: p.id === activeProfileId ? 'var(--bg-overlay-l2)' : 'transparent' }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${p.id === activeProfileId ? 'bg-accent' : ''}`}
                     >
                       {p.id === activeProfileId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
                       <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
@@ -1901,29 +1898,31 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
             </div>
           </div>
           <div className="flex items-end gap-2">
-            <button
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors mb-1"
-              style={{ color: 'var(--icon-secondary)' }}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="w-8 h-8 rounded-lg mb-1 text-muted-foreground"
             >
               <i className="fas fa-plus text-xs"></i>
-            </button>
-            <textarea
+            </Button>
+            <Textarea
               rows={1}
               placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
-              className="flex-1 bg-transparent px-2 py-3 resize-none outline-none text-sm leading-relaxed"
-              style={{ minHeight: '40px', maxHeight: '100px', color: 'var(--text-default)' }}
+              className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+              style={{ color: 'var(--text-default)' }}
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={handleKeydown}
             />
-            <button
+            <Button
               data-testid="send-button"
+              variant="default"
+              size="icon"
               onClick={handleSendClick}
-              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all mb-0.5 mr-0.5"
-              style={{ background: 'var(--bg-brand)' }}
+              className="w-9 h-9 rounded-xl mb-0.5 mr-0.5"
             >
               <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
-            </button>
+            </Button>
           </div>
         </div>
         <div className="text-center mt-1">
@@ -1936,7 +1935,8 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
 
 // ── Settings Modal（LLM 设置面板，取代旧版仅 API Key 的弹窗）──
 // 实现 delta 5.1/5.5（模型/BaseURL/思考开关）、6.1-6.5（Provider 预设 + 模型发现）、7.1-7.4（连通性测试）。
-export function SettingsModal({ config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+export function SettingsModal({ open = true, config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+  open?: boolean
   config: LLMConfig
   backendDefaults: { model: string; baseUrl: string; thinking: string }
   profileStore: ProfileStore
@@ -2105,17 +2105,17 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.25)' }} onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="glass-card rounded-2xl p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-default)' }}>LLM 配置</h3>
-        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>配置模型、API 端点与密钥。配置保存在浏览器本地，刷新页面不会丢失。</p>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto rounded-2xl gap-0">
+        <DialogTitle className="text-lg font-semibold mb-1" style={{ color: 'var(--text-default)' }}>LLM 配置</DialogTitle>
+        <DialogDescription className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>配置模型、API 端点与密钥。配置保存在浏览器本地，刷新页面不会丢失。</DialogDescription>
 
         {/* Provider 预设选择器（delta 6.1） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Provider 预设</label>
         <select
           value={currentPreset}
           onChange={e => applyPreset(e.target.value)}
-          className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         >
           {PROVIDER_PRESETS.map(p => (
@@ -2128,7 +2128,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
         <select
           value={apiForm}
           onChange={e => setApiForm(e.target.value)}
-          className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         >
           {API_FORM_OPTIONS.map(o => (
@@ -2138,49 +2138,50 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
         {/* 上下文长度（add-context-length-config）：请求级覆盖，留空跟随静态默认 */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>上下文长度（tokens）</label>
-        <input
+        <Input
           type="number"
           min={1}
           step={1}
           placeholder="留空跟随默认（如 128000）"
           value={contextLength}
           onChange={e => setContextLength(e.target.value)}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          className="mb-4"
           style={{ color: 'var(--text-default)' }}
         />
 
         {/* API Key（保留原有密码输入） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Key</label>
-        <input
+        <Input
           type="password"
           placeholder="sk-..."
           value={apiKey}
           onChange={e => { setApiKey(e.target.value); invalidateCapability() }}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          className="mb-4"
           style={{ color: 'var(--text-default)' }}
         />
 
         {/* 模型名称 + 刷新按钮（delta 6.3） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>模型名称</label>
         <div className="flex gap-2 mb-2">
-          <input
+          <Input
             type="text"
           placeholder={backendDefaults.model || 'deepseek/deepseek-chat'}
           value={model}
           onChange={e => { setModel(e.target.value); invalidateCapability() }}
-            className="flex-1 glass-input rounded-xl px-4 py-3 text-sm outline-none"
+            className="flex-1"
             style={{ color: 'var(--text-default)' }}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={refreshModels}
             disabled={discoveryLoading}
-            className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-50"
-            style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+            className="whitespace-nowrap"
             title="从 Base URL 拉取可用模型列表"
           >
             <i className={`fas fa-sync-alt mr-1 ${discoveryLoading ? 'fa-spin' : ''}`}></i>
             {discoveryLoading ? '加载中' : '刷新模型'}
-          </button>
+          </Button>
         </div>
 
         {/* 自动发现的模型下拉（delta 6.4） */}
@@ -2188,7 +2189,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
           <select
             value=""
             onChange={e => { if (e.target.value) pickDiscoveredModel(e.target.value) }}
-            className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+            className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none mb-4"
             style={{ color: 'var(--text-default)' }}
           >
             <option value="">从发现列表选择模型…</option>
@@ -2213,12 +2214,12 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
         {/* API Base URL（delta 5.1） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Base URL</label>
-        <input
+        <Input
           type="text"
           placeholder={backendDefaults.baseUrl || 'https://api.deepseek.com/v1（留空使用默认）'}
           value={baseUrl}
           onChange={e => { setBaseUrl(e.target.value); invalidateCapability() }}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          className="mb-4"
           style={{ color: 'var(--text-default)' }}
         />
 
@@ -2246,15 +2247,15 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
         {/* 连通性测试（delta 7.1-7.4） */}
         <div className="mb-4">
-          <button
+          <Button
+            variant="secondary"
             onClick={testConnection}
             disabled={testStatus === 'loading'}
-            className="w-full py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
-            style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+            className="w-full"
           >
             <i className={`fas ${testStatus === 'loading' ? 'fa-spinner fa-spin' : 'fa-plug'} mr-1.5`}></i>
             {testStatus === 'loading' ? '测试中…' : '测试连接'}
-          </button>
+          </Button>
           {testStatus === 'success' && (
             <p className="text-xs mt-2" style={{ color: 'var(--status-success-default)' }}>
               <i className="fas fa-check-circle mr-1"></i>
@@ -2322,15 +2323,17 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
           {/* 另存为新 profile */}
           <div className="flex gap-2 mb-3">
-            <input
+            <Input
               type="text"
               placeholder="输入配置名称，如「DeepSeek 办公」"
               value={profileName}
               onChange={e => setProfileName(e.target.value)}
-              className="flex-1 glass-input rounded-xl px-3 py-2 text-xs outline-none"
+              className="flex-1 h-8 text-xs"
               style={{ color: 'var(--text-default)' }}
             />
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 const name = profileName.trim()
                 if (!name) return
@@ -2338,11 +2341,10 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
                 onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '', apiForm: apiForm, capability }, name)
                 setProfileName('')
               }}
-              className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap"
-              style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+              className="whitespace-nowrap"
             >
               <i className="fas fa-save mr-1"></i>另存为
-            </button>
+            </Button>
           </div>
 
           {/* 已有 profile 列表 */}
@@ -2364,13 +2366,14 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
                     {p.id === profileStore.activeId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
                     <span>{p.name}</span>
                   </button>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => onDeleteProfile(p.id)}
-                    className="text-[10px] opacity-60 hover:opacity-100 transition-opacity"
-                    style={{ color: 'var(--status-error-default)' }}
+                    className="h-5 w-5 text-destructive opacity-60 hover:opacity-100 hover:text-destructive"
                   >
-                    <i className="fas fa-trash-alt"></i>
-                  </button>
+                    <i className="fas fa-trash-alt text-[10px]"></i>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -2378,23 +2381,15 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
         </div>
 
         <div className="flex gap-3">
-          <button
-            onClick={handleSave}
-            className="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
-            style={{ background: 'var(--bg-brand)', color: 'var(--text-onbrand)' }}
-          >
+          <Button onClick={handleSave} className="flex-1">
             确认
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-xl text-sm transition-colors"
-            style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-secondary)' }}
-          >
+          </Button>
+          <Button variant="secondary" onClick={onClose}>
             取消
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
