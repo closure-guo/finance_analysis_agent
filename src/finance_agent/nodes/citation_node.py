@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 
 from finance_agent.citation import CitationReport, Claim, verify_claims
-from finance_agent.langfuse_tracing import get_langfuse
+from finance_agent.langfuse_tracing import get_langfuse, update_current_span
 from finance_agent.models import AnalystReport
+from finance_agent.routing import citation_retry_stagnated
 
 logger = logging.getLogger("finance_agent.citation")
 
@@ -35,10 +36,27 @@ def verify_citations(state: dict) -> dict:
     # 否则 citation_pass=False 时会无限重试，图永远无法推进到辩论/报告阶段。
     iteration_count = state.get("iteration_count", 0)
 
+    # citation-retry-policy delta：记录各轮失败率，供 after_citation 做重试
+    # 降级（失败率停滞时提前放行渲染，不再全量重跑分析师）。
+    fail_count = sum(1 for r in results if r.status == "FAIL")
+    fail_rate = fail_count / len(results) if results else 0.0
+    fail_rates = list(state.get("citation_fail_rates") or []) + [fail_rate]
+
+    if not report.all_passed and iteration_count + 1 < 3 and citation_retry_stagnated(fail_rates):
+        # 降级决策须可观测：路由将因失败率停滞跳过下一轮重试
+        update_current_span(
+            metadata={
+                "citation_retry_deescalated": True,
+                "fail_rates": fail_rates,
+            },
+            level="WARNING",
+        )
+
     return {
         "citation_report": report.model_dump(),
         "citation_pass": report.all_passed,
         "iteration_count": iteration_count + 1,
+        "citation_fail_rates": fail_rates,
     }
 
 

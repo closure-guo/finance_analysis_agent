@@ -28,11 +28,31 @@ def after_fund_manager(state: dict) -> str:
     return "generate_report"
 
 
+# citation-retry-policy delta：重试降级的"无显著改善"阈值。线上事故
+# （601700 深研）三轮失败率 35%→38%→31%，重试零收益却每轮全量重跑
+# 4 分析师白烧 ~40 分钟——失败是系统性的（claim field_ref 与数据形态
+# 不匹配），非随机噪声，降级判定按最新失败率 ≥ 上一轮 × 80% 触发。
+_CITATION_STAGNATION_FACTOR = 0.8
+
+
+def citation_retry_stagnated(fail_rates: list[float]) -> bool:
+    """判定失败率序列是否停滞（重试无收益）：需至少两轮且最新一轮
+    失败率不低于上一轮的 80%；上一轮失败率为 0 时不判停滞（比值无意义）。"""
+    if len(fail_rates) < 2:
+        return False
+    prev, curr = fail_rates[-2], fail_rates[-1]
+    return bool(prev > 0 and curr >= prev * _CITATION_STAGNATION_FACTOR)
+
+
 def after_citation(state: dict) -> str:
-    """引用校验路由：PASS → 渲染，FAIL → 重试（最多 3 次）。"""
+    """引用校验路由：PASS → 渲染，FAIL → 重试（最多 3 次，失败率停滞提前放行）。"""
     if state.get("citation_pass", False):
         return "render"
     if state.get("iteration_count", 0) < 3:
+        # citation-retry-policy delta：重试无收益（失败率无显著改善）时
+        # 提前放行渲染；轮数上限 3 不因降级放宽（stagnated 只会提前，不会延后）。
+        if citation_retry_stagnated(state.get("citation_fail_rates") or []):
+            return "render"
         return "retry"
     return "render"
 
