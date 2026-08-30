@@ -1,0 +1,35 @@
+{
+  "n_core": 90,
+  "n_excluded": 120,
+  "confusion": {
+    "tp": 14,
+    "fp": 0,
+    "fn": 0,
+    "tn": 76
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "f1_ci_95": [
+    1.0,
+    1.0
+  ],
+  "accuracy": 1.0,
+  "gate": {
+    "f1_gate": 0.9,
+    "passed": true
+  },
+  "near_miss_recall": 1.0,
+  "hedged_fp_rate": 0.0,
+  "excluded_breakdown": {
+    "rejudge_unverifiable": 92,
+    "regression": 87,
+    "regression_label_dist": {
+      "FAIL": 6,
+      "UNVERIFIABLE": 59,
+      "PASS": 22
+    }
+  },
+  "fp_buckets": [],
+  "fn_buckets": []
+}

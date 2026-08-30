@@ -96,8 +96,30 @@ TESTING: bool = os.getenv("TESTING") == "1"
 
 graph = build_5layer_graph()
 
-REPORTS_DIR = Path("reports")
-REPORTS_DIR.mkdir(exist_ok=True)
+# REPORTS_DIR 支持环境变量覆盖（与 export/service.py 一致）：E2E 门禁 webServer
+# 注入 REPORTS_DIR=<tmp 目录> 实现测试隔离，避免 /api/files 扫描生产 reports/
+REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "reports"))
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# 导出文件格式白名单（add-download-center）：列表/下载/删除三类文件接口共用
+EXPORT_EXTENSIONS = {".docx", ".pptx", ".pdf", ".md"}
+
+
+def resolve_reports_path(file_name: str) -> Path:
+    """将文件名解析到 REPORTS_DIR 内的绝对路径；越界（路径穿越）抛 400。
+
+    三类文件接口（下载/列表/删除）共用：取 basename 剥离目录成分后，
+    resolve 并校验父目录必须是 REPORTS_DIR 本身。
+    """
+    safe_name = Path(file_name).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    reports_root = REPORTS_DIR.resolve()
+    file_path = (reports_root / safe_name).resolve()
+    if file_path.parent != reports_root:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return file_path
+
 
 # Initialize session DB
 init_db()
@@ -1970,14 +1992,45 @@ async def export_report_file(req: ExportRequest):
     return {"file_name": file_name, "url": f"/api/files/{file_name}"}
 
 
+@app.get("/api/files")
+async def list_export_files():
+    """扫描 REPORTS_DIR 返回导出文件元信息，按创建时间倒序（add-download-center）。"""
+    if not REPORTS_DIR.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for entry in REPORTS_DIR.iterdir():
+        if not entry.is_file() or entry.suffix.lower() not in EXPORT_EXTENSIONS:
+            continue
+        st = entry.stat()
+        items.append(
+            {
+                "file_name": entry.name,
+                "file_type": entry.suffix.lower().lstrip("."),
+                "size_bytes": st.st_size,
+                "created_at": int(st.st_ctime * 1000),
+            }
+        )
+    items.sort(key=lambda x: int(x["created_at"]), reverse=True)
+    return items
+
+
 @app.get("/api/files/{filename}")
 async def download_file(filename: str):
     """Download generated report files."""
-    safe_name = Path(filename).name
-    file_path = REPORTS_DIR / safe_name
+    file_path = resolve_reports_path(filename)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path, filename=safe_name)
+    return FileResponse(file_path, filename=file_path.name)
+
+
+@app.delete("/api/files/{filename}")
+async def delete_export_file(filename: str):
+    """删除 REPORTS_DIR 下的指定导出文件（add-download-center）。"""
+    file_path = resolve_reports_path(filename)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    file_path.unlink()
+    return {"deleted": file_path.name}
 
 
 def _now() -> str:
@@ -1986,6 +2039,12 @@ def _now() -> str:
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
+
+
+# ── AG-UI 协议通道（add-assistant-ui-thread PoC，双轨隔离：仅挂载，不接入 registry）──
+from finance_agent.agui.endpoint import router as agui_router  # noqa: E402
+
+app.include_router(agui_router)
 
 
 if __name__ == "__main__":

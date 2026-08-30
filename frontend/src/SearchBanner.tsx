@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Button } from './components/ui/button'
 
 // 搜索结果条目
 interface SearchResult {
@@ -71,12 +72,10 @@ export function SearchBanner({ status, query, results = [], embedded = false }: 
   // 搜索完成：可折叠的结果列表
   return (
     <div className={embedded ? '' : 'mb-3'}>
-      <button
+      <Button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
-        style={{ background: embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-overlay-l2)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = embedded ? 'transparent' : 'var(--bg-overlay-l1)' }}
+        variant="ghost"
+        className={`w-full justify-start h-auto px-3 py-2 text-left text-xs font-normal rounded-lg ${embedded ? '' : 'bg-muted'}`}
       >
         <i className="fas fa-search text-xs flex-shrink-0" style={{ color: 'var(--status-success-default)' }}></i>
         <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
@@ -86,7 +85,7 @@ export function SearchBanner({ status, query, results = [], embedded = false }: 
           {query && <span className="ml-1.5" style={{ color: 'var(--text-tertiary)' }}>· {query}</span>}
         </span>
         <i className={`fas fa-chevron-${expanded ? 'down' : 'right'} text-[10px] ml-auto transition-transform`} style={{ color: 'var(--text-tertiary)' }}></i>
-      </button>
+      </Button>
       <div
         className="overflow-hidden transition-all duration-300 ease-out"
         style={{ maxHeight: expanded ? '400px' : '0px', opacity: expanded ? 1 : 0 }}

@@ -12,8 +12,16 @@ import { buildLayerTree } from './pipelineTree'
 import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 import { useClickOutside } from './useClickOutside'
+import { usePathname, navigate } from './route'
+import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
+import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
+import { Toaster } from './components/ui/sonner'
+import { Button } from './components/ui/button'
+import { Input } from './components/ui/input'
+import { Textarea } from './components/ui/textarea'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from './components/ui/dialog'
 import {
   loadProfiles,
   saveProfiles,
@@ -240,9 +248,24 @@ export default function App() {
     setCurrentSessionId(id)
   }, [])
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // 下载中心路由（add-download-center）：/downloads 直达/刷新时主区域渲染下载管理页
+  const pathname = usePathname()
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
   // 临时警告提示（如"该会话正在生成中"）
   const [warningMessage, setWarningMessage] = useState<string | null>(null)
+
+  // ── AG-UI quick 通道（add-assistant-ui-thread）──
+  // quick 模式对话改走 assistant-ui Thread + POST /api/agui/quick（双轨隔离：
+  // 不进 streamStore/registry，深度模式渲染零影响）。历史消息仍由 MessageItem
+  // 渲染（rebuildSession 快照），Thread 只接管挂载后发起的新 run（调研 §3.3 路径 a）。
+  const [quickActive, setQuickActive] = useState(false)
+  const [quickRunning, setQuickRunning] = useState(false)
+  // 重挂载纪元：会话切换/新建时 +1 → Thread 重置（切换守卫：abort 旧 run + 快照恢复不重复）
+  const [aguiEpoch, setAguiEpoch] = useState(0)
+  const quickThreadRef = useRef<QuickThreadHandle>(null)
+  // EmptyState 首条 quick 消息：QuickThread 在 viewState==='empty' 时未挂载（ref=null），
+  // 直接 send 会静默丢弃（Task 4 E2E 发现）。先排队，视图切到聊天、Thread 挂载后补发。
+  const [pendingQuickMessage, setPendingQuickMessage] = useState<string | null>(null)
   // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
   const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
   // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
@@ -382,6 +405,17 @@ export default function App() {
   // forceRebuild：轮询发现后台任务 completed 时强制从后端重建（拿报告/终态），
   // 跳过 live 短路——resume 把 origin 标为 live，completed 后需重建才有报告。
   const selectSession = async (sessionId: string, forceRebuild = false) => {
+    // AG-UI 通道切换守卫（add-assistant-ui-thread）：quick run 流式中切换会话 →
+    // abort 当前 run（HttpAgent.abortRun → 服务端 CancelledError → 中断落库），
+    // 并重挂载 Thread 清空本 mount 的新 run 消息；切回走 rebuildSession 快照。
+    // （重新选择当前会话不重置，避免误清在看的消息）
+    if (sessionId !== currentSessionId) {
+      if (quickThreadRef.current?.isRunning()) quickThreadRef.current.abort()
+      setAguiEpoch(e => e + 1)
+      setQuickActive(false)
+      setQuickRunning(false)
+      setPendingQuickMessage(null)
+    }
     store.switchSession(sessionId)
     setAndPersistSession(sessionId)
 
@@ -452,14 +486,24 @@ export default function App() {
   }
 
   const newAnalysis = () => {
+    // AG-UI 通道守卫：重置 quick Thread（abort 在途 run + 清空新 run 消息）
+    if (quickThreadRef.current?.isRunning()) quickThreadRef.current.abort()
+    setAguiEpoch(e => e + 1)
+    setQuickActive(false)
+    setQuickRunning(false)
+    setPendingQuickMessage(null)
     // 断开当前会话的本地 SSE 订阅（不调后端 cancel，后台任务继续运行）
     // delta spec Task 5.3：新建分析仅断开本地订阅
     store.switchSession(null)
     setAndPersistSession(null)
   }
 
-  // 停止当前会话的生成任务（本地 abort + 后端 cancel + 状态收口）
+  // 停止当前会话的生成任务（quick AG-UI 通道 abort；深度模式本地 abort + 后端 cancel）
   const stopGeneration = async () => {
+    if (quickThreadRef.current?.isRunning()) {
+      quickThreadRef.current.abort()
+      return
+    }
     if (!currentSessionId) return
     await store.cancel(currentSessionId)
   }
@@ -505,29 +549,31 @@ export default function App() {
   }
 
   const quickChat = async (message: string) => {
-    // 拦截：当前会话正在运行时不允许提交新消息（delta spec Task 6.2）
-    if (currentSessionId && store.isSessionRunning(currentSessionId)) {
+    // AG-UI 通道（add-assistant-ui-thread）：quick 对话不再走 streamStore.submit，
+    // 由 assistant-ui runtime 驱动 POST /api/agui/quick（SSE 事件流 → Thread 渲染）。
+    // 单飞守卫：Thread run 进行中不允许新消息（与原 409 busy 提示语义一致）。
+    if (quickThreadRef.current?.isRunning()) {
       showWarning('该会话正在生成中，可停止后再发')
       return
     }
-    // 请求级 LLM 配置（delta 5.4）：仅在有非空配置时携带 llm_config 字段
-    const llmConfigPayload = buildLlmConfigPayload(llmConfig)
-    try {
-      await store.submit(
-        {
-          message,
-          user_id: getUserId(),
-          api_key: apiKey,
-          ...(currentSessionId ? { session_id: currentSessionId } : {}),
-          ...(llmConfigPayload ? { llm_config: llmConfigPayload } : {}),
-        },
-        { currentView: currentSessionId },
-      )
-    } catch {
-      const errText = store.getSnapshot(currentSessionId || '')?.error
-      if (errText) showWarning(errText)
+    if (!quickThreadRef.current) {
+      // EmptyState 首发：QuickThread 未挂载，排队待挂载后补发（不丢首条消息）
+      setQuickActive(true)
+      setPendingQuickMessage(message)
+      return
     }
+    setQuickActive(true)
+    quickThreadRef.current.send(message)
   }
+
+  // 排队的首条 quick 消息：QuickThread 挂载（视图切换渲染完成）后立即补发
+  useEffect(() => {
+    if (pendingQuickMessage === null) return
+    if (!quickThreadRef.current) return // 等待 QuickThread 挂载
+    const message = pendingQuickMessage
+    setPendingQuickMessage(null)
+    quickThreadRef.current.send(message)
+  }, [pendingQuickMessage])
 
   const handleSendFromEmpty = (text: string, sendMode: string = 'deep') => {
     const query = text.trim()
@@ -631,6 +677,23 @@ export default function App() {
   // ── Render ──
   const leftInset = sidebarOpen ? 256 : 48
 
+  // 视图状态：quick AG-UI 通道活跃（首页发起、streamStore 无消息/phase）时进入聊天视图。
+  // 附加派生不改深度模式语义（quickActive 仅在 quick 发送后为 true）。
+  const viewState = appState === 'empty' && quickActive ? 'clarifying' : appState
+
+  // AG-UI quick 通道回调：新会话绑定（RUN_STARTED.thread_id）+ 完成刷新列表 + 错误提示
+  const handleAguiSessionCreated = useCallback((id: string) => {
+    setCurrentSessionId(prev => {
+      if (prev) return prev
+      localStorage.setItem('fa_current_session_id', id)
+      return id
+    })
+    void loadSessions()
+  }, [loadSessions])
+  const handleAguiRunFinished = useCallback(() => {
+    void loadSessions()
+  }, [loadSessions])
+
   // 计算正在运行的会话 ID 集合（后端 status=running 或 store 中有进行中流）
   const runningSessionIds = new Set<string>()
   for (const s of sessions) {
@@ -651,17 +714,20 @@ export default function App() {
         onNew={newAnalysis}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
+        onOpenDownloads={() => navigate('/downloads')}
         runningSessionIds={runningSessionIds}
         loading={!sessionsLoaded}
       />
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
-        {bootRestoring && appState === 'empty' ? (
+        {pathname === '/downloads' ? (
+          <DownloadCenter onBack={() => navigate('/')} />
+        ) : bootRestoring && viewState === 'empty' ? (
           // 刷新恢复中：有持久化会话但尚未重建消息，显示恢复指示而非闪首页空态
           <div data-testid="restoring-state" className="flex flex-col items-center justify-center h-screen gap-3">
             <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
             <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>恢复会话中…</p>
           </div>
-        ) : appState === 'empty' ? (
+        ) : viewState === 'empty' ? (
           <EmptyState
             onSend={handleSendFromEmpty}
             apiKey={apiKey}
@@ -682,12 +748,13 @@ export default function App() {
               style={{ left: leftInset }}
             >
               <div className="flex items-center gap-3">
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setSidebarOpen(!sidebarOpen)}
-                  className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors"
                 >
                   <i className="fas fa-bars text-sm"></i>
-                </button>
+                </Button>
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
@@ -695,15 +762,14 @@ export default function App() {
               </div>
               <div className="flex items-center gap-4">
                 {lastExportableReport && (
-                  <button data-testid="topbar-files-button"
-                    onClick={() => setDrawerMessage(lastExportableReport!)}
-                    className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm">
+                  <Button data-testid="topbar-files-button" variant="ghost" size="sm"
+                    onClick={() => setDrawerMessage(lastExportableReport!)}>
                     <i className="fas fa-folder-open mr-1"></i>查看全部文件
-                  </button>
+                  </Button>
                 )}
-                <button className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors text-sm" onClick={() => setShowSettings(true)}>
+                <Button variant="ghost" size="sm" onClick={() => setShowSettings(true)}>
                   <i className="fas fa-cog mr-1"></i>设置
-                </button>
+                </Button>
                 <div className="w-7 h-7 rounded-full" style={{ background: 'var(--bg-overlay-l3)' }}></div>
               </div>
             </header>
@@ -731,6 +797,23 @@ export default function App() {
               {lastExportableReport && (
                 <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
               )}
+
+              {/* AG-UI quick 通道（add-assistant-ui-thread）：历史消息由上方 MessageItem
+                  渲染（rebuildSession 快照），Thread 只接管本 mount 的新 run。
+                  key= 纪元+apiKey：会话切换/新建重置 Thread；apiKey 变更重建 agent。 */}
+              {mode === 'quick' && (
+                <QuickThread
+                  key={`agui-${aguiEpoch}-${apiKey}`}
+                  ref={quickThreadRef}
+                  apiKey={apiKey}
+                  llmConfig={buildLlmConfigPayload(llmConfig)}
+                  sessionId={currentSessionId}
+                  onSessionCreated={handleAguiSessionCreated}
+                  onRunFinished={handleAguiRunFinished}
+                  onRunningChange={setQuickRunning}
+                  onError={showWarning}
+                />
+              )}
             </div>
 
             {/* 「会话生成中」警告：fixed 顶部 toast，浮于 header(z-50)/输入框(z-40) 之上 */}
@@ -744,21 +827,22 @@ export default function App() {
               </div>
             )}
 
-            {/* 停止按钮（流式输出时显示） */}
-            {(appState === 'analyzing' || messages.some(m => m.streaming)) && (
+            {/* 停止按钮（流式输出时显示；quick AG-UI 通道由 quickRunning 驱动） */}
+            {(appState === 'analyzing' || messages.some(m => m.streaming) || quickRunning) && (
               <div
                 className="fixed right-0 z-40 flex flex-col items-center gap-2 px-4"
                 style={{ left: leftInset, bottom: '90px' }}
               >
-                {(appState === 'analyzing' || messages.some(m => m.streaming)) && currentSessionId && (
-                  <button
+                {(appState === 'analyzing' || quickRunning) && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
                     onClick={stopGeneration}
-                    className="px-4 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-80"
-                    style={{ background: 'var(--status-error-default)', color: 'white' }}
+                    className="rounded-lg"
                   >
                     <i className="fas fa-stop text-[10px]"></i>
                     停止生成
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
@@ -785,6 +869,7 @@ export default function App() {
       {/* LLM 设置面板（取代旧版仅 API Key 的弹窗） */}
       {showSettings && (
         <SettingsModal
+          open
           config={llmConfig}
           backendDefaults={backendDefaults}
           profileStore={profileStore}
@@ -802,12 +887,15 @@ export default function App() {
       {drawerMessage && (
         <ReportFileDrawer drawerMessage={drawerMessage} onClose={() => setDrawerMessage(null)} />
       )}
+
+      {/* 全局 toast 容器（shadcn/sonner 封装；仅挂载，暂无调用方） */}
+      <Toaster />
     </>
   )
 }
 
 // ── Sidebar ──
-function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, runningSessionIds, loading = false }: {
+function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, onOpenDownloads, runningSessionIds, loading = false }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
@@ -816,6 +904,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   onNew: () => void
   isOpen: boolean
   onToggle: () => void
+  onOpenDownloads: () => void
   runningSessionIds: Set<string>
   loading?: boolean
 }) {
@@ -832,9 +921,9 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   if (!isOpen) {
     return (
       <div className="fixed left-0 top-0 bottom-0 w-12 flex flex-col items-center py-4 z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
-        <button onClick={onToggle} className="text-[var(--icon-secondary)] hover:text-[var(--text-default)] transition-colors">
+        <Button variant="ghost" size="icon" onClick={onToggle} aria-label="展开侧边栏">
           <i className="fas fa-bars"></i>
-        </button>
+        </Button>
       </div>
     )
   }
@@ -844,34 +933,30 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
       {/* Header */}
       <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
         <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
-        <button onClick={onToggle} className="text-[var(--text-tertiary)] hover:text-[var(--text-default)] transition-colors">
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle}>
           <i className="fas fa-times text-xs"></i>
-        </button>
+        </Button>
       </div>
 
       {/* New analysis button */}
       <div className="p-3">
-        <button
+        <Button
           onClick={onNew}
-          className="w-full py-2 rounded-xl text-white text-sm font-medium transition-all flex items-center justify-center gap-2"
-          style={{ background: 'var(--bg-brand)' }}
+          className="w-full rounded-xl text-sm font-medium"
         >
           <i className="fas fa-plus text-xs"></i>
           新建分析
-        </button>
+        </Button>
       </div>
 
       {/* Search */}
       <div className="px-3 pb-3">
-        <input
+        <Input
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="搜索股票..."
-          className="w-full rounded-lg px-3 py-2 text-xs outline-none transition-all"
-          style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', border: '1px solid transparent' }}
-          onFocus={e => { e.target.style.borderColor = 'var(--bg-brand)'; e.target.style.boxShadow = '0 0 0 3px var(--bg-brand-popup)' }}
-          onBlur={e => { e.target.style.borderColor = 'transparent'; e.target.style.boxShadow = 'none' }}
+          className="h-9 text-xs"
         />
       </div>
 
@@ -900,7 +985,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
               onMouseLeave={(e) => { if (currentSessionId !== s.session_id) e.currentTarget.style.background = 'transparent' }}
             >
               {editingId === s.session_id ? (
-                <input
+                <Input
                   type="text"
                   value={editText}
                   onChange={e => setEditText(e.target.value)}
@@ -917,8 +1002,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                   }}
                   onClick={e => e.stopPropagation()}
                   autoFocus
-                  className="w-full rounded px-2 py-1 text-xs outline-none"
-                  style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-default)' }}
+                  className="h-7 rounded px-2 py-1 text-xs"
                 />
               ) : (
                 <>
@@ -940,23 +1024,35 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                     <span>{s.stock_name}</span>
                     <span>{formatSessionTime(s.created_at)}</span>
                   </div>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={e => {
                       e.stopPropagation()
                       onDelete(s.session_id)
                     }}
-                    className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ color: 'var(--text-tertiary)' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--status-error-default)' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)' }}
+                    className="absolute right-2 top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive"
                   >
                     <i className="fas fa-trash text-xs"></i>
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
           ))
         )}
+      </div>
+
+      {/* 下载管理入口（add-download-center）：底部固定区 */}
+      <div className="p-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
+        <Button
+          variant="ghost"
+          onClick={onOpenDownloads}
+          data-testid="sidebar-downloads"
+          className="w-full justify-start text-sm text-secondary hover:text-foreground"
+        >
+          <i className="fas fa-download text-xs"></i>
+          下载管理
+        </Button>
       </div>
     </div>
   )
@@ -1032,7 +1128,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
           <div className="relative flex items-center gap-2 px-4 pt-1 pb-0" ref={rowRef}>
             <button
               onClick={() => { setLlmDropdownOpen(false); setDropdownOpen(!dropdownOpen) }}
-              className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+              className="flex items-center gap-1.5 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-muted"
             >
               <span style={{ color: 'var(--text-tertiary)' }}>模式：</span>
               <i className={`fas ${currentMode.icon} ${currentMode.color}`}></i>
@@ -1049,8 +1145,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
                     onClick={() => { if (gate.allowed) { setMode(m.id); setDropdownOpen(false) } }}
                     disabled={!gate.allowed}
                     title={gate.allowed ? undefined : gate.reason}
-                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                    className={`w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m.id ? 'bg-accent' : ''}`}
                     onMouseEnter={(e) => { if (mode !== m.id && gate.allowed) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
                     onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                   >
@@ -1079,7 +1174,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
                   setDropdownOpen(false)
                   setLlmDropdownOpen(!llmDropdownOpen)
                 }}
-                className="flex items-center gap-1 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+                className="flex items-center gap-1 text-[10px] font-medium rounded px-2 py-0.5 transition-colors hover:bg-muted"
               >
                 <i className="fas fa-microchip text-[var(--text-tertiary)]"></i>
                 <span style={{ color: 'var(--text-secondary)' }}>{profileName}</span>
@@ -1091,8 +1186,7 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
                     <button
                       key={p.id}
                       onClick={() => { onSwitchProfile(p.id); setLlmDropdownOpen(false) }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
-                      style={{ background: p.id === activeProfileId ? 'var(--bg-overlay-l2)' : 'transparent' }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${p.id === activeProfileId ? 'bg-accent' : ''}`}
                     >
                       {p.id === activeProfileId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
                       <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
@@ -1103,36 +1197,37 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
             </div>
           </div>
           <div className="flex items-end gap-2">
-            <textarea
+            <Textarea
               rows={1}
               placeholder={mode === 'quick' ? '输入问题，如：茅台、宁德时代怎么样' : '输入股票名称或代码，如 茅台、300750'}
-              className="flex-1 bg-transparent px-4 py-3 resize-none outline-none text-sm leading-relaxed"
-              style={{ minHeight: '48px', maxHeight: '120px', color: 'var(--text-default)' }}
+              className="flex-1 border-0 bg-transparent px-4 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[48px] max-h-[120px]"
+              style={{ color: 'var(--text-default)' }}
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={handleKeydown}
             />
-            <button
+            <Button
               data-testid="send-button"
+              variant="default"
+              size="icon"
               onClick={handleSend}
-              className="w-10 h-10 rounded-xl flex items-center justify-center mb-1 mr-1"
-              style={{ background: 'var(--bg-brand)' }}
+              className="w-10 h-10 rounded-xl mb-1 mr-1"
             >
               <i className="fas fa-arrow-up text-white text-sm"></i>
-            </button>
+            </Button>
           </div>
         </div>
         {!apiKey ? (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-info-circle mr-1"></i>
             请先配置 LLM API 才能开始分析
-            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowSettings(true)}>去配置</button>
+            <Button variant="link" className="ml-1 h-auto p-0 text-xs" onClick={() => setShowSettings(true)}>去配置</Button>
           </p>
         ) : (
           <p className="text-center text-xs mt-2" style={{ color: 'var(--text-tertiary)' }}>
             <i className="fas fa-check-circle mr-1" style={{ color: 'var(--status-success-default)' }}></i>
             LLM API 已配置
-            <button className="hover:underline ml-1" style={{ color: 'var(--text-brand)' }} onClick={() => setShowSettings(true)}>修改</button>
+            <Button variant="link" className="ml-1 h-auto p-0 text-xs" onClick={() => setShowSettings(true)}>修改</Button>
           </p>
         )}
       </div>
@@ -1824,7 +1919,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
           <div className="relative flex items-center gap-1 px-1 pb-1" ref={rowRef}>
             <button
               onClick={() => { setLlmDropdownOpen(false); setModeDropdownOpen(!modeDropdownOpen) }}
-              className="flex items-center gap-1.5 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+              className="flex items-center gap-1.5 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-muted"
             >
               <i className={`fas ${currentMode.icon} ${currentMode.color} text-[10px]`}></i>
               <span className={currentMode.color}>{currentMode.label}</span>
@@ -1840,8 +1935,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                     onClick={() => handleModeSelect(m.id)}
                     disabled={!gate.allowed}
                     title={gate.allowed ? undefined : gate.reason}
-                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    style={mode === m.id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
+                    className={`w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m.id ? 'bg-accent' : ''}`}
                     onMouseEnter={(e) => { if (mode !== m.id && gate.allowed) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
                     onMouseLeave={(e) => { if (mode !== m.id) e.currentTarget.style.background = 'transparent' }}
                   >
@@ -1873,7 +1967,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                   setModeDropdownOpen(false)
                   setLlmDropdownOpen(!llmDropdownOpen)
                 }}
-                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-[var(--bg-overlay-l1)]"
+                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2.5 py-1 transition-colors hover:bg-muted"
               >
                 <i className="fas fa-microchip text-[10px]" style={{ color: 'var(--text-tertiary)' }}></i>
                 <span style={{ color: 'var(--text-secondary)' }}>{profileName}</span>
@@ -1885,8 +1979,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                     <button
                       key={p.id}
                       onClick={() => { onSwitchProfile(p.id); setLlmDropdownOpen(false) }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
-                      style={{ background: p.id === activeProfileId ? 'var(--bg-overlay-l2)' : 'transparent' }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${p.id === activeProfileId ? 'bg-accent' : ''}`}
                     >
                       {p.id === activeProfileId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
                       <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
@@ -1897,29 +1990,31 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
             </div>
           </div>
           <div className="flex items-end gap-2">
-            <button
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors mb-1"
-              style={{ color: 'var(--icon-secondary)' }}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="w-8 h-8 rounded-lg mb-1 text-muted-foreground"
             >
               <i className="fas fa-plus text-xs"></i>
-            </button>
-            <textarea
+            </Button>
+            <Textarea
               rows={1}
               placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
-              className="flex-1 bg-transparent px-2 py-3 resize-none outline-none text-sm leading-relaxed"
-              style={{ minHeight: '40px', maxHeight: '100px', color: 'var(--text-default)' }}
+              className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+              style={{ color: 'var(--text-default)' }}
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={handleKeydown}
             />
-            <button
+            <Button
               data-testid="send-button"
+              variant="default"
+              size="icon"
               onClick={handleSendClick}
-              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all mb-0.5 mr-0.5"
-              style={{ background: 'var(--bg-brand)' }}
+              className="w-9 h-9 rounded-xl mb-0.5 mr-0.5"
             >
               <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
-            </button>
+            </Button>
           </div>
         </div>
         <div className="text-center mt-1">
@@ -1932,7 +2027,8 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
 
 // ── Settings Modal（LLM 设置面板，取代旧版仅 API Key 的弹窗）──
 // 实现 delta 5.1/5.5（模型/BaseURL/思考开关）、6.1-6.5（Provider 预设 + 模型发现）、7.1-7.4（连通性测试）。
-export function SettingsModal({ config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+export function SettingsModal({ open = true, config, backendDefaults, profileStore, capability: capabilityProp, onProbeCapability, onSave, onSaveAs, onSwitchProfile, onDeleteProfile, onClose }: {
+  open?: boolean
   config: LLMConfig
   backendDefaults: { model: string; baseUrl: string; thinking: string }
   profileStore: ProfileStore
@@ -2101,17 +2197,17 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.25)' }} onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="glass-card rounded-2xl p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-default)' }}>LLM 配置</h3>
-        <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>配置模型、API 端点与密钥。配置保存在浏览器本地，刷新页面不会丢失。</p>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto rounded-2xl gap-0">
+        <DialogTitle className="text-lg font-semibold mb-1" style={{ color: 'var(--text-default)' }}>LLM 配置</DialogTitle>
+        <DialogDescription className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>配置模型、API 端点与密钥。配置保存在浏览器本地，刷新页面不会丢失。</DialogDescription>
 
         {/* Provider 预设选择器（delta 6.1） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Provider 预设</label>
         <select
           value={currentPreset}
           onChange={e => applyPreset(e.target.value)}
-          className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         >
           {PROVIDER_PRESETS.map(p => (
@@ -2124,7 +2220,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
         <select
           value={apiForm}
           onChange={e => setApiForm(e.target.value)}
-          className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none mb-4"
           style={{ color: 'var(--text-default)' }}
         >
           {API_FORM_OPTIONS.map(o => (
@@ -2134,49 +2230,50 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
         {/* 上下文长度（add-context-length-config）：请求级覆盖，留空跟随静态默认 */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>上下文长度（tokens）</label>
-        <input
+        <Input
           type="number"
           min={1}
           step={1}
           placeholder="留空跟随默认（如 128000）"
           value={contextLength}
           onChange={e => setContextLength(e.target.value)}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          className="mb-4"
           style={{ color: 'var(--text-default)' }}
         />
 
         {/* API Key（保留原有密码输入） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Key</label>
-        <input
+        <Input
           type="password"
           placeholder="sk-..."
           value={apiKey}
           onChange={e => { setApiKey(e.target.value); invalidateCapability() }}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          className="mb-4"
           style={{ color: 'var(--text-default)' }}
         />
 
         {/* 模型名称 + 刷新按钮（delta 6.3） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>模型名称</label>
         <div className="flex gap-2 mb-2">
-          <input
+          <Input
             type="text"
           placeholder={backendDefaults.model || 'deepseek/deepseek-chat'}
           value={model}
           onChange={e => { setModel(e.target.value); invalidateCapability() }}
-            className="flex-1 glass-input rounded-xl px-4 py-3 text-sm outline-none"
+            className="flex-1"
             style={{ color: 'var(--text-default)' }}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={refreshModels}
             disabled={discoveryLoading}
-            className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-50"
-            style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+            className="whitespace-nowrap"
             title="从 Base URL 拉取可用模型列表"
           >
             <i className={`fas fa-sync-alt mr-1 ${discoveryLoading ? 'fa-spin' : ''}`}></i>
             {discoveryLoading ? '加载中' : '刷新模型'}
-          </button>
+          </Button>
         </div>
 
         {/* 自动发现的模型下拉（delta 6.4） */}
@@ -2184,7 +2281,7 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
           <select
             value=""
             onChange={e => { if (e.target.value) pickDiscoveredModel(e.target.value) }}
-            className="w-full glass-input rounded-xl px-3 py-2.5 text-sm outline-none mb-4"
+            className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none mb-4"
             style={{ color: 'var(--text-default)' }}
           >
             <option value="">从发现列表选择模型…</option>
@@ -2209,12 +2306,12 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
         {/* API Base URL（delta 5.1） */}
         <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>API Base URL</label>
-        <input
+        <Input
           type="text"
           placeholder={backendDefaults.baseUrl || 'https://api.deepseek.com/v1（留空使用默认）'}
           value={baseUrl}
           onChange={e => { setBaseUrl(e.target.value); invalidateCapability() }}
-          className="w-full glass-input rounded-xl px-4 py-3 text-sm outline-none mb-4"
+          className="mb-4"
           style={{ color: 'var(--text-default)' }}
         />
 
@@ -2242,15 +2339,15 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
         {/* 连通性测试（delta 7.1-7.4） */}
         <div className="mb-4">
-          <button
+          <Button
+            variant="secondary"
             onClick={testConnection}
             disabled={testStatus === 'loading'}
-            className="w-full py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
-            style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+            className="w-full"
           >
             <i className={`fas ${testStatus === 'loading' ? 'fa-spinner fa-spin' : 'fa-plug'} mr-1.5`}></i>
             {testStatus === 'loading' ? '测试中…' : '测试连接'}
-          </button>
+          </Button>
           {testStatus === 'success' && (
             <p className="text-xs mt-2" style={{ color: 'var(--status-success-default)' }}>
               <i className="fas fa-check-circle mr-1"></i>
@@ -2318,15 +2415,17 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
 
           {/* 另存为新 profile */}
           <div className="flex gap-2 mb-3">
-            <input
+            <Input
               type="text"
               placeholder="输入配置名称，如「DeepSeek 办公」"
               value={profileName}
               onChange={e => setProfileName(e.target.value)}
-              className="flex-1 glass-input rounded-xl px-3 py-2 text-xs outline-none"
+              className="flex-1 h-8 text-xs"
               style={{ color: 'var(--text-default)' }}
             />
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 const name = profileName.trim()
                 if (!name) return
@@ -2334,11 +2433,10 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
                 onSaveAs({ apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim(), thinking: showThinkingToggle ? thinking : '', apiForm: apiForm, capability }, name)
                 setProfileName('')
               }}
-              className="px-3 rounded-xl text-xs font-medium transition-colors whitespace-nowrap"
-              style={{ background: 'var(--bg-overlay-l2)', color: 'var(--text-secondary)' }}
+              className="whitespace-nowrap"
             >
               <i className="fas fa-save mr-1"></i>另存为
-            </button>
+            </Button>
           </div>
 
           {/* 已有 profile 列表 */}
@@ -2360,13 +2458,14 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
                     {p.id === profileStore.activeId && <i className="fas fa-check text-[10px]" style={{ color: 'var(--text-brand)' }}></i>}
                     <span>{p.name}</span>
                   </button>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => onDeleteProfile(p.id)}
-                    className="text-[10px] opacity-60 hover:opacity-100 transition-opacity"
-                    style={{ color: 'var(--status-error-default)' }}
+                    className="h-5 w-5 text-destructive opacity-60 hover:opacity-100 hover:text-destructive"
                   >
-                    <i className="fas fa-trash-alt"></i>
-                  </button>
+                    <i className="fas fa-trash-alt text-[10px]"></i>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -2374,23 +2473,15 @@ export function SettingsModal({ config, backendDefaults, profileStore, capabilit
         </div>
 
         <div className="flex gap-3">
-          <button
-            onClick={handleSave}
-            className="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
-            style={{ background: 'var(--bg-brand)', color: 'var(--text-onbrand)' }}
-          >
+          <Button onClick={handleSave} className="flex-1">
             确认
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-xl text-sm transition-colors"
-            style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-secondary)' }}
-          >
+          </Button>
+          <Button variant="secondary" onClick={onClose}>
             取消
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

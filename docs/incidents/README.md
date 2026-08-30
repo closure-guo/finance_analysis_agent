@@ -29,6 +29,7 @@
 | 019  | 2026-08-24 | [LLM 输出截断治理 — 静默截断、重试空转与 reasoning 配额吃空](019-llm-output-truncation-governance.md) | 阶段修复 |
 | 020  | 2026-08-28 | [citation 校验器契约疾病 — 索引错位、词表分裂与容差失真制造大面积假 FAIL](020-citation-contract-diseases-20260828.md) | 已修复(待合并) |
 | 021  | 2026-08-25 | [深研管线「假卡死」— 事件落库限速终态迟到 + 管线超时空转](021-deep-analysis-session-stuck.md) | 已修复 |
+| 022  | 2026-08-30 | [契约修复冒烟验证 — 第四类契约疾病浮现（技术上下文数组方向未声明）](022-citation-smoke-verify-20260830.md) | 部分修复 |
 
 ---
 
@@ -43,6 +44,7 @@
 
 - [006](006-citation-infinite-loop-20260716.md) 深度模式无响应 - citation 重试无限循环
 - [020](020-citation-contract-diseases-20260828.md) 考卷与答案册不同源：context 裁剪索引/中文词表/绝对容差 → 61% 假 FAIL；负索引约定 + 单一词表 + 相对容差，离线重判 41→5（残量全为真幻觉）
+- [022](022-citation-smoke-verify-20260830.md) 修复后多标的冒烟：稳态标的 2.2% FAIL 清零成疾；异动股暴露第四类契约疾病（技术 context 数组方向未声明 → LLM 期次错位，校验器裁决正确）
 
 ### 评分与分析模型
 
