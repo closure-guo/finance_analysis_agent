@@ -1,11 +1,11 @@
 # Tasks: add-assistant-ui-thread
 
-## 1. 调研与依赖锁定
-- [ ] 1.1 锁定版本：`ag-ui-protocol`（Python SDK + LangGraph 集成）、`@ag-ui/client`、assistant-ui（React 组件），记录版本与相互兼容矩阵到 design 附录
-- [ ] 1.2 确认 quick 模式 graph 事件形态（messages/updates、是否含工具调用），产出事件映射表（graph 事件 → AG-UI 事件）
+## 1. 调研与依赖锁定（已完成，见 docs/superpowers/research/2026-08-30-agui-assistant-ui-research.md）
+- [x] 1.1 版本锁定：`ag-ui-protocol==0.1.21`（Python，仅 pydantic 依赖；不引入 ag-ui-langgraph，依赖冲突见 design 决策 2）；前端 `@ag-ui/client@0.0.59` + `@assistant-ui/react@0.15.17` + `@assistant-ui/react-ag-ui@0.0.57`（React 18.3.1 兼容）
+- [x] 1.2 事件映射表：15 行 harness StreamEvent → AG-UI 事件（含 web_search 工具调用、REASONING→thinking、心跳），见调研文档
 
 ## 2. 后端 AG-UI 端点
-- [ ] 2.1 新增 `POST /api/agui/quick`：RunAgentInput → SSE 标准 AG-UI 事件流（官方 LangGraph 适配层包装 quick graph）
+- [ ] 2.1 新增 `POST /api/agui/quick`：RunAgentInput → SSE 标准 AG-UI 事件流（`ag_ui.core` 类型 + `EventEncoder` + harness StreamEvent 薄翻译层，映射表为准）
 - [ ] 2.2 事件序列契约测试：正常序列（RUN_STARTED → TEXT_MESSAGE_* → RUN_FINISHED）+ 分块拼接与落库一致
 - [ ] 2.3 异常终止测试：LLM 失败 → RUN_ERROR 终止、不落库成功回复
 - [ ] 2.4 双轨隔离测试：现有 `/api/stream` 事件契约测试零修改通过；停用 AG-UI 路由后深度模式不受影响

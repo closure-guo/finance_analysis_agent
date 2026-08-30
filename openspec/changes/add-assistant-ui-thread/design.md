@@ -3,7 +3,7 @@
 ## 决策
 
 1. **双轨而非替换**：AG-UI 端点（`POST /api/agui/quick`）与现有 `/api/stream` 并行。理由：管线时间线的领域事件（思考标题、工具调用横幅、5 层 pipeline 快照）没有标准 AG-UI 事件可映射，强行塞进 `CUSTOM`/`STATE_DELTA` 等于换一种方式手搓协议；quick 对话是纯文本流，恰好在 AG-UI 标准事件覆盖范围内。PoC 验收后再评估管线事件的映射方案（另立 change）。
-2. **后端用官方适配层而非手写翻译**：使用 AG-UI 官方 Python SDK 的 LangGraph 集成（`ag_ui_langgraph`，FastAPI endpoint 助手）包装现有 quick 模式 graph。理由：事件类型定义随 SDK 版本演进，手写翻译层会把「协议标准化」的收益重新变成自研维护负担。现有 LLM 配置（LLMConfig/llitlm 格式）在 graph 构建层注入，适配层不感知。
+2. **协议类型用官方 SDK、翻译层自写（Task 1 调研后修订）**：~~使用官方 LangGraph 适配层~~ → 调研证实该前提不成立：quick 模式并非 LangGraph graph，而是 harness ReAct Agent（`agent_factory.py`），`ag_ui_langgraph@0.0.44` 只接受 `CompiledStateGraph`（内部走 `astream_events`，harness StreamEvent 不可见）；且其依赖 `langchain>=1.2.0` 会约束 `langgraph<1.1.0`，与本仓 `langgraph 1.2.0` 冲突。故采用：**`ag-ui-protocol==0.1.21`（仅依赖 pydantic）提供 `ag_ui.core` 事件类型 + `EventEncoder`（SSE 编码），harness StreamEvent → AG-UI 事件用自写薄翻译层**（15 行映射表见 docs/superpowers/research/2026-08-30-agui-assistant-ui-research.md）。协议类型与编码仍走官方包，自研范围收敛到一层纯函数翻译（可全量单测）。
 3. **前端渲染替换、流管理最小化**：assistant-ui Thread + `@ag-ui/client`（HttpAgent → SSE）承担渲染与消息状态；会话切换守卫沿用现有语义（切换时中止当前 run + 快照恢复），不引入 CopilotKit 全家桶（scope 收敛，只取协议 + 渲染）。视觉层直接用 design-system 令牌给 assistant-ui 做 theme 对齐。
 4. **历史恢复走快照而非事件回放**：AG-UI 的 `MessagesSnapshot` 用于运行前初始化消息列表（把 session_store 的 chat_history 映射为 Thread 初始消息），刷新/切回恢复仍走现有 session_store 快照路径——不改变已验证的恢复语义。
 
@@ -16,5 +16,5 @@
 
 ## 开放问题（实施时决策）
 
-- quick 模式 graph 当前是否输出工具调用事件（web_search 等）？若有，AG-UI `TOOL_CALL_*` 事件天然覆盖，渲染用 assistant-ui 的工具 UI——在 tasks 的事件契约测试中固化。
-- LangGraph 适配层与现有 `agent_factory.build_quick_graph()` 的输出 event 形态差异（messages vs updates 模式）需在 Task 1 调研后定实现细节。
+- ~~quick 模式 graph 当前是否输出工具调用事件？~~ 已确认（Task 1）：quick 模式带 `web_search` 工具调用，harness StreamEvent 有对应 TOOL_CALL_START/ARGS/RESULT 事件 → 映射为 AG-UI `TOOL_CALL_START/ARGS/END`，渲染用 assistant-ui 工具 UI（映射表见调研文档）。
+- ~~quick graph 事件形态差异？~~ 已确认（Task 1）：quick 模式非 LangGraph graph（实为 harness ReAct Agent），事件映射按调研文档 15 行映射表执行；无 LangGraph 适配层可用（见决策 2）。
