@@ -16,6 +16,7 @@ import { usePathname, navigate } from './route'
 import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
+import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -252,6 +253,16 @@ export default function App() {
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
   // 临时警告提示（如"该会话正在生成中"）
   const [warningMessage, setWarningMessage] = useState<string | null>(null)
+
+  // ── AG-UI quick 通道（add-assistant-ui-thread）──
+  // quick 模式对话改走 assistant-ui Thread + POST /api/agui/quick（双轨隔离：
+  // 不进 streamStore/registry，深度模式渲染零影响）。历史消息仍由 MessageItem
+  // 渲染（rebuildSession 快照），Thread 只接管挂载后发起的新 run（调研 §3.3 路径 a）。
+  const [quickActive, setQuickActive] = useState(false)
+  const [quickRunning, setQuickRunning] = useState(false)
+  // 重挂载纪元：会话切换/新建时 +1 → Thread 重置（切换守卫：abort 旧 run + 快照恢复不重复）
+  const [aguiEpoch, setAguiEpoch] = useState(0)
+  const quickThreadRef = useRef<QuickThreadHandle>(null)
   // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
   const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
   // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
@@ -391,6 +402,16 @@ export default function App() {
   // forceRebuild：轮询发现后台任务 completed 时强制从后端重建（拿报告/终态），
   // 跳过 live 短路——resume 把 origin 标为 live，completed 后需重建才有报告。
   const selectSession = async (sessionId: string, forceRebuild = false) => {
+    // AG-UI 通道切换守卫（add-assistant-ui-thread）：quick run 流式中切换会话 →
+    // abort 当前 run（HttpAgent.abortRun → 服务端 CancelledError → 中断落库），
+    // 并重挂载 Thread 清空本 mount 的新 run 消息；切回走 rebuildSession 快照。
+    // （重新选择当前会话不重置，避免误清在看的消息）
+    if (sessionId !== currentSessionId) {
+      if (quickThreadRef.current?.isRunning()) quickThreadRef.current.abort()
+      setAguiEpoch(e => e + 1)
+      setQuickActive(false)
+      setQuickRunning(false)
+    }
     store.switchSession(sessionId)
     setAndPersistSession(sessionId)
 
@@ -461,14 +482,23 @@ export default function App() {
   }
 
   const newAnalysis = () => {
+    // AG-UI 通道守卫：重置 quick Thread（abort 在途 run + 清空新 run 消息）
+    if (quickThreadRef.current?.isRunning()) quickThreadRef.current.abort()
+    setAguiEpoch(e => e + 1)
+    setQuickActive(false)
+    setQuickRunning(false)
     // 断开当前会话的本地 SSE 订阅（不调后端 cancel，后台任务继续运行）
     // delta spec Task 5.3：新建分析仅断开本地订阅
     store.switchSession(null)
     setAndPersistSession(null)
   }
 
-  // 停止当前会话的生成任务（本地 abort + 后端 cancel + 状态收口）
+  // 停止当前会话的生成任务（quick AG-UI 通道 abort；深度模式本地 abort + 后端 cancel）
   const stopGeneration = async () => {
+    if (quickThreadRef.current?.isRunning()) {
+      quickThreadRef.current.abort()
+      return
+    }
     if (!currentSessionId) return
     await store.cancel(currentSessionId)
   }
@@ -514,28 +544,15 @@ export default function App() {
   }
 
   const quickChat = async (message: string) => {
-    // 拦截：当前会话正在运行时不允许提交新消息（delta spec Task 6.2）
-    if (currentSessionId && store.isSessionRunning(currentSessionId)) {
+    // AG-UI 通道（add-assistant-ui-thread）：quick 对话不再走 streamStore.submit，
+    // 由 assistant-ui runtime 驱动 POST /api/agui/quick（SSE 事件流 → Thread 渲染）。
+    // 单飞守卫：Thread run 进行中不允许新消息（与原 409 busy 提示语义一致）。
+    if (quickThreadRef.current?.isRunning()) {
       showWarning('该会话正在生成中，可停止后再发')
       return
     }
-    // 请求级 LLM 配置（delta 5.4）：仅在有非空配置时携带 llm_config 字段
-    const llmConfigPayload = buildLlmConfigPayload(llmConfig)
-    try {
-      await store.submit(
-        {
-          message,
-          user_id: getUserId(),
-          api_key: apiKey,
-          ...(currentSessionId ? { session_id: currentSessionId } : {}),
-          ...(llmConfigPayload ? { llm_config: llmConfigPayload } : {}),
-        },
-        { currentView: currentSessionId },
-      )
-    } catch {
-      const errText = store.getSnapshot(currentSessionId || '')?.error
-      if (errText) showWarning(errText)
-    }
+    setQuickActive(true)
+    quickThreadRef.current?.send(message)
   }
 
   const handleSendFromEmpty = (text: string, sendMode: string = 'deep') => {
@@ -640,6 +657,23 @@ export default function App() {
   // ── Render ──
   const leftInset = sidebarOpen ? 256 : 48
 
+  // 视图状态：quick AG-UI 通道活跃（首页发起、streamStore 无消息/phase）时进入聊天视图。
+  // 附加派生不改深度模式语义（quickActive 仅在 quick 发送后为 true）。
+  const viewState = appState === 'empty' && quickActive ? 'clarifying' : appState
+
+  // AG-UI quick 通道回调：新会话绑定（RUN_STARTED.thread_id）+ 完成刷新列表 + 错误提示
+  const handleAguiSessionCreated = useCallback((id: string) => {
+    setCurrentSessionId(prev => {
+      if (prev) return prev
+      localStorage.setItem('fa_current_session_id', id)
+      return id
+    })
+    void loadSessions()
+  }, [loadSessions])
+  const handleAguiRunFinished = useCallback(() => {
+    void loadSessions()
+  }, [loadSessions])
+
   // 计算正在运行的会话 ID 集合（后端 status=running 或 store 中有进行中流）
   const runningSessionIds = new Set<string>()
   for (const s of sessions) {
@@ -667,13 +701,13 @@ export default function App() {
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
         {pathname === '/downloads' ? (
           <DownloadCenter onBack={() => navigate('/')} />
-        ) : bootRestoring && appState === 'empty' ? (
+        ) : bootRestoring && viewState === 'empty' ? (
           // 刷新恢复中：有持久化会话但尚未重建消息，显示恢复指示而非闪首页空态
           <div data-testid="restoring-state" className="flex flex-col items-center justify-center h-screen gap-3">
             <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
             <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>恢复会话中…</p>
           </div>
-        ) : appState === 'empty' ? (
+        ) : viewState === 'empty' ? (
           <EmptyState
             onSend={handleSendFromEmpty}
             apiKey={apiKey}
@@ -743,6 +777,22 @@ export default function App() {
               {lastExportableReport && (
                 <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
               )}
+
+              {/* AG-UI quick 通道（add-assistant-ui-thread）：历史消息由上方 MessageItem
+                  渲染（rebuildSession 快照），Thread 只接管本 mount 的新 run。
+                  key= 纪元+apiKey：会话切换/新建重置 Thread；apiKey 变更重建 agent。 */}
+              {mode === 'quick' && (
+                <QuickThread
+                  key={`agui-${aguiEpoch}-${apiKey}`}
+                  ref={quickThreadRef}
+                  apiKey={apiKey}
+                  llmConfig={buildLlmConfigPayload(llmConfig)}
+                  onSessionCreated={handleAguiSessionCreated}
+                  onRunFinished={handleAguiRunFinished}
+                  onRunningChange={setQuickRunning}
+                  onError={showWarning}
+                />
+              )}
             </div>
 
             {/* 「会话生成中」警告：fixed 顶部 toast，浮于 header(z-50)/输入框(z-40) 之上 */}
@@ -756,13 +806,13 @@ export default function App() {
               </div>
             )}
 
-            {/* 停止按钮（流式输出时显示） */}
-            {(appState === 'analyzing' || messages.some(m => m.streaming)) && (
+            {/* 停止按钮（流式输出时显示；quick AG-UI 通道由 quickRunning 驱动） */}
+            {(appState === 'analyzing' || messages.some(m => m.streaming) || quickRunning) && (
               <div
                 className="fixed right-0 z-40 flex flex-col items-center gap-2 px-4"
                 style={{ left: leftInset, bottom: '90px' }}
               >
-                {(appState === 'analyzing' || messages.some(m => m.streaming)) && currentSessionId && (
+                {(appState === 'analyzing' || quickRunning) && (
                   <Button
                     variant="destructive"
                     size="sm"
