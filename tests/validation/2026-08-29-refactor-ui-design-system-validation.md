@@ -31,6 +31,12 @@ OpenSpec change `refactor-ui-design-system`：引入 shadcn 语义令牌层与�
 
 ## 截图对比（基线 ui-baseline/ vs 重构后 ui-after/）
 
+**采集方式补充**：会话页与报告渲染态截图由 `tests/e2e/playwright/tests/visual-baseline-report.spec.ts`
+采集（STUB_SCENARIO=pipeline 管线环境，8002/5175；基线在 cc00bc0 前端源码下运行，重构后在 HEAD 运行）：
+
+- **session-page.png**：会话页（对话流 + 分层管线时间轴运行中）
+- **report-view.png**：报告渲染态（报告卡标题 + 财务图表 + 报告正文 markdown）
+
 - **empty-state.png**：布局完全一致（侧栏/主区/输入卡/能力卡四宫格），无错位、遮挡、溢出。侧栏会话列表内容不同属数据差异（开发库会话变化），非视觉回归。
 - **settings-modal.png**：结构一致（表单字段/顺序/文案不变）。预期风格变化：①遮罩加深（bg-black/80，shadcn Dialog 标准）；②右上角新增 X 关闭钮；③弹窗打开支持 Esc 关闭与焦点圈定（Radix Dialog 原生行为，属**新增交互能力**，非行为破坏——原实现无 Esc 关闭）；④控件圆角/边框统一为语义令牌。
 
