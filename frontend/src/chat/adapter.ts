@@ -15,6 +15,7 @@
 // 未知事件类型在 streamStore.reduce 的 default 分支已安全忽略（forward-compatible），
 // 本层不做二次过滤。
 import type { ThreadMessageLike } from '@assistant-ui/react'
+import type { ReadonlyJSONObject } from 'assistant-stream/utils'
 import type { UIMessage } from '../types'
 
 export type AnalysisThreadMessage = ThreadMessageLike
@@ -33,19 +34,22 @@ export const DATA_PART = {
 export type MessageKind = UIMessage['type']
 
 // 工具参数展示文本是浓缩后的字符串（timeline.summarizeToolArgs 产物），
-// 尝试还原为 JSON 对象供 tool-call 部件 args 字段使用
-function parseArgsText(argsText: string): Record<string, unknown> | undefined {
+// 尝试还原为 JSON 对象供 tool-call 部件 args 字段使用（非对象/非法 JSON 返回 undefined）
+function parseArgsText(argsText: string): ReadonlyJSONObject | undefined {
   if (!argsText) return undefined
   try {
-    const parsed = JSON.parse(argsText)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
+    const parsed: unknown = JSON.parse(argsText)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as ReadonlyJSONObject) : undefined
   } catch {
     return undefined
   }
 }
 
-function timelineParts(msg: UIMessage): ThreadMessageLike['content'] {
-  const parts: Exclude<ThreadMessageLike['content'], string> = []
+// 消息部件联合类型（ThreadMessageLike.content 的数组形态元素）
+type AnalysisPart = Exclude<ThreadMessageLike['content'], string>[number]
+
+function timelineParts(msg: UIMessage): AnalysisPart[] {
+  const parts: AnalysisPart[] = []
   const timeline = msg.agentTimeline ?? []
   timeline.forEach((item, i) => {
     if (item.type === 'thinking') {
@@ -92,7 +96,7 @@ export function translateMessage(msg: UIMessage): ThreadMessageLike {
         metadata: { custom: { kind: 'user' } },
       }
     case 'chat': {
-      const parts = [...timelineParts(msg)]
+      const parts: AnalysisPart[] = [...timelineParts(msg)]
       if (msg.chatResponse) {
         parts.push({
           type: 'text',

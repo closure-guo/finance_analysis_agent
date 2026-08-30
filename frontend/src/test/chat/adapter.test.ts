@@ -21,9 +21,14 @@ function applyEvents(events: object[]): { state: SessionStreamState; last: UIMes
   return { state, last: state.messages[state.messages.length - 1] }
 }
 
+// content 为 readonly 数组：测试断言用宽松视图
+function partsOf(m: { content: unknown }): Array<Record<string, unknown>> {
+  return (Array.isArray(m.content) ? m.content : []) as unknown as Array<Record<string, unknown>>
+}
+
 function lastPart(state: SessionStreamState) {
   const translated = translateMessage(state.messages[state.messages.length - 1])
-  const parts = translated.content as Array<Record<string, unknown>>
+  const parts = partsOf(translated)
   return { translated, part: parts[parts.length - 1] }
 }
 
@@ -86,7 +91,7 @@ describe('对话流事件 → 消息部件', () => {
       { type: 'thinking_to_answer', answer: '最终答案XYZ' },
     ])
     const translated = translateMessage(state.messages[state.messages.length - 1])
-    const parts = translated.content as Array<Record<string, unknown>>
+    const parts = partsOf(translated)
     expect(parts.some((p) => p.type === 'reasoning' && p.text === '前缀思考，')).toBe(true)
     const text = parts.find((p) => p.type === 'text')
     expect(text?.text).toBe('最终答案XYZ')
@@ -123,7 +128,7 @@ describe('工具调用事件 → tool-call 部件', () => {
       { type: 'search_start', query: '茅台' },
     ])
     const translated = translateMessage(state.messages[state.messages.length - 1])
-    const parts = translated.content as Array<Record<string, unknown>>
+    const parts = partsOf(translated)
     expect(parts.filter((p) => p.type === 'tool-call')).toHaveLength(0)
     expect(parts.some((p) => p.type === 'data-search')).toBe(true)
   })
@@ -262,7 +267,7 @@ describe('状态转换与错误事件', () => {
       ])
       const translated = translateMessage(state.messages[state.messages.length - 1])
       expect(translated.status).toEqual({ type: 'complete', reason: 'unknown' })
-      const parts = translated.content as Array<Record<string, unknown>>
+      const parts = partsOf(translated)
       expect(parts.every((p) => p.status === undefined)).toBe(true)
     }
   })
@@ -279,7 +284,7 @@ describe('状态转换与错误事件', () => {
       { type: 'totally_unknown_event', foo: 'bar' },
     ])
     const translated = translateMessage(state.messages[state.messages.length - 1])
-    const parts = translated.content as Array<Record<string, unknown>>
+    const parts = partsOf(translated)
     expect(parts).toHaveLength(1)
     expect(parts[0].text).toBe('前文')
   })
@@ -321,7 +326,7 @@ describe('translateMessages / 边界', () => {
     }
     expect(detail.chat_history).toEqual([])
     const translated = translateMessage(msg)
-    const parts = translated.content as Array<Record<string, unknown>>
+    const parts = partsOf(translated)
     expect(parts.map((p) => p.type)).toEqual(['reasoning', 'tool-call', 'reasoning', 'text'])
   })
 })

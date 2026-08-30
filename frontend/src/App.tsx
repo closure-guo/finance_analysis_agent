@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react'
 import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
 import { ChartsSection } from './Charts'
 import { ReportFileDrawer } from './ReportFileDrawer'
@@ -17,6 +18,7 @@ import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
+import { AnalysisRuntimeProvider, ThreadMessages } from './chat/AnalysisThread'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -598,6 +600,19 @@ export default function App() {
     startAnalysis(t, currentSessionId)
   }
 
+  // adopt-assistant-ui-chat：assistant-ui Composer 提交桥接（onNew → App 分发）。
+  // 拦截语义迁移至 runtime 状态判定（运行中 Composer 发送键变停止），此处的
+  // isSessionRunning/单飞守卫作为兜底保留（toast 提示语义不变）。
+  const handleComposerSubmit = (text: string) => {
+    const t = text.trim()
+    if (!t) return
+    if (mode === 'quick') {
+      quickChat(t)
+      return
+    }
+    startAnalysis(t, currentSessionId)
+  }
+
   // 运行中会话快照轮询（resume-pipeline-across-sessions Task 5）：
   // 切回 running 会话进入 analyzing 且无活跃 SSE（仅恢复态、非实时订阅）时，
   // 每 2s 拉取会话详情刷新分层时间轴；completed 则走 selectSession 完整恢复报告并自然停止；
@@ -703,6 +718,51 @@ export default function App() {
     runningSessionIds.add(id)
   }
 
+  // ── assistant-ui Thread 接线（adopt-assistant-ui-chat）──
+  // pipeline 消息渲染时机：运行中（analyzing）始终显示；completed 会话恢复的
+  // 静态完成时间轴（progress===1）随报告一并展示；其余（空树回退）不显示
+  const visibleMessages = messages.filter((msg) => {
+    if (msg.type === 'pipeline') return appState === 'analyzing' || msg.progress === 1
+    return true
+  })
+  // Composer 运行中判定（对齐 store 拦截语义 isSessionRunning：前端有活跃 reader 在消费），
+  // 叠加消息级流式标记（澄清阶段）与 quick run 进行中；恢复态（无 reader）不拦截发送
+  const composerRunning =
+    store.isSessionRunning(currentSessionId ?? '') ||
+    messages.some((m) => m.streaming) || quickRunning
+
+  // Composer 插槽：assistant-ui 输入区（Enter 发送 / Shift+Enter 换行 / 空禁用发送）
+  const composerInput = (
+    <ComposerPrimitive.Input
+      placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
+      className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+      style={{ color: 'var(--text-default)' }}
+    />
+  )
+  const composerSend = (
+    <>
+      {/* 运行中：发送键变停止按钮（runtime 状态判定，拦截语义迁移） */}
+      <ThreadPrimitive.If running>
+        <ComposerPrimitive.Cancel
+          data-testid="composer-stop"
+          className="w-9 h-9 rounded-xl mb-0.5 mr-0.5 flex items-center justify-center shrink-0"
+          style={{ background: 'var(--bg-brand)' }}
+        >
+          <i className="fas fa-stop text-xs text-white"></i>
+        </ComposerPrimitive.Cancel>
+      </ThreadPrimitive.If>
+      <ThreadPrimitive.If running={false}>
+        <ComposerPrimitive.Send
+          data-testid="send-button"
+          className="w-9 h-9 rounded-xl mb-0.5 mr-0.5 flex items-center justify-center shrink-0 disabled:opacity-50"
+          style={{ background: 'var(--bg-brand)' }}
+        >
+          <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
+        </ComposerPrimitive.Send>
+      </ThreadPrimitive.If>
+    </>
+  )
+
   return (
     <>
       <Sidebar
@@ -774,47 +834,46 @@ export default function App() {
               </div>
             </header>
 
-            {/* Chat messages */}
-            <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
-              {messages
-                .filter(msg => {
-                  // pipeline 消息渲染时机：运行中（analyzing）始终显示；
-                  // completed 会话恢复的静态完成时间轴（progress===1）随报告一并展示；
-                  // 其他情况（如历史会话无快照回退的空树）不显示
-                  if (msg.type === 'pipeline') {
-                    return appState === 'analyzing' || msg.progress === 1;
+            {/* Chat messages（adopt-assistant-ui-chat）：assistant-ui Thread 渲染。
+                消息区为固定高度滚动容器，Viewport autoScroll 提供流式跟随/上翻暂停。 */}
+            <AnalysisRuntimeProvider
+              messages={visibleMessages}
+              isRunning={composerRunning}
+              onSubmit={handleComposerSubmit}
+              onCancel={stopGeneration}
+            >
+              <div className="fixed top-0 bottom-0 right-0" style={{ left: leftInset }}>
+                <ThreadMessages
+                  footer={
+                    <>
+                      {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
+                      {exportableReports.map((msg) => (
+                        <ReportNameBanner key={`rb-${msg.id}`} msg={msg} onOpen={setDrawerMessage} />
+                      ))}
+                      {lastExportableReport && (
+                        <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
+                      )}
+
+                      {/* AG-UI quick 通道（add-assistant-ui-thread）：历史消息由 Thread 渲染
+                          （rebuildSession 快照），Thread 只接管本 mount 的新 run。
+                          key= 纪元+apiKey：会话切换/新建重置 Thread；apiKey 变更重建 agent。 */}
+                      {mode === 'quick' && (
+                        <QuickThread
+                          key={`agui-${aguiEpoch}-${apiKey}`}
+                          ref={quickThreadRef}
+                          apiKey={apiKey}
+                          llmConfig={buildLlmConfigPayload(llmConfig)}
+                          sessionId={currentSessionId}
+                          onSessionCreated={handleAguiSessionCreated}
+                          onRunFinished={handleAguiRunFinished}
+                          onRunningChange={setQuickRunning}
+                          onError={showWarning}
+                        />
+                      )}
+                    </>
                   }
-                  return true;
-                })
-                .map(msg => (
-                  <MessageRenderer key={msg.id} msg={msg} />
-                ))}
-
-              {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
-              {exportableReports.map((msg) => (
-                <ReportNameBanner key={`rb-${msg.id}`} msg={msg} onOpen={setDrawerMessage} />
-              ))}
-              {lastExportableReport && (
-                <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
-              )}
-
-              {/* AG-UI quick 通道（add-assistant-ui-thread）：历史消息由上方 MessageItem
-                  渲染（rebuildSession 快照），Thread 只接管本 mount 的新 run。
-                  key= 纪元+apiKey：会话切换/新建重置 Thread；apiKey 变更重建 agent。 */}
-              {mode === 'quick' && (
-                <QuickThread
-                  key={`agui-${aguiEpoch}-${apiKey}`}
-                  ref={quickThreadRef}
-                  apiKey={apiKey}
-                  llmConfig={buildLlmConfigPayload(llmConfig)}
-                  sessionId={currentSessionId}
-                  onSessionCreated={handleAguiSessionCreated}
-                  onRunFinished={handleAguiRunFinished}
-                  onRunningChange={setQuickRunning}
-                  onError={showWarning}
                 />
-              )}
-            </div>
+              </div>
 
             {/* 「会话生成中」警告：fixed 顶部 toast，浮于 header(z-50)/输入框(z-40) 之上 */}
             {warningMessage && (
@@ -847,7 +906,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Fixed input at bottom */}
+            {/* Fixed input at bottom（Composer 插槽：assistant-ui 输入区，须在 Provider 内） */}
             <ChatInputBar
               onSend={handleSendFromChat}
               leftInset={leftInset}
@@ -861,8 +920,11 @@ export default function App() {
               profiles={profileStore.profiles}
               activeProfileId={profileStore.activeId}
               onSwitchProfile={switchProfile}
+              composerInput={composerInput}
+              composerSend={composerSend}
             />
-          </>
+              </AnalysisRuntimeProvider>
+            </>
         )}
       </div>
 
@@ -1250,143 +1312,6 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
   )
 }
 
-// ── Message Renderer ──
-function MessageRenderer({ msg }: { msg: UIMessage }) {
-  if (msg.type === 'user') {
-    return (
-      <div className="flex justify-end animate-slide-in">
-        <div className="max-w-[85%] md:max-w-[75%]">
-          <div className="msg-user rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-relaxed" style={{ color: 'var(--text-onbrand)' }}>
-            {msg.content}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'error') {
-    return (
-      <div className="flex justify-start animate-slide-in" data-testid="stream-error">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--status-error-default)' }}>
-              <i className="fas fa-exclamation text-white text-xs"></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-3 flex-1">
-              <p className="text-sm" style={{ color: 'var(--status-error-default)' }}>{msg.content}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'system' && msg.content === 'typing') {
-    return (
-      <div className="flex justify-start">
-        <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'var(--bg-brand)' }}>
-            <i className="fas fa-robot text-white text-xs"></i>
-          </div>
-          <div className="msg-system rounded-xl rounded-tl-sm px-4 py-3">
-            <div className="flex gap-1.5">
-              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'system') {
-    return (
-      <div className="flex justify-start animate-slide-in">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-              <i className="fas fa-robot text-white text-xs"></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-3 flex-1">
-              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--status-success-default)' }}>
-                <i className="fas fa-check-circle"></i>
-                <span>{msg.content}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'chat') {
-    return (
-      <div className="flex justify-start animate-slide-in" data-testid="stream-output">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-              <i className="fas fa-robot text-white text-xs"></i>
-            </div>
-            {/* Kimi 风格：思考区为统一白色时间轴容器，response 纯白底无框直接排版 */}
-            <div className="flex-1 min-w-0">
-              {/* 按 agentTimeline 数组顺序渲染：每个思考片段/搜索/工具调用一个独立横幅，
-                  包在统一白色容器内用左侧竖线串联（时间轴效果），
-                  反映 agent 实际执行时序（思考 -> 搜索 -> 再思考 -> 工具调用 -> ...） */}
-              {msg.agentTimeline && msg.agentTimeline.length > 0 && (
-                <TimelineRenderer
-                  timeline={msg.agentTimeline}
-                  streaming={!!msg.streaming}
-                  components={timelineBannerComponents}
-                />
-              )}
-              {/* response：纯白底、无框体、无背景色，像普通文档直接排版 */}
-              {msg.chatResponse ? (
-                <div className={`prose prose-sm max-w-none px-1 py-1 response-streaming ${msg.streaming ? 'is-streaming' : ''}`} style={{ color: 'var(--text-secondary)' }}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      a: ({href, children}) => (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--bg-brand)' }}>
-                          {children}
-                        </a>
-                      ),
-                    }}
-                  >
-                    {msg.chatResponse}
-                  </ReactMarkdown>
-                  {/* 流式输出中：动态图标跟在 response 文字末尾（与最后段落同行） */}
-                  {msg.streaming && (
-                    <span data-testid="stream-status" className="streaming-cursor">
-                      <span className="block w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></span>
-                    </span>
-                  )}
-                </div>
-              ) : null}
-              {/* 思考阶段（尚无 response）：动态图标单独显示，无文字 */}
-              {msg.streaming && !msg.chatResponse && (
-                <div data-testid="stream-status" className="mt-2 flex items-center">
-                  <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'pipeline') {
-    return <PipelineCard msg={msg} />
-  }
-
-  if (msg.type === 'report') {
-    return <ReportCard msg={msg} />
-  }
-
-  return null
-}
-
 // ── Thinking Banner (Kimi-style collapsible reasoning) ──
 // 思考横幅：统一快速模式与深度模式澄清阶段的思考流式展示。
 // 思考中显示"思考中"并自动展开；完成后按横幅展开/折叠状态与是否有标题分别展示。
@@ -1568,7 +1493,8 @@ function getFavicon(url: string) {
 }
 
 // ── Pipeline Card ──
-function PipelineCard({ msg }: { msg: UIMessage }) {
+// adopt-assistant-ui-chat：经 AnalysisThread 的 data-pipeline 部件挂载（导出供部件复用）
+export function PipelineCard({ msg }: { msg: UIMessage }) {
   const [showLog, setShowLog] = useState(false)
   const completed = msg.completedNodes || []
   const current = msg.currentNode || ''
@@ -1703,7 +1629,8 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Report Card ──
-function ReportCard({ msg }: { msg: UIMessage }) {
+// adopt-assistant-ui-chat：经 AnalysisThread 的 data-report 部件挂载（导出供部件复用）
+export function ReportCard({ msg }: { msg: UIMessage }) {
   return (
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
@@ -1853,7 +1780,11 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
+// adopt-assistant-ui-chat：输入区插槽化——App 内（assistant-ui Runtime Provider 内）
+// 传入 composerInput/composerSend 插槽（ComposerPrimitive 输入/发送/停止），保持
+// 「Enter 发送、Shift+Enter 换行、空禁用发送、运行中发送键变停止」；未传插槽时
+// 使用受控 Textarea+按钮（保持本组件可独立渲染，dropdownOutsideClick 等测试不变）。
+export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile, composerInput, composerSend }: {
   onSend: (text: string) => void
   leftInset: number
   mode: 'quick' | 'deep'
@@ -1866,6 +1797,8 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
   profiles: LLMProfile[]
   activeProfileId: string
   onSwitchProfile: (id: string) => void
+  composerInput?: ReactNode
+  composerSend?: ReactNode
 }) {
   const [text, setText] = useState('')
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
@@ -1997,24 +1930,28 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
             >
               <i className="fas fa-plus text-xs"></i>
             </Button>
-            <Textarea
-              rows={1}
-              placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
-              className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
-              style={{ color: 'var(--text-default)' }}
-              value={text}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={handleKeydown}
-            />
-            <Button
-              data-testid="send-button"
-              variant="default"
-              size="icon"
-              onClick={handleSendClick}
-              className="w-9 h-9 rounded-xl mb-0.5 mr-0.5"
-            >
-              <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
-            </Button>
+            {composerInput ?? (
+              <Textarea
+                rows={1}
+                placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
+                className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+                style={{ color: 'var(--text-default)' }}
+                value={text}
+                onChange={e => setText(e.target.value)}
+                onKeyDown={handleKeydown}
+              />
+            )}
+            {composerSend ?? (
+              <Button
+                data-testid="send-button"
+                variant="default"
+                size="icon"
+                onClick={handleSendClick}
+                className="w-9 h-9 rounded-xl mb-0.5 mr-0.5"
+              >
+                <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
+              </Button>
+            )}
           </div>
         </div>
         <div className="text-center mt-1">
