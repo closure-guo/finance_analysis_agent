@@ -113,3 +113,8 @@ AG-UI 协议 quick 模式对话通道 PoC：
 - [ ] Task 4.3 真实浏览器检查项（§5）全部通过
 - [ ] Task 4.4 PoC 结论评审（§6）确认
 - 签字/日期：____________
+
+## 8. archive 前待办（最终审查补记，2026-08-30）
+
+- **主规范冲突登记**：`openspec/specs/frontend/spec.md` 的「Quick Chat Entry」Requirement 仍写明 quick 对话 SHALL 经 `POST /api/chat` 发起（含两个 scenario），而本 change 实现已改走 `POST /api/agui/quick`。本 change 的 frontend delta 未覆盖该条目——**archive（sync specs）前必须补一条 delta MODIFIED「Quick Chat Entry」（`POST /api/chat` → `POST /api/agui/quick`，旧通道保留用于回退的表述按实施实况定稿）**，否则主规范与事实脱节，违反「openspec/specs 是唯一真相来源」红线。
+- 附带修正：验证分支记录为 feat/design-system-download-center@92f4446（Task 4 提交 8266cf1 原落在并发工作流分支 feat/verifier-baseline-v1，已拣选回本分支，内容一致）。
