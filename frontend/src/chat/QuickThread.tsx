@@ -41,6 +41,8 @@ export interface QuickThreadProps {
   apiKey: string
   /** 请求级 LLM 配置（forwardedProps 透传，语义对齐现有通道 llm_config） */
   llmConfig?: LLMConfigPayload | null
+  /** 挂载时已绑定的会话 id（恢复/切回会话后追问携带之；新会话为 null → 空线程 id 新建） */
+  sessionId?: string | null
   /** RUN_STARTED.thread_id 回传（新会话创建时由 App 绑定会话） */
   onSessionCreated?: (sessionId: string) => void
   /** run 正常结束（RUN_FINISHED） */
@@ -130,11 +132,14 @@ const QuickAssistantMessage = () => (
 )
 
 const QuickThread = forwardRef<QuickThreadHandle, QuickThreadProps>(function QuickThread(
-  { apiKey, llmConfig = null, onSessionCreated, onRunFinished, onRunningChange, onError },
+  { apiKey, llmConfig = null, sessionId = null, onSessionCreated, onRunFinished, onRunningChange, onError },
   ref,
 ) {
+  // 会话 id 生命周期：初始 = App 传入（恢复/切回场景），RUN_STARTED.thread_id
+  // 回传后更新（新会话场景）——后续追问经 getSessionId 携带正确 thread_id。
+  const sessionIdRef = useRef<string | null>(sessionId)
   // agent 每个 mount 创建一次（会话切换守卫由 App 通过 key 重挂载实现）
-  const [agent] = useState(() => createQuickAgent({ apiKey, llmConfig }))
+  const [agent] = useState(() => createQuickAgent({ apiKey, llmConfig, getSessionId: () => sessionIdRef.current }))
   const runtimeRef = useRef<AssistantRuntime | null>(null)
   // 回调经 ref 透传最新引用（避免回调 identity 变化重建 runtime/订阅）
   const callbacksRef = useRef({ onSessionCreated, onRunFinished, onRunningChange, onError })
@@ -162,7 +167,11 @@ const QuickThread = forwardRef<QuickThreadHandle, QuickThreadProps>(function Qui
       onRunStartedEvent: ({ event }) => {
         setRunning(true)
         const threadId = (event as { threadId?: string }).threadId
-        if (threadId) callbacksRef.current.onSessionCreated?.(threadId)
+        if (threadId) {
+          // 服务端新建会话后，同 mount 追问必须携带该会话 id（thread_id 生命周期）
+          sessionIdRef.current = threadId
+          callbacksRef.current.onSessionCreated?.(threadId)
+        }
       },
       onRunFinishedEvent: () => {
         setRunning(false)

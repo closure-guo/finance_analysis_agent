@@ -18,6 +18,8 @@ export const AGUI_QUICK_URL = '/api/agui/quick'
 export interface QuickAgentConfig {
   apiKey?: string
   llmConfig?: LLMConfigPayload | null
+  /** 当前会话 id 获取器：非空 → threadId 用之（追问/恢复会话）；null → ''（服务端新建会话） */
+  getSessionId?: () => string | null
 }
 
 export function createQuickAgent(config: QuickAgentConfig): HttpAgent {
@@ -28,10 +30,14 @@ export function createQuickAgent(config: QuickAgentConfig): HttpAgent {
       const forwardedProps: Record<string, unknown> = {}
       if (config.apiKey) forwardedProps.apiKey = config.apiKey
       if (config.llmConfig) forwardedProps.llmConfig = config.llmConfig
-      return super.prepareRunAgentInput({
+      const input = super.prepareRunAgentInput({
         ...parameters,
         forwardedProps: { ...forwardedProps, ...parameters?.forwardedProps },
       })
+      // thread_id 生命周期（后端契约：为空 → 服务端 create_chat_session 新建，
+      // 真 id 经 RUN_STARTED 回传）。HttpAgent 构造时自动生成随机 UUID threadId，
+      // 不覆写的话新会话首条消息会被后端 404（Session not found）——E2E 发现。
+      return { ...input, threadId: config.getSessionId?.() ?? '' }
     }
   }
   return new QuickAgent({
