@@ -33,10 +33,13 @@ from typing import Any
 from ag_ui.core.events import (
     BaseEvent,
     ReasoningMessageContentEvent,
+    ReasoningMessageEndEvent,
+    ReasoningMessageStartEvent,
     RunErrorEvent,
     RunFinishedEvent,
     TextMessageContentEvent,
     ToolCallArgsEvent,
+    ToolCallEndEvent,
     ToolCallResultEvent,
     ToolCallStartEvent,
 )
@@ -48,6 +51,7 @@ from pydantic.alias_generators import to_camel
 
 from finance_agent import session_store
 from finance_agent.agui.translator import translate_to_agui
+from finance_agent.timeline_builder import close_last_thinking, summarize_tool_args
 
 _logger = logging.getLogger("finance_agent.agui.endpoint")
 
@@ -96,6 +100,12 @@ class _AguiCollector:
 
     等价 api._ChatCollector（分块拼接 == 落库全文的挂钩点，调研 §2.3）：
     仅收翻译后的官方事件，response 只累积 TEXT_MESSAGE_CONTENT delta。
+
+    同时按事件顺序构建结构化 agentTimeline（TimelineItem 同构 dict，经
+    deserializeTimeline 被前端恢复路径直接消费——修复刷新恢复丢 web_search
+    步骤的保真度缺口）。与旧通道 apply_chat_event 的差异：搜索类工具
+    （web_search 等）不跳过——本通道实时渲染就是工具横幅（QuickThread
+    ToolCallBlock），无结构化搜索结果可建 search item。
     """
 
     def __init__(self) -> None:
@@ -106,12 +116,63 @@ class _AguiCollector:
         self.error_message: str = ""
         # AG-UI tool_call_id -> self.tool_calls 索引（ARGS/RESULT 回查）
         self._tool_index: dict[str, int] = {}
+        # 结构化时序（thinking / tool_call 交错，事件顺序）
+        self.agent_timeline: list[dict] = []
+        # 当前接收 content 的 thinking item 索引；None = 无开段
+        self._thinking_idx: int | None = None
+        # 首个 delta 重置 content（THINK_REPLACE 语义：新段紧邻上一个思考段结束）
+        self._replace_pending: bool = False
+        # 最近一次 REASONING_MESSAGE_END 后尚无其他 item（换段紧邻判定）
+        self._just_closed: bool = False
+        # AG-UI tool_call_id -> agent_timeline 索引（RESULT 回查）
+        self._timeline_tool_index: dict[str, int] = {}
 
     def feed(self, event: BaseEvent) -> None:
         if isinstance(event, TextMessageContentEvent):
             self.response += event.delta
+            # 文本不是 timeline item；文本段开启意味着思考段已成历史（不再 replace）
+            self._just_closed = False
+        elif isinstance(event, ReasoningMessageStartEvent):
+            self.agent_timeline = close_last_thinking(self.agent_timeline)
+            last = self.agent_timeline[-1] if self.agent_timeline else None
+            if self._just_closed and last is not None and last.get("type") == "thinking":
+                # 新思考段紧邻上一思考段结束（中间无工具/文本）：THINK_REPLACE 语义，
+                # 首个 delta 重置该 item 内容（对齐前端 thinking_replace）
+                self._thinking_idx = len(self.agent_timeline) - 1
+                self._replace_pending = True
+            else:
+                self._thinking_idx = None
+            self._just_closed = False
         elif isinstance(event, ReasoningMessageContentEvent):
             self.thinking += event.delta
+            cur = self._thinking_idx
+            last = (
+                self.agent_timeline[cur]
+                if cur is not None and cur < len(self.agent_timeline)
+                else None
+            )
+            if last is not None and cur is not None:
+                if self._replace_pending:
+                    self.agent_timeline[cur] = {
+                        **last,
+                        "content": event.delta,
+                        "done": False,
+                    }
+                    self._replace_pending = False
+                else:
+                    self.agent_timeline[cur] = {
+                        **last,
+                        "content": last["content"] + event.delta,
+                    }
+            else:
+                self.agent_timeline.append(
+                    {"type": "thinking", "content": event.delta, "done": False}
+                )
+                self._thinking_idx = len(self.agent_timeline) - 1
+        elif isinstance(event, ReasoningMessageEndEvent):
+            self.agent_timeline = close_last_thinking(self.agent_timeline)
+            self._thinking_idx = None
+            self._just_closed = True
         elif isinstance(event, ToolCallStartEvent):
             self._tool_index[event.tool_call_id] = len(self.tool_calls)
             self.tool_calls.append(
@@ -122,16 +183,41 @@ class _AguiCollector:
                     "done": False,
                 }
             )
+            # 思考后接工具调用：末尾 thinking 显式收口（镜像前端 tool_call 语义）
+            self.agent_timeline = close_last_thinking(self.agent_timeline)
+            self.agent_timeline.append(
+                {
+                    "type": "tool_call",
+                    "name": event.tool_call_name,
+                    "args": "",
+                    "result": "",
+                    "done": False,
+                }
+            )
+            self._timeline_tool_index[event.tool_call_id] = len(self.agent_timeline) - 1
+            self._thinking_idx = None
+            self._just_closed = False
         elif isinstance(event, ToolCallArgsEvent):
             idx = self._tool_index.get(event.tool_call_id)
             if idx is not None:
                 with contextlib.suppress(json.JSONDecodeError, TypeError):
                     self.tool_calls[idx]["args"] = json.loads(event.delta)
+            tl_idx = self._timeline_tool_index.get(event.tool_call_id)
+            if idx is not None and tl_idx is not None:
+                self.agent_timeline[tl_idx]["args"] = summarize_tool_args(
+                    self.tool_calls[idx]["args"]
+                )
         elif isinstance(event, ToolCallResultEvent):
             idx = self._tool_index.get(event.tool_call_id)
             if idx is not None:
                 self.tool_calls[idx]["result_text"] = event.content[:_TOOL_RESULT_MAX]
                 self.tool_calls[idx]["done"] = True
+            tl_idx = self._timeline_tool_index.get(event.tool_call_id)
+            if tl_idx is not None:
+                self.agent_timeline[tl_idx]["result"] = event.content[:_TOOL_RESULT_MAX]
+                self.agent_timeline[tl_idx]["done"] = True
+        elif isinstance(event, ToolCallEndEvent):
+            pass  # 协议闭合事件，collector 无状态变化
         elif isinstance(event, RunErrorEvent):
             self.saw_error = True
             self.error_message = event.message
@@ -142,7 +228,8 @@ def _upsert_assistant_chat(session_id: str, collector: _AguiCollector) -> None:
     response = collector.response.strip()
     thinking = collector.thinking.strip() or None
     tool_calls = collector.tool_calls or None
-    if not (response or thinking or tool_calls):
+    agent_timeline = collector.agent_timeline or None
+    if not (response or thinking or tool_calls or agent_timeline):
         return
     session_store.upsert_chat(
         session_id,
@@ -150,6 +237,7 @@ def _upsert_assistant_chat(session_id: str, collector: _AguiCollector) -> None:
         response,
         thinking=thinking,
         tool_calls=tool_calls,
+        agent_timeline=agent_timeline,
     )
 
 

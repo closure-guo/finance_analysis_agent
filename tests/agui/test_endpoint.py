@@ -171,6 +171,60 @@ def test_empty_thread_creates_session(isolated_db, monkeypatch):
     assert history[1]["content"] == "答"
 
 
+def test_tool_call_channel_persists_structured_agent_timeline(isolated_db, monkeypatch):
+    """工具调用 run 落库结构化 agentTimeline（按事件顺序，含搜索类工具）。
+
+    回归（E2E agui-toolcall 刷新恢复场景发现的保真度缺口）：此前 _AguiCollector
+    只落 response/thinking/tool_calls 平铺字段，恢复走 buildTimelineFromHistory
+    fallback，其按 design 决策 7 跳过搜索类工具 → 刷新后 web_search 步骤整个
+    不可见。修复后按事件顺序构建 agentTimeline（thinking/tool_call 交错）落库，
+    恢复端 deserializeTimeline 直接消费，时序与实时渲染一致。
+    """
+    sid = session_store.create_chat_session("测试会话")
+    stub = _StubAgent(
+        [
+            StreamEvent.think("第一段思考"),
+            StreamEvent.for_tool_call(
+                ToolCallRequest(id="tc-1", name="web_search", arguments={"query": "茅台"})
+            ),
+            StreamEvent.for_tool_result(
+                ToolResult(tool_call_id="tc-1", name="web_search", output="搜索结果")
+            ),
+            StreamEvent.think("第二段思考"),
+            StreamEvent.answer("最终回答"),
+        ]
+    )
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: stub)
+
+    with TestClient(app) as client:
+        _post_agui(
+            client,
+            {
+                "threadId": sid,
+                "runId": "run-timeline",
+                "messages": [{"id": "m1", "role": "user", "content": "查一下茅台"}],
+            },
+        )
+
+    session = session_store.get_session(sid)
+    assert session is not None
+    entry = session["chat_history"][-1]
+    assert entry["role"] == "assistant"
+
+    timeline = entry.get("agentTimeline")
+    assert timeline is not None, "assistant 条目应携带结构化 agentTimeline"
+    # 按事件顺序：思考1 → 工具调用（web_search 不再被跳过）→ 思考2
+    assert [item["type"] for item in timeline] == ["thinking", "tool_call", "thinking"]
+    assert timeline[0]["content"] == "第一段思考"
+    assert timeline[0]["done"] is True, "思考段结束后应置完成态"
+    assert timeline[1]["name"] == "web_search"
+    assert timeline[1]["args"] == "茅台"
+    assert "搜索结果" in timeline[1]["result"]
+    assert timeline[1]["done"] is True
+    assert timeline[2]["content"] == "第二段思考"
+    assert timeline[2]["done"] is True
+
+
 def test_tool_call_channel_persists_tool_records(isolated_db, monkeypatch):
     """补充：TOOL_CALL/RESULT 映射 + 落库 tool_calls（等价 _ChatCollector 行为）。"""
     sid = session_store.create_chat_session("测试会话")

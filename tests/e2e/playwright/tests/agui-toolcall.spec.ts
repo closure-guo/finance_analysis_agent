@@ -131,11 +131,9 @@ test.describe('AG-UI quick 通道带工具调用 run', () => {
     await expect(historyEntry).toHaveCount(1)
     await expect(historyEntry).toContainText('需要先搜索')
 
-    // 注：历史快照不含「调用工具 · web_search」横幅——quick 通道落库无结构化
-    // agentTimeline，恢复走 buildTimelineFromHistory fallback，其按 design 决策 7
-    // 跳过搜索类工具（搜索横幅需结构化 results，AG-UI 通道仅有 result_text）。
-    // 该恢复保真度缺口独立于本次修复，待产品决策（结构化搜索结果落库或
-    // fallback 渲染工具横幅）后补断言。
+    // 工具调用横幅恢复（agentTimeline 结构化落库 → deserializeTimeline →
+    // ToolCallBanner，web_search label = 网络搜索）：时序与实时渲染一致
+    await expect(historyEntry).toContainText('网络搜索')
 
     // Thread 重挂载后为空壳
     await expect(page.getByTestId('agui-user-message')).toHaveCount(0)
