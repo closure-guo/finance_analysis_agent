@@ -144,4 +144,42 @@ describe('QuickThread（assistant-ui Thread + AG-UI 通道）', () => {
       expect(onSessionCreated).toHaveBeenCalledWith('sess-1')
     })
   })
+
+  it('thread_id 生命周期：首条发送空 thread_id，RUN_STARTED 回传后追问携带会话 id', async () => {
+    // Task 4 E2E 发现的回归：HttpAgent 构造时自动生成随机 UUID threadId，
+    // 后端契约是「thread_id 为空 → create_chat_session 新建会话」，直发 UUID
+    // 会被 404 Session not found，run 永不启动（用户气泡后无任何流式事件）。
+    const bodies: Array<{ threadId?: string }> = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url === '/api/agui/quick') {
+        bodies.push(JSON.parse((init?.body as string) ?? '{}'))
+        return aguiSse(NORMAL_EVENTS)
+      }
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const ref = createRef<QuickThreadHandle>()
+    render(<QuickThread ref={ref} apiKey="sk-test" />)
+
+    // 第一问（新会话）
+    await act(async () => {
+      ref.current?.send('第一问')
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/上涨 1\.2%/)).toBeInTheDocument()
+    })
+
+    // 第二问（同 mount 追问，RUN_STARTED.thread_id 已回传）
+    await act(async () => {
+      ref.current?.send('第二问')
+    })
+    await waitFor(() => {
+      expect(bodies.length).toBe(2)
+    })
+
+    expect(bodies[0]?.threadId).toBe('')
+    expect(bodies[1]?.threadId).toBe('sess-1')
+  })
 })

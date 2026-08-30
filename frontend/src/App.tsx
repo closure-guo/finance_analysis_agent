@@ -263,6 +263,9 @@ export default function App() {
   // 重挂载纪元：会话切换/新建时 +1 → Thread 重置（切换守卫：abort 旧 run + 快照恢复不重复）
   const [aguiEpoch, setAguiEpoch] = useState(0)
   const quickThreadRef = useRef<QuickThreadHandle>(null)
+  // EmptyState 首条 quick 消息：QuickThread 在 viewState==='empty' 时未挂载（ref=null），
+  // 直接 send 会静默丢弃（Task 4 E2E 发现）。先排队，视图切到聊天、Thread 挂载后补发。
+  const [pendingQuickMessage, setPendingQuickMessage] = useState<string | null>(null)
   // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
   const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
   // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
@@ -411,6 +414,7 @@ export default function App() {
       setAguiEpoch(e => e + 1)
       setQuickActive(false)
       setQuickRunning(false)
+      setPendingQuickMessage(null)
     }
     store.switchSession(sessionId)
     setAndPersistSession(sessionId)
@@ -487,6 +491,7 @@ export default function App() {
     setAguiEpoch(e => e + 1)
     setQuickActive(false)
     setQuickRunning(false)
+    setPendingQuickMessage(null)
     // 断开当前会话的本地 SSE 订阅（不调后端 cancel，后台任务继续运行）
     // delta spec Task 5.3：新建分析仅断开本地订阅
     store.switchSession(null)
@@ -551,9 +556,24 @@ export default function App() {
       showWarning('该会话正在生成中，可停止后再发')
       return
     }
+    if (!quickThreadRef.current) {
+      // EmptyState 首发：QuickThread 未挂载，排队待挂载后补发（不丢首条消息）
+      setQuickActive(true)
+      setPendingQuickMessage(message)
+      return
+    }
     setQuickActive(true)
-    quickThreadRef.current?.send(message)
+    quickThreadRef.current.send(message)
   }
+
+  // 排队的首条 quick 消息：QuickThread 挂载（视图切换渲染完成）后立即补发
+  useEffect(() => {
+    if (pendingQuickMessage === null) return
+    if (!quickThreadRef.current) return // 等待 QuickThread 挂载
+    const message = pendingQuickMessage
+    setPendingQuickMessage(null)
+    quickThreadRef.current.send(message)
+  }, [pendingQuickMessage])
 
   const handleSendFromEmpty = (text: string, sendMode: string = 'deep') => {
     const query = text.trim()
@@ -787,6 +807,7 @@ export default function App() {
                   ref={quickThreadRef}
                   apiKey={apiKey}
                   llmConfig={buildLlmConfigPayload(llmConfig)}
+                  sessionId={currentSessionId}
                   onSessionCreated={handleAguiSessionCreated}
                   onRunFinished={handleAguiRunFinished}
                   onRunningChange={setQuickRunning}

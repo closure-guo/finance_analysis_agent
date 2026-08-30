@@ -238,4 +238,39 @@ describe('QuickThread 切换守卫与历史恢复（Task 3b）', () => {
       expect(screen.getByText(/HTTP 409/)).toBeInTheDocument()
     })
   })
+
+  it('App 级：EmptyState 首条 quick 消息不丢失（Thread 挂载后补发 AG-UI run）', async () => {
+    // Task 4 E2E 发现的回归：EmptyState 下 QuickThread 尚未挂载（ref=null），
+    // quickChat 直接 ref.send() 会静默丢弃首条消息（视图切到聊天但 Thread 全空）。
+    const agui = makeAguiHandler('hold')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url === '/api/sessions' && (!init || !init.method)) {
+        return new Response(JSON.stringify({ sessions: [] }), { status: 200 })
+      }
+      if (url === '/api/agui/quick') return agui.handler(init)
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Finance Analysis Agent')).toBeInTheDocument())
+
+    // EmptyState「模式：」下拉 → 快速模式（默认 deep，输入框占位符随之变化）
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /模式/ })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /快速模式/ })) })
+    await waitFor(() => expect(screen.getByPlaceholderText(/输入问题/)).toBeInTheDocument())
+
+    // 首条消息从 EmptyState 发出（此时 QuickThread 尚未挂载）
+    const input = screen.getByPlaceholderText(/输入问题/)
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '首页首条提问' } })
+      fireEvent.click(screen.getByTestId('send-button'))
+    })
+
+    // 修复前：视图切到聊天但请求从未发出、Thread 无用户气泡
+    await waitFor(() => expect(agui.requests.length).toBe(1), { timeout: 5_000 })
+    await waitFor(() => expect(screen.getByTestId('agui-user-message')).toBeInTheDocument())
+    expect(screen.getByTestId('agui-user-message')).toHaveTextContent('首页首条提问')
+  })
 })
