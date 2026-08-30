@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { toast } from 'sonner'
 import type { ExportFileInfo, DownloadType } from '../../types'
@@ -70,20 +70,18 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
   const visibleFiles = useMemo(() => filtered.slice(0, renderLimit), [filtered, renderLimit])
   const remainingCount = filtered.length - visibleFiles.length
 
-  // 滚动到底部自动加载下一页（IntersectionObserver 监听哨兵行）；
-  // 环境无 IntersectionObserver（如 jsdom）时跳过，「加载更多」按钮兜底
-  const sentinelRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const el = sentinelRef.current
-    if (!el || remainingCount <= 0 || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(e => e.isIntersecting)) {
+  // 滚动到底部附近自动加载下一页（经典 scroll 监听，所有环境可靠；
+  // 「加载更多」按钮保留为兜底入口）
+  const handleListScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (remainingCount <= 0) return
+      const el = e.currentTarget
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300) {
         setRenderLimit(limit => limit + PAGE_SIZE)
       }
-    }, { rootMargin: '200px' })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [remainingCount, visibleFiles.length])
+    },
+    [remainingCount],
+  )
 
   const handleDownload = (f: ExportFileInfo) => {
     setDownloading(f.file_name)
@@ -156,7 +154,7 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
       </div>
 
       {/* 列表区（内部滚动） */}
-      <div className="flex-1 overflow-y-auto" style={{ background: 'var(--background)' }}>
+      <div className="flex-1 overflow-y-auto" onScroll={handleListScroll} style={{ background: 'var(--background)' }}>
         {error ? (
           <div data-testid="downloads-error" className="flex flex-col items-center justify-center py-24 gap-3">
             <i className="fas fa-triangle-exclamation text-2xl text-destructive"></i>
@@ -205,9 +203,9 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
             </AnimatePresence>
           </motion.ul>
         )}
-        {/* 增量加载哨兵：进入视口自动加载下一页；剩余数 > 0 时常驻便于点击 */}
+        {/* 加载更多：剩余数 > 0 时显示（滚动到底也会自动加载，此为兜底入口） */}
         {!error && files !== null && remainingCount > 0 && (
-          <div ref={sentinelRef} className="flex justify-center py-4">
+          <div className="flex justify-center py-4">
             <Button
               data-testid="load-more"
               variant="ghost"
