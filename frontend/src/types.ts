@@ -385,3 +385,14 @@ export interface UIMessage {
   // 管线模式：按 node 分组的时序（key 为 thinking_token 事件的 node 字段，如 bull_debater）
   nodeTimelines?: Record<string, TimelineItem[]>
 }
+
+// 导出文件元信息（add-download-center：GET /api/files 返回项）
+export interface ExportFileInfo {
+  file_name: string
+  file_type: DownloadType
+  size_bytes: number
+  created_at: number
+}
+
+// 下载中心类型筛选（'all' 为全部）
+export type DownloadType = 'docx' | 'pptx' | 'pdf' | 'md'

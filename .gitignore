@@ -24,6 +24,9 @@ lib/
 lib64/
 # 前端 shadcn 原语依赖 frontend/src/lib/utils.ts，上面的 lib/ 是 Python 构建产物规则，不适用于前端源码
 !frontend/src/lib/
+# 下载管理页前端源码目录与上面的 downloads/（Python 构建产物）规则重名，不适用于前端源码
+!frontend/src/pages/downloads/
+!frontend/src/test/downloads/
 parts/
 sdist/
 var/

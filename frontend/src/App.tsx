@@ -12,6 +12,8 @@ import { buildLayerTree } from './pipelineTree'
 import { PipelineTimeline } from './PipelineTimeline'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 import { useClickOutside } from './useClickOutside'
+import { usePathname, navigate } from './route'
+import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import { Toaster } from './components/ui/sonner'
@@ -245,6 +247,8 @@ export default function App() {
     setCurrentSessionId(id)
   }, [])
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // 下载中心路由（add-download-center）：/downloads 直达/刷新时主区域渲染下载管理页
+  const pathname = usePathname()
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
   // 临时警告提示（如"该会话正在生成中"）
   const [warningMessage, setWarningMessage] = useState<string | null>(null)
@@ -656,11 +660,14 @@ export default function App() {
         onNew={newAnalysis}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
+        onOpenDownloads={() => navigate('/downloads')}
         runningSessionIds={runningSessionIds}
         loading={!sessionsLoaded}
       />
       <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
-        {bootRestoring && appState === 'empty' ? (
+        {pathname === '/downloads' ? (
+          <DownloadCenter onBack={() => navigate('/')} />
+        ) : bootRestoring && appState === 'empty' ? (
           // 刷新恢复中：有持久化会话但尚未重建消息，显示恢复指示而非闪首页空态
           <div data-testid="restoring-state" className="flex flex-col items-center justify-center h-screen gap-3">
             <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
@@ -817,7 +824,7 @@ export default function App() {
 }
 
 // ── Sidebar ──
-function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, runningSessionIds, loading = false }: {
+function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, onOpenDownloads, runningSessionIds, loading = false }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
@@ -826,6 +833,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   onNew: () => void
   isOpen: boolean
   onToggle: () => void
+  onOpenDownloads: () => void
   runningSessionIds: Set<string>
   loading?: boolean
 }) {
@@ -842,7 +850,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
   if (!isOpen) {
     return (
       <div className="fixed left-0 top-0 bottom-0 w-12 flex flex-col items-center py-4 z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
-        <Button variant="ghost" size="icon" onClick={onToggle}>
+        <Button variant="ghost" size="icon" onClick={onToggle} aria-label="展开侧边栏">
           <i className="fas fa-bars"></i>
         </Button>
       </div>
@@ -961,6 +969,19 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
             </div>
           ))
         )}
+      </div>
+
+      {/* 下载管理入口（add-download-center）：底部固定区 */}
+      <div className="p-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
+        <Button
+          variant="ghost"
+          onClick={onOpenDownloads}
+          data-testid="sidebar-downloads"
+          className="w-full justify-start text-sm text-secondary hover:text-foreground"
+        >
+          <i className="fas fa-download text-xs"></i>
+          下载管理
+        </Button>
       </div>
     </div>
   )
