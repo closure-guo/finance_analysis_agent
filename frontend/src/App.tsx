@@ -19,6 +19,13 @@ import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
 import { AnalysisRuntimeProvider, ThreadMessages } from './chat/AnalysisThread'
+import { SidebarProvider, Sidebar, SidebarTrigger, SidebarIcon, useSidebar } from './components/ui/sidebar'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './components/ui/dropdown-menu'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -211,6 +218,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   // 后端默认 LLM 配置（GET /api/llm-config），用作设置面板输入框 placeholder（delta 5.3）
   const [backendDefaults, setBackendDefaults] = useState<{ model: string; baseUrl: string; thinking: string }>({ model: '', baseUrl: '', thinking: 'enabled' })
+  // add-collapsible-sidebar：侧边栏折叠状态由 SidebarProvider 管理（localStorage 持久化 + Ctrl/Cmd+B）
   useEffect(() => {
     let cancelled = false
     fetch('/api/llm-config')
@@ -249,7 +257,7 @@ export default function App() {
     }
     setCurrentSessionId(id)
   }, [])
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // add-collapsible-sidebar：侧边栏折叠状态由 SidebarProvider 管理（localStorage 持久化 + Ctrl/Cmd+B）
   // 下载中心路由（add-download-center）：/downloads 直达/刷新时主区域渲染下载管理页
   const pathname = usePathname()
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
@@ -690,7 +698,7 @@ export default function App() {
   }, [appState, currentSessionId, store, stream.phase])
 
   // ── Render ──
-  const leftInset = sidebarOpen ? 256 : 48
+  // leftInset 由 MainContent 的 render prop 依据 SidebarProvider 状态派生
 
   // 视图状态：quick AG-UI 通道活跃（首页发起、streamStore 无消息/phase）时进入聊天视图。
   // 附加派生不改深度模式语义（quickActive 仅在 quick 发送后为 true）。
@@ -777,21 +785,20 @@ export default function App() {
   )
 
   return (
-    <>
-      <Sidebar
+    <SidebarProvider>
+      <AppSidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
         onSelect={selectSession}
         onDelete={deleteSession}
         onRename={renameSession}
         onNew={newAnalysis}
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
         onOpenDownloads={() => navigate('/downloads')}
         runningSessionIds={runningSessionIds}
         loading={!sessionsLoaded}
       />
-      <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
+      <MainContent>{(leftInset) => (
+      <div>
         {pathname === '/downloads' ? (
           <DownloadCenter onBack={() => navigate('/')} />
         ) : bootRestoring && viewState === 'empty' ? (
@@ -821,13 +828,7 @@ export default function App() {
               style={{ left: leftInset }}
             >
               <div className="flex items-center gap-3">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setSidebarOpen(!sidebarOpen)}
-                >
-                  <i className="fas fa-bars text-sm"></i>
-                </Button>
+                <SidebarMenuButton />
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
@@ -941,6 +942,7 @@ export default function App() {
             </>
         )}
       </div>
+      )}</MainContent>
 
       {/* LLM 设置面板（取代旧版仅 API Key 的弹窗） */}
       {showSettings && (
@@ -966,27 +968,29 @@ export default function App() {
 
       {/* 全局 toast 容器（shadcn/sonner 封装；仅挂载，暂无调用方） */}
       <Toaster />
-    </>
+    </SidebarProvider>
   )
 }
 
-// ── Sidebar ──
-function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, onOpenDownloads, runningSessionIds, loading = false }: {
+// ── Sidebar（add-collapsible-sidebar：shadcn Sidebar 原语重构）──
+function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, onOpenDownloads, runningSessionIds, loading = false }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onRename: (id: string, name: string) => void
   onNew: () => void
-  isOpen: boolean
-  onToggle: () => void
   onOpenDownloads: () => void
   runningSessionIds: Set<string>
   loading?: boolean
 }) {
+  const { state, setOpenMobile, toggleSidebar } = useSidebar()
+  const collapsed = state === 'collapsed'
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  // 删除二次确认（delta spec: 删除 SHALL 二次确认）
+  const [deletingSession, setDeletingSession] = useState<SessionMeta | null>(null)
 
   const filtered = sessions.filter(s =>
     (s.stock_name || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -994,30 +998,51 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
     (s.display_name || '').toLowerCase().includes(search.toLowerCase())
   )
 
-  if (!isOpen) {
+  const handleSelect = (id: string) => {
+    onSelect(id)
+    // 移动端：选中会话后抽屉自动关闭（delta spec）
+    setOpenMobile(false)
+  }
+
+  // ── 收起态图标栏 ──
+  if (collapsed) {
     return (
-      <div className="fixed left-0 top-0 bottom-0 w-12 flex flex-col items-center py-4 z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
-        <Button variant="ghost" size="icon" onClick={onToggle} aria-label="展开侧边栏">
-          <i className="fas fa-bars"></i>
-        </Button>
-      </div>
+      <Sidebar expandedRail={null} collapsedRail={
+        <div className="flex flex-col items-center py-4 gap-2 h-full">
+          <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="展开侧边栏">
+            <i className="fas fa-bars"></i>
+          </Button>
+          <SidebarIcon label="新建分析">
+            <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
+              <i className="fas fa-plus text-xs"></i>
+            </Button>
+          </SidebarIcon>
+          <div className="flex-1" />
+          <SidebarIcon label="下载管理">
+            <Button variant="ghost" size="icon" onClick={onOpenDownloads} aria-label="下载管理" data-testid="sidebar-downloads-collapsed">
+              <i className="fas fa-download text-xs"></i>
+            </Button>
+          </SidebarIcon>
+        </div>
+      } />
     )
   }
 
+  // ── 展开态（桌面）与移动端抽屉共用 ──
   return (
-    <div className="fixed left-0 top-0 bottom-0 w-64 flex flex-col z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
+    <Sidebar collapsedRail={null} expandedRail={
+      <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
         <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle}>
-          <i className="fas fa-times text-xs"></i>
-        </Button>
+        <SidebarTrigger />
       </div>
 
       {/* New analysis button */}
       <div className="p-3">
         <Button
           onClick={onNew}
+          data-testid="sidebar-new"
           className="w-full rounded-xl text-sm font-medium"
         >
           <i className="fas fa-plus text-xs"></i>
@@ -1054,7 +1079,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
           filtered.map(s => (
             <div
               key={s.session_id}
-              onClick={() => onSelect(s.session_id)}
+              onClick={() => handleSelect(s.session_id)}
               className="group relative px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1"
               style={currentSessionId === s.session_id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
               onMouseEnter={(e) => { if (currentSessionId !== s.session_id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
@@ -1100,17 +1125,32 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                     <span>{s.stock_name}</span>
                     <span>{formatSessionTime(s.created_at)}</span>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={e => {
-                      e.stopPropagation()
-                      onDelete(s.session_id)
-                    }}
-                    className="absolute right-2 top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive"
-                  >
-                    <i className="fas fa-trash text-xs"></i>
-                  </Button>
+                  {/* 会话项操作菜单（hover 出现「···」）：重命名（原地输入）/ 删除（二次确认） */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={e => e.stopPropagation()}
+                        aria-label={`会话操作 ${s.display_name}`}
+                        data-testid={`session-menu-${s.session_id}`}
+                        className="absolute right-2 top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <i className="fas fa-ellipsis-h text-xs"></i>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                      <DropdownMenuItem onClick={() => { setEditingId(s.session_id); setEditText(s.display_name) }}>
+                        <i className="fas fa-pen text-[10px] mr-1.5"></i>重命名
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => setDeletingSession(s)}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <i className="fas fa-trash text-[10px] mr-1.5"></i>删除
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
               )}
             </div>
@@ -1130,8 +1170,62 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
           下载管理
         </Button>
       </div>
+
+      {/* 删除二次确认弹窗 */}
+      <Dialog open={deletingSession !== null} onOpenChange={(o) => { if (!o) setDeletingSession(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogTitle className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>删除会话</DialogTitle>
+          <DialogDescription className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+            确定删除「{deletingSession?.display_name}」吗？删除后不可恢复。
+          </DialogDescription>
+          <div className="flex gap-2 justify-end mt-4">
+            <Button variant="secondary" size="sm" onClick={() => setDeletingSession(null)}>取消</Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              data-testid="confirm-delete"
+              onClick={() => {
+                if (deletingSession) onDelete(deletingSession.session_id)
+                setDeletingSession(null)
+              }}
+            >
+              删除
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      </div>
+    } />
+  )
+}
+
+// ── 主内容区包装：依据 SidebarProvider 状态派生左边距（200ms 过渡）──
+// render prop 注入 leftInset（fixed 定位的 header/输入栏/停止按钮使用）
+function MainContent({ children }: { children: (leftInset: number) => ReactNode }) {
+  const { state, isMobile } = useSidebar()
+  const collapsed = state === 'collapsed'
+  const leftInset = isMobile ? 0 : collapsed ? 52 : 256
+  return (
+    <div
+      className={isMobile ? '' : 'transition-[margin] duration-200 ease-out'}
+      style={isMobile ? undefined : { marginLeft: leftInset }}
+    >
+      {children(leftInset)}
     </div>
   )
+}
+
+// Header 左侧按钮：桌面=折叠触发；移动端=打开抽屉
+function SidebarMenuButton() {
+  const { isMobile, setOpenMobile } = useSidebar()
+  if (isMobile) {
+    return (
+      <Button variant="ghost" size="icon" onClick={() => setOpenMobile(true)} aria-label="打开侧边栏">
+        <i className="fas fa-bars text-sm"></i>
+      </Button>
+    )
+  }
+  return <SidebarTrigger />
 }
 
 // ── Empty State ──
