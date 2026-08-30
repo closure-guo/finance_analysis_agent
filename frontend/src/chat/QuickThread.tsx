@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import {
   AssistantRuntimeProvider,
   MessagePrimitive,
@@ -147,14 +147,17 @@ const QuickThread = forwardRef<QuickThreadHandle, QuickThreadProps>(function Qui
   })
   runtimeRef.current = runtime
 
+  // run 生命周期内部跟踪：HttpAgent.isRunning 在 abortRun 后不复位（0.0.59 实测），
+  // 守卫语义以本组件状态为准（abort 即中断，允许立即发起新 run）
+  const runningRef = useRef(false)
+  const setRunning = useCallback((v: boolean) => {
+    if (runningRef.current === v) return
+    runningRef.current = v
+    callbacksRef.current.onRunningChange?.(v)
+  }, [])
+
   // agent 事件订阅：会话创建回传 + run 生命周期（与 runtime 订阅并行，官方 Subscriber API）
   useEffect(() => {
-    let running = false
-    const setRunning = (v: boolean) => {
-      if (v === running) return
-      running = v
-      callbacksRef.current.onRunningChange?.(v)
-    }
     const sub = agent.subscribe({
       onRunStartedEvent: ({ event }) => {
         setRunning(true)
@@ -175,22 +178,53 @@ const QuickThread = forwardRef<QuickThreadHandle, QuickThreadProps>(function Qui
       },
     })
     return () => sub.unsubscribe()
-  }, [agent])
+  }, [agent, setRunning])
 
   useImperativeHandle(
     ref,
     () => ({
       send: (message: string) => {
         try {
-          runtimeRef.current?.thread.append(message)
+          // 经 core 层 append（返回原始 Promise task）以便捕获失败（断连/HTTP 错误已由
+          // runtime onError 上报）。公开 facade thread.append 内部对非 MessageNotSentError
+          // 重新抛出且无人接住，会产生 unhandled rejection（0.15.17 实测）。
+          // __internal_threadBinding 在 0.15.17 存在；缺失时回退公开 facade。
+          type AppendState = {
+            append: (msg: unknown) => Promise<void>
+            messages: ReadonlyArray<{ id: string }>
+          }
+          const thread = runtimeRef.current?.thread as unknown as {
+            __internal_threadBinding?: { getState: () => AppendState }
+            append?: (message: string) => void
+          }
+          const state = thread?.__internal_threadBinding?.getState()
+          if (state) {
+            const task = state.append({
+              createdAt: new Date(),
+              parentId: null,
+              sourceId: null,
+              runConfig: {},
+              role: 'user',
+              content: [{ type: 'text', text: message }],
+              startRun: true,
+            })
+            void Promise.resolve(task).catch(() => {
+              // 失败已经 runtime onError 上报，兜底吞掉
+            })
+          } else {
+            thread?.append?.(message)
+          }
         } catch {
-          // 发送失败（断连等）：错误已经 runtime onError 上报，这里兜底不再抛出
+          // 同步抛出同样由 runtime onError 上报，这里兜底不再抛出
         }
       },
-      abort: () => agent.abortRun(),
-      isRunning: () => agent.isRunning,
+      abort: () => {
+        agent.abortRun()
+        setRunning(false)
+      },
+      isRunning: () => runningRef.current,
     }),
-    [agent],
+    [agent, setRunning],
   )
 
   return (
