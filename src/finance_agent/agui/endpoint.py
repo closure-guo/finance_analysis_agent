@@ -1,0 +1,315 @@
+"""POST /api/agui/quick：AG-UI 协议 quick 模式对话端点（add-assistant-ui-thread PoC）。
+
+双轨隔离（调研 §2.3）：生成任务由请求内联驱动（StreamingResponse 生成器直接消费
+agent.run() → translate_to_agui → EventEncoder SSE），不经过 StreamRegistry /
+journal——移除本路由后深度模式与现有 /api/chat 通道零影响。
+
+对接点（调研 §3.1）：
+- build_agent(mode="quick")：TESTING=1 时与现有通道同一 stub 注入路径；
+- Langfuse react_loop span 等价保留（ADR-0015）；
+- 落库等价 _ChatCollector：user 消息任务内 append_chat，assistant 以 AG-UI 事件
+  累积（TEXT_MESSAGE_CONTENT → response 等），终态/异常/中断三路落库 +
+  update_session_status（completed/failed/interrupted）；
+- 客户端断开（abortRun/关页）→ CancelledError → 中断落库。
+
+取消路径 PoC 限制：/api/sessions/{id}/cancel 经 registry 取消 registry 任务，
+本通道任务不在 registry 中（隔离要求），取消由前端 HttpAgent.abortRun() 断开
+连接触发服务端中断路径；挂入 cancel 端点需改 api.py（本任务硬约束禁止）。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import uuid
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import nullcontext
+from typing import Any
+
+from ag_ui.core.events import (
+    BaseEvent,
+    ReasoningMessageContentEvent,
+    RunErrorEvent,
+    TextMessageContentEvent,
+    ToolCallArgsEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
+)
+from ag_ui.encoder import EventEncoder
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
+
+from finance_agent import session_store
+from finance_agent.agui.translator import translate_to_agui
+
+_logger = logging.getLogger("finance_agent.agui.endpoint")
+
+router = APIRouter()
+
+# SSE 响应统一头（与 api._SSE_HEADERS 同款：禁缓存、禁代理缓冲）
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+_HEARTBEAT_INTERVAL = 10.0  # 秒，与现有通道一致
+_TOOL_RESULT_MAX = 150  # tool result_text 截断长度（等价 _summarize_tool_result）
+
+
+class _AguiMessage(BaseModel):
+    """AG-UI Message 子集（camelCase 兼容 HttpAgent 线上格式）。"""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+
+    id: str | None = None
+    role: str
+    content: str = ""
+
+
+class _RunAgentInputBody(BaseModel):
+    """AG-UI RunAgentInput 兼容请求体。
+
+    官方 RunAgentInput 的 thread_id 必填，本端点 PoC 允许为空——为空则服务端
+    create_chat_session 新建会话，thread_id 经 RUN_STARTED 回传（实施计划 Task 2）。
+    extra="allow" 容忍 state/tools/context 等官方字段直通。
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+
+    thread_id: str | None = None
+    run_id: str | None = None
+    messages: list[_AguiMessage] = Field(default_factory=list)
+    forwarded_props: Any = None
+
+
+class _AguiCollector:
+    """从 AG-UI 事件流累积 assistant 回复/思考/工具调用，用于落库。
+
+    等价 api._ChatCollector（分块拼接 == 落库全文的挂钩点，调研 §2.3）：
+    仅收翻译后的官方事件，response 只累积 TEXT_MESSAGE_CONTENT delta。
+    """
+
+    def __init__(self) -> None:
+        self.response: str = ""
+        self.thinking: str = ""
+        self.tool_calls: list[dict] = []
+        self.saw_error: bool = False
+        self.error_message: str = ""
+        # AG-UI tool_call_id -> self.tool_calls 索引（ARGS/RESULT 回查）
+        self._tool_index: dict[str, int] = {}
+
+    def feed(self, event: BaseEvent) -> None:
+        if isinstance(event, TextMessageContentEvent):
+            self.response += event.delta
+        elif isinstance(event, ReasoningMessageContentEvent):
+            self.thinking += event.delta
+        elif isinstance(event, ToolCallStartEvent):
+            self._tool_index[event.tool_call_id] = len(self.tool_calls)
+            self.tool_calls.append(
+                {
+                    "name": event.tool_call_name,
+                    "args": {},
+                    "result_text": "",
+                    "done": False,
+                }
+            )
+        elif isinstance(event, ToolCallArgsEvent):
+            idx = self._tool_index.get(event.tool_call_id)
+            if idx is not None:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    self.tool_calls[idx]["args"] = json.loads(event.delta)
+        elif isinstance(event, ToolCallResultEvent):
+            idx = self._tool_index.get(event.tool_call_id)
+            if idx is not None:
+                self.tool_calls[idx]["result_text"] = event.content[:_TOOL_RESULT_MAX]
+                self.tool_calls[idx]["done"] = True
+        elif isinstance(event, RunErrorEvent):
+            self.saw_error = True
+            self.error_message = event.message
+
+
+def _upsert_assistant_chat(session_id: str, collector: _AguiCollector) -> None:
+    """collector 内容 upsert 到 chat_history（等价 api._upsert_assistant_chat）。"""
+    response = collector.response.strip()
+    thinking = collector.thinking.strip() or None
+    tool_calls = collector.tool_calls or None
+    if not (response or thinking or tool_calls):
+        return
+    session_store.upsert_chat(
+        session_id,
+        "assistant",
+        response,
+        thinking=thinking,
+        tool_calls=tool_calls,
+    )
+
+
+def _persist_interrupted(session_id: str, collector: _AguiCollector) -> None:
+    """中断兜底持久化（等价 api._persist_interrupted）：不出现悬空 user 消息。"""
+    if collector.response.strip():
+        collector.response += "\n\n[输出中断]"
+    else:
+        collector.response = "[输出中断]"
+    _upsert_assistant_chat(session_id, collector)
+
+
+async def _next_event(gen: AsyncIterator[BaseEvent]) -> BaseEvent:
+    """包装 __anext__ 为协程函数（asyncio.create_task 需要协程而非 Awaitable）。"""
+    return await gen.__anext__()
+
+
+async def _aclose(gen: Any) -> None:
+    """尽力关闭异步生成器（等价 stream_agent_to_sse finally 清理）。
+
+    gen 参数弱类型：Agent.run 与 translate_to_agui 的声明返回类型为
+    AsyncIterator，aclose 仅存在于运行时的异步生成器对象上。
+    """
+    with contextlib.suppress(Exception):
+        await gen.aclose()
+
+
+async def _agui_run_stream(
+    thread_id: str,
+    run_id: str,
+    user_message: str,
+    api_key: str | None,
+    encoder: EventEncoder,
+) -> AsyncGenerator[str, None]:
+    """内联驱动一次 quick run：落库 user → agent.run() → 翻译 → SSE，三路落库。"""
+    from finance_agent.agent_factory import build_agent
+
+    collector = _AguiCollector()
+    try:
+        # user 消息任务内落库（调研 §3.1：409/single-flight 语义不适用于本通道）
+        await asyncio.to_thread(session_store.append_chat, thread_id, "user", user_message)
+        await asyncio.to_thread(session_store.update_session_status, thread_id, "running")
+
+        agent = build_agent(mode="quick", api_key=api_key, session_id=thread_id)
+
+        # ADR-0015：Langfuse react_loop span 等价保留（调研 §3.1）
+        from finance_agent.langfuse_tracing import get_langfuse
+
+        lf = get_langfuse()
+        react_cm: contextlib.AbstractContextManager[Any] = nullcontext()
+        propagate_cm: contextlib.AbstractContextManager[Any] = nullcontext()
+        react_obs: Any = None
+        if lf is not None:
+            react_cm = lf.start_as_current_observation(
+                as_type="span", name="react_loop", input={"query": user_message}
+            )
+            try:
+                from langfuse import propagate_attributes
+
+                propagate_cm = propagate_attributes(session_id=thread_id)
+            except Exception:  # noqa: S110
+                pass
+        react_obs = react_cm.__enter__()
+        propagate_cm.__enter__()
+
+        agent_gen = agent.run(user_message)
+        agui_events = translate_to_agui(agent_gen, thread_id=thread_id, run_id=run_id)
+        next_task: asyncio.Task[BaseEvent] = asyncio.create_task(_next_event(agui_events))
+        try:
+            while True:
+                done, _ = await asyncio.wait({next_task}, timeout=_HEARTBEAT_INTERVAL)
+                if not done:
+                    # 空闲心跳：SSE 注释行（映射表 #15，非协议事件）
+                    yield ": heartbeat\n\n"
+                    continue
+                try:
+                    event = next_task.result()
+                except StopAsyncIteration:
+                    break
+                collector.feed(event)
+                yield encoder.encode(event)
+                next_task = asyncio.create_task(_next_event(agui_events))
+        finally:
+            if not next_task.done():
+                next_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await next_task
+            with contextlib.suppress(Exception):
+                await _aclose(agent_gen)
+            with contextlib.suppress(Exception):
+                await _aclose(agui_events)
+            if react_obs is not None and collector.response:
+                with contextlib.suppress(Exception):
+                    react_obs.update(output={"answer": collector.response})
+            with contextlib.suppress(Exception):
+                propagate_cm.__exit__(None, None, None)
+                react_cm.__exit__(None, None, None)
+
+        if collector.saw_error:
+            # ERROR → RUN_ERROR 路径：部分内容落库 + failed（不落库成功回复）
+            await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+            await asyncio.to_thread(
+                session_store.update_session_status,
+                thread_id,
+                "failed",
+                failure_reason=collector.error_message or "agent error",
+            )
+        else:
+            # 正常完成：RUN_FINISHED 前落库 + completed
+            await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+            await asyncio.to_thread(session_store.update_session_status, thread_id, "completed")
+    except asyncio.CancelledError:
+        # 客户端断开/取消：中断落库 + interrupted（RunAgent abortRun 语义）
+        await asyncio.to_thread(_persist_interrupted, thread_id, collector)
+        await asyncio.to_thread(session_store.update_session_status, thread_id, "interrupted")
+        raise
+    except Exception as exc:
+        # agent.run() 自身异常（真 LLM 失败等）：RUN_ERROR 终止 + failed
+        _logger.exception("AG-UI run 异常 session=%s", thread_id)
+        collector.saw_error = True
+        collector.error_message = f"{type(exc).__name__}: {exc}"
+        await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+        await asyncio.to_thread(
+            session_store.update_session_status,
+            thread_id,
+            "failed",
+            failure_reason=collector.error_message,
+        )
+        yield encoder.encode(RunErrorEvent(message=str(exc)))
+
+
+@router.post("/api/agui/quick")
+async def agui_quick(req: _RunAgentInputBody):
+    """AG-UI 协议 quick 模式对话端点。
+
+    接受 RunAgentInput（thread_id 可空——为空则新建会话，thread_id 从
+    RUN_STARTED 回传），以 SSE 返回 EventEncoder 编码的标准 AG-UI 事件流。
+    """
+    user_message = next(
+        (m.content for m in reversed(req.messages) if m.role == "user" and m.content),
+        "",
+    )
+    if not user_message:
+        raise HTTPException(status_code=422, detail="messages must contain a user message")
+
+    thread_id = (req.thread_id or "").strip()
+    if thread_id:
+        session = await asyncio.to_thread(session_store.get_session, thread_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+    else:
+        display_name = user_message.strip()[:30] or "快速问答"
+        thread_id = await asyncio.to_thread(session_store.create_chat_session, display_name)
+
+    api_key: str | None = None
+    if isinstance(req.forwarded_props, dict):
+        key = req.forwarded_props.get("apiKey")
+        if isinstance(key, str) and key.startswith("sk-"):
+            api_key = key
+
+    run_id = req.run_id or uuid.uuid4().hex
+    encoder = EventEncoder()
+    return StreamingResponse(
+        _agui_run_stream(thread_id, run_id, user_message, api_key, encoder),
+        media_type=encoder.get_content_type(),
+        headers=_SSE_HEADERS,
+    )

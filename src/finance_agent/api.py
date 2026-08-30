@@ -2041,6 +2041,12 @@ def _now() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
 
 
+# ── AG-UI 协议通道（add-assistant-ui-thread PoC，双轨隔离：仅挂载，不接入 registry）──
+from finance_agent.agui.endpoint import router as agui_router  # noqa: E402
+
+app.include_router(agui_router)
+
+
 if __name__ == "__main__":
     import uvicorn
 
