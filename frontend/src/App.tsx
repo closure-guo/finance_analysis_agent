@@ -731,6 +731,19 @@ export default function App() {
     store.isSessionRunning(currentSessionId ?? '') ||
     messages.some((m) => m.streaming) || quickRunning
 
+  // 消息 hover「重新生成」：定位该 assistant 消息前驱最近的 user 查询并重提交
+  // （运行中拦截由 handleComposerSubmit → startAnalysis/quickChat 守卫兜底）
+  const handleRegenerate = (messageId: string) => {
+    const idx = visibleMessages.findIndex((m) => m.id === messageId)
+    for (let i = idx - 1; i >= 0; i--) {
+      const m = visibleMessages[i]
+      if (m.type === 'user' && m.content.trim()) {
+        handleComposerSubmit(m.content)
+        return
+      }
+    }
+  }
+
   // Composer 插槽：assistant-ui 输入区（Enter 发送 / Shift+Enter 换行 / 空禁用发送）
   const composerInput = (
     <ComposerPrimitive.Input
@@ -844,6 +857,7 @@ export default function App() {
             >
               <div className="fixed top-0 bottom-0 right-0" style={{ left: leftInset }}>
                 <ThreadMessages
+                  onRegenerate={handleRegenerate}
                   footer={
                     <>
                       {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}

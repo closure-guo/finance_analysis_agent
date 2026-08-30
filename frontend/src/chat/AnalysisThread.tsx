@@ -13,7 +13,7 @@
 //
 // 测试 DOM 契约（既有测试无修改通过）：chat 消息容器 data-testid="stream-output"
 // （含思考/工具横幅与正文）；流式光标 data-testid="stream-status"。
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   AssistantRuntimeProvider,
   MessagePrimitive,
@@ -160,18 +160,72 @@ const UserMessage = () => (
   </div>
 )
 
+// 消息 hover 操作（delta spec: 消息操作与独有部件）：复制 / 重新生成。
+// JS 条件渲染（hover 才挂载）——既满足 hover 显示语义，又保持既有测试的
+// button 计数契约（未 hover 时 DOM 无额外按钮）。
+function MessageActions({ text, onRegenerate }: { text: string; onRegenerate: () => void }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="flex items-center gap-1 mt-1" data-testid="message-actions">
+      <button
+        onClick={() => {
+          void navigator.clipboard?.writeText(text).then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          }).catch(() => {})
+        }}
+        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors"
+        style={{ color: 'var(--text-tertiary)', background: 'var(--bg-overlay-l1)' }}
+      >
+        <i className={`fas ${copied ? 'fa-check' : 'fa-copy'} text-[10px]`}></i>
+        {copied ? '已复制' : '复制'}
+      </button>
+      <button
+        onClick={onRegenerate}
+        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors"
+        style={{ color: 'var(--text-tertiary)', background: 'var(--bg-overlay-l1)' }}
+      >
+        <i className="fas fa-redo text-[10px]"></i>
+        重新生成
+      </button>
+    </div>
+  )
+}
+
+// 模块级桥：App 的重新生成回调（ThreadMessages 渲染时更新，AssistantMessage 读取）
+let regenerateHandler: ((messageId: string) => void) | null = null
+
 const AssistantMessage = () => {
   // 消息形态标记（adapter metadata.custom.kind）
   const kind = useAuiState((s) => s.message.metadata?.custom?.kind as string | undefined)
+  const messageId = useAuiState((s) => s.message.id)
+  const isRunning = useAuiState((s) => s.thread.isRunning)
+  const messageText = useAuiState((s) => {
+    const c = s.message.content
+    return Array.isArray(c) ? c.map((p) => (p.type === 'text' ? p.text : '')).join('') : ''
+  })
+  const [hovered, setHovered] = useState(false)
   if (kind === 'chat') {
     // chat 消息容器：思考/工具横幅与正文同容器（stream-output 测试契约）
     return (
-      <div className="flex justify-start animate-slide-in" data-testid="stream-output">
+      <div
+        className="flex justify-start animate-slide-in"
+        data-testid="stream-output"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
             <AssistantAvatar />
             <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-secondary)' }}>
               <MessagePrimitive.Parts components={chatPartsComponents} />
+              {/* hover 操作：流式中不显示（生成中的消息无复制/重生语义） */}
+              {hovered && !isRunning && (
+                <MessageActions
+                  text={messageText}
+                  onRegenerate={() => regenerateHandler?.(messageId)}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -226,10 +280,13 @@ export function AnalysisRuntimeProvider({ messages, isRunning, onSubmit, onCance
 export interface ThreadMessagesProps {
   /** 视口尾部附加内容（会话级导出横幅、quick 通道 Thread） */
   footer?: ReactNode
+  /** 消息 hover「重新生成」回调（App 按消息定位前驱 user 查询重提交） */
+  onRegenerate?: (messageId: string) => void
 }
 
 // 消息区：Viewport autoScroll 提供流式跟随/上翻暂停/回底恢复（delta spec）
-export function ThreadMessages({ footer }: ThreadMessagesProps) {
+export function ThreadMessages({ footer, onRegenerate }: ThreadMessagesProps) {
+  regenerateHandler = onRegenerate ?? null
   return (
     <ThreadPrimitive.Root className="h-full">
       <ThreadPrimitive.Viewport autoScroll className="h-full overflow-y-auto">
