@@ -184,6 +184,50 @@ async def test_tool_call_result_id_consistency() -> None:
     assert result_ev.content == "搜索结果文本"
 
 
+@pytest.mark.asyncio
+async def test_text_then_tool_call_then_answer_reopens_segment() -> None:
+    """ReAct 第二轮：文本段开着时调工具，须正确闭段且第二轮开新文本段。
+
+    回归测试（线上 AGUIError "No active text message found"）：_close_event
+    此前不重置段状态，TOOL_CALL 后 seg.kind 残留 "text"，导致同一 message_id
+    的 TEXT_MESSAGE_END 重复下发、第二轮 ANSWER delta 误挂到已关闭消息上。
+    """
+    call = ToolCallRequest(id="tc-1", name="web_search", arguments={"query": "财经新闻"})
+    result = ToolResult(tool_call_id="tc-1", name="web_search", output="搜索结果")
+    events = await _translate(
+        StreamEvent.answer("我先搜索一下。"),
+        StreamEvent.for_tool_call(call),
+        StreamEvent.for_tool_result(result),
+        StreamEvent.answer("总结如下。"),
+    )
+    types = _types(events)
+    # 每个消息 id：START 恰一次、END 恰一次且在 START 之后
+    starts = [e for e in events if isinstance(e, TextMessageStartEvent)]
+    ends = [e for e in events if e.type == EventType.TEXT_MESSAGE_END]
+    start_ids = [e.message_id for e in starts]
+    end_ids = [e.message_id for e in ends]
+    assert len(start_ids) == len(set(start_ids)), "message_id 不得重复 START"
+    assert start_ids == end_ids, "每个 START 恰好对应一个同 id 的 END"
+    # 第一段在 TOOL_CALL_START 之前闭合
+    first_end_idx = types.index(EventType.TEXT_MESSAGE_END)
+    tool_start_idx = types.index(EventType.TOOL_CALL_START)
+    assert first_end_idx < tool_start_idx
+    # 完整序列
+    assert types == [
+        EventType.RUN_STARTED,
+        EventType.TEXT_MESSAGE_START,
+        EventType.TEXT_MESSAGE_CONTENT,
+        EventType.TEXT_MESSAGE_END,
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_ARGS,
+        EventType.TOOL_CALL_RESULT,
+        EventType.TEXT_MESSAGE_START,
+        EventType.TEXT_MESSAGE_CONTENT,
+        EventType.TEXT_MESSAGE_END,
+        EventType.RUN_FINISHED,
+    ]
+
+
 # ── #12：ERROR → RUN_ERROR ──
 
 
