@@ -19,6 +19,9 @@ export default defineConfig({
     'pipeline-eta-banner.spec.ts',
     'pipeline-hierarchical-timeline.spec.ts',
     'resume-pipeline-across-sessions.spec.ts',
+    // AG-UI quick 通道带工具调用 run 依赖 STUB_SCENARIO=tool_call 的后端（8001/5174），
+    // 由 playwright.timeline.config.ts 运行，默认 config 的 stub 无工具场景，故排除
+    'agui-toolcall.spec.ts',
     // 报告导出抽屉依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175），
     // 由 playwright.timeline.config.ts 运行，默认 config 无此后端，故排除
     'report-export.spec.ts',
