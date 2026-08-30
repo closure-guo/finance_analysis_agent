@@ -96,8 +96,10 @@ TESTING: bool = os.getenv("TESTING") == "1"
 
 graph = build_5layer_graph()
 
-REPORTS_DIR = Path("reports")
-REPORTS_DIR.mkdir(exist_ok=True)
+# REPORTS_DIR 支持环境变量覆盖（与 export/service.py 一致）：E2E 门禁 webServer
+# 注入 REPORTS_DIR=<tmp 目录> 实现测试隔离，避免 /api/files 扫描生产 reports/
+REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "reports"))
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 导出文件格式白名单（add-download-center）：列表/下载/删除三类文件接口共用
 EXPORT_EXTENSIONS = {".docx", ".pptx", ".pdf", ".md"}

@@ -60,3 +60,25 @@ def test_path_traversal_rejected(monkeypatch, tmp_path):
     for url in ("/api/files/..%2F..%2F.env", "/api/files/%2e%2e%2fsecret.md"):
         assert c.delete(url).status_code in (400, 404)
         assert c.get(url).status_code in (400, 404)
+
+
+def test_reports_dir_honors_env_override(tmp_path, monkeypatch):
+    """api 模块的 REPORTS_DIR 应尊重环境变量（与 export/service.py 一致）。
+
+    E2E 门禁（playwright.config.ts webServer）注入 REPORTS_DIR=<tmp 目录> 实现
+    测试隔离；此前 api.py 硬编码 Path("reports") 导致 /api/files 扫描生产目录。
+    """
+    import importlib
+
+    import finance_agent.api as api_module
+
+    env_dir = tmp_path / "env-reports"
+    monkeypatch.setenv("REPORTS_DIR", str(env_dir))
+    importlib.reload(api_module)
+    try:
+        assert env_dir == api_module.REPORTS_DIR
+        client = TestClient(api_module.app)
+        assert client.get("/api/files").json() == []
+    finally:
+        monkeypatch.undo()
+        importlib.reload(api_module)
