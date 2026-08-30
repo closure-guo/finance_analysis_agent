@@ -25,17 +25,17 @@ test.describe('add-download-center: 下载管理页', () => {
     const entry = page.getByTestId('sidebar-downloads')
     await expect(entry).toBeVisible()
     await entry.click()
-    await expect(page).toHaveURL('http://localhost:5173/downloads')
+    await expect(page).toHaveURL(/\/downloads$/)
     await expect(page.getByTestId('download-center')).toBeVisible()
   })
 
   test('直达 /downloads 渲染下载管理页（刷新保持路由语义）', async ({ page }) => {
     await page.goto('/downloads')
-    await expect(page).toHaveURL('http://localhost:5173/downloads')
+    await expect(page).toHaveURL(/\/downloads$/)
     await expect(page.getByTestId('download-center')).toBeVisible()
     // 刷新（vite dev 下由 SPA fallback 提供 index.html）后仍停留在下载管理页
     await page.reload()
-    await expect(page).toHaveURL('http://localhost:5173/downloads')
+    await expect(page).toHaveURL(/\/downloads$/)
     await expect(page.getByTestId('download-center')).toBeVisible()
   })
 
@@ -62,7 +62,7 @@ test.describe('add-download-center: 下载管理页', () => {
     }
     expect(visible, '轮询 6 次后空态仍未出现：/api/files 在全量套件负载下持续无响应窗口').toBe(true)
     await empty.getByRole('button', { name: '返回聊天' }).click()
-    await expect(page).toHaveURL('http://localhost:5173/')
+    await expect(page).toHaveURL(/\/$/)
     // 会话页 EmptyState 特征：标题与输入框
     await expect(page.getByRole('heading', { name: 'Finance Analysis Agent' })).toBeVisible()
   })

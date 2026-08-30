@@ -3,6 +3,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { toast } from 'sonner'
 import type { ExportFileInfo, DownloadType } from '../../types'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import { Input } from '../../components/ui/input'
+import { Button } from '../../components/ui/button'
 import { FileRow } from './FileRow'
 
 const TYPE_TABS: { key: DownloadType | 'all'; label: string }[] = [
@@ -22,6 +24,14 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
   const [pendingDelete, setPendingDelete] = useState<ExportFileInfo | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
   const reduced = useReducedMotion()
+  // 列表数据首次就绪后置 true：入场 stagger 只在列表首挂载播一次，
+  // 此后新挂载行（筛选切回/回滚）initial=false 不再重播入场动画。
+  // 注意不能在组件 mount 的 effect 里翻转——首帧还是骨架屏，行要等 fetch 完成才挂载，
+  // 若那时 entered 已为 true，首挂载 stagger 同样会被吞掉。
+  const [entered, setEntered] = useState(false)
+  useEffect(() => {
+    if (files !== null) setEntered(true)
+  }, [files])
 
   const load = useCallback(async () => {
     setError(false)
@@ -49,7 +59,6 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
   )
 
   const handleDownload = (f: ExportFileInfo) => {
-    if (downloading) return
     setDownloading(f.file_name)
     const a = document.createElement('a')
     a.href = `/api/files/${encodeURIComponent(f.file_name)}`
@@ -94,13 +103,13 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
         <p className="text-xs text-muted-foreground mt-1">管理已生成的报告导出文件（docx / pptx / pdf / md）</p>
         {/* 搜索 + 类型筛选（叠加过滤） */}
         <div className="flex items-center gap-3 mt-3">
-          <input
+          <Input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="搜索文件..."
             data-testid="downloads-search"
-            className="h-8 flex-1 max-w-xs rounded-md border border-input bg-background px-3 text-xs outline-none focus:ring-1 focus:ring-ring"
+            className="h-8 flex-1 max-w-xs text-xs motion-reduce:transition-none"
           />
           <div className="flex items-center gap-1" data-testid="downloads-tabs">
             {TYPE_TABS.map(t => (
@@ -108,7 +117,7 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
                 key={t.key}
                 data-testid={`filter-tab-${t.key}`}
                 onClick={() => setTab(t.key)}
-                className={`px-3 h-7 rounded-full text-xs transition-colors ${
+                className={`px-3 h-7 rounded-full text-xs transition-colors motion-reduce:transition-none ${
                   tab === t.key ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted'
                 }`}
               >
@@ -125,21 +134,18 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
           <div data-testid="downloads-error" className="flex flex-col items-center justify-center py-24 gap-3">
             <i className="fas fa-triangle-exclamation text-2xl text-destructive"></i>
             <p className="text-sm text-muted-foreground">文件列表加载失败</p>
-            <button
-              onClick={load}
-              className="px-3 h-8 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
+            <Button onClick={load} variant="default" size="sm" className="motion-reduce:transition-none">
               重试
-            </button>
+            </Button>
           </div>
         ) : files === null ? (
           <div data-testid="downloads-skeleton" className="px-4 py-2">
             {[0, 1, 2, 3, 4].map(i => (
               <div key={i} className="flex items-center gap-3 px-4 py-3 border-b border-border">
-                <div className="w-8 h-8 rounded animate-pulse" style={{ background: 'var(--muted)' }} />
+                <div className="w-8 h-8 rounded animate-pulse motion-reduce:animate-none" style={{ background: 'var(--muted)' }} />
                 <div className="flex-1 space-y-1.5">
-                  <div className="h-3 w-1/3 rounded animate-pulse" style={{ background: 'var(--muted)' }} />
-                  <div className="h-2 w-1/5 rounded animate-pulse" style={{ background: 'var(--muted)' }} />
+                  <div className="h-3 w-1/3 rounded animate-pulse motion-reduce:animate-none" style={{ background: 'var(--muted)' }} />
+                  <div className="h-2 w-1/5 rounded animate-pulse motion-reduce:animate-none" style={{ background: 'var(--muted)' }} />
                 </div>
               </div>
             ))}
@@ -148,21 +154,18 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
           <div data-testid="downloads-empty" className="flex flex-col items-center justify-center py-24 gap-3">
             <i className="fas fa-file-arrow-down text-3xl text-muted-foreground"></i>
             <p className="text-sm text-muted-foreground">暂无导出文件</p>
-            <button
-              onClick={onBack}
-              className="px-3 h-8 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
+            <Button onClick={onBack} variant="default" size="sm" className="motion-reduce:transition-none">
               返回聊天
-            </button>
+            </Button>
           </div>
         ) : (
           <motion.ul
             data-testid="file-list"
-            initial={reduced ? false : 'hidden'}
+            initial={reduced || entered ? false : 'hidden'}
             animate="show"
             variants={{ show: { transition: { staggerChildren: 0.03 } } }}
           >
-            <AnimatePresence initial={false}>
+            <AnimatePresence>
               {filtered.map(f => (
                 <FileRow
                   key={f.file_name}
@@ -187,20 +190,12 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
-            <button
-              data-testid="delete-cancel"
-              onClick={() => setPendingDelete(null)}
-              className="px-3 h-8 rounded-md text-xs border border-input hover:bg-muted transition-colors"
-            >
+            <Button data-testid="delete-cancel" onClick={() => setPendingDelete(null)} variant="outline" size="sm" className="motion-reduce:transition-none">
               取消
-            </button>
-            <button
-              data-testid="delete-ok"
-              onClick={handleConfirmDelete}
-              className="px-3 h-8 rounded-md text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-            >
+            </Button>
+            <Button data-testid="delete-ok" onClick={handleConfirmDelete} variant="destructive" size="sm" className="motion-reduce:transition-none">
               删除
-            </button>
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

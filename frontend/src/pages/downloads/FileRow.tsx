@@ -68,7 +68,7 @@ export function FileRow({ file, downloading, onDownload, onDelete }: {
           data-testid="row-download"
           disabled={downloading}
           onClick={() => onDownload(file)}
-          className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors motion-reduce:transition-none disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <i className={`fas ${downloading ? 'fa-circle-notch fa-spin' : 'fa-download'} text-sm`}></i>
         </button>
@@ -76,7 +76,7 @@ export function FileRow({ file, downloading, onDownload, onDelete }: {
           aria-label="删除"
           data-testid="row-delete"
           onClick={() => onDelete(file)}
-          className="p-2 rounded-md text-muted-foreground hover:text-destructive hover:bg-muted transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+          className="p-2 rounded-md text-muted-foreground hover:text-destructive hover:bg-muted transition-colors motion-reduce:transition-none opacity-0 group-hover:opacity-100 focus:opacity-100"
         >
           <i className="fas fa-trash text-sm"></i>
         </button>
