@@ -42,6 +42,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from evals.claim_benchmark._langfuse import _load_env  # noqa: E402
 from evals.stats import cohen_kappa  # noqa: E402
 
 PROMPT = """你是引用校验标注员。给出一条 Agent 报告中的 claim 及其校验数据，判定应有裁决。
@@ -142,6 +143,7 @@ def write_entries(path: Path, entries: list[dict]) -> None:
 
 
 def cmd_label(args: argparse.Namespace) -> int:
+    _load_env()  # 独立 CLI 运行加载 .env（LLM 网关凭据；测试 monkeypatch _call_llm 不受影响）
     entries = load_entries(Path(args.input))
     print(f"待标注 {len(entries)} 条")
     for i, e in enumerate(entries):
