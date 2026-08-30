@@ -71,12 +71,19 @@ class _SegmentState:
 
 
 def _close_event(seg: _SegmentState) -> BaseEvent | None:
-    """闭当前段产生的 END 事件（无开段时 None）。"""
+    """闭当前段产生的 END 事件（无开段时 None）。
+
+    闭段即重置：kind 残留会导致后续换段/终态路径对同一 message_id
+    重复下发 END（线上 AGUIError "No active text message found" 的根因）。
+    """
     if seg.kind == "reasoning":
-        return ReasoningMessageEndEvent(message_id=seg.message_id)
-    if seg.kind == "text":
-        return TextMessageEndEvent(message_id=seg.message_id)
-    return None
+        end: BaseEvent = ReasoningMessageEndEvent(message_id=seg.message_id)
+    elif seg.kind == "text":
+        end = TextMessageEndEvent(message_id=seg.message_id)
+    else:
+        return None
+    seg.reset()
+    return end
 
 
 async def translate_to_agui(
