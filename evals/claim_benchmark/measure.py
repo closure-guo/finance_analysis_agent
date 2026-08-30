@@ -1,0 +1,229 @@
+#!/usr/bin/env python
+"""校验器准度测量（verifier-baseline-v1，任务 5）：离线复判 vs 人工标签。
+
+输入 benchmark_v1_labeled.jsonl（含最终 label），对每条重新执行离线复判
+（rejudge.rejudge_claim：按当前契约从收割到的 ground_truth/delta 重建
+校验器裁决），FAIL 为正类计算整体 P/R/F1（bootstrap 95% CI）。
+
+测量边界（v1.md 判读说明）：
+- 复判为 UNVERIFIABLE（gt 缺失 / 比较型方向不可判 / 事件 gt 缺失）或
+  regression 疾病样本（修复前 trace 的索引/词表病）不进入 F1 核心——
+  解析层无法离线重建，单独披露数量与人工标签分布；
+- near_miss 子集「检出率」= 子集内人工 FAIL 条目的复判召回；hedged 子集
+  「假阳率」= 子集内复判 FAIL 而人工非 FAIL 的比例（措辞容差盲区）；
+- 门禁：整体 F1 ≥ 0.90（不合格 → 打印混淆矩阵 + fp/fn 集中桶回报人工，
+  不得调阈值通过）。
+
+用法:
+    uv run python evals/claim_benchmark/measure.py \
+        --labeled evals/claim_benchmark/data/benchmark_v1_labeled.jsonl
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import Counter
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+import numpy as np  # noqa: E402
+
+from evals.claim_benchmark.rejudge import rejudge_claim  # noqa: E402
+
+F1_GATE = 0.90
+BOOTSTRAP_B = 2000
+BOOTSTRAP_SEED = 42
+
+
+@dataclass
+class Metrics:
+    n: int
+    tp: int
+    fp: int
+    fn: int
+    tn: int
+    precision: float
+    recall: float
+    f1: float
+    f1_ci: tuple[float, float]
+    accuracy: float
+    gate_passed: bool
+
+
+@dataclass
+class SubsetReport:
+    name: str
+    n: int
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+def _rejudge_entry(e: dict) -> str:
+    return rejudge_claim(e["claim"], e.get("ground_truth"), e.get("delta"))
+
+
+def _bootstrap_f1_ci(
+    labels: list[str], preds: list[str], seed: int = BOOTSTRAP_SEED
+) -> tuple[float, float]:
+    fail_lab = np.array([1.0 if lab == "FAIL" else 0.0 for lab in labels])
+    fail_pr = np.array([1.0 if p == "FAIL" else 0.0 for p in preds])
+    n = len(labels)
+    if n == 0:
+        return (0.0, 0.0)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(BOOTSTRAP_B, n))
+    samples: list[float] = []
+    for row in idx:
+        lab_s, pr_s = fail_lab[row], fail_pr[row]
+        tp_s = int(np.sum((lab_s == 1) & (pr_s == 1)))
+        fp_s = int(np.sum((lab_s == 0) & (pr_s == 1)))
+        fn_s = int(np.sum((lab_s == 1) & (pr_s == 0)))
+        p_s = tp_s / (tp_s + fp_s) if tp_s + fp_s else 0.0
+        r_s = tp_s / (tp_s + fn_s) if tp_s + fn_s else 0.0
+        samples.append(2 * p_s * r_s / (p_s + r_s) if p_s + r_s else 0.0)
+    return (float(np.percentile(samples, 2.5)), float(np.percentile(samples, 97.5)))
+
+
+def _confusion(labels: list[str], preds: list[str]) -> dict[str, int]:
+    c = Counter(zip(labels, preds, strict=True))
+    return {
+        "tp": c.get(("FAIL", "FAIL"), 0),
+        "fp": c.get(("PASS", "FAIL"), 0) + c.get(("UNVERIFIABLE", "FAIL"), 0),
+        "fn": c.get(("FAIL", "PASS"), 0) + c.get(("FAIL", "UNVERIFIABLE"), 0),
+        "tn": c.get(("PASS", "PASS"), 0)
+        + c.get(("UNVERIFIABLE", "UNVERIFIABLE"), 0)
+        + c.get(("PASS", "UNVERIFIABLE"), 0)
+        + c.get(("UNVERIFIABLE", "PASS"), 0),
+    }
+
+
+def measure(entries: list[dict]) -> dict:
+    rows = [
+        {
+            "rejudged": _rejudge_entry(e),
+            "label": e.get("label"),
+            "subsets": set(e.get("subsets") or []),
+            "claim": e["claim"],
+            "eid": e["entry_id"],
+        }
+        for e in entries
+    ]
+
+    core = [r for r in rows if r["rejudged"] != "UNVERIFIABLE" and "regression" not in r["subsets"]]
+    excluded = [r for r in rows if r["rejudged"] == "UNVERIFIABLE" or "regression" in r["subsets"]]
+
+    labels = [r["label"] for r in core]
+    preds = [r["rejudged"] for r in core]
+    cm = _confusion(labels, preds)
+    n = len(core)
+    precision = cm["tp"] / (cm["tp"] + cm["fp"]) if cm["tp"] + cm["fp"] else 0.0
+    recall = cm["tp"] / (cm["tp"] + cm["fn"]) if cm["tp"] + cm["fn"] else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    accuracy = sum(1 for lab, p in zip(labels, preds, strict=True) if lab == p) / n if n else 0.0
+    ci = _bootstrap_f1_ci(labels, preds)
+
+    def _near_miss_recall() -> float | None:
+        sub = [r for r in core if "near_miss" in r["subsets"]]
+        fails = [r for r in sub if r["label"] == "FAIL"]
+        if not fails:
+            return None
+        return sum(1 for r in fails if r["rejudged"] == "FAIL") / len(fails)
+
+    def _hedged_fp_rate() -> float | None:
+        sub = [r for r in core if "hedged" in r["subsets"]]
+        if not sub:
+            return None
+        fp = sum(1 for r in sub if r["rejudged"] == "FAIL" and r["label"] != "FAIL")
+        return fp / len(sub)
+
+    # fp/fn 集中桶（供 < 0.90 时人工回报）
+    buckets_fp: Counter = Counter()
+    buckets_fn: Counter = Counter()
+    for r in core:
+        if r["label"] != "FAIL" and r["rejudged"] == "FAIL":
+            buckets_fp[(r["claim"].get("claim_type"), "+".join(sorted(r["subsets"])))] += 1
+        if r["label"] == "FAIL" and r["rejudged"] != "FAIL":
+            buckets_fn[(r["claim"].get("claim_type"), "+".join(sorted(r["subsets"])))] += 1
+
+    nm_recall: float | None = _near_miss_recall()
+    hedged_fp: float | None = _hedged_fp_rate()
+    regression = [r for r in rows if "regression" in r["subsets"]]
+    return {
+        "n_core": n,
+        "n_excluded": len(excluded),
+        "confusion": cm,
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "f1_ci_95": [round(ci[0], 4), round(ci[1], 4)],
+        "accuracy": round(accuracy, 4),
+        "gate": {"f1_gate": F1_GATE, "passed": f1 >= F1_GATE},
+        "near_miss_recall": None if nm_recall is None else round(nm_recall, 4),
+        "hedged_fp_rate": None if hedged_fp is None else round(hedged_fp, 4),
+        "excluded_breakdown": {
+            "rejudge_unverifiable": sum(1 for r in excluded if r["rejudged"] == "UNVERIFIABLE"),
+            "regression": len(regression),
+            "regression_label_dist": dict(Counter(r["label"] for r in regression)),
+        },
+        "fp_buckets": [{"bucket": k, "count": v} for k, v in buckets_fp.most_common(15)],
+        "fn_buckets": [{"bucket": k, "count": v} for k, v in buckets_fn.most_common(15)],
+    }
+
+
+def _print_report(rep: dict) -> None:
+    print("\n========== 校验器准度报告（离线复判 vs 人工标签）==========")
+    print(f"核心样本 n={rep['n_core']}（排除 {rep['n_excluded']}：复判不可得/回归样本）")
+    print(f"混淆矩阵: {rep['confusion']}")
+    print(
+        f"Precision={rep['precision']}  Recall={rep['recall']}  F1={rep['f1']}  "
+        f"(95% CI {rep['f1_ci_95']})  Accuracy={rep['accuracy']}"
+    )
+    print(
+        f"门禁 F1 ≥ {rep['gate']['f1_gate']}: {'✅ 通过' if rep['gate']['passed'] else '❌ 未通过'}"
+    )
+    print(f"near_miss 检出率（子集内人工 FAIL 召回）: {rep['near_miss_recall']}")
+    print(f"hedged 假阳率（子集内复判 FAIL ∧ 人工非 FAIL 占比）: {rep['hedged_fp_rate']}")
+    print(f"排除明细: {rep['excluded_breakdown']}")
+    if rep["fp_buckets"] or rep["fn_buckets"]:
+        print("fp 集中桶:", rep["fp_buckets"])
+        print("fn 集中桶:", rep["fn_buckets"])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="校验器准度测量")
+    ap.add_argument("--labeled", required=True, help="benchmark_v1_labeled.jsonl")
+    ap.add_argument("--out-json", default=None, help="可省：报告另存路径")
+    args = ap.parse_args()
+
+    path = Path(args.labeled)
+    entries = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    empty = [e["entry_id"] for e in entries if not e.get("label")]
+    if empty:
+        print(
+            f"错误: {len(empty)} 条 entry 无最终 label（{empty[:5]}…），拒绝测量", file=sys.stderr
+        )
+        return 2
+
+    rep = measure(entries)
+    _print_report(rep)
+    if args.out_json:
+        Path(args.out_json).write_text(
+            json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"报告另存 {args.out_json}")
+    return 0 if rep["gate"]["passed"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

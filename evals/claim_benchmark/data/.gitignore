@@ -1,0 +1,7 @@
+# 基准数据例外管理（verifier-baseline-v1 任务 2）
+# 数据文件（*.jsonl / *.csv）可提交，单文件体积须 < 5MB；
+# 超出体积的历史收割产物（如 claims_raw 膨胀）改走 git-lfs 或另存不入库。
+*
+!.gitignore
+*.jsonl
+*.csv
