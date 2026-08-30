@@ -31,6 +31,7 @@ from ag_ui.core.events import (
     TextMessageEndEvent,
     TextMessageStartEvent,
     ToolCallArgsEvent,
+    ToolCallEndEvent,
     ToolCallResultEvent,
     ToolCallStartEvent,
 )
@@ -167,6 +168,10 @@ async def translate_to_agui(
             yield ToolCallArgsEvent(
                 tool_call_id=agui_id, delta=json.dumps(tc.arguments, ensure_ascii=False)
             )
+            # END 闭合 tool call：客户端 HttpAgent 校验状态机中 END 是唯一把
+            # tool call 移出 active 集合的事件，缺失会导致 RUN_FINISHED 前置校验
+            # 抛 AGUIError "tool calls are still active"，整个 run 被前端判错。
+            yield ToolCallEndEvent(tool_call_id=agui_id)
 
         elif et == ActionType.TOOL_RESULT:  # #11
             tr = event.tool_result

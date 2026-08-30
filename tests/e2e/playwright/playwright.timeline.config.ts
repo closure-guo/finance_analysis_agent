@@ -25,6 +25,9 @@ export default defineConfig({
     'resume-pipeline-across-sessions.spec.ts',
     'persist-full-session-timeline.spec.ts',
     'harden-react-path-resilience.spec.ts',
+    // AG-UI quick 通道带工具调用 run（fix/agui-quick-toolcall-lifecycle 回归）：
+    // 依赖 STUB_SCENARIO=tool_call 后端（8001），覆盖 TOOL_CALL_END / 多轮分列 / 刷新恢复
+    'agui-toolcall.spec.ts',
     // 报告导出抽屉：依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175）
     'report-export.spec.ts',
     // 视觉基线截图采集（会话页/报告渲染态）：同 report-export 环境（8002/5175），

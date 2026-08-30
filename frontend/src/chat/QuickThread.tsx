@@ -208,9 +208,13 @@ const QuickThread = forwardRef<QuickThreadHandle, QuickThreadProps>(function Qui
           }
           const state = thread?.__internal_threadBinding?.getState()
           if (state) {
+            // parentId 必须是当前线程末尾消息：传 null 会把追问挂成新的兄弟分支
+            // （root），第一轮对话从当前视图脱离、且第二轮 RunAgentInput 丢失历史
+            // 上下文（多步交互中 agent 输出/action 序列错乱的根因）。
+            const parent = state.messages[state.messages.length - 1]
             const task = state.append({
               createdAt: new Date(),
-              parentId: null,
+              parentId: parent?.id ?? null,
               sourceId: null,
               runConfig: {},
               role: 'user',

@@ -159,6 +159,41 @@ async def test_think_replace_opens_new_segment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_call_emits_end_before_result() -> None:
+    """TOOL_CALL 段必须以 END 闭合：START → ARGS → END → RESULT。
+
+    回归测试（线上两症状：动作条不实时显示 / 多步输出累加进第一轮回复）：
+    客户端 HttpAgent 校验状态机中 TOOL_CALL_END 是唯一把 tool call 移出
+    active 集合的事件，RUN_FINISHED 时 active 集合非空直接抛
+    AGUIError "Cannot send 'RUN_FINISHED' while tool calls are still active"，
+    整个 run 被前端判错、内容丢弃/错挂。翻译层此前只发 START+ARGS+RESULT，
+    从不发 END。
+    """
+    call = ToolCallRequest(id="tc-1", name="web_search", arguments={"query": "贵州茅台"})
+    result = ToolResult(tool_call_id="tc-1", name="web_search", output="搜索结果文本")
+    events = await _translate(
+        StreamEvent.for_tool_call(call),
+        StreamEvent.for_tool_result(result),
+    )
+    assert _types(events) == [
+        EventType.RUN_STARTED,
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_ARGS,  # ARGS 一次全量（#10）
+        EventType.TOOL_CALL_END,  # 闭合 active tool call（客户端 RUN_FINISHED 前置校验）
+        EventType.TOOL_CALL_RESULT,
+        EventType.RUN_FINISHED,
+    ]
+    end = events[3]
+    # START/ARGS/END/RESULT 四者同一 AG-UI tool_call_id
+    assert (
+        events[1].tool_call_id
+        == events[2].tool_call_id
+        == end.tool_call_id
+        == events[4].tool_call_id
+    )
+
+
+@pytest.mark.asyncio
 async def test_tool_call_result_id_consistency() -> None:
     call = ToolCallRequest(id="tc-1", name="web_search", arguments={"query": "贵州茅台"})
     result = ToolResult(tool_call_id="tc-1", name="web_search", output="搜索结果文本")
@@ -170,12 +205,13 @@ async def test_tool_call_result_id_consistency() -> None:
         EventType.RUN_STARTED,
         EventType.TOOL_CALL_START,
         EventType.TOOL_CALL_ARGS,  # ARGS 一次全量（#10）
+        EventType.TOOL_CALL_END,  # 闭合 active tool call
         EventType.TOOL_CALL_RESULT,
         EventType.RUN_FINISHED,
     ]
     start = events[1]
     args = events[2]
-    result_ev = events[3]
+    result_ev = events[4]
     # id 一致性：START/ARGS/RESULT 三者同一 tool_call_id
     assert start.tool_call_id == args.tool_call_id == result_ev.tool_call_id
     assert start.tool_call_name == "web_search"
@@ -220,6 +256,7 @@ async def test_text_then_tool_call_then_answer_reopens_segment() -> None:
         EventType.TEXT_MESSAGE_END,
         EventType.TOOL_CALL_START,
         EventType.TOOL_CALL_ARGS,
+        EventType.TOOL_CALL_END,
         EventType.TOOL_CALL_RESULT,
         EventType.TEXT_MESSAGE_START,
         EventType.TEXT_MESSAGE_CONTENT,
