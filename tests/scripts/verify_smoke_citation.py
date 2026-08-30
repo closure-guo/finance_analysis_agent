@@ -95,8 +95,9 @@ class LangfuseClient:
     def trace_scores(self, trace: dict) -> dict:
         """trace scores 兜底：list 响应可能为字符串列表，改拉详情取标准对象。"""
         scores = trace.get("scores") or []
-        if all(isinstance(s, dict) for s in scores):
-            return {s.get("name"): s.get("value") for s in scores}  # type: ignore[union-attr]
+        dict_scores = [s for s in scores if isinstance(s, dict)]
+        if scores and len(dict_scores) == len(scores):
+            return {s.get("name"): s.get("value") for s in dict_scores}
         r = requests.get(
             f"{self.host}/api/public/traces/{trace.get('id')}", auth=self.auth, timeout=30
         )
@@ -122,10 +123,11 @@ def start_analysis(stock_code: str, stock_name: str) -> str:
         session_id = ""
         deadline = time.time() + 20
         for raw in resp.iter_lines(decode_unicode=True):
-            if not raw or not raw.startswith("data:"):
+            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+            if not line or not line.startswith("data:"):
                 continue
             try:
-                ev = json.loads(raw[len("data:") :])
+                ev = json.loads(line[len("data:") :])
             except ValueError:
                 continue
             if ev.get("type") == "session_created":

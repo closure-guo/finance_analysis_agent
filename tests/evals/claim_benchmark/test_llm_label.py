@@ -1,6 +1,7 @@
 """标注流程测试：LLM 初标字段追加、人工合并 κ 定稿、空 label 拒绝。"""
 
 import json
+from argparse import Namespace
 from pathlib import Path
 
 from evals.claim_benchmark import llm_label
@@ -28,10 +29,8 @@ def _write(path: Path, entries: list[dict]) -> None:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
-class FakeArgs:
-    def __init__(self, **kw):
-        for k, v in kw.items():
-            setattr(self, k, v)
+class FakeArgs(Namespace):
+    """Namespace 子类：cmd_* 的 argparse.Namespace 形参可直接接收 kwargs 构造。"""
 
 
 class TestLabel:
