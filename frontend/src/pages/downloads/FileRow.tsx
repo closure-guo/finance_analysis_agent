@@ -27,8 +27,13 @@ export function formatFileTime(ts: number, now = new Date()): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-export function FileRow({ file, downloading, onDownload, onDelete }: {
+// 入场 stagger 延迟上限：逐行 30ms 只对首屏有节奏意义，行数多时封顶，
+// 避免千行列表时最后一行等 30s 才入场（配合 DownloadCenter 的增量渲染）
+const MAX_STAGGER_DELAY = 0.6
+
+export function FileRow({ file, index = 0, downloading, onDownload, onDelete }: {
   file: ExportFileInfo
+  index?: number
   downloading: boolean
   onDownload: (f: ExportFileInfo) => void
   onDelete: (f: ExportFileInfo) => void
@@ -40,12 +45,17 @@ export function FileRow({ file, downloading, onDownload, onDelete }: {
       data-testid="download-row"
       data-file-name={file.file_name}
       className="overflow-hidden"
+      custom={index}
       variants={
         reduced
           ? undefined
           : {
               hidden: { opacity: 0, y: 8 },
-              show: { opacity: 1, y: 0, transition: { duration: 0.2, ease: 'easeOut' } },
+              show: (i: number) => ({
+                opacity: 1,
+                y: 0,
+                transition: { delay: Math.min(i * 0.03, MAX_STAGGER_DELAY), duration: 0.2, ease: 'easeOut' },
+              }),
             }
       }
       exit={reduced ? undefined : { height: 0, opacity: 0, transition: { duration: 0.2, ease: 'easeInOut' } }}

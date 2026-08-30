@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { toast } from 'sonner'
 import type { ExportFileInfo, DownloadType } from '../../types'
@@ -14,6 +14,13 @@ const TYPE_TABS: { key: DownloadType | 'all'; label: string }[] = [
   { key: 'pdf', label: 'PDF' },
   { key: 'md', label: 'Markdown' },
 ]
+
+// 增量渲染：reports/ 下可能有上千个导出文件，一次性全量渲染 DOM +
+// framer-motion 逐行 stagger（30ms/行）会导致页面卡死（千行级最后一行
+// 要等 30s+ 才入场）。首屏只渲染 PAGE_SIZE 行，滚动到底自动加载下一页。
+const PAGE_SIZE = 50
+// 入场 stagger 延迟上限：只对首屏前 ~20 行有逐行节奏感，之后不再线性累加
+const MAX_STAGGER_DELAY = 0.6
 
 export function DownloadCenter({ onBack }: { onBack: () => void }) {
   // null = 加载中；error = 接口失败（与空态严格区分，失败不得以空态冒充）
@@ -57,6 +64,26 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
       ),
     [files, tab, search],
   )
+  const [renderLimit, setRenderLimit] = useState(PAGE_SIZE)
+  // 数据或筛选变化后重置增量窗口（保留当前窗口大小，避免来回筛选重复加载）
+  useEffect(() => { setRenderLimit(PAGE_SIZE) }, [tab, search])
+  const visibleFiles = useMemo(() => filtered.slice(0, renderLimit), [filtered, renderLimit])
+  const remainingCount = filtered.length - visibleFiles.length
+
+  // 滚动到底部自动加载下一页（IntersectionObserver 监听哨兵行）；
+  // 环境无 IntersectionObserver（如 jsdom）时跳过，「加载更多」按钮兜底
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || remainingCount <= 0 || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) {
+        setRenderLimit(limit => limit + PAGE_SIZE)
+      }
+    }, { rootMargin: '200px' })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [remainingCount, visibleFiles.length])
 
   const handleDownload = (f: ExportFileInfo) => {
     setDownloading(f.file_name)
@@ -163,13 +190,13 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
             data-testid="file-list"
             initial={reduced || entered ? false : 'hidden'}
             animate="show"
-            variants={{ show: { transition: { staggerChildren: 0.03 } } }}
           >
             <AnimatePresence>
-              {filtered.map(f => (
+              {visibleFiles.map((f, i) => (
                 <FileRow
                   key={f.file_name}
                   file={f}
+                  index={i}
                   downloading={downloading === f.file_name}
                   onDownload={handleDownload}
                   onDelete={setPendingDelete}
@@ -177,6 +204,20 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
               ))}
             </AnimatePresence>
           </motion.ul>
+        )}
+        {/* 增量加载哨兵：进入视口自动加载下一页；剩余数 > 0 时常驻便于点击 */}
+        {!error && files !== null && remainingCount > 0 && (
+          <div ref={sentinelRef} className="flex justify-center py-4">
+            <Button
+              data-testid="load-more"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground motion-reduce:transition-none"
+              onClick={() => setRenderLimit(limit => limit + PAGE_SIZE)}
+            >
+              加载更多（剩余 {remainingCount} 个）
+            </Button>
+          </div>
         )}
       </div>
 
