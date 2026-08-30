@@ -7,13 +7,17 @@ update_session_status / 不 publish 进 registry）。
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from typing import Any
 
 import pytest
+from ag_ui.encoder import EventEncoder
 from fastapi.testclient import TestClient
 
 from finance_agent import agent_factory, session_store
+from finance_agent.agui.endpoint import _agui_run_stream
 from finance_agent.api import app
 from finance_agent.harness.types import StreamEvent, ToolCallRequest, ToolResult
 
@@ -216,3 +220,151 @@ def test_tool_call_channel_persists_tool_records(isolated_db, monkeypatch):
     assert history[-1]["thinking"] == "搜索前思考"
     assert history[-1]["tool_calls"][0]["name"] == "web_search"
     assert history[-1]["tool_calls"][0]["done"] is True
+
+
+# ---------------------------------------------------------------------------
+# 审查修复：终态先落库再下发 / 断开中断落库 / 增量 upsert / api_key 透传
+# ---------------------------------------------------------------------------
+
+
+class _SlowAgent:
+    """产出部分回复后长时间阻塞（模拟 LLM 长连接，供取消/中断测试）。"""
+
+    def __init__(self, partial: str) -> None:
+        self.partial = partial
+
+    async def run(self, user_input: str, force_tool: bool = False):
+        yield StreamEvent.answer(self.partial)
+        await asyncio.Event().wait()
+
+
+class _TwoPartAgent:
+    """两段回复，中间 sleep 拉开间隔（供增量 upsert 节奏测试）。"""
+
+    async def run(self, user_input: str, force_tool: bool = False):
+        yield StreamEvent.answer("第一段")
+        await asyncio.sleep(0.2)
+        yield StreamEvent.answer("第二段")
+
+
+async def test_run_finished_persisted_before_yield(isolated_db, monkeypatch):
+    """终态先落库再下发：消费端收到 RUN_FINISHED 的瞬间，assistant 全文已在 session_store。"""
+    sid = session_store.create_chat_session("测试会话")
+    stub = _StubAgent([StreamEvent.answer("你好"), StreamEvent.answer("，世界")])
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: stub)
+
+    encoder = EventEncoder()
+    agen = _agui_run_stream(sid, "run-order", "贵州茅台怎么样？", None, encoder)
+    snapshot: dict[str, Any] | None = None
+    async for chunk in agen:
+        if "RUN_FINISHED" in chunk:
+            # 收到终态事件的瞬间读 session_store（不等待生成器收尾）
+            session = session_store.get_session(sid)
+            assert session is not None
+            snapshot = session
+            break
+    with contextlib.suppress(Exception):
+        await agen.aclose()
+
+    assert snapshot is not None
+    assert snapshot["status"] == "completed"
+    history = snapshot["chat_history"]
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[1]["content"] == "你好，世界"
+
+
+async def test_client_disconnect_persists_interrupted(isolated_db, monkeypatch):
+    """客户端断开（消费任务被 cancel）→ 中断占位落库 + status=interrupted。"""
+    sid = session_store.create_chat_session("测试会话")
+    stub = _SlowAgent("部分回复")
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: stub)
+
+    encoder = EventEncoder()
+    agen = _agui_run_stream(sid, "run-cancel", "问题", None, encoder)
+    chunks: list[str] = []
+
+    async def _consume() -> None:
+        async for chunk in agen:
+            chunks.append(chunk)
+
+    task = asyncio.create_task(_consume())
+    await asyncio.sleep(0.2)  # 让生成器推进到阻塞点（agent 挂起、外层 wait 等待中）
+    assert chunks  # RUN_STARTED 等事件已下发
+    task.cancel()  # 模拟客户端断开 → 服务端取消
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    session = session_store.get_session(sid)
+    assert session is not None
+    assert session["status"] == "interrupted"
+    history = session["chat_history"]
+    # 中断占位：部分回复 + [输出中断]，无悬空 user 消息
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[1]["content"] == "部分回复\n\n[输出中断]"
+
+
+async def test_incremental_upsert_mid_run(isolated_db, monkeypatch):
+    """增量 upsert：终态未到时按间隔 upsert 进行中回复（进程崩溃可兜底）。"""
+    monkeypatch.setattr("finance_agent.agui.endpoint._PERSIST_INTERVAL", 0.05)
+    sid = session_store.create_chat_session("测试会话")
+    stub = _TwoPartAgent()
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: stub)
+
+    encoder = EventEncoder()
+    agen = _agui_run_stream(sid, "run-incr", "问题", None, encoder)
+    mid_run_snapshot: str | None = None
+    async for chunk in agen:
+        if "TEXT_MESSAGE_CONTENT" in chunk and "第二段" in chunk:
+            # 收到第二段内容块的瞬间：RUN_FINISHED 尚未下发，
+            # 落库内容只能来自间隔触发的增量 upsert
+            session = session_store.get_session(sid)
+            assert session is not None
+            history = session["chat_history"]
+            if history and history[-1]["role"] == "assistant":
+                mid_run_snapshot = history[-1]["content"]
+    with contextlib.suppress(Exception):
+        await agen.aclose()
+
+    assert mid_run_snapshot == "第一段第二段"
+    session = session_store.get_session(sid)
+    assert session is not None
+    assert session["status"] == "completed"
+    assert session["chat_history"][-1]["content"] == "第一段第二段"
+
+
+def test_api_key_non_sk_prefix_passthrough(isolated_db, monkeypatch):
+    """api_key 放宽：非 sk- 前缀的非空字符串也透传；空字符串不透传。"""
+    sid = session_store.create_chat_session("测试会话")
+    captured: dict[str, Any] = {}
+
+    def _fake_build(**kwargs: Any) -> _StubAgent:
+        captured.update(kwargs)
+        return _StubAgent([StreamEvent.answer("答")])
+
+    monkeypatch.setattr(agent_factory, "build_agent", _fake_build)
+
+    with TestClient(app) as client:
+        events = _post_agui(
+            client,
+            {
+                "threadId": sid,
+                "runId": "run-key",
+                "messages": [{"id": "m1", "role": "user", "content": "问题"}],
+                "forwardedProps": {"apiKey": "custom-token-123"},
+            },
+        )
+        assert _types(events)[-1] == "RUN_FINISHED"
+        assert captured.get("api_key") == "custom-token-123"
+
+        captured.clear()
+        events = _post_agui(
+            client,
+            {
+                "threadId": sid,
+                "runId": "run-key-empty",
+                "messages": [{"id": "m2", "role": "user", "content": "问题"}],
+                "forwardedProps": {"apiKey": ""},
+            },
+        )
+        assert _types(events)[-1] == "RUN_FINISHED"
+        assert captured.get("api_key") is None

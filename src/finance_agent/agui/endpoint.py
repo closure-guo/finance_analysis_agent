@@ -8,8 +8,9 @@ journal——移除本路由后深度模式与现有 /api/chat 通道零影响�
 - build_agent(mode="quick")：TESTING=1 时与现有通道同一 stub 注入路径；
 - Langfuse react_loop span 等价保留（ADR-0015）；
 - 落库等价 _ChatCollector：user 消息任务内 append_chat，assistant 以 AG-UI 事件
-  累积（TEXT_MESSAGE_CONTENT → response 等），终态/异常/中断三路落库 +
-  update_session_status（completed/failed/interrupted）；
+  累积（TEXT_MESSAGE_CONTENT → response 等），运行中每 10s 增量 upsert，
+  终态（RUN_FINISHED/RUN_ERROR）先落库再下发 + update_session_status
+  （completed/failed/interrupted）；
 - 客户端断开（abortRun/关页）→ CancelledError → 中断落库。
 
 取消路径 PoC 限制：/api/sessions/{id}/cancel 经 registry 取消 registry 任务，
@@ -23,6 +24,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import nullcontext
@@ -32,6 +34,7 @@ from ag_ui.core.events import (
     BaseEvent,
     ReasoningMessageContentEvent,
     RunErrorEvent,
+    RunFinishedEvent,
     TextMessageContentEvent,
     ToolCallArgsEvent,
     ToolCallResultEvent,
@@ -58,6 +61,7 @@ _SSE_HEADERS = {
 }
 
 _HEARTBEAT_INTERVAL = 10.0  # 秒，与现有通道一致
+_PERSIST_INTERVAL = 10.0  # 增量 upsert 间隔（对齐现有通道 api.py 节奏）
 _TOOL_RESULT_MAX = 150  # tool result_text 截断长度（等价 _summarize_tool_result）
 
 
@@ -214,10 +218,17 @@ async def _agui_run_stream(
         agent_gen = agent.run(user_message)
         agui_events = translate_to_agui(agent_gen, thread_id=thread_id, run_id=run_id)
         next_task: asyncio.Task[BaseEvent] = asyncio.create_task(_next_event(agui_events))
+        last_persist = time.monotonic()
+        terminal_persisted = False
         try:
             while True:
                 done, _ = await asyncio.wait({next_task}, timeout=_HEARTBEAT_INTERVAL)
                 if not done:
+                    # 增量持久化：空闲期到点也 upsert，进行中回复不丢
+                    now = time.monotonic()
+                    if now - last_persist >= _PERSIST_INTERVAL:
+                        await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+                        last_persist = now
                     # 空闲心跳：SSE 注释行（映射表 #15，非协议事件）
                     yield ": heartbeat\n\n"
                     continue
@@ -226,6 +237,31 @@ async def _agui_run_stream(
                 except StopAsyncIteration:
                     break
                 collector.feed(event)
+                if isinstance(event, RunFinishedEvent):
+                    # 终态先落库再下发：客户端收到 RUN_FINISHED 的瞬间读
+                    # session_store 必须已见到 assistant 全文（审查修复）
+                    await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+                    await asyncio.to_thread(
+                        session_store.update_session_status, thread_id, "completed"
+                    )
+                    terminal_persisted = True
+                elif isinstance(event, RunErrorEvent):
+                    # 终态先落库再下发：部分内容落库 + failed（不落库成功回复）
+                    await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+                    await asyncio.to_thread(
+                        session_store.update_session_status,
+                        thread_id,
+                        "failed",
+                        failure_reason=collector.error_message or "agent error",
+                    )
+                    terminal_persisted = True
+                else:
+                    # 增量持久化：每 _PERSIST_INTERVAL upsert 一次进行中回复
+                    # （进程崩溃可兜底，对齐现有通道 api.py 节奏）
+                    now = time.monotonic()
+                    if now - last_persist >= _PERSIST_INTERVAL:
+                        await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+                        last_persist = now
                 yield encoder.encode(event)
                 next_task = asyncio.create_task(_next_event(agui_events))
         finally:
@@ -244,19 +280,20 @@ async def _agui_run_stream(
                 propagate_cm.__exit__(None, None, None)
                 react_cm.__exit__(None, None, None)
 
-        if collector.saw_error:
-            # ERROR → RUN_ERROR 路径：部分内容落库 + failed（不落库成功回复）
-            await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
-            await asyncio.to_thread(
-                session_store.update_session_status,
-                thread_id,
-                "failed",
-                failure_reason=collector.error_message or "agent error",
-            )
-        else:
-            # 正常完成：RUN_FINISHED 前落库 + completed
-            await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
-            await asyncio.to_thread(session_store.update_session_status, thread_id, "completed")
+        if not terminal_persisted:
+            # 兜底：流耗尽但未出现终态事件（正常情况下 RUN_FINISHED/RUN_ERROR
+            # 已在循环内先落库再下发，不会走到这里，避免重复落库）
+            if collector.saw_error:
+                await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+                await asyncio.to_thread(
+                    session_store.update_session_status,
+                    thread_id,
+                    "failed",
+                    failure_reason=collector.error_message or "agent error",
+                )
+            else:
+                await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
+                await asyncio.to_thread(session_store.update_session_status, thread_id, "completed")
     except asyncio.CancelledError:
         # 客户端断开/取消：中断落库 + interrupted（RunAgent abortRun 语义）
         await asyncio.to_thread(_persist_interrupted, thread_id, collector)
@@ -303,7 +340,8 @@ async def agui_quick(req: _RunAgentInputBody):
     api_key: str | None = None
     if isinstance(req.forwarded_props, dict):
         key = req.forwarded_props.get("apiKey")
-        if isinstance(key, str) and key.startswith("sk-"):
+        # 非空字符串即可透传（审查修复：不限定 sk- 前缀，key 形态由上游决定）
+        if isinstance(key, str) and key:
             api_key = key
 
     run_id = req.run_id or uuid.uuid4().hex
