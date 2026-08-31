@@ -143,3 +143,12 @@ class TestCycleFitMethodology:
     def test_macro_mandates_stale_downweight(self):
         text = _load("macro_analyst.md")
         assert "滞后" in text
+
+
+class TestTechnicalArrayOrderContract:
+    """incident 022：引用 -1 前须核对序列尾部（正序，末尾=最新）。"""
+
+    def test_technical_prompt_mandates_tail_verification(self):
+        text = _load("technical_analyst.md")
+        assert "序列尾部" in text or "末尾" in text
+        assert "正序" in text
