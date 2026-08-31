@@ -201,3 +201,54 @@ class TestHedged:
         for interp in ("约为 12", "接近 10", "大约 8", "MA20 左右"):
             assert is_hedged({"stated_value": "", "interpretation": interp})
         assert not is_hedged({"stated_value": "12.5", "interpretation": "精确值"})
+
+
+class TestRejudgeSemantic:
+    def test_term_mismatch_rejudged_fail(self):
+        """metric_name 与 field_ref 指标段不一致 → 离线复判 FAIL（数值正确也拦）。"""
+        claim = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "profitability_metrics.毛利率.2024",
+            "stated_value": 45.2,
+            "interpretation": "净利率 45.2%",
+            "metric_name": "净利率",
+            "period": None,
+        }
+        assert rejudge_claim(claim, 45.2, 0.0) == "FAIL"
+
+    def test_period_mismatch_rejudged_fail(self):
+        claim = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "profitability_metrics.毛利率.2024",
+            "stated_value": 45.2,
+            "interpretation": "2023 年毛利率 45.2%",
+            "metric_name": "毛利率",
+            "period": "2023",
+        }
+        assert rejudge_claim(claim, 45.2, 0.0) == "FAIL"
+
+    def test_semantic_control_rejudged_pass(self):
+        """正确申报的 term/period → 语义检查通过，回落到容差复判 PASS。"""
+        claim = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "profitability_metrics.毛利率.2024",
+            "stated_value": 45.2,
+            "interpretation": "2024 年毛利率 45.2%",
+            "metric_name": "毛利率",
+            "period": "2024",
+        }
+        assert rejudge_claim(claim, 45.2, 0.0) == "PASS"
+
+    def test_legacy_claim_without_semantic_fields_unchanged(self):
+        """v1 旧行（无新字段）复判行为不回归。"""
+        claim = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "solvency_metrics.资产负债率.2024",
+            "stated_value": 40.0,
+            "interpretation": "资产负债率 40%",
+        }
+        assert rejudge_claim(claim, 40.0, 0.0) == "PASS"

@@ -48,6 +48,10 @@ def rejudge_claim(claim: dict, ground_truth: object | None, delta: object | None
     if source_type == "llm_inference":
         return "UNVERIFIABLE"
 
+    semantic = _rejudge_semantic(claim)
+    if semantic is not None:
+        return semantic
+
     claim_type = claim.get("claim_type")
 
     if claim_type == "event":
@@ -80,6 +84,36 @@ def rejudge_claim(claim: dict, ground_truth: object | None, delta: object | None
 
     # temporal / entity / regulatory 等：verify_claims 走 else 分支 → UNVERIFIABLE
     return "UNVERIFIABLE"
+
+
+def _rejudge_semantic(claim: dict) -> Status | None:
+    """语义层离线复判（harden-citation-semantic-coverage 镜像 citation.py）：
+
+    term 检查纯字符串（metric_name 规范键 vs field_ref 指标段）；
+    period 检查仅显式期次段可比（索引锚定离线无从解析 → None 跳过，与
+    管线「计缺口不 FAIL」对齐——baseline 的索引锚定样本期次维度不计检出）。
+    返回 "FAIL" 或 None（通过/不适用）。
+    """
+    from finance_agent.metric_vocab import (
+        canonical_metric,
+        field_ref_metric_segments,
+        field_ref_period_segment,
+        period_matches,
+    )
+
+    field_ref = str(claim.get("field_ref") or "")
+    metric_name = (claim.get("metric_name") or "").strip()
+    if metric_name:
+        canonical = canonical_metric(metric_name)
+        seg_keys = {(canonical_metric(s) or s) for s in field_ref_metric_segments(field_ref)}
+        if canonical is None or canonical not in seg_keys:
+            return "FAIL"
+    period = (claim.get("period") or "").strip()
+    if period:
+        actual = field_ref_period_segment(field_ref)
+        if actual is not None and not period_matches(period, actual):
+            return "FAIL"
+    return None
 
 
 def _rejudge_event(claim: dict, ground_truth: object | None) -> Status:
