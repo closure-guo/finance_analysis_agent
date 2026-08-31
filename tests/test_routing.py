@@ -117,3 +117,30 @@ class TestAfterCitationDeescalation:
         """无失败率历史时上限语义不变（< 3 重试，>= 3 放行）。"""
         assert after_citation({"citation_pass": False, "iteration_count": 2}) == "retry"
         assert after_citation({"citation_pass": False, "iteration_count": 3}) == "render"
+
+
+class TestAfterCitationMinorFail:
+    """skip-citation-retry-on-minor-failures：FAIL≤1 且失败率≤5% 免重试。"""
+
+    def test_minor_fail_returns_render(self):
+        state = {
+            "citation_pass": False,
+            "citation_minor_fail": True,
+            "iteration_count": 1,
+            "citation_fail_rates": [0.022],
+        }
+        assert after_citation(state) == "render"
+
+    def test_non_minor_fail_still_retries(self):
+        state = {
+            "citation_pass": False,
+            "citation_minor_fail": False,
+            "iteration_count": 1,
+            "citation_fail_rates": [0.542],
+        }
+        assert after_citation(state) == "retry"
+
+    def test_cap_still_enforced_with_minor_flag(self):
+        """轮数上限优先：即使轻微失败标记为假但已达 3 轮仍渲染。"""
+        state = {"citation_pass": False, "citation_minor_fail": False, "iteration_count": 3}
+        assert after_citation(state) == "render"
