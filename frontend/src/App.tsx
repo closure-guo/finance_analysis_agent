@@ -383,14 +383,19 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
     let retryCount = 0
+    // 恢复指示退场阈值（fix: 后端持续不可用时「恢复会话中」永久占屏锁死主区）：
+    // 连续 3 次失败（约 3.5s）后退出恢复指示、放行空态首页，退避重试继续——
+    // 列表后续加载成功时 restoredRef 分支仍会自动恢复会话。
+    const BOOT_FAIL_LIMIT = 3
 
     const loadWithRetry = async () => {
       const loaded = await loadSessions()
       if (cancelled || loaded === null) {
         if (cancelled) return
-        // 退避：500ms, 1s, 2s, ... 封顶 10s，无限重试直到成功
-        const delay = Math.min(500 * Math.pow(2, retryCount), 10000)
         retryCount++
+        if (retryCount >= BOOT_FAIL_LIMIT) setBootRestoring(false)
+        // 退避：500ms, 1s, 2s, ... 封顶 10s，无限重试直到成功
+        const delay = Math.min(500 * Math.pow(2, retryCount - 1), 10000)
         setTimeout(loadWithRetry, delay)
         return
       }
