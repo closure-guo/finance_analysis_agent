@@ -473,6 +473,8 @@ export class StreamStore {
             filePaths: data.file_paths || undefined,
             durationMs: data.duration_ms,
             sessionId: data.session_id,
+            // 结构化引用（add-citation-display）：旧会话 citations 为 null 不挂载
+            ...(data.citations ? { citations: data.citations } : {}),
           }
         : null
 

@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react'
-import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
+import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot, Citation } from './types'
 import { ChartsSection } from './Charts'
 import { ReportFileDrawer } from './ReportFileDrawer'
 import { ReportNameBanner, AllFilesBanner, isExportableReport, formatReportTitle } from './ReportEntryBanners'
@@ -1805,6 +1805,88 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
   )
 }
 
+// ── Citation display（add-citation-display）──
+
+// 引用校验状态视觉：verified 绿 / failed 红 / unchecked 灰
+const VERDICT_STYLE: Record<string, { color: string; label: string; icon: string }> = {
+  verified: { color: 'var(--status-success-default)', label: '已验证', icon: 'fa-check-circle' },
+  failed: { color: 'var(--status-error-default)', label: '校验未通过', icon: 'fa-times-circle' },
+  unchecked: { color: 'var(--text-tertiary)', label: '未校验', icon: 'fa-minus-circle' },
+}
+
+// 行内引用上标：hover 懒渲染预览卡（claim/来源/校验状态）
+function CitationSup({ citation }: { citation: Citation }) {
+  const [hovered, setHovered] = useState(false)
+  const style = VERDICT_STYLE[citation.verdict] ?? VERDICT_STYLE.unchecked
+  return (
+    <span
+      className="relative inline-block"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <sup
+        data-testid={`citation-sup-${citation.id}`}
+        className="cursor-pointer font-mono text-[10px] mx-0.5 px-1 rounded"
+        style={{ color: style.color, background: 'var(--bg-overlay-l1)' }}
+      >
+        {citation.id.replace('cite-', '')}
+      </sup>
+      {/* 预览卡：hover 时才挂载（懒渲染，长报告上百标记不预挂） */}
+      {hovered && (
+        <span
+          data-testid={`citation-preview-${citation.id}`}
+          className="absolute bottom-full left-1/2 -translate-x-1/2 z-[80] w-64 mb-1.5 px-3 py-2 rounded-lg text-left shadow-lg block"
+          style={{ background: 'var(--bg-base-default)', border: '1px solid var(--border-neutral-l1)' }}
+        >
+          <span className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: style.color }}>
+            <i className={`fas ${style.icon}`}></i>
+            {style.label}
+            <span className="font-mono" style={{ color: 'var(--text-tertiary)' }}>[{citation.id.replace('cite-', '')}]</span>
+          </span>
+          <span className="block text-[11px] leading-relaxed mt-1" style={{ color: 'var(--text-secondary)' }}>
+            {citation.claim}
+          </span>
+          <span className="block text-[10px] mt-1 truncate font-mono" style={{ color: 'var(--text-tertiary)' }}>
+            <i className="fas fa-database mr-1"></i>
+            {citation.source}
+          </span>
+          <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+            {citation.detail}
+          </span>
+        </span>
+      )}
+    </span>
+  )
+}
+
+// 递归替换 React children 中的 [[cite-<id>]] 文本标记为上标组件。
+// 旧报告无引用数据时 citations 为空 → 原样返回（不渲染任何标记）。
+function withCitationMarks(children: ReactNode, citations: Citation[] | undefined): ReactNode {
+  if (!citations || citations.length === 0) return children
+  const byId = new Map(citations.map((c) => [c.id, c] as const))
+  const replaceText = (text: string, keyPrefix: string): ReactNode => {
+    const parts = text.split(/(\[\[cite-[A-Za-z0-9_-]+\]\])/g)
+    if (parts.length === 1) return text
+    return parts.map((part, i) => {
+      const m = part.match(/^\[\[cite-([A-Za-z0-9_-]+)\]\]$/)
+      if (!m) return part
+      const citation = byId.get(`cite-${m[1]}`) ?? byId.get(part.slice(2, -2))
+      return citation ? <CitationSup key={`${keyPrefix}-${i}`} citation={citation} /> : null
+    })
+  }
+  const walk = (node: ReactNode, keyPrefix: string): ReactNode => {
+    if (typeof node === 'string') return replaceText(node, keyPrefix)
+    if (typeof node === 'number') return node
+    if (Array.isArray(node)) return node.map((n, i) => walk(n, `${keyPrefix}-${i}`))
+    if (isValidElement(node)) {
+      const el = node as ReactElement<{ children?: ReactNode }>
+      return cloneElement(el, undefined, walk(el.props.children, `${keyPrefix}-c`))
+    }
+    return node
+  }
+  return walk(children, 'r')
+}
+
 // ── Report Card ──
 // adopt-assistant-ui-chat：经 AnalysisThread 的 data-report 部件挂载（导出供部件复用）
 export function ReportCard({ msg }: { msg: UIMessage }) {
@@ -1869,16 +1951,16 @@ export function ReportCard({ msg }: { msg: UIMessage }) {
                       h1: ({children}) => <h1 className="text-lg font-bold mt-4 mb-2" style={{ color: 'var(--text-default)' }}>{children}</h1>,
                       h2: ({children}) => <h2 className="text-base font-bold mt-4 mb-2 pb-1" style={{ color: 'var(--text-default)', borderBottom: '1px solid var(--border-neutral-l1)' }}>{children}</h2>,
                       h3: ({children}) => <h3 className="text-sm font-semibold mt-3 mb-1" style={{ color: 'var(--text-default)' }}>{children}</h3>,
-                      p: ({children}) => <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{children}</p>,
-                      ul: ({children}) => <ul className="text-sm mb-2 ml-4 list-disc" style={{ color: 'var(--text-secondary)' }}>{children}</ul>,
-                      ol: ({children}) => <ol className="text-sm mb-2 ml-4 list-decimal" style={{ color: 'var(--text-secondary)' }}>{children}</ol>,
-                      li: ({children}) => <li className="mb-0.5">{children}</li>,
-                      strong: ({children}) => <strong className="font-semibold" style={{ color: 'var(--text-default)' }}>{children}</strong>,
+                      p: ({children}) => <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</p>,
+                      ul: ({children}) => <ul className="text-sm mb-2 ml-4 list-disc" style={{ color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</ul>,
+                      ol: ({children}) => <ol className="text-sm mb-2 ml-4 list-decimal" style={{ color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</ol>,
+                      li: ({children}) => <li className="mb-0.5">{withCitationMarks(children, msg.citations)}</li>,
+                      strong: ({children}) => <strong className="font-semibold" style={{ color: 'var(--text-default)' }}>{withCitationMarks(children, msg.citations)}</strong>,
                       table: ({children}) => <table className="w-full text-xs border-collapse mb-2">{children}</table>,
                       th: ({children}) => <th className="border px-2 py-1 text-left" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }}>{children}</th>,
-                      td: ({children}) => <td className="border px-2 py-1" style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-neutral-l1)' }}>{children}</td>,
+                      td: ({children}) => <td className="border px-2 py-1" style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-neutral-l1)' }}>{withCitationMarks(children, msg.citations)}</td>,
                       hr: () => <hr className="my-3" style={{ borderColor: 'var(--border-neutral-l1)' }} />,
-                      blockquote: ({children}) => <blockquote className="border-l-2 pl-3 italic my-2" style={{ borderColor: 'var(--bg-brand)', color: 'var(--text-secondary)' }}>{children}</blockquote>,
+                      blockquote: ({children}) => <blockquote className="border-l-2 pl-3 italic my-2" style={{ borderColor: 'var(--bg-brand)', color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</blockquote>,
                     }}
                   >
                     {msg.reportMarkdown}
@@ -1936,6 +2018,50 @@ export function ReportCard({ msg }: { msg: UIMessage }) {
                       </div>
                     </a>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* 引用与校验列表（add-citation-display）：编号/声明/来源/校验状态，failed 红标可辨 */}
+            {!msg.streaming && msg.citations && msg.citations.length > 0 && (
+              <div className="px-5 py-4 border-t" data-testid="citation-list" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+                <div className="flex items-center gap-2 mb-3">
+                  <i className="fas fa-clipboard-check text-xs" style={{ color: 'var(--text-tertiary)' }}></i>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                    引用与校验（{msg.citations.length} 条声明）
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {msg.citations.map((c) => {
+                    const style = VERDICT_STYLE[c.verdict] ?? VERDICT_STYLE.unchecked
+                    return (
+                      <div
+                        key={c.id}
+                        data-testid={`citation-item-${c.id}`}
+                        className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+                        style={{ background: 'var(--bg-overlay-l1)' }}
+                      >
+                        <span className="font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>[{c.id.replace('cite-', '')}]</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{c.claim}</div>
+                          <div className="text-[10px] mt-0.5 truncate font-mono" style={{ color: 'var(--text-tertiary)' }}>
+                            <i className="fas fa-database mr-1"></i>{c.source}
+                          </div>
+                          {c.detail && (
+                            <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{c.detail}</div>
+                          )}
+                        </div>
+                        <span
+                          data-testid={`citation-verdict-${c.id}`}
+                          className="flex-shrink-0 flex items-center gap-1 text-[10px] font-medium"
+                          style={{ color: style.color }}
+                        >
+                          <i className={`fas ${style.icon}`}></i>
+                          {style.label}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}

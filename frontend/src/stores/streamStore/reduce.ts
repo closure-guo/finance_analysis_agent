@@ -189,6 +189,8 @@ function applyReportEvent(messages: UIMessage[], event: SSEEvent): UIMessage[] {
         sessionId: event.session_id,
         webSources: event.web_sources || [],
         streaming: false,
+        // 结构化引用（add-citation-display）：旧后端无该字段时不写入
+        ...(event.citations ? { citations: event.citations } : {}),
       }
       if (reportMsg) {
         return updateMessage(messages, reportMsg.id, updates)
