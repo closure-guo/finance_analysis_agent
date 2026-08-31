@@ -1308,7 +1308,8 @@ function MainContent({ children }: { children: (leftInset: number) => ReactNode 
   )
 }
 
-// Header 左侧按钮：桌面=折叠触发；移动端=打开抽屉
+// Header 左侧按钮：移动端=打开抽屉；桌面不渲染（侧边栏内「会话历史」标题栏
+// 已有折叠/展开引导按钮，消除左上角重复入口）
 function SidebarMenuButton() {
   const { isMobile, setOpenMobile } = useSidebar()
   if (isMobile) {
@@ -1318,7 +1319,7 @@ function SidebarMenuButton() {
       </Button>
     )
   }
-  return <SidebarTrigger />
+  return null
 }
 
 // 报告面板视口宿主：从 SidebarProvider 读移动端标记（add-report-side-panel 移动端回退）
