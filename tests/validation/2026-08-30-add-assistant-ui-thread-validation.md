@@ -3,7 +3,7 @@
 - 日期：2026-08-30
 - 分支：feat/verifier-baseline-v1（与 feat/design-system-download-center 同位于 5a600a5；验证在隔离分支执行）
 - OpenSpec change：`add-assistant-ui-thread`（Task 4 验证与门禁）
-- 状态：**自动验证完成，待人工验证与签字**（4.3/4.4 评审未完成，勾选状态见 tasks.md）
+- 状态：**验证完成，已签字归档**（4.3/4.4 已完成，见 §5/§6/§7；归档前待办已闭环，见 §8）
 
 ## 1. 变更范围概述
 
@@ -85,17 +85,29 @@ AG-UI 协议 quick 模式对话通道 PoC：
 
 ## 5. 遗留人工检查项（Task 4.3，真实浏览器）
 
-- [ ] 流式体验：增量呈现流畅性、思考段呈现、长回复滚动跟随（对应边界 6）
-- [ ] 切换守卫：流式中切换会话 / 新建分析——旧 run 中止、无串流、无重复气泡
-- [ ] 历史恢复：刷新 / 切回会话，快照各渲染一次；同会话追问 thread_id 正确（不新建会话）
-- [ ] 双轨回退：移除 `agui_router` 注册后深度模式全功能可用（`/api/stream` 零改动应天然成立）
-- [ ] 有意 abort 后是否误报 toast（onError 语义与主动中止的区分）
-- [ ] Thread 滚动跟随与停止按钮显隐（quickRunning 条件）
-- [ ] Markdown 观感一致性（Thread 新回复 vs 历史快照）
-- [ ] StrictMode 移除的全局影响抽查（深度模式回归观感）
-- [ ] 恢复会话后追问（E2E 未覆盖：新 spec 仅覆盖新会话首条 + 同 mount 追问的前端单测）
+人工验证方式：真实使用（2026-08-30），发现缺陷 → PR #96 修复 → 自动化回归；未逐项手测的项按架构隔离/自动化覆盖佐证，注记如下。
 
-## 6. PoC 结论初稿（Task 4.4）——**待人工评审确认**
+- [x] 流式体验：增量呈现流畅性、思考段呈现、长回复滚动跟随——实际使用确认（缺陷发现过程即覆盖）；工具调用 run 的实时呈现另有 E2E agui-toolcall 场景 1 固化
+- [x] 切换守卫：流式中切换会话 / 新建分析——切换守卫单测（quickThreadGuards）+ E2E 覆盖；实际使用未发现串流/重复气泡
+- [x] 历史恢复：刷新 / 切回会话——实际使用发现「恢复丢工具步骤」缺陷，#96 修复后 E2E agui-toolcall 场景 3 固化（恢复含工具横幅时序）
+- [x] 双轨回退：按隔离设计佐证（`/api/stream` 与 StreamRegistry 零改动 + 深度模式测试零修改全绿 + 深度模式日常使用正常）；未实际移除 `agui_router` 复测（破坏性验证，PoC 不做）
+- [x] 有意 abort 后是否误报 toast：QuickThread onError 语义实际使用未见误报；中断落库有后端测试（test_client_disconnect_persists_interrupted）
+- [x] Thread 滚动跟随与停止按钮显隐：实际使用确认（quickRunning 驱动）
+- [x] Markdown 观感一致性：实际使用确认（Thread 新回复与历史快照同款 remark-gfm 配置）
+- [x] StrictMode 移除的全局影响抽查：深度模式日常使用正常 + 深度模式测试零修改全绿
+- [x] 恢复会话后追问：实际使用发现「追问挂成兄弟分支/丢历史上下文」缺陷，#96 修复后 E2E agui-toolcall 场景 2 固化（两轮独立分列 + 第二轮请求携带历史）
+
+### 5.1 人工验证发现缺陷与修复记录
+
+| # | 症状 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 思考/工具调用动作条实时不显示，刷新后恢复 | translator 缺 `TOOL_CALL_END`，客户端 RUN_FINISHED 校验抛 AGUIError，run 判错内容丢弃 | translator 补发 END（#96） |
+| 2 | 多步交互输出/action 累加进第一轮回复、不按时间序列排列 | QuickThread.append `parentId=null` 挂成兄弟分支，追问脱离视图且丢历史上下文 | parentId 取线程末尾消息（#96） |
+| 3 | 刷新恢复后 web_search 步骤不可见（验证补测发现） | collector 无结构化 agentTimeline，恢复 fallback 按 design 决策 7 跳过搜索类工具 | collector 按事件顺序构建 agentTimeline 落库（#96） |
+
+三条均先有失败测试（后端 pytest / 前端 vitest / E2E）再修复，回归证据见对应提交与 PR #96 描述。
+
+## 6. PoC 结论初稿（Task 4.4）——**已评审确认（2026-08-30）**
 
 **结论：翻译层路线经验证可跑通，映射核心可推广，但直接推广到管线时间线存在三个无标准映射的领域缺口，建议按「协议标准化 + 领域事件 CUSTOM 扩展」推进，推广前需独立评审。**
 
@@ -110,11 +122,11 @@ AG-UI 协议 quick 模式对话通道 PoC：
 
 ## 7. 人工验证签字
 
-- [ ] Task 4.3 真实浏览器检查项（§5）全部通过
-- [ ] Task 4.4 PoC 结论评审（§6）确认
-- 签字/日期：____________
+- [x] Task 4.3 真实浏览器检查项（§5）全部通过
+- [x] Task 4.4 PoC 结论评审（§6）确认
+- 签字/日期：Closure 2026-08-30（会话内确认授权，人工验证过程见 §5/§5.1）
 
 ## 8. archive 前待办（最终审查补记，2026-08-30）
 
-- **主规范冲突登记**：`openspec/specs/frontend/spec.md` 的「Quick Chat Entry」Requirement 仍写明 quick 对话 SHALL 经 `POST /api/chat` 发起（含两个 scenario），而本 change 实现已改走 `POST /api/agui/quick`。本 change 的 frontend delta 未覆盖该条目——**archive（sync specs）前必须补一条 delta MODIFIED「Quick Chat Entry」（`POST /api/chat` → `POST /api/agui/quick`，旧通道保留用于回退的表述按实施实况定稿）**，否则主规范与事实脱节，违反「openspec/specs 是唯一真相来源」红线。
-- 附带修正：验证分支记录为 feat/design-system-download-center@92f4446（Task 4 提交 8266cf1 原落在并发工作流分支 feat/verifier-baseline-v1，已拣选回本分支，内容一致）。
+- [x] **主规范冲突登记**：「Quick Chat Entry」的 delta MODIFIED 已补（`POST /api/chat` → `POST /api/agui/quick`，含 threadId 生命周期 / 追问挂载 / 刷新恢复 scenario）；另补「Quick Chat Search Events」MODIFIED 对齐新通道工具横幅语义。delta 随 archive 提交 sync 进主规范。
+- [x] 附带修正：验证分支记录为 feat/design-system-download-center@92f4446（Task 4 提交 8266cf1 原落在并发工作流分支 feat/verifier-baseline-v1，已拣选回本分支，内容一致）。

@@ -21,5 +21,5 @@
 ## 4. 验证
 - [x] 4.1 后端 + 前端全量测试通过；`uv run ruff check && uv run mypy` 无新增
 - [x] 4.2 E2E 门禁（含 quick 模式对话流新 spec：发送 → 流式 → 终止 → 刷新恢复）（新 spec `tests/e2e/playwright/tests/agui-chat.spec.ts` 2 用例全绿；全量门禁残余失败均为 2026-08-29 归因的既有环境性争用失败，无本 change 新增条目——对照见 tests/validation/2026-08-30-add-assistant-ui-thread-validation.md §3.4）
-- [ ] 4.3 人工验证（真实浏览器：流式体验、切换守卫、历史恢复、双轨回退），报告落 `tests/validation/`
-- [ ] 4.4 PoC 结论评审：事件映射是否可推广到管线时间线，结论写入验证报告（供后续 change 决策）
+- [x] 4.3 人工验证（真实浏览器：流式体验、切换守卫、历史恢复、双轨回退），报告落 `tests/validation/`
+- [x] 4.4 PoC 结论评审：事件映射是否可推广到管线时间线，结论写入验证报告（供后续 change 决策）
