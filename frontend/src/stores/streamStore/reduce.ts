@@ -134,6 +134,8 @@ function applyPipelineEvent(messages: UIMessage[], event: SSEEvent): UIMessage[]
         },
         layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
         content: `${event.layer}: ${event.desc} ✓`,
+        // 管线完成时刻（enhance-pipeline-progress：完成摘要条总用时数据源）
+        ...(event.progress >= 1 ? { completedAt: Date.now() } : {}),
       })
 
     case 'thinking_token':

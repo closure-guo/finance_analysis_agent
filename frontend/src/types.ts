@@ -366,6 +366,9 @@ export interface UIMessage {
   progress?: number
   // 管线启动时间戳（ms epoch），用于 ETA 已用时长计算
   startedAt?: number
+  // 管线完成时刻（enhance-pipeline-progress：live 路径 node_complete progress=1 落值，
+  // 完成摘要条总用时数据源；重建路径用 durationMs）
+  completedAt?: number
   // 分层时间轴状态树（redesign delta）：node_start/node_complete 驱动的 6 层→子节点状态
   layerTree?: import('./pipelineTree').LayerNode[]
   // Report-specific

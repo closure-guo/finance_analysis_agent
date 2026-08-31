@@ -1639,13 +1639,17 @@ function getFavicon(url: string) {
 }
 
 // ── Pipeline Card ──
-// adopt-assistant-ui-chat：经 AnalysisThread 的 data-pipeline 部件挂载（导出供部件复用）
+// adopt-assistant-ui-chat：经 AnalysisThread 的 data-pipeline 部件挂载（导出供部件复用）。
+// enhance-pipeline-progress：管线完成后时间线折叠为单行摘要条（阶段数 + 总用时），点击可再展开。
 export function PipelineCard({ msg }: { msg: UIMessage }) {
   const [showLog, setShowLog] = useState(false)
   const completed = msg.completedNodes || []
   const current = msg.currentNode || ''
   const progress = msg.progress || 0
   const outputs = msg.nodeOutputs || {}
+  // 完成折叠（delta spec）：progress=1 为完成态，摘要条默认收起、点击展开全部节点
+  const isCompleted = progress === 1
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
 
   // ETA 每秒刷新（仅管线运行中；完成后停止计时）
   const pipelineDone = completed.includes('generate_file') || completed.includes('fund_manager')
@@ -1662,6 +1666,13 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
   const etaText = pipelineDone
     ? `总耗时 ${formatDurationMs(elapsedMs)}`
     : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
+  // 完成摘要条总用时：重建路径 durationMs（报告耗时）优先，live 路径用 completedAt-startedAt
+  const totalMs = msg.durationMs ?? (msg.completedAt && msg.startedAt ? msg.completedAt - msg.startedAt : elapsedMs)
+  // 阶段数：completedNodes 优先；重建会话该字段为空，从 layerTree 统计已完成子节点回退
+  const completedCount =
+    completed.length > 0
+      ? completed.length
+      : (msg.layerTree ?? []).reduce((acc, layer) => acc + layer.children.filter(c => c.status === 'completed').length, 0)
 
   // 分层时间轴状态树（无事件数据的历史会话回退为空树，PipelineTimeline 空渲染）
   const layerTree = msg.layerTree ?? buildLayerTree()
@@ -1683,6 +1694,24 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
           <div className="msg-system rounded-xl rounded-tl-sm overflow-hidden flex-1">
+            {/* 完成摘要条（enhance-pipeline-progress）：折叠为单行（阶段数 + 总用时），点击展开/收起 */}
+            {isCompleted && (
+              <button
+                type="button"
+                data-testid="pipeline-summary"
+                aria-expanded={summaryExpanded}
+                onClick={() => setSummaryExpanded(v => !v)}
+                className="w-full flex items-center gap-2 px-5 py-3 text-left"
+              >
+                <i className={`fas ${summaryExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} text-[10px]`} style={{ color: 'var(--text-tertiary)' }}></i>
+                <i className="fas fa-check-circle text-xs" style={{ color: 'var(--status-success-default)' }}></i>
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  分析完成 · {completedCount} 个阶段 · 总耗时 {formatDurationMs(totalMs)}
+                </span>
+              </button>
+            )}
+            {(!isCompleted || summaryExpanded) && (
+            <>
             {/* Progress Pipeline */}
             <div className="px-5 pt-4 pb-2">
               <div className="flex items-center justify-between mb-4">
@@ -1767,6 +1796,8 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
                 </div>
               </div>
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>

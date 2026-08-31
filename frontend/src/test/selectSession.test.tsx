@@ -177,6 +177,8 @@ describe('selectSession 按会话状态恢复管线', () => {
     stubFetchWithSessionList('s1', '已完成会话', [{ ok: true, body: detail }])
 
     await renderAndSelect('s1', '已完成会话')
+    // enhance-pipeline-progress：完成态时间线默认折叠为摘要条，展开后执行原断言
+    fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     // 报告消息渲染（ReactMarkdown 渲染 markdown 内容）
     expect(screen.getByText('交易决策报告')).toBeInTheDocument()
@@ -490,6 +492,8 @@ describe('selectSession 结构化时序恢复（persist-full-session-timeline）
     stubFetchWithSessionList('s1', '结构化管线会话', [{ ok: true, body: detail }])
 
     await renderAndSelect('s1', '结构化管线会话')
+    // enhance-pipeline-progress：完成态时间线默认折叠为摘要条，展开后执行原断言
+    fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     // 管线消息渲染 nodeTimelines 分组：节点角色名标题 + 该节点思考横幅
     expect(screen.getByText('多头分析师')).toBeInTheDocument()
@@ -519,6 +523,8 @@ describe('selectSession 结构化时序恢复（persist-full-session-timeline）
     stubFetchWithSessionList('s1', '旧版管线会话', [{ ok: true, body: detail }])
 
     await renderAndSelect('s1', '旧版管线会话')
+    // enhance-pipeline-progress：完成态时间线默认折叠为摘要条，展开后执行原断言
+    fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     // 时间轴树照常恢复，但无节点时序分组（无角色名标题）
     expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
@@ -568,6 +574,8 @@ describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
     stubFetchWithSessionList('s1', '多轮澄清会话', [{ ok: true, body: detail }])
 
     await renderAndSelect('s1', '多轮澄清会话')
+    // enhance-pipeline-progress：完成态时间线默认折叠为摘要条，展开后执行原断言
+    fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     const user1 = screen.getByText('分析热门股票')
     const user2 = screen.getByText('中际旭创')
@@ -601,6 +609,8 @@ describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
     stubFetchWithSessionList('s1', '追问会话', [{ ok: true, body: detail }])
 
     await renderAndSelect('s1', '追问会话')
+    // enhance-pipeline-progress：完成态时间线默认折叠为摘要条，展开后执行原断言
+    fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     const user1 = screen.getByText('分析茅台')
     const user2 = screen.getByText('再看看风险')
@@ -629,6 +639,8 @@ describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
     stubFetchWithSessionList('s1', '旧版会话', [{ ok: true, body: detail }])
 
     await renderAndSelect('s1', '旧版会话')
+    // enhance-pipeline-progress：完成态时间线默认折叠为摘要条，展开后执行原断言
+    fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     const user1 = screen.getByText('分析茅台')
     const timeline = screen.getByTestId('pipeline-timeline')
