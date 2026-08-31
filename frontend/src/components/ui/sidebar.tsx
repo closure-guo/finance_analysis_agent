@@ -8,6 +8,7 @@
 // - 收起态图标 tooltip（TooltipProvider 由 Provider 统一挂载）
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip'
+import { MenuToggleIcon } from './menu-toggle-icon'
 import { cn } from '../../lib/utils'
 
 export type SidebarState = 'expanded' | 'collapsed'
@@ -145,9 +146,11 @@ export function Sidebar({
   )
 }
 
-// 折叠触发按钮（Header 内使用；收起态图标栏自含展开按钮）
-export function SidebarTrigger({ className }: { className?: string }) {
-  const { toggleSidebar } = useSidebar()
+// 折叠触发按钮（Header 内使用；收起态图标栏自含展开按钮）。
+// 图标为「汉堡 ⇄ X」形变（MenuToggleIcon，open 由侧边栏状态驱动）；
+// 传入 children 可覆盖默认图标。
+export function SidebarTrigger({ className, children }: { className?: string; children?: ReactNode }) {
+  const { state, toggleSidebar } = useSidebar()
   return (
     <button
       type="button"
@@ -156,7 +159,7 @@ export function SidebarTrigger({ className }: { className?: string }) {
       onClick={toggleSidebar}
       className={cn('inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted', className)}
     >
-      <i className="fas fa-bars text-sm"></i>
+      {children ?? <MenuToggleIcon open={state === 'expanded'} className="size-5" />}
     </button>
   )
 }

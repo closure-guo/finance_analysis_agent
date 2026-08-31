@@ -30,6 +30,7 @@ import {
 import { SUGGESTION_CARDS } from './config/suggestions'
 import { formatSessionTime } from './lib/format'
 import { CommandPalette } from './CommandPalette'
+import { MenuToggleIcon } from './components/ui/menu-toggle-icon'
 import { loadThemeChoice, saveThemeChoice, applyTheme, watchSystemTheme, type ThemeChoice } from './theme'
 import { useHotkeys } from './hooks/useHotkeys'
 import { Toaster } from './components/ui/sonner'
@@ -1089,7 +1090,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
       <Sidebar expandedRail={null} collapsedRail={
         <div className="flex flex-col items-center py-4 gap-2 h-full">
           <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="展开侧边栏">
-            <i className="fas fa-bars"></i>
+            <MenuToggleIcon open={false} className="size-5" />
           </Button>
           <SidebarIcon label="新建分析">
             <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
