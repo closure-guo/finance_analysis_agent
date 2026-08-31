@@ -28,6 +28,10 @@ import {
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu'
 import { SUGGESTION_CARDS } from './config/suggestions'
+import { formatSessionTime } from './lib/format'
+import { CommandPalette } from './CommandPalette'
+import { loadThemeChoice, saveThemeChoice, applyTheme, watchSystemTheme, type ThemeChoice } from './theme'
+import { useHotkeys } from './hooks/useHotkeys'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -98,17 +102,6 @@ const getUserId = (): string => {
     localStorage.setItem(KEY, uid)
   }
   return uid
-}
-
-// 格式化会话时间，对非法/缺失的 created_at 兜底，绝不返回 "Invalid Date"
-function formatSessionTime(ts: string | undefined | null): string {
-  if (!ts) return '未知时间'
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return '未知时间'
-  // 后端用 epoch 占位的脏数据（无法还原真实时间）。浏览器解析 ISO 字符串时
-  // 可能按本地时区得到 epoch 之前的负值时间戳，所以用 <= 0 或年份 <= 1970 兜底。
-  if (d.getTime() <= 0 || d.getFullYear() <= 1970) return '未知时间'
-  return d.toLocaleString()
 }
 
 // 从 stream.phase 派生视图状态（替代原 appState 的流相关部分）
@@ -274,6 +267,26 @@ export default function App() {
   const [quickRunning, setQuickRunning] = useState(false)
   // 空态退场动画（replicate-chat-home）：首条消息发出后空态 200ms 淡出再卸载
   const [emptyLeaving, setEmptyLeaving] = useState(false)
+  // 命令面板（polish-dark-mode-shortcuts）：Cmd/Ctrl+K 打开
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  // 主题三态（polish-dark-mode-shortcuts）：浅色/深色/跟随系统，持久化 + 系统跟随
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => loadThemeChoice())
+  useEffect(() => {
+    applyTheme(themeChoice)
+    const unwatch = watchSystemTheme(() => {
+      if (loadThemeChoice() === 'system') applyTheme('system')
+    })
+    return unwatch
+  }, [themeChoice])
+  const cycleTheme = useCallback(() => {
+    setThemeChoice((prev) => {
+      const next: ThemeChoice = prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light'
+      saveThemeChoice(next)
+      return next
+    })
+  }, [])
+  // `/` 聚焦输入框：经包装容器定位 Composer 内部 textarea
+  const composerWrapRef = useRef<HTMLDivElement>(null)
   // 重挂载纪元：会话切换/新建时 +1 → Thread 重置（切换守卫：abort 旧 run + 快照恢复不重复）
   const [aguiEpoch, setAguiEpoch] = useState(0)
   const quickThreadRef = useRef<QuickThreadHandle>(null)
@@ -765,11 +778,13 @@ export default function App() {
 
   // Composer 插槽：assistant-ui 输入区（Enter 发送 / Shift+Enter 换行 / 空禁用发送）
   const composerInput = (
-    <ComposerPrimitive.Input
-      placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
-      className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
-      style={{ color: 'var(--text-default)' }}
-    />
+    <div ref={composerWrapRef} className="flex-1 flex" data-testid="composer-wrap">
+      <ComposerPrimitive.Input
+        placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
+        className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+        style={{ color: 'var(--text-default)' }}
+      />
+    </div>
   )
   const composerSend = (
     <>
@@ -795,6 +810,27 @@ export default function App() {
     </>
   )
 
+  // 快捷键集中注册（polish-dark-mode-shortcuts Task 3.1/3.2）：
+  // Ctrl/Cmd+K 命令面板；Ctrl/Cmd+Shift+N 新建会话；`/` 聚焦输入框（输入态抑制在 useHotkeys 内）
+  useHotkeys([
+    { key: 'k', modifiers: ['ctrl', 'meta'], description: '打开命令面板', handler: () => setPaletteOpen(true), allowInInput: true },
+    {
+      key: 'n',
+      modifiers: ['ctrl', 'meta', 'shift'],
+      description: '新建会话',
+      handler: () => newAnalysis(),
+      allowInInput: true,
+    },
+    {
+      key: '/',
+      description: '聚焦输入框',
+      handler: () => {
+        const ta = composerWrapRef.current?.querySelector('textarea')
+        ta?.focus()
+      },
+    },
+  ])
+
   return (
     <SidebarProvider>
       <AppSidebar
@@ -805,6 +841,8 @@ export default function App() {
         onRename={renameSession}
         onNew={newAnalysis}
         onOpenDownloads={() => navigate('/downloads')}
+        themeChoice={themeChoice}
+        onCycleTheme={cycleTheme}
         runningSessionIds={runningSessionIds}
         loading={!sessionsLoaded}
       />
@@ -988,6 +1026,18 @@ export default function App() {
           摘要卡「打开报告」点击时已同步展开消息流内完整区作为回退） */}
       <ReportSidePanelWithViewport msg={panelMessage} onClose={() => setPanelMessage(null)} />
 
+      {/* 命令面板（polish-dark-mode-shortcuts）：Cmd/Ctrl+K */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        sessions={sessions}
+        onSelectSession={selectSession}
+        onNewSession={newAnalysis}
+        onOpenDownloads={() => navigate('/downloads')}
+        onCycleTheme={cycleTheme}
+        themeChoice={themeChoice}
+      />
+
       {/* 全局 toast 容器（shadcn/sonner 封装；仅挂载，暂无调用方） */}
       <Toaster />
     </SidebarProvider>
@@ -995,7 +1045,7 @@ export default function App() {
 }
 
 // ── Sidebar（add-collapsible-sidebar：shadcn Sidebar 原语重构）──
-function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, onOpenDownloads, runningSessionIds, loading = false }: {
+function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, onOpenDownloads, runningSessionIds, loading = false, themeChoice, onCycleTheme }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
@@ -1005,6 +1055,8 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   onOpenDownloads: () => void
   runningSessionIds: Set<string>
   loading?: boolean
+  themeChoice: ThemeChoice
+  onCycleTheme: () => void
 }) {
   const { state, setOpenMobile, toggleSidebar } = useSidebar()
   const collapsed = state === 'collapsed'
@@ -1037,6 +1089,11 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
           <SidebarIcon label="新建分析">
             <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
               <i className="fas fa-plus text-xs"></i>
+            </Button>
+          </SidebarIcon>
+          <SidebarIcon label={`主题：${themeChoice === 'system' ? '跟随系统' : themeChoice === 'dark' ? '深色' : '浅色'}`}>
+            <Button variant="ghost" size="icon" onClick={onCycleTheme} aria-label="切换主题" data-testid="theme-toggle-collapsed">
+              <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : themeChoice === 'light' ? 'fa-sun' : 'fa-adjust'} text-xs`}></i>
             </Button>
           </SidebarIcon>
           <div className="flex-1" />
@@ -1180,8 +1237,8 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
         )}
       </div>
 
-      {/* 下载管理入口（add-download-center）：底部固定区 */}
-      <div className="p-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
+      {/* 下载管理入口（add-download-center）：底部固定区 + 主题切换（polish-dark-mode-shortcuts） */}
+      <div className="p-3 flex flex-col gap-1" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
         <Button
           variant="ghost"
           onClick={onOpenDownloads}
@@ -1190,6 +1247,15 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
         >
           <i className="fas fa-download text-xs"></i>
           下载管理
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={onCycleTheme}
+          data-testid="theme-toggle"
+          className="w-full justify-start text-sm text-secondary hover:text-foreground"
+        >
+          <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : themeChoice === 'light' ? 'fa-sun' : 'fa-adjust'} text-xs`}></i>
+          主题：{themeChoice === 'system' ? '跟随系统' : themeChoice === 'dark' ? '深色' : '浅色'}
         </Button>
       </div>
 
