@@ -75,6 +75,16 @@ def _run_deep(inp: dict) -> dict:
         "judge_vars": extract_judge_vars(state, query=inp.get("query", "")),
         "mode": "deep",
         "skipped": None,
+        # harden-citation-semantic-coverage：引用指标进实验报告（citation_pass
+        # 布尔转 0/1；citation_coverage 缺失→None 不计入）
+        "citation_pass": (
+            float(state["citation_pass"]) if state.get("citation_pass") is not None else None
+        ),
+        "citation_coverage": (
+            float(state["citation_coverage"])
+            if state.get("citation_coverage") is not None
+            else None
+        ),
     }
 
 
