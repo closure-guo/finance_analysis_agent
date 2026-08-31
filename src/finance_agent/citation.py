@@ -39,6 +39,10 @@ class Claim(BaseModel):
     stated_value: float | str
     interpretation: str
     field_ref_b: str | None = None  # 比较型 claim 的第二个值路径
+    # harden-citation-semantic-coverage：术语/期次申报。None = 未申报（旧格式），
+    # 校验器跳过对应检查并计覆盖缺口（显式降级，不静默 PASS）。
+    metric_name: str | None = None  # 指标枚举（中文规范键或别名，见 metric_vocab）
+    period: str | None = None  # 期次（2024 / 2025Q2 / 2026-08-28 / 2026-07）
 
 
 class CitationResult(BaseModel):
@@ -48,7 +52,20 @@ class CitationResult(BaseModel):
     claim: Claim
     ground_truth: float | str | None = None
     delta: float | None = None
-    coverage_gap: bool = False  # 计算型 claim 根键未注册 → True（覆盖缺口指标）
+    coverage_gap: bool = False  # 覆盖缺口（未注册根键 / 未申报术语期次）
+    # FAIL 分桶（harden-citation-semantic-coverage）：value_mismatch=值级（gt 存在且
+    # 超容差，定向重试）；path_unresolvable=路径/事件不可解析；semantic_*=术语/期次
+    # 张冠李戴；internal_inconsistency=stated 与 interpretation 两张皮/方向矛盾。
+    bucket: (
+        Literal[
+            "value_mismatch",
+            "path_unresolvable",
+            "semantic_term_mismatch",
+            "semantic_period_mismatch",
+            "internal_inconsistency",
+        ]
+        | None
+    ) = None
 
 
 class CitationReport(BaseModel):
@@ -204,15 +221,33 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
         else:
             return CitationResult(status="UNVERIFIABLE", claim=claim)
         if current is None:
-            return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
+            return CitationResult(
+                status="FAIL",
+                claim=claim,
+                ground_truth=None,
+                delta=None,
+                bucket="path_unresolvable",
+            )
 
     if not isinstance(current, int | float | str):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
+        return CitationResult(
+            status="FAIL",
+            claim=claim,
+            ground_truth=None,
+            delta=None,
+            bucket="path_unresolvable",
+        )
     try:
         ground_truth = float(current)
         stated = float(claim.stated_value)
     except (TypeError, ValueError):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
+        return CitationResult(
+            status="FAIL",
+            claim=claim,
+            ground_truth=None,
+            delta=None,
+            bucket="path_unresolvable",
+        )
     delta = abs(ground_truth - stated)
 
     # 相对容差 0.5%（FinGround 标准）
@@ -223,6 +258,7 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
         claim=claim,
         ground_truth=ground_truth,
         delta=delta,
+        bucket=None if passed else "value_mismatch",
     )
 
 
@@ -234,18 +270,36 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     """
     ground_truth = _resolve_field_ref(claim.field_ref, state)
     if not isinstance(ground_truth, int | float | str):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
+        return CitationResult(
+            status="FAIL",
+            claim=claim,
+            ground_truth=None,
+            delta=None,
+            bucket="path_unresolvable",
+        )
     try:
         gt_float = float(ground_truth)
         sv_float = float(claim.stated_value)
     except (TypeError, ValueError):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None, delta=None)
+        return CitationResult(
+            status="FAIL",
+            claim=claim,
+            ground_truth=None,
+            delta=None,
+            bucket="path_unresolvable",
+        )
     delta = abs(gt_float - sv_float)
     # fix-citation-contract-diseases 修 C：|delta|<0.01 或相对误差<0.5%
     # （与计算型容差对齐；绝对 0.01 对亿元级数值是假阴性——LLM 须精确到分才过）
     tol = max(0.01, abs(gt_float) * 0.005)
     status: Literal["PASS", "FAIL"] = "PASS" if delta < tol else "FAIL"
-    return CitationResult(status=status, claim=claim, ground_truth=gt_float, delta=delta)
+    return CitationResult(
+        status=status,
+        claim=claim,
+        ground_truth=gt_float,
+        delta=delta,
+        bucket=None if status == "PASS" else "value_mismatch",
+    )
 
 
 def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
@@ -253,13 +307,17 @@ def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
     val_a = _resolve_field_ref(claim.field_ref, state)
     val_b = _resolve_field_ref(claim.field_ref_b, state) if claim.field_ref_b else None
     if not isinstance(val_a, int | float | str) or not isinstance(val_b, int | float | str):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None)
+        return CitationResult(
+            status="FAIL", claim=claim, ground_truth=None, bucket="path_unresolvable"
+        )
 
     try:
         a = float(val_a)
         b = float(val_b)
     except (TypeError, ValueError):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None)
+        return CitationResult(
+            status="FAIL", claim=claim, ground_truth=None, bucket="path_unresolvable"
+        )
     delta = abs(a - b)
     direction = str(claim.stated_value)
 
@@ -273,14 +331,22 @@ def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
         return CitationResult(status="UNVERIFIABLE", claim=claim)
 
     status: Literal["PASS", "FAIL"] = "PASS" if passed else "FAIL"
-    return CitationResult(status=status, claim=claim, ground_truth=a, delta=delta)
+    return CitationResult(
+        status=status,
+        claim=claim,
+        ground_truth=a,
+        delta=delta,
+        bucket=None if passed else "value_mismatch",
+    )
 
 
 def _verify_event(claim: Claim, state: dict) -> CitationResult:
     """事件型 claim：验证引用的事件存在于 key_events。"""
     key_events = state.get("key_events", [])
     if not isinstance(key_events, list):
-        return CitationResult(status="FAIL", claim=claim, ground_truth=None)
+        return CitationResult(
+            status="FAIL", claim=claim, ground_truth=None, bucket="path_unresolvable"
+        )
 
     event_title = claim.field_ref
     for event in key_events:
@@ -289,10 +355,15 @@ def _verify_event(claim: Claim, state: dict) -> CitationResult:
             if claim.stated_value and event.get("date"):
                 if str(event["date"]) == str(claim.stated_value):
                     return CitationResult(status="PASS", claim=claim, ground_truth=event["date"])
-                return CitationResult(status="FAIL", claim=claim, ground_truth=event["date"])
+                return CitationResult(
+                    status="FAIL",
+                    claim=claim,
+                    ground_truth=event["date"],
+                    bucket="value_mismatch",
+                )
             return CitationResult(status="PASS", claim=claim)
 
-    return CitationResult(status="FAIL", claim=claim, ground_truth=None)
+    return CitationResult(status="FAIL", claim=claim, ground_truth=None, bucket="path_unresolvable")
 
 
 def verify_claims(claims: list[Claim], state: dict) -> list[CitationResult]:

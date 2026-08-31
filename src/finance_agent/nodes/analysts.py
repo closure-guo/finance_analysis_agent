@@ -74,6 +74,11 @@ def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
         for field in ("field_ref", "stated_value", "interpretation"):
             if claim.get(field) is None:
                 claim[field] = ""
+        # metric_name/period 为可选申报字段：非 None 时统一转 str（LLM 偶发
+        # 把 period 输出成 int 2024），缺省保持 None（None = 未申报，校验跳过）。
+        for field in ("metric_name", "period"):
+            if claim.get(field) is not None:
+                claim[field] = str(claim[field])
     return data
 
 
