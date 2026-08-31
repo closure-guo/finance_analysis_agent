@@ -393,7 +393,9 @@ def _resolve_index_period(field_ref: str, state: dict) -> str | None:
     """索引锚定引用（无显式期次段）从 state 解析实际期次标签；解析不出返回 None。
 
     technical_indicators.X.Y.<idx> → kline 日期列同索引（序列与 kline 等长、升序）；
-    macro_indicators.<key>.<idx>.<列> → records[idx]["月份"]；
+    macro_indicators.<key>.<idx>.<列> → records[idx]["月份"]
+        （4 段式索引在 parts[2]，亦接受键上括号 macro_indicators.<key>[<idx>].<列>；
+        T3 修复：旧实现只看 parts[-1]，macro 期次恒解析不出、静默降级为缺口）；
     quarterly_trend.<key>[<idx>] → quarters[idx]。
     """
     import re as _re
@@ -401,23 +403,35 @@ def _resolve_index_period(field_ref: str, state: dict) -> str | None:
     parts = field_ref.split(".")
     root = parts[0] if parts else ""
     idx: int | None = None
-    m = _re.match(r"^-?\d+$", parts[-1]) if parts else None
-    bracket = _re.search(r"\[(-?\d+)\]$", parts[-1]) if parts else None
-    if bracket:
-        idx = int(bracket.group(1))
-    elif m and root in {"technical_indicators", "macro_indicators", "quarterly_trend"}:
-        idx = int(parts[-1])
-    if idx is None:
-        return None
     try:
-        if root == "technical_indicators":
-            dates = state["kline"]["日期"]
-            return str(dates.iloc[idx])
-        if root == "macro_indicators" and len(parts) >= 3:
-            recs = state["macro_indicators"][parts[1]]
+        if root == "macro_indicators":
+            if len(parts) < 3:
+                return None
+            key = parts[1]
+            bracket = _re.search(r"\[(-?\d+)\]$", key)
+            if bracket:
+                idx = int(bracket.group(1))
+                key = key[: bracket.start()]
+            elif _re.match(r"^-?\d+$", parts[2]):
+                idx = int(parts[2])
+            if idx is None:
+                return None
+            recs = state["macro_indicators"][key]
             if isinstance(recs, dict):
                 recs = recs.get("records") or []
             return str(recs[idx].get("月份", "")) or None
+
+        m = _re.match(r"^-?\d+$", parts[-1]) if parts else None
+        bracket = _re.search(r"\[(-?\d+)\]$", parts[-1]) if parts else None
+        if bracket:
+            idx = int(bracket.group(1))
+        elif m and root in {"technical_indicators", "quarterly_trend"}:
+            idx = int(parts[-1])
+        if idx is None:
+            return None
+        if root == "technical_indicators":
+            dates = state["kline"]["日期"]
+            return str(dates.iloc[idx])
         if root == "quarterly_trend":
             return str(state["quarterly_trend"]["quarters"][idx]) or None
     except (KeyError, IndexError, TypeError, AttributeError):

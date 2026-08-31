@@ -55,6 +55,8 @@ _METRIC_ALIASES: dict[str, list[str]] = {
     "pmi": ["pmi", "采购经理指数", "制造业pmi"],
     "m2": ["m2", "广义货币供应量", "广义货币"],
     "lpr": ["lpr", "贷款市场报价利率"],
+    # quarterly_trend
+    "yoy": ["yoy", "同比", "同比增速"],
     # 报表常用行（field_ref 指标段即列名，别名收敛到真实列名）
     "营业总收入": ["营业总收入", "营业收入", "营收", "总收入", "revenue"],
     "净利润": ["净利润", "net_profit", "net profit"],

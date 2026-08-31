@@ -151,6 +151,11 @@ class TestSemanticPeriodCheck:
         assert r.bucket == "semantic_period_mismatch"
 
     def test_macro_index_period_resolved_from_records(self):
+        """macro 4 段式（索引在 parts[2]）→ 从 records[idx]["月份"] 解析期次比对。
+
+        coverage_gap is False 钉住「解析真正发生」：解析不出会走缺口路径，
+        只断言 PASS 时该用例会空转（T3 修复前即如此）。
+        """
         claim = Claim(
             claim_type="numerical",
             source_type="data",
@@ -162,6 +167,59 @@ class TestSemanticPeriodCheck:
         )
         (r,) = verify_claims([claim], _state())
         assert r.status == "PASS"
+        assert r.coverage_gap is False
+
+    def test_macro_index_period_bracket_form_on_key(self):
+        """macro 键上括号形式 macro_indicators.cpi[0].<列> → 同样解析 records[0] 期次。"""
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="macro_indicators.cpi[0].全国-同比增长",
+            stated_value=0.4,
+            interpretation="2026 年 7 月 CPI 同比 0.4%",
+            metric_name="CPI",
+            period="2026-07",
+        )
+        (r,) = verify_claims([claim], _state())
+        assert r.status == "PASS"
+        assert r.coverage_gap is False
+
+    def test_macro_index_period_mismatch_fails(self):
+        """值正确但申报期次与 records[idx]["月份"] 不符 → FAIL semantic_period_mismatch。"""
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="macro_indicators.cpi.0.全国-同比增长",
+            stated_value=0.4,
+            interpretation="2026 年 6 月 CPI 同比 0.4%",
+            metric_name="CPI",
+            period="2026-06",
+        )
+        (r,) = verify_claims([claim], _state())
+        assert r.status == "FAIL"
+        assert r.bucket == "semantic_period_mismatch"
+
+    def test_quarterly_index_period_resolved_from_quarters(self):
+        """quarterly_trend 括号形式（quarters 降序：idx 1 = 次近季）→ 期次比对。
+
+        quarters = ["2025Q4", "2025Q3"]：yoy[1] 锚定 2025Q3。申报 2025Q3 → PASS
+        且无覆盖缺口；申报 2025Q4（idx 0 的期次，张冠李戴）→ FAIL。
+        """
+        state = {"quarterly_trend": {"quarters": ["2025Q4", "2025Q3"], "yoy": [1.0, 2.0]}}
+        base = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "quarterly_trend.yoy[1]",
+            "stated_value": 2.0,
+            "metric_name": "yoy",
+        }
+        ok = Claim(**base, interpretation="2025Q3 同比 2.0%", period="2025Q3")
+        bad = Claim(**base, interpretation="2025Q4 同比 2.0%", period="2025Q4")
+        r_ok, r_bad = verify_claims([ok, bad], state)
+        assert r_ok.status == "PASS"
+        assert r_ok.coverage_gap is False
+        assert r_bad.status == "FAIL"
+        assert r_bad.bucket == "semantic_period_mismatch"
 
     def test_index_period_unresolvable_counts_gap_not_fail(self):
         """state 缺 kline 时索引期次解析不出 → 缺口计数，不 FAIL。"""
