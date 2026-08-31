@@ -430,3 +430,157 @@ class TestCitationMinorFail:
         monkeypatch.setattr(citation_node, "update_current_span", lambda **kw: None)
         result = citation_node.verify_citations(self._state(self._claims(5, 0)))
         assert result["citation_minor_fail"] is False
+
+
+def _report(agent: str, claims: list[Claim], markdown: str) -> AnalystReport:
+    return AnalystReport(
+        agent_name=agent,
+        summary=f"{agent} 分析",
+        key_findings=[],
+        claims=claims,
+        markdown=markdown,
+    )
+
+
+class TestFailBucketAggregation:
+    def test_value_mismatch_produces_retry_target_and_feedback(self):
+        """基本面 1 条值级 FAIL → 仅基本面进重试目标，反馈带 gt 明细。"""
+        good = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=40.0,
+            interpretation="资产负债率 40%",
+        )
+        bad = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2023",
+            stated_value=99.0,
+            interpretation="2023 年资产负债率 99%",
+        )
+        state = {
+            "analyst_reports": {
+                "fundamental": _report("fundamental", [good, bad], "资产负债率 40%"),
+                "macro": _report("macro", [], "CPI 温和"),
+            },
+            "solvency_metrics": {"资产负债率": {"2024": 40.0, "2023": 38.0}},
+        }
+        result = verify_citations(state)
+        assert result["citation_retry_targets"] == ["fundamental"]
+        fb = result["citation_retry_feedback"]["fundamental"]
+        assert len(fb) == 1
+        assert fb[0]["field_ref"] == "solvency_metrics.资产负债率.2023"
+        assert fb[0]["ground_truth"] == 38.0
+        assert fb[0]["stated_value"] == 99.0
+        assert result["citation_fail_buckets"] == {"value_mismatch": 1}
+
+    def test_format_class_fail_no_retry_target(self):
+        """纯格式类 FAIL（路径不可解析）→ 无重试目标，桶计数照记。"""
+        bad = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.不存在.2024",
+            stated_value=40.0,
+            interpretation="x",
+        )
+        state = {
+            "analyst_reports": {"fundamental": _report("fundamental", [bad], "x")},
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+        }
+        result = verify_citations(state)
+        assert result["citation_retry_targets"] == []
+        assert result["citation_retry_feedback"] == {}
+        assert result["citation_fail_buckets"] == {"path_unresolvable": 1}
+        assert result["citation_pass"] is False
+
+    def test_semantic_fail_no_retry_target(self):
+        """术语张冠李戴 → 格式类桶，不触发重试。"""
+        bad = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="profitability_metrics.毛利率.2024",
+            stated_value=45.2,
+            interpretation="净利率为 45.2%",
+            metric_name="净利率",
+        )
+        state = {
+            "analyst_reports": {"fundamental": _report("fundamental", [bad], "净利率 45.2%")},
+            "profitability_metrics": {"毛利率": {"2024": 45.2}},
+        }
+        result = verify_citations(state)
+        assert result["citation_retry_targets"] == []
+        assert result["citation_fail_buckets"] == {"semantic_term_mismatch": 1}
+
+
+class TestCoverageScore:
+    def test_coverage_computed_from_markdown(self):
+        """markdown 黑数字拉低 citation_coverage。"""
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=40.0,
+            interpretation="资产负债率 40%",
+        )
+        state = {
+            "analyst_reports": {
+                "fundamental": _report("fundamental", [claim], "资产负债率 40%，营收 10.39 亿")
+            },
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+        }
+        result = verify_citations(state)
+        # 40% 被认领、10.39 亿未认领 → 1/2
+        assert result["citation_coverage"] == 0.5
+
+    def test_coverage_full_when_no_dark_numbers(self):
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=40.0,
+            interpretation="资产负债率 40%",
+        )
+        state = {
+            "analyst_reports": {"fundamental": _report("fundamental", [claim], "资产负债率 40%")},
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+        }
+        result = verify_citations(state)
+        assert result["citation_coverage"] == 1.0
+
+    def test_coverage_reported_to_langfuse(self, monkeypatch):
+        """citation_coverage 作为 NUMERIC Score 上报；<0.8 产生告警 metadata。"""
+        import finance_agent.nodes.citation_node as cn
+
+        calls: list[dict] = []
+
+        class _FakeClient:
+            def score_current_trace(self, **kwargs):
+                calls.append(kwargs)
+
+            def update_current_span(self, **kwargs):
+                calls.append(kwargs)
+
+        monkeypatch.setattr(cn, "get_langfuse", lambda: _FakeClient())
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=40.0,
+            interpretation="资产负债率 40%",
+        )
+        state = {
+            "analyst_reports": {
+                "fundamental": _report("fundamental", [claim], "资产负债率 40%，营收 10.39 亿")
+            },
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+        }
+        verify_citations(state)
+        score = next(c for c in calls if c.get("name") == "citation_coverage")
+        assert score["data_type"] == "NUMERIC"
+        assert score["value"] == 0.5
+        span = next(
+            c for c in calls if "metadata" in c and "citation_coverage_alert" in c["metadata"]
+        )
+        assert span["metadata"]["citation_coverage_alert"] is True
+        assert span["level"] == "WARNING"
