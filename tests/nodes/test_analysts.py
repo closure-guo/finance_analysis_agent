@@ -12,7 +12,16 @@ import json
 import logging
 from unittest.mock import MagicMock, patch
 
-from finance_agent.nodes.analysts import _retry_feedback_section, technical_analyst
+import pandas as pd
+
+from finance_agent.nodes.analysts import (
+    _build_fundamental_context,
+    _build_macro_context,
+    _build_technical_context,
+    _retry_feedback_section,
+    _series_semantic_header,
+    technical_analyst,
+)
 
 
 def _mock_llm_response() -> str:
@@ -324,3 +333,75 @@ class TestRetryFeedbackSection:
             }
         }
         assert _retry_feedback_section(state, "fundamental") == ""
+
+
+class TestSeriesSemanticHeader:
+    def test_header_format(self):
+        h = _series_semantic_header("时间正序(旧→新)", "index -1 = 最新交易日(2026-08-28)", 60)
+        assert h == "# 序列语义: 时间正序(旧→新), index -1 = 最新交易日(2026-08-28), 共60期"
+
+    def test_technical_header_declares_direction_and_latest_date(self):
+        """incident 022 修复：语义头机生，期次与 state 实际数据一致。"""
+        state = {
+            "stock_name": "中际旭创",
+            "stock_code": "300308",
+            "kline": pd.DataFrame(
+                {"日期": [f"2026-08-{d:02d}" for d in range(1, 29)], "收盘": [100.0] * 28}
+            ),
+            "technical_indicators": {"MA": {"5": [100.0 + i for i in range(28)]}},
+        }
+        ctx = _build_technical_context(state)
+        assert "# 序列语义: 时间正序(旧→新)" in ctx
+        assert "index -1 = 最新交易日(2026-08-28)" in ctx
+        assert "共28期" in ctx
+        # 与校验语义一致：列表末尾为最新一期（既有负索引声明仍在）
+        assert "-1=最新一期" in ctx
+
+    def test_technical_header_without_kline_degrades(self):
+        """kline 缺失 → 方向声明保留，日期省略（不编造期次）。"""
+        state = {"technical_indicators": {"MA": {"5": [1.0, 2.0]}}}
+        ctx = _build_technical_context(state)
+        assert "时间正序(旧→新)" in ctx
+        assert "最新交易日" not in ctx
+
+    def test_macro_header_declares_descending_and_latest_month(self):
+        state = {
+            "stock_name": "x",
+            "stock_code": "x",
+            "macro_indicators": {
+                "cpi": {
+                    "records": [
+                        {"月份": "2026年07月份", "全国-同比增长": 0.4},
+                        {"月份": "2026年06月份", "全国-同比增长": 0.5},
+                    ],
+                    "freshness": "fresh",
+                }
+            },
+        }
+        ctx = _build_macro_context(state)
+        assert "# 序列语义: 时间降序(新→旧)" in ctx
+        assert "index 0 = 最新一期(2026年07月份)" in ctx
+        assert "共2期" in ctx
+
+    def test_fundamental_headers(self):
+        """报表段声明降序 + 首行最新期；季度趋势段声明 index 0 最新。"""
+        df = pd.DataFrame(
+            {"报告日": ["20251231", "20241231", "20231231"], "营业总收入": [1.0, 2.0, 3.0]}
+        )
+        state = {
+            "stock_name": "x",
+            "stock_code": "x",
+            "balance_sheet": df,
+            "income_statement": df,
+            "cash_flow_statement": df,
+            "quarterly_trend": {
+                "quarters": ["2025Q4", "2025Q3"],
+                "net_profit": [1.0, 2.0],
+                "qoq": [1.0, 2.0],
+                "yoy": [1.0, 2.0],
+                "warnings": [],
+            },
+        }
+        ctx = _build_fundamental_context(state)
+        assert "行按报告期降序(新→旧), 首行 = 最新报告期(20251231)" in ctx
+        assert "# 序列语义: 时间降序(新→旧), index 0 = 最新季度(2025Q4), 共2期" in ctx

@@ -174,6 +174,25 @@ def _trim_series(values: list, window: int) -> list:
     return values[-window:] if isinstance(values, list) and len(values) > window else values
 
 
+def _series_len(trimmed: dict) -> int:
+    """裁剪结构内任一序列的长度（各序列等长；无序列返回 0）。"""
+    for series in trimmed.values():
+        if isinstance(series, dict):
+            for values in series.values():
+                if isinstance(values, list):
+                    return len(values)
+        elif isinstance(series, list):
+            return len(series)
+    return 0
+
+
+def _series_semantic_header(direction: str, latest_label: str, count: int) -> str:
+    """序列语义头（harden-citation-semantic-coverage D4）：机生声明排序方向 +
+    最新期定位 + 期数。内容由代码依据 state 实际数据形态生成，LLM 所见语义
+    与校验器解析语义一致（incident 022 期次错位疾病的主防线）。"""
+    return f"# 序列语义: {direction}, {latest_label}, 共{count}期"
+
+
 def _trim_technical_indicators(
     indicators: dict, window: int = _TECHNICAL_CONTEXT_WINDOW
 ) -> tuple[dict, bool]:
@@ -217,6 +236,19 @@ def _build_technical_context(state: dict) -> str:
         # 序列裁剪到最近窗口期控制 token；负索引约定（-1=最新一期）使 LLM 引用与
         # 校验器解析按「长度无关」语义对齐，裁剪窗口此后怎么改都不影响校验。
         trimmed, did_trim = _trim_technical_indicators(indicators)
+        # 机生语义头（incident 022）：方向 + 最新交易日（取自 kline 末行）+ 期数。
+        # 技术序列与 kline 等长升序，裁剪后期数 = min(序列长, 窗口)。
+        n_shown = _TECHNICAL_CONTEXT_WINDOW if did_trim else _series_len(trimmed)
+        kline = state.get("kline")
+        latest_date = ""
+        try:
+            latest_date = str(kline["日期"].iloc[-1]) if kline is not None and len(kline) else ""
+        except (KeyError, IndexError, TypeError):
+            latest_date = ""
+        latest_label = (
+            f"index -1 = 最新交易日({latest_date})" if latest_date else "index -1 = 最新一期"
+        )
+        header = _series_semantic_header("时间正序(旧→新)", latest_label, n_shown)
         # 数组方向声明（incident 022 第四类疾病）：序列为时间正序（旧→新），
         # 列表末尾为最新一期——LLM 按此读取 -1 语义，防止把展示首元素当最新。
         note = (
@@ -225,7 +257,7 @@ def _build_technical_context(state: dict) -> str:
             else "序列为时间正序（旧→新），列表末尾为最新一期；"
         )
         sections.append(
-            "技术指标数据（state 键 technical_indicators；"
+            f"{header}\n技术指标数据（state 键 technical_indicators；"
             f"{note}field_ref 引用序列值时用负索引：-1=最新一期）:\n"
             f"{json.dumps(trimmed, ensure_ascii=False, default=str)}"
         )
@@ -288,6 +320,22 @@ def _build_macro_context(state: dict) -> str:
                     )
             else:
                 trimmed[key] = value
+        # 机生语义头：宏观序列降序（index 0 = 最新），期次取首个含 records 指标
+        # 的最新月份与展示期数（records[:3] 截断后实际长度）
+        latest_month, n_shown = "", 0
+        for value in macro.values():
+            if isinstance(value, dict):
+                recs = value.get("records") or []
+                if recs:
+                    latest_month = str(recs[0].get("月份", ""))
+                    n_shown = min(len(recs), 3)
+                    break
+        if latest_month:
+            sections.append(
+                _series_semantic_header(
+                    "时间降序(新→旧)", f"index 0 = 最新一期({latest_month})", n_shown
+                )
+            )
         sections.append(
             f"宏观经济指标（state 键 macro_indicators，近3期）:\n"
             f"{json.dumps(trimmed, ensure_ascii=False, default=str)}"
@@ -344,7 +392,15 @@ def _build_fundamental_context(state: dict) -> str:
         df = state.get(key)
         if df is not None and not df.empty:
             recent = df.head(3) if len(df) > 3 else df
-            sections.append(f"{name}（state 键 {key}，近3年）:\n{recent.to_string(index=False)}")
+            # 报表段：降序声明 + 首行最新报告期（机生）
+            latest_period = (
+                str(recent["报告日"].iloc[0]) if "报告日" in recent.columns and len(recent) else ""
+            )
+            period_label = f", 首行 = 最新报告期({latest_period})" if latest_period else ""
+            sections.append(
+                f"# 表格语义: 行按报告期降序(新→旧){period_label}, 共{len(recent)}期\n"
+                f"{name}（state 键 {key}，近3年）:\n{recent.to_string(index=False)}"
+            )
 
     # 预计算指标（由降序财报计算，继承降序；head = 最新 3 年）
     indicators = state.get("financial_indicators")
@@ -355,6 +411,14 @@ def _build_fundamental_context(state: dict) -> str:
         )
 
     # 四维度指标
+    # 指标 dict 以年份为键：声明最新年（机生，取自任一有值指标的最大年键）
+    latest_year = ""
+    prof = state.get("profitability_metrics") or {}
+    for metric_values in prof.values():
+        if isinstance(metric_values, dict) and metric_values:
+            latest_year = max(str(y) for y in metric_values)
+            break
+    year_note = f"，dict 以年份为键，最新年 = {latest_year}" if latest_year else ""
     for label, key in [
         ("盈利能力", "profitability_metrics"),
         ("偿债能力", "solvency_metrics"),
@@ -364,7 +428,7 @@ def _build_fundamental_context(state: dict) -> str:
         val = state.get(key)
         if val:
             sections.append(
-                f"{label}（state 键 {key}）:\n{json.dumps(val, ensure_ascii=False, default=str)}"
+                f"{label}（state 键 {key}{year_note}）:\n{json.dumps(val, ensure_ascii=False, default=str)}"
             )
 
     # 杜邦分析
@@ -424,6 +488,13 @@ def _build_fundamental_context(state: dict) -> str:
     # 季度趋势
     qtrend = state.get("quarterly_trend")
     if qtrend:
+        quarters = qtrend.get("quarters") or []
+        if quarters:
+            sections.append(
+                _series_semantic_header(
+                    "时间降序(新→旧)", f"index 0 = 最新季度({quarters[0]})", len(quarters)
+                )
+            )
         sections.append(
             f"季度趋势（state 键 quarterly_trend）:\n{json.dumps(qtrend, ensure_ascii=False, default=str)}"
         )
