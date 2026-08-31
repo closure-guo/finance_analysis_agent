@@ -42,6 +42,19 @@ def verify_citations(state: dict) -> dict:
     fail_rate = fail_count / len(results) if results else 0.0
     fail_rates = list(state.get("citation_fail_rates") or []) + [fail_rate]
 
+    minor_fail = (not report.all_passed) and fail_count <= 1 and fail_rate <= 0.05
+    if minor_fail:
+        # skip-citation-retry-on-minor-failures：单点/近零失败直接放行渲染，
+        # 不重跑分析师（校验器确定性，同 claim 重跑必复现——incident 022 实测
+        # 汉森/茅台 1/46=2.2% FAIL 仍全量重跑 1-2 轮空转）。
+        update_current_span(
+            metadata={
+                "citation_minor_fail_deescalated": True,
+                "fail_rates": fail_rates,
+            },
+            level="WARNING",
+        )
+
     if not report.all_passed and iteration_count + 1 < 3 and citation_retry_stagnated(fail_rates):
         # 降级决策须可观测：路由将因失败率停滞跳过下一轮重试
         update_current_span(
@@ -57,6 +70,7 @@ def verify_citations(state: dict) -> dict:
         "citation_pass": report.all_passed,
         "iteration_count": iteration_count + 1,
         "citation_fail_rates": fail_rates,
+        "citation_minor_fail": minor_fail,
     }
 
 

@@ -366,3 +366,67 @@ class TestFailRateHistory:
         degraded = [m for m in marks if m.get("metadata", {}).get("citation_retry_deescalated")]
         assert degraded, f"降级决策须落 span 标记，实际 marks: {marks}"
         assert degraded[0]["metadata"]["fail_rates"] == [0.5, 1.0]
+
+
+class TestCitationMinorFail:
+    """skip-citation-retry-on-minor-failures：FAIL≤1 且失败率≤5% 免重试标志。"""
+
+    _M2_STATE = {"macro_indicators": {"m2": [{"货币和准货币(M2)-同比增长": 17.37}]}}
+
+    def _claims(self, n_total: int, n_fail: int) -> list[dict]:
+        return [
+            {
+                "claim_type": "numerical",
+                "source_type": "data",
+                "field_ref": "macro_indicators.m2.0.货币和准货币(M2)-同比增长",
+                "stated_value": 16.19 if i < n_fail else 17.37,
+                "interpretation": "",
+            }
+            for i in range(n_total)
+        ]
+
+    def _state(self, claims: list[dict]) -> dict:
+        return {
+            "analyst_reports": {
+                "technical": {
+                    "agent_name": "technical",
+                    "summary": "",
+                    "key_findings": [],
+                    "claims": claims,
+                    "markdown": "",
+                }
+            },
+            **self._M2_STATE,
+        }
+
+    def test_minor_fail_sets_flag_and_marks_span(self, monkeypatch):
+        """40 条中 1 条 FAIL（2.5% ≤ 5%）：设置 citation_minor_fail 并落 span 标记。"""
+        from finance_agent.nodes import citation_node
+
+        marks: list[dict] = []
+
+        def fake_update_span(**kwargs):
+            marks.append(kwargs)
+
+        monkeypatch.setattr(citation_node, "update_current_span", fake_update_span)
+
+        result = citation_node.verify_citations(self._state(self._claims(40, 1)))
+        assert result["citation_minor_fail"] is True
+        marked = [m for m in marks if m.get("metadata", {}).get("citation_minor_fail_deescalated")]
+        assert marked, f"轻微失败须落 span 标记，实际 marks: {marks}"
+
+    def test_many_fails_no_minor_flag(self, monkeypatch):
+        """失败数/失败率超阈值（13 条全 FAIL，100%）不设 minor_fail。"""
+        from finance_agent.nodes import citation_node
+
+        monkeypatch.setattr(citation_node, "update_current_span", lambda **kw: None)
+        result = citation_node.verify_citations(self._state(self._claims(13, 13)))
+        assert result["citation_minor_fail"] is False
+
+    def test_all_pass_no_flag(self, monkeypatch):
+        """全 PASS 不设 minor_fail（渲染由 citation_pass 走既有路径）。"""
+        from finance_agent.nodes import citation_node
+
+        monkeypatch.setattr(citation_node, "update_current_span", lambda **kw: None)
+        result = citation_node.verify_citations(self._state(self._claims(5, 0)))
+        assert result["citation_minor_fail"] is False
