@@ -190,7 +190,13 @@ def _build_technical_context(state: dict) -> str:
         # 序列裁剪到最近窗口期控制 token；负索引约定（-1=最新一期）使 LLM 引用与
         # 校验器解析按「长度无关」语义对齐，裁剪窗口此后怎么改都不影响校验。
         trimmed, did_trim = _trim_technical_indicators(indicators)
-        note = f"各序列为最近 {_TECHNICAL_CONTEXT_WINDOW} 期，更早历史已省略；" if did_trim else ""
+        # 数组方向声明（incident 022 第四类疾病）：序列为时间正序（旧→新），
+        # 列表末尾为最新一期——LLM 按此读取 -1 语义，防止把展示首元素当最新。
+        note = (
+            f"各序列为最近 {_TECHNICAL_CONTEXT_WINDOW} 期，更早历史已省略；序列为时间正序（旧→新），列表末尾为最新一期；"
+            if did_trim
+            else "序列为时间正序（旧→新），列表末尾为最新一期；"
+        )
         sections.append(
             "技术指标数据（state 键 technical_indicators；"
             f"{note}field_ref 引用序列值时用负索引：-1=最新一期）:\n"
