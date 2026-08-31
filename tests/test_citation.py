@@ -502,12 +502,16 @@ class TestComputationalRegistryCoverage:
 
         state = self._state(balance_sheet, income_statement, cash_flow, indicators)
         truth = _COMPUTATIONAL_RECALC["dupont_tree"](state)
+        # harden-citation-semantic-coverage D5：未申报 metric_name/period 也计覆盖缺口，
+        # 故本用例全申报（与 field_ref 一致），仅钉「已注册根键 → 不计缺口」语义。
         claim = Claim(
             claim_type="computational",
             source_type="data",
             field_ref="dupont_tree.L1.2024.ROE",
             stated_value=float(truth["L1"]["2024"]["ROE"]),
             interpretation="",
+            metric_name="ROE",
+            period="2024",
         )
         results = verify_claims([claim], state)
         report = CitationReport.from_results(results)

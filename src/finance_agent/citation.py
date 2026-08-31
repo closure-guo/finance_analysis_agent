@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING, Literal, TypeGuard
 
 from pydantic import BaseModel
 
+from finance_agent.metric_vocab import (
+    canonical_metric,
+    field_ref_metric_segments,
+    field_ref_period_segment,
+    normalize_period,
+    period_matches,
+)
 from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
 from finance_agent.metrics.efficiency import calc_efficiency
@@ -366,6 +373,78 @@ def _verify_event(claim: Claim, state: dict) -> CitationResult:
     return CitationResult(status="FAIL", claim=claim, ground_truth=None, bucket="path_unresolvable")
 
 
+# ── 语义层检查（harden-citation-semantic-coverage）──
+
+
+def _check_metric_term(claim: Claim) -> CitationResult | None:
+    """术语一致性：metric_name 规范键须命中 field_ref 指标段。不一致/词表外 → FAIL。"""
+    name = (claim.metric_name or "").strip()
+    if not name:
+        return None
+    canonical = canonical_metric(name)
+    segments = field_ref_metric_segments(claim.field_ref)
+    seg_keys = {(canonical_metric(s) or s) for s in segments}
+    if canonical is None or canonical not in seg_keys:
+        return CitationResult(status="FAIL", claim=claim, bucket="semantic_term_mismatch")
+    return None
+
+
+def _resolve_index_period(field_ref: str, state: dict) -> str | None:
+    """索引锚定引用（无显式期次段）从 state 解析实际期次标签；解析不出返回 None。
+
+    technical_indicators.X.Y.<idx> → kline 日期列同索引（序列与 kline 等长、升序）；
+    macro_indicators.<key>.<idx>.<列> → records[idx]["月份"]；
+    quarterly_trend.<key>[<idx>] → quarters[idx]。
+    """
+    import re as _re
+
+    parts = field_ref.split(".")
+    root = parts[0] if parts else ""
+    idx: int | None = None
+    m = _re.match(r"^-?\d+$", parts[-1]) if parts else None
+    bracket = _re.search(r"\[(-?\d+)\]$", parts[-1]) if parts else None
+    if bracket:
+        idx = int(bracket.group(1))
+    elif m and root in {"technical_indicators", "macro_indicators", "quarterly_trend"}:
+        idx = int(parts[-1])
+    if idx is None:
+        return None
+    try:
+        if root == "technical_indicators":
+            dates = state["kline"]["日期"]
+            return str(dates.iloc[idx])
+        if root == "macro_indicators" and len(parts) >= 3:
+            recs = state["macro_indicators"][parts[1]]
+            if isinstance(recs, dict):
+                recs = recs.get("records") or []
+            return str(recs[idx].get("月份", "")) or None
+        if root == "quarterly_trend":
+            return str(state["quarterly_trend"]["quarters"][idx]) or None
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return None
+    return None
+
+
+def _check_period(claim: Claim, state: dict) -> tuple[CitationResult | None, bool]:
+    """期次一致性。返回 (FAIL 结果或 None, 是否覆盖缺口)。"""
+    declared = (claim.period or "").strip()
+    if not declared:
+        return None, False
+    if normalize_period(declared) is None:
+        return None, True  # 期次表述无法归一化 → 缺口，不误伤
+    actual = field_ref_period_segment(claim.field_ref)
+    if actual is None:
+        actual = _resolve_index_period(claim.field_ref, state)
+        if actual is None:
+            return None, True  # 索引期次解析不出 → 缺口
+    if period_matches(declared, actual):
+        return None, False
+    return (
+        CitationResult(status="FAIL", claim=claim, bucket="semantic_period_mismatch"),
+        False,
+    )
+
+
 def verify_claims(claims: list[Claim], state: dict) -> list[CitationResult]:
     """校验所有 Claim，返回逐条结果。"""
     results: list[CitationResult] = []
@@ -375,11 +454,34 @@ def verify_claims(claims: list[Claim], state: dict) -> list[CitationResult]:
         elif claim.source_type == "event":
             results.append(_verify_event(claim, state))
         elif claim.claim_type == "numerical":
-            results.append(_verify_numerical(claim, state))
+            results.append(_verify_data_claim(claim, state, _verify_numerical))
         elif claim.claim_type == "computational":
-            results.append(_verify_computational(claim, state))
+            results.append(_verify_data_claim(claim, state, _verify_computational))
         elif claim.claim_type == "comparative":
-            results.append(_verify_comparative(claim, state))
+            results.append(_verify_data_claim(claim, state, _verify_comparative))
         else:
             results.append(CitationResult(status="UNVERIFIABLE", claim=claim))
     return results
+
+
+def _verify_data_claim(
+    claim: Claim,
+    state: dict,
+    value_fn: Callable[[Claim, dict], CitationResult],
+) -> CitationResult:
+    """data/mixed 数值族 claim 的完整校验链：术语 → 期次 → 值级。
+
+    首个 FAIL 短路（桶即首个失败因）；术语/期次缺省或不可解析计覆盖缺口
+    （coverage_gap=True），不静默 PASS（D5）。
+    """
+    term_fail = _check_metric_term(claim)
+    if term_fail is not None:
+        return term_fail
+    period_fail, period_gap = _check_period(claim, state)
+    if period_fail is not None:
+        return period_fail
+    result = value_fn(claim, state)
+    gap = period_gap or not (claim.metric_name or "").strip() or not (claim.period or "").strip()
+    if gap:
+        result.coverage_gap = True
+    return result
