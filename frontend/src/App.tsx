@@ -19,7 +19,7 @@ import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
 import { AnalysisRuntimeProvider, ThreadMessages } from './chat/AnalysisThread'
-import { SidebarProvider, Sidebar, SidebarTrigger, SidebarIcon, useSidebar } from './components/ui/sidebar'
+import { SidebarProvider, Sidebar, SidebarFixedToggle, SidebarIcon, useSidebar } from './components/ui/sidebar'
 import { ReportSidePanel } from './components/ReportSidePanel'
 import {
   DropdownMenu,
@@ -839,6 +839,7 @@ export default function App() {
 
   return (
     <SidebarProvider>
+      <SidebarFixedToggle />
       <AppSidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -889,7 +890,6 @@ export default function App() {
               style={{ left: leftInset }}
             >
               <div className="flex items-center gap-3">
-                <SidebarMenuButton />
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
@@ -1064,7 +1064,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   themeChoice: ThemeChoice
   onCycleTheme: () => void
 }) {
-  const { state, setOpenMobile, toggleSidebar } = useSidebar()
+  const { state, setOpenMobile } = useSidebar()
   const collapsed = state === 'collapsed'
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -1088,10 +1088,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   if (collapsed) {
     return (
       <Sidebar expandedRail={null} collapsedRail={
-        <div className="flex flex-col items-center py-4 gap-2 h-full">
-          <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="展开侧边栏">
-            <MenuToggleIcon open={false} className="size-5" />
-          </Button>
+        <div className="flex flex-col items-center pt-14 gap-2 h-full">
           <SidebarIcon label="新建分析">
             <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
               <i className="fas fa-plus text-xs"></i>
@@ -1118,9 +1115,8 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
     <Sidebar collapsedRail={null} expandedRail={
       <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+      <div className="py-3 pl-12 pr-3 flex items-center" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
         <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
-        <SidebarTrigger />
       </div>
 
       {/* New analysis button */}
@@ -1307,20 +1303,6 @@ function MainContent({ children }: { children: (leftInset: number) => ReactNode 
       {children(leftInset)}
     </div>
   )
-}
-
-// Header 左侧按钮：移动端=打开抽屉；桌面不渲染（侧边栏内「会话历史」标题栏
-// 已有折叠/展开引导按钮，消除左上角重复入口）
-function SidebarMenuButton() {
-  const { isMobile, setOpenMobile } = useSidebar()
-  if (isMobile) {
-    return (
-      <Button variant="ghost" size="icon" onClick={() => setOpenMobile(true)} aria-label="打开侧边栏">
-        <i className="fas fa-bars text-sm"></i>
-      </Button>
-    )
-  }
-  return null
 }
 
 // 报告面板视口宿主：从 SidebarProvider 读移动端标记（add-report-side-panel 移动端回退）

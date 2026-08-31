@@ -7,6 +7,7 @@
 // - <768px 抽屉态：默认隐藏，滑入 + 遮罩关闭；选中会话后由业务调 setOpenMobile(false)
 // - 收起态图标 tooltip（TooltipProvider 由 Provider 统一挂载）
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { useAnimationControls, motion } from 'framer-motion'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip'
 import { MenuToggleIcon } from './menu-toggle-icon'
 import { cn } from '../../lib/utils'
@@ -161,5 +162,64 @@ export function SidebarTrigger({ className, children }: { className?: string; ch
     >
       {children ?? <MenuToggleIcon open={state === 'expanded'} className="size-5" />}
     </button>
+  )
+}
+
+// ── 固定位置折叠按钮（悬浮视口左上，不随侧边栏展开/收起移动）──
+// 动画三层：图标 spring 形变（MenuToggleIcon）+ 按钮弹跳 keyframes + 品牌色涟漪光环。
+// 桌面端点击折叠/展开侧边栏；移动端点击开合抽屉。
+export function SidebarFixedToggle() {
+  const { state, toggleSidebar, isMobile, openMobile, setOpenMobile } = useSidebar()
+  const expanded = state === 'expanded'
+  const controls = useAnimationControls()
+  const [rippleKey, setRippleKey] = useState(0)
+
+  const handleToggle = () => {
+    // 按钮弹跳（scale keyframes + 轻微 rotate），每次点击经 controls 重播
+    void controls.start(
+      { scale: [1, 0.8, 1.15, 1], rotate: [0, -10, 6, 0] },
+      { type: 'spring', stiffness: 400, damping: 14 },
+    )
+    setRippleKey((k) => k + 1)
+    if (isMobile) {
+      setOpenMobile(!openMobile)
+      return
+    }
+    toggleSidebar()
+  }
+
+  const iconOpen = isMobile ? openMobile : expanded
+  const ariaLabel = isMobile
+    ? openMobile ? '关闭侧边栏' : '打开侧边栏'
+    : expanded ? '折叠侧边栏' : '展开侧边栏'
+
+  return (
+    <motion.button
+      type="button"
+      data-testid="sidebar-trigger"
+      aria-label={ariaLabel}
+      onClick={handleToggle}
+      whileHover={{ scale: 1.08 }}
+      animate={controls}
+      className="fixed top-3 left-3 z-[52] flex h-10 w-10 items-center justify-center rounded-xl shadow-md"
+      style={{
+        background: 'var(--bg-base-default)',
+        border: '1px solid var(--border-neutral-l1)',
+        color: 'var(--text-secondary)',
+      }}
+    >
+      {/* 涟漪光环：点击时渲染（key 递增触发播放），扩散一圈后淡出 */}
+      {rippleKey > 0 && (
+        <motion.span
+          key={rippleKey}
+          className="pointer-events-none absolute inset-0 rounded-xl"
+          style={{ border: '2px solid var(--bg-brand)' }}
+          initial={{ scale: 1, opacity: 0.7 }}
+          animate={{ scale: 2, opacity: 0 }}
+          transition={{ duration: 0.55, ease: 'easeOut' }}
+        />
+      )}
+      <MenuToggleIcon open={iconOpen} className="size-5" />
+    </motion.button>
   )
 }
