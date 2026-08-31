@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal, TypeGuard
 
@@ -459,6 +460,108 @@ def _check_period(claim: Claim, state: dict) -> tuple[CitationResult | None, boo
     )
 
 
+# ── claim 内部一致性（harden-citation-semantic-coverage）──
+
+_NUMBER_PATTERN = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?\s*(?:%|％|亿|万|元)?")
+_UNIT_SCALE = {"亿": 1e8, "万": 1e4, "元": 1.0, "%": 1.0, "％": 1.0, "": 1.0}
+
+_NEGATIVE_WORDS = ("负增长", "下降", "下滑", "下跌", "回落", "走低", "减少", "降低", "恶化", "走弱")
+_POSITIVE_WORDS = ("增长", "上升", "上涨", "提升", "提高", "改善", "走高", "回升", "向好")
+_NEGATION_PREFIXES = ("负", "未", "无", "不")
+
+
+def _extract_numbers(text: str) -> list[float]:
+    """从自由文本提取数值（去千分位，亿/万缩放为原始单位，% 取面值）。"""
+    out: list[float] = []
+    for m in _NUMBER_PATTERN.finditer(text):
+        token = m.group(0)
+        unit = token[-1] if token and token[-1] in _UNIT_SCALE else ""
+        digits = token[:-1] if unit else token
+        try:
+            out.append(float(digits.replace(",", "").strip()) * _UNIT_SCALE[unit])
+        except ValueError:
+            continue
+    return out
+
+
+def value_close(a: float, b: float) -> bool:
+    """容差比对（max(0.01, 0.5%)，与数值型校验同族，允许双向不对称）。"""
+    return abs(a - b) < max(0.01, 0.005 * max(abs(a), abs(b)))
+
+
+def _check_internal_echo(claim: Claim) -> CitationResult | None:
+    """数值回声：interpretation 含数值但无一与 stated_value 匹配 → FAIL。
+
+    符号不敏感（abs 比对）：中文财务表述惯用「下降 5.2%」（幅度 + 方向词）
+    而非「-5.2%」，符号一致性由方向词核对承担，回声只抓幅度两张皮。
+    """
+    try:
+        stated = float(claim.stated_value)
+    except (TypeError, ValueError):
+        return None  # 非数值 stated（比较方向等）不适用回声检查
+    candidates = _extract_numbers(claim.interpretation or "")
+    if not candidates:
+        return None  # 定性表述不强制回声（召回由正文覆盖率普查承担）
+    for cand in candidates:
+        for scale in (1.0, 100.0, 0.01, 1e4, 1e8):
+            if value_close(abs(stated), abs(cand) * scale):
+                return None
+    return CitationResult(status="FAIL", claim=claim, bucket="internal_inconsistency")
+
+
+def _direction_hits(text: str, words: tuple[str, ...]) -> list[int]:
+    """方向词命中位置；排除紧邻否定前缀的「增长」类命中（负增长 ≠ 增长）。"""
+    hits: list[int] = []
+    for w in words:
+        start = 0
+        while True:
+            i = text.find(w, start)
+            if i < 0:
+                break
+            if w in _POSITIVE_WORDS and i > 0 and text[i - 1] in _NEGATION_PREFIXES:
+                start = i + len(w)
+                continue
+            hits.append(i)
+            start = i + len(w)
+    return hits
+
+
+def _check_direction_words(claim: Claim, base: CitationResult) -> CitationResult | None:
+    """方向词核对（仅值级 PASS 时）：方向词与比较方向/增长符号矛盾 → FAIL。
+
+    适用面收敛（v1 防误报）：comparative 全量；numerical/computational 仅
+    growth_rates 根键或指标段含 同比/环比/增速 的增长类 claim。
+    正负向词同时出现或均不出现 → 跳过（不赌复杂句语义）。
+    """
+    text = claim.interpretation or ""
+    pos = bool(_direction_hits(text, _POSITIVE_WORDS))
+    neg = bool(_direction_hits(text, _NEGATIVE_WORDS))
+    if pos == neg:
+        return None
+    expect_positive: bool | None = None
+    if claim.claim_type == "comparative":
+        if claim.stated_value == "greater_than":
+            expect_positive = True
+        elif claim.stated_value == "less_than":
+            expect_positive = False
+    else:
+        is_growth = claim.field_ref.split(".")[0] == "growth_rates" or any(
+            k in claim.field_ref for k in ("同比", "环比", "增速")
+        )
+        if is_growth:
+            try:
+                expect_positive = float(claim.stated_value) > 0
+            except (TypeError, ValueError):
+                return None
+    if expect_positive is None:
+        return None
+    if expect_positive and neg:
+        return CitationResult(status="FAIL", claim=claim, bucket="internal_inconsistency")
+    if not expect_positive and pos:
+        return CitationResult(status="FAIL", claim=claim, bucket="internal_inconsistency")
+    return None
+
+
 def verify_claims(claims: list[Claim], state: dict) -> list[CitationResult]:
     """校验所有 Claim，返回逐条结果。"""
     results: list[CitationResult] = []
@@ -483,10 +586,10 @@ def _verify_data_claim(
     state: dict,
     value_fn: Callable[[Claim, dict], CitationResult],
 ) -> CitationResult:
-    """data/mixed 数值族 claim 的完整校验链：术语 → 期次 → 值级。
+    """data/mixed 数值族 claim 的完整校验链：术语 → 期次 → 内部回声 → 值级 → 方向词。
 
-    首个 FAIL 短路（桶即首个失败因）；术语/期次缺省或不可解析计覆盖缺口
-    （coverage_gap=True），不静默 PASS（D5）。
+    首个 FAIL 短路；术语/期次缺省或不可解析计覆盖缺口（D5 显式降级）。
+    方向词检查只在值级 PASS 上执行（值级 FAIL 已由重试反馈携带真值）。
     """
     term_fail = _check_metric_term(claim)
     if term_fail is not None:
@@ -494,7 +597,14 @@ def _verify_data_claim(
     period_fail, period_gap = _check_period(claim, state)
     if period_fail is not None:
         return period_fail
+    echo_fail = _check_internal_echo(claim)
+    if echo_fail is not None:
+        return echo_fail
     result = value_fn(claim, state)
+    if result.status == "PASS":
+        direction_fail = _check_direction_words(claim, result)
+        if direction_fail is not None:
+            return direction_fail
     gap = period_gap or not (claim.metric_name or "").strip() or not (claim.period or "").strip()
     if gap:
         result.coverage_gap = True
