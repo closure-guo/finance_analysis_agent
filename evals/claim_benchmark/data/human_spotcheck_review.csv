@@ -1,4 +1,4 @@
-entry_id,subset,stock,claim_type,source_type,field_ref,stated_value,interpretation,ground_truth,delta,human_label(填 PASS/FAIL/UNVERIFIABLE),备注
+﻿entry_id,subset,stock,claim_type,source_type,field_ref,stated_value,interpretation,ground_truth,delta,human_label(填 PASS/FAIL/UNVERIFIABLE),备注
 benchmark_v1_0159,near_miss,汉森制药002412,numerical,data,efficiency_metrics.应收账款周转率.2025,3.65,应收账款周转率3.65次，五年缓慢下滑（2021年为4.30次）,3.648598193491053,0.0014018065089467235,,
 benchmark_v1_0153,near_miss,风范股份601700,numerical,data,technical_indicators.KDJ.J.249,40.11,最新J值为40.1，短线快速回落,40.10847350578115,0.0015264942188508712,,
 benchmark_v1_0160,near_miss,汉森制药002412,numerical,data,efficiency_metrics.存货周转率.2025,1.09,存货周转率仅1.09次/年，为红灯指标，存货周转天数约330天，中药制造行业特征下仍属偏慢,1.0903,0.00029999999999996696,,

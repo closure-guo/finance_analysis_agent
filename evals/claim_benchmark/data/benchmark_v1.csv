@@ -1,4 +1,4 @@
-entry_id,stock_code,stock_name,trace_id,trace_timestamp,trace_version,claim_type,source_type,field_ref,stated_value,interpretation,ground_truth,delta,verifier_status,expected_label,subsets,disease
+﻿entry_id,stock_code,stock_name,trace_id,trace_timestamp,trace_version,claim_type,source_type,field_ref,stated_value,interpretation,ground_truth,delta,verifier_status,expected_label,subsets,disease
 benchmark_v1_0000,002412,汉森制药,69a0e220fe58ede18f4e155a181b69cd,2026-08-26T09:06:08.793Z,pre_fix,numerical,data,technical_indicators.KDJ.J.59,100.57,KDJ J 值为 100.57，连续 5 期高于 100，三线共振超买,95.30238742646694,5.267612573533057,FAIL,FAIL,clean+regression,index
 benchmark_v1_0001,002412,汉森制药,33e5356535e52e2938d650ae4e1dab14,2026-08-26T06:09:24.215Z,pre_fix,numerical,data,income_statement.投资收益.2023,61149887.87,"2023年投资收益6,115万元",,,FAIL,UNVERIFIABLE,clean,
 benchmark_v1_0002,300308,中际旭创,da3a81c682085fb125e652564abc85bc,2026-08-30T09:34:13.546Z,post_fix,numerical,data,technical_indicators.KDJ.K.-1,70.3,KDJ K 值 70.30,19.567205693154143,50.732794306845854,FAIL,FAIL,clean,

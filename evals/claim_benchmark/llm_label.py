@@ -174,12 +174,21 @@ def cmd_label(args: argparse.Namespace) -> int:
 
 def _load_human_labels(path: Path) -> dict[str, str]:
     labels: dict[str, str] = {}
-    with path.open(encoding="utf-8", newline="") as f:
-        for row in csv.DictReader(f):
-            eid = (row.get("entry_id") or "").strip()
-            lab = (row.get("human_label") or "").strip().upper()
-            if eid and lab:
-                labels[eid] = lab
+    text = path.read_bytes()
+    # 容错解码：utf-8-sig（含 BOM，Excel 友好）→ GBK（中文 Excel 别存的 ANSI 文件）
+    for enc in ("utf-8-sig", "gbk"):
+        try:
+            decoded = text.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:  # pragma: no cover - 双解码失败
+        raise ValueError(f"无法解码人工标签文件: {path}（utf-8/gbk 均失败）")
+    for row in csv.DictReader(decoded.splitlines()):
+        eid = (row.get("entry_id") or "").strip()
+        lab = (row.get("human_label") or "").strip().upper()
+        if eid and lab:
+            labels[eid] = lab
     return labels
 
 
