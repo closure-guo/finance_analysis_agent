@@ -121,7 +121,7 @@ export function Sidebar({
             'fixed inset-y-0 left-0 z-50 flex w-64 flex-col animate-slide-in',
             className,
           )}
-          style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}
+          style={{ background: 'var(--bg-base-secondary)' }}
         >
           {expandedRail}
         </aside>
@@ -138,7 +138,6 @@ export function Sidebar({
       style={{
         width: collapsed ? 52 : 256,
         background: 'var(--bg-base-secondary)',
-        borderRight: '1px solid var(--border-neutral-l1)',
       }}
     >
       {collapsed ? collapsedRail : expandedRail}

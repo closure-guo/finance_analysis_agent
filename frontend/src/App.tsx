@@ -886,8 +886,8 @@ export default function App() {
           <>
             {/* Header */}
             <header
-              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3 glass-card"
-              style={{ left: leftInset }}
+              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3"
+              style={{ left: leftInset, background: 'var(--bg-base-default)' }}
             >
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
@@ -1115,7 +1115,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
     <Sidebar collapsedRail={null} expandedRail={
       <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="py-3 pl-12 pr-3 flex items-center" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+      <div className="py-3 pl-12 pr-3 flex items-center">
         <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
       </div>
 
