@@ -12,7 +12,7 @@ import json
 import logging
 from unittest.mock import MagicMock, patch
 
-from finance_agent.nodes.analysts import technical_analyst
+from finance_agent.nodes.analysts import _retry_feedback_section, technical_analyst
 
 
 def _mock_llm_response() -> str:
@@ -283,3 +283,44 @@ class TestTechnicalContextArrayOrder:
             }
         )
         assert "时间正序" in ctx and "末尾" in ctx and "最新" in ctx
+
+
+class TestRetryFeedbackSection:
+    def test_no_feedback_returns_empty(self):
+        assert _retry_feedback_section({}, "fundamental") == ""
+
+    def test_feedback_renders_failed_claims(self):
+        state = {
+            "citation_retry_feedback": {
+                "fundamental": [
+                    {
+                        "field_ref": "solvency_metrics.资产负债率.2023",
+                        "stated_value": 99.0,
+                        "ground_truth": 38.0,
+                        "delta": 61.0,
+                        "interpretation": "2023 年资产负债率 99%",
+                    }
+                ]
+            }
+        }
+        section = _retry_feedback_section(state, "fundamental")
+        assert "上轮引用校验失败" in section
+        assert "solvency_metrics.资产负债率.2023" in section
+        assert "38.0" in section  # ground_truth 必须随反馈给出（与旧盲目重跑的关键区别）
+        assert "99.0" in section
+
+    def test_feedback_scoped_to_agent(self):
+        state = {
+            "citation_retry_feedback": {
+                "macro": [
+                    {
+                        "field_ref": "x",
+                        "stated_value": 1,
+                        "ground_truth": 2,
+                        "delta": 1,
+                        "interpretation": "y",
+                    }
+                ]
+            }
+        }
+        assert _retry_feedback_section(state, "fundamental") == ""

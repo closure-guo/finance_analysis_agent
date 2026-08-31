@@ -45,8 +45,18 @@ def citation_retry_stagnated(fail_rates: list[float]) -> bool:
 
 
 def after_citation(state: dict) -> str:
-    """引用校验路由：PASS → 渲染，轻微失败（≤1 条且 ≤5%）→ 渲染，FAIL → 重试（最多 3 次）。"""
+    """引用校验路由（harden-citation-semantic-coverage 按桶分流）：
+
+    PASS / 轻微失败 → 渲染；仅值级 FAIL（value_mismatch）触发定向重试
+    （citation_retry_targets 非空）；格式类 FAIL（术语/期次/内部不一致、
+    路径不可解析）与 UNVERIFIABLE 直判放行不重试（实测三轮停滞
+    35%→38%→31%，重试零收益却每轮全量重跑 4 分析师白烧 ~40 分钟——
+    失败是系统性的（claim field_ref 与数据形态不匹配），非随机噪声，降级
+    判定按最新失败率 ≥ 上一轮 × 80% 触发）；轮次上限与停滞降级语义不变。
+    """
     if state.get("citation_pass", False) or state.get("citation_minor_fail", False):
+        return "render"
+    if not state.get("citation_retry_targets"):
         return "render"
     if state.get("iteration_count", 0) < 3:
         # citation-retry-policy delta：重试无收益（失败率无显著改善）时
@@ -61,13 +71,19 @@ def after_citation(state: dict) -> str:
 
 
 def route_to_analysts(state: dict) -> list[Send]:
-    """Layer I: 派发到 4 个并行分析师。"""
-    return [
-        Send("technical_analyst", state),
-        Send("macro_analyst", state),
-        Send("fundamental_analyst", state),
-        Send("sentiment_analyst", state),
-    ]
+    """Layer I 派发：首轮 4 分析师并行；引用校验重试轮只 Send 值级 FAIL 的目标
+    分析师（harden-citation-semantic-coverage 定向重试），其余分析师结果复用
+    （analyst_reports merge_dicts 保留旧值，重跑覆盖目标键）。"""
+    all_sends = {
+        "technical": Send("technical_analyst", state),
+        "macro": Send("macro_analyst", state),
+        "fundamental": Send("fundamental_analyst", state),
+        "sentiment": Send("sentiment_analyst", state),
+    }
+    targets = state.get("citation_retry_targets") or []
+    if targets:
+        return [all_sends[t] for t in targets if t in all_sends]
+    return list(all_sends.values())
 
 
 def route_to_debate_r1(state: dict) -> list[Send]:

@@ -31,6 +31,25 @@ _VALID_CLAIM_TYPES = {
 _VALID_SOURCE_TYPES = {"data", "event", "llm_inference", "mixed"}
 
 
+def _retry_feedback_section(state: dict, agent_name: str) -> str:
+    """定向重试反馈段（harden-citation-semantic-coverage D3）：值级 FAIL 明细 +
+    ground_truth 注入重试上下文——与旧「盲目重跑」的关键区别是给 LLM 改错信息。
+
+    无反馈（首轮 / 非目标分析师 / feedback 缺该 agent 键）时返回 ""，使首轮
+    与非目标分析师的 context 不受影响。"""
+    feedback = (state.get("citation_retry_feedback") or {}).get(agent_name) or []
+    if not feedback:
+        return ""
+    lines = ["## 上轮引用校验失败（必须修正以下数据引用，ground_truth 为真实值）"]
+    for item in feedback:
+        lines.append(
+            f"- field_ref={item['field_ref']}：你写的值 {item['stated_value']}，"
+            f"真实值 {item['ground_truth']}（偏差 {item['delta']}）。"
+            f"原表述：{item['interpretation']}"
+        )
+    return "\n".join(lines)
+
+
 def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
     """修正 LLM 输出中非法的 claim 字段值。
 
@@ -122,6 +141,9 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
 def technical_analyst(state: dict) -> dict:
     """Layer I 技术面分析师 Agent。"""
     context = _build_technical_context(state)
+    feedback = _retry_feedback_section(state, "technical")
+    if feedback:
+        context = f"{context}\n\n{feedback}"
     _pinfo = load_prompt_with_meta("technical_analyst")
     system = _pinfo.template
     api_key = state.get("api_key")
@@ -214,6 +236,9 @@ def _build_technical_context(state: dict) -> str:
 def macro_analyst(state: dict) -> dict:
     """Layer I 宏观分析师 Agent。"""
     context = _build_macro_context(state)
+    feedback = _retry_feedback_section(state, "macro")
+    if feedback:
+        context = f"{context}\n\n{feedback}"
     _pinfo = load_prompt_with_meta("macro_analyst")
     system = _pinfo.template
     api_key = state.get("api_key")
@@ -276,6 +301,9 @@ def _build_macro_context(state: dict) -> str:
 def fundamental_analyst(state: dict) -> dict:
     """Layer I 基本面分析师 Agent。"""
     context = _build_fundamental_context(state)
+    feedback = _retry_feedback_section(state, "fundamental")
+    if feedback:
+        context = f"{context}\n\n{feedback}"
     _pinfo = load_prompt_with_meta("fundamental_analyst")
     system = _pinfo.template
     api_key = state.get("api_key")
@@ -406,6 +434,9 @@ def _build_fundamental_context(state: dict) -> str:
 def sentiment_analyst(state: dict) -> dict:
     """Layer I 舆情分析师 Agent。"""
     context = _build_sentiment_context(state)
+    feedback = _retry_feedback_section(state, "sentiment")
+    if feedback:
+        context = f"{context}\n\n{feedback}"
     _pinfo = load_prompt_with_meta("sentiment_analyst")
     system = _pinfo.template
     api_key = state.get("api_key")

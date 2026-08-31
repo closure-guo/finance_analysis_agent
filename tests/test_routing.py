@@ -5,6 +5,7 @@ from finance_agent.routing import (
     after_citation,
     after_fund_manager,
     after_validate,
+    route_to_analysts,
 )
 
 
@@ -70,12 +71,20 @@ class TestAfterCitation:
         assert after_citation(state) == "render"
 
     def test_fail_below_max_returns_retry(self):
-        state = {"citation_pass": False, "iteration_count": 1}
+        state = {
+            "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
+            "iteration_count": 1,
+        }
         assert after_citation(state) == "retry"
 
     def test_fail_at_max_returns_render(self):
         """重试次数达上限（3 次），强制渲染。"""
-        state = {"citation_pass": False, "iteration_count": 3}
+        state = {
+            "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
+            "iteration_count": 3,
+        }
         assert after_citation(state) == "render"
 
 
@@ -90,6 +99,7 @@ class TestAfterCitationDeescalation:
         """最新失败率 ≥ 上一轮的 80%（无显著改善）时不再重试。"""
         state = {
             "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
             "iteration_count": 2,
             "citation_fail_rates": [0.35, 0.31],
         }
@@ -99,6 +109,7 @@ class TestAfterCitationDeescalation:
         """失败率显著改善（< 上一轮 80%）时按上限继续重试。"""
         state = {
             "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
             "iteration_count": 2,
             "citation_fail_rates": [0.60, 0.20],
         }
@@ -108,6 +119,7 @@ class TestAfterCitationDeescalation:
         """首轮失败（无历史失败率）不降级，按既有行为重试。"""
         state = {
             "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
             "iteration_count": 1,
             "citation_fail_rates": [0.9],
         }
@@ -115,8 +127,26 @@ class TestAfterCitationDeescalation:
 
     def test_cap_still_enforced_without_rates(self):
         """无失败率历史时上限语义不变（< 3 重试，>= 3 放行）。"""
-        assert after_citation({"citation_pass": False, "iteration_count": 2}) == "retry"
-        assert after_citation({"citation_pass": False, "iteration_count": 3}) == "render"
+        assert (
+            after_citation(
+                {
+                    "citation_pass": False,
+                    "citation_retry_targets": ["fundamental"],
+                    "iteration_count": 2,
+                }
+            )
+            == "retry"
+        )
+        assert (
+            after_citation(
+                {
+                    "citation_pass": False,
+                    "citation_retry_targets": ["fundamental"],
+                    "iteration_count": 3,
+                }
+            )
+            == "render"
+        )
 
 
 class TestAfterCitationMinorFail:
@@ -135,6 +165,7 @@ class TestAfterCitationMinorFail:
         state = {
             "citation_pass": False,
             "citation_minor_fail": False,
+            "citation_retry_targets": ["fundamental"],
             "iteration_count": 1,
             "citation_fail_rates": [0.542],
         }
@@ -144,3 +175,67 @@ class TestAfterCitationMinorFail:
         """轮数上限优先：即使轻微失败标记为假但已达 3 轮仍渲染。"""
         state = {"citation_pass": False, "citation_minor_fail": False, "iteration_count": 3}
         assert after_citation(state) == "render"
+
+
+class TestAfterCitationBucketRouting:
+    def test_pass_goes_render(self):
+        assert after_citation({"citation_pass": True}) == "render"
+
+    def test_minor_fail_goes_render(self):
+        assert after_citation({"citation_pass": False, "citation_minor_fail": True}) == "render"
+
+    def test_value_mismatch_triggers_retry(self):
+        state = {
+            "citation_pass": False,
+            "citation_minor_fail": False,
+            "citation_retry_targets": ["fundamental"],
+            "iteration_count": 1,
+            "citation_fail_rates": [0.1],
+        }
+        assert after_citation(state) == "retry"
+
+    def test_format_only_fail_goes_render(self):
+        """格式类 FAIL（无值级目标）→ 直判放行，不重试（D3）。"""
+        state = {
+            "citation_pass": False,
+            "citation_minor_fail": False,
+            "citation_retry_targets": [],
+            "citation_fail_buckets": {"semantic_term_mismatch": 2},
+            "iteration_count": 1,
+            "citation_fail_rates": [0.1],
+        }
+        assert after_citation(state) == "render"
+
+    def test_retry_cap_unchanged(self):
+        """iteration_count 上限 3 语义不回归。"""
+        state = {
+            "citation_pass": False,
+            "citation_minor_fail": False,
+            "citation_retry_targets": ["fundamental"],
+            "iteration_count": 3,
+            "citation_fail_rates": [0.3, 0.2, 0.1],
+        }
+        assert after_citation(state) == "render"
+
+    def test_stagnation_still_deescalates(self):
+        state = {
+            "citation_pass": False,
+            "citation_minor_fail": False,
+            "citation_retry_targets": ["fundamental"],
+            "iteration_count": 2,
+            "citation_fail_rates": [0.10, 0.09],
+        }
+        assert after_citation(state) == "render"
+
+
+class TestTargetedRetryDispatch:
+    def test_initial_run_sends_all_four(self):
+        sends = route_to_analysts({"stock_code": "600519"})
+        assert len(sends) == 4
+
+    def test_retry_sends_only_targets(self):
+        sends = route_to_analysts(
+            {"stock_code": "600519", "citation_retry_targets": ["fundamental"]}
+        )
+        assert len(sends) == 1
+        assert sends[0].node == "fundamental_analyst"
