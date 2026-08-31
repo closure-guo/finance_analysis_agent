@@ -86,7 +86,7 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     fireEvent.click(screen.getByText('返回聊天'))
     await waitFor(() => expect(window.location.pathname).toBe('/'))
     // 回到会话页（空态首屏）
-    expect(await screen.findByText('Finance Analysis Agent')).toBeTruthy()
+    expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
   })
 
   it('接口失败 toast 报错且不以空态冒充', async () => {

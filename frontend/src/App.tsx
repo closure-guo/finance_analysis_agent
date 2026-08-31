@@ -26,6 +26,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu'
+import { SUGGESTION_CARDS } from './config/suggestions'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -270,6 +271,8 @@ export default function App() {
   // 渲染（rebuildSession 快照），Thread 只接管挂载后发起的新 run（调研 §3.3 路径 a）。
   const [quickActive, setQuickActive] = useState(false)
   const [quickRunning, setQuickRunning] = useState(false)
+  // 空态退场动画（replicate-chat-home）：首条消息发出后空态 200ms 淡出再卸载
+  const [emptyLeaving, setEmptyLeaving] = useState(false)
   // 重挂载纪元：会话切换/新建时 +1 → Thread 重置（切换守卫：abort 旧 run + 快照恢复不重复）
   const [aguiEpoch, setAguiEpoch] = useState(0)
   const quickThreadRef = useRef<QuickThreadHandle>(null)
@@ -576,18 +579,12 @@ export default function App() {
     quickThreadRef.current.send(message)
   }
 
-  // 排队的首条 quick 消息：QuickThread 挂载（视图切换渲染完成）后立即补发
-  useEffect(() => {
-    if (pendingQuickMessage === null) return
-    if (!quickThreadRef.current) return // 等待 QuickThread 挂载
-    const message = pendingQuickMessage
-    setPendingQuickMessage(null)
-    quickThreadRef.current.send(message)
-  }, [pendingQuickMessage])
-
   const handleSendFromEmpty = (text: string, sendMode: string = 'deep') => {
     const query = text.trim()
     if (!query) return
+    // 空态退场动画（replicate-chat-home）：首条消息发出后空态 200ms 淡出
+    setEmptyLeaving(true)
+    window.setTimeout(() => setEmptyLeaving(false), 200)
     if (sendMode === 'quick') {
       quickChat(query)
     } else {
@@ -704,6 +701,18 @@ export default function App() {
   // 附加派生不改深度模式语义（quickActive 仅在 quick 发送后为 true）。
   const viewState = appState === 'empty' && quickActive ? 'clarifying' : appState
 
+  // 排队的首条 quick 消息：QuickThread 挂载（视图切换渲染完成）后立即补发。
+  // deps 含 viewState/emptyLeaving：空态退场动画期间聊天视图尚未挂载，
+  // 动画结束（emptyLeaving→false）后视图真正挂载 Thread，本 effect 重跑补发不丢
+  // （replicate-chat-home 空态退场与 add-assistant-ui-thread 补发机制的衔接）。
+  useEffect(() => {
+    if (pendingQuickMessage === null) return
+    if (!quickThreadRef.current) return // 等待 QuickThread 挂载
+    const message = pendingQuickMessage
+    setPendingQuickMessage(null)
+    quickThreadRef.current.send(message)
+  }, [pendingQuickMessage, viewState, emptyLeaving])
+
   // AG-UI quick 通道回调：新会话绑定（RUN_STARTED.thread_id）+ 完成刷新列表 + 错误提示
   const handleAguiSessionCreated = useCallback((id: string) => {
     setCurrentSessionId(prev => {
@@ -807,19 +816,25 @@ export default function App() {
             <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
             <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>恢复会话中…</p>
           </div>
-        ) : viewState === 'empty' ? (
-          <EmptyState
-            onSend={handleSendFromEmpty}
-            apiKey={apiKey}
-            capability={capability}
-            setShowSettings={setShowSettings}
-            mode={mode}
-            setMode={setMode}
-            profileName={getActiveProfileName(profileStore)}
-            profiles={profileStore.profiles}
-            activeProfileId={profileStore.activeId}
-            onSwitchProfile={switchProfile}
-          />
+        ) : viewState === 'empty' || emptyLeaving ? (
+          // 空态首页（replicate-chat-home）：首条消息发出后 200ms 淡出再切消息流
+          <div
+            data-testid="empty-state"
+            className={`transition-opacity duration-200 ease-out ${emptyLeaving ? 'opacity-0' : 'opacity-100'}`}
+          >
+            <EmptyState
+              onSend={handleSendFromEmpty}
+              apiKey={apiKey}
+              capability={capability}
+              setShowSettings={setShowSettings}
+              mode={mode}
+              setMode={setMode}
+              profileName={getActiveProfileName(profileStore)}
+              profiles={profileStore.profiles}
+              activeProfileId={profileStore.activeId}
+              onSwitchProfile={switchProfile}
+            />
+          </div>
         ) : (
           <>
             {/* Header */}
@@ -1280,15 +1295,19 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4 transition-all duration-700" style={{ minHeight: '100vh' }}>
-      {/* Logo & Title */}
+      {/* Logo & Greeting（replicate-chat-home：问候语 + 输入提示副标题） */}
       <div className="text-center mb-10 animate-fade-in-up">
         <div className="w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-5" style={{ background: 'var(--bg-brand)' }}>
           <i className="fas fa-chart-line text-white text-2xl"></i>
         </div>
         <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-default)', fontFamily: 'var(--font-family-heading)' }}>
-          Finance Analysis Agent
+          今天想研究什么？
         </h1>
         <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>AI 驱动的 A 股投研分析系统</p>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+          <i className="fas fa-keyboard mr-1"></i>
+          支持输入股票名称、代码或自然语言指令
+        </p>
       </div>
 
       {/* Input Box */}
@@ -1400,6 +1419,25 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
             <Button variant="link" className="ml-1 h-auto p-0 text-xs" onClick={() => setShowSettings(true)}>修改</Button>
           </p>
         )}
+      </div>
+
+      {/* 建议卡片（replicate-chat-home）：点击填入输入框，不直接发送 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5 max-w-2xl w-full px-4 animate-fade-in-up" style={{ animationDelay: '0.15s' }}>
+        {SUGGESTION_CARDS.map(card => (
+          <button
+            key={card.title}
+            type="button"
+            data-testid={`suggestion-${card.title}`}
+            onClick={() => { setText(card.prompt) }}
+            className="glass-card rounded-xl px-3 py-3 text-left transition-transform hover:-translate-y-0.5 hover:shadow-md"
+          >
+            <div className="flex items-center gap-1.5 mb-1">
+              <i className={`fas ${card.icon} text-xs`} style={{ color: 'var(--text-brand)' }}></i>
+              <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>{card.title}</span>
+            </div>
+            <p className="text-[11px] leading-relaxed line-clamp-2" style={{ color: 'var(--text-tertiary)' }}>{card.prompt}</p>
+          </button>
+        ))}
       </div>
 
       {/* Feature cards */}

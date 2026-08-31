@@ -254,7 +254,7 @@ describe('QuickThread 切换守卫与历史恢复（Task 3b）', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Finance Analysis Agent')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('今天想研究什么？')).toBeInTheDocument())
 
     // EmptyState「模式：」下拉 → 快速模式（默认 deep，输入框占位符随之变化）
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /模式/ })) })
