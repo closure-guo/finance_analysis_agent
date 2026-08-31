@@ -40,7 +40,9 @@
       "source_type": "data",
       "field_ref": "profitability_metrics.ROE.2025",
       "stated_value": 30.5,
-      "interpretation": "ROE 为 30.5%"
+      "interpretation": "ROE 为 30.5%",
+      "metric_name": "ROE",
+      "period": "2025"
     }
   ],
   "markdown": "## 基本面分析\n详细分析内容..."
@@ -53,6 +55,9 @@
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. markdown 中包含完整的基本面分析章节
 5. 不要编造数据，只使用提供的数据
+6. data 型 claim 必填 metric_name 与 period：metric_name 取指标词表规范名（ROE/ROA/ROIC/毛利率/净利率/资产负债率/流动比率/速动比率/利息覆盖倍数/存货周转率/应收账款周转率/应付账款周转率/总资产周转率/经营现金流\/净利润/FCF/权益乘数 等），须与 field_ref 的指标段一致；period 填年份（如 2024）或报告日（如 20251231）或季度（如 2025Q4，见 context 序列语义头的最新期标注）
+7. 覆盖纪律：markdown 正文中每个关键数值（百分比/金额/倍数）都必须与某条 claim 的 stated_value 一致——未被 claim 认领的数字会被覆盖率审计计为黑数字
+8. context 中每个序列块开头的「# 序列语义」声明了排序方向与最新期位置，引用数值前先核对该声明
 
 ## 分析方法论
 

@@ -24,7 +24,9 @@
       "source_type": "data",
       "field_ref": "technical_indicators.MA.5.-1",
       "stated_value": 13.0,
-      "interpretation": "MA5 为 13.0"
+      "interpretation": "MA5 为 13.0",
+      "metric_name": "MA",
+      "period": "2026-08-28"
     }
   ],
   "markdown": "## 技术面分析\n详细分析内容..."
@@ -38,6 +40,9 @@
 3. claim_type: numerical（直接读值）、computational（重算指标）
 4. source_type: data（来自数据）或 llm_inference（你的推断）
 5. markdown 中包含完整的技术面分析章节
+6. data 型 claim 必填 metric_name 与 period：metric_name 取指标词表规范名（MA/MACD/DIF/DEA/RSI/BOLL/KDJ/max_drawdown/volatility/beta/var_95），须与 field_ref 的指标段一致；period 填该值对应的实际交易日（YYYY-MM-DD，见 context 序列语义头的最新期标注）
+7. 覆盖纪律：markdown 正文中每个关键数值（百分比/金额/倍数）都必须与某条 claim 的 stated_value 一致——未被 claim 认领的数字会被覆盖率审计计为黑数字
+8. context 中每个序列块开头的「# 序列语义」声明了排序方向与最新期位置，引用数值前先核对该声明
 
 ## 分析方法论
 
