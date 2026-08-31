@@ -471,7 +471,12 @@ _NEGATION_PREFIXES = ("负", "未", "无", "不")
 
 
 def _extract_numbers(text: str) -> list[float]:
-    """从自由文本提取数值（去千分位，亿/万缩放为原始单位，% 取面值）。"""
+    """从自由文本提取数值（去千分位，亿/万缩放为原始单位，% 取面值）。
+
+    仅返回单位缩放后的值（"0.68亿" → 6.8e7）。回声匹配需要同时比对面值时
+    用 `_extract_number_candidates`，本函数签名/口径被 TestExtractNumbers 钉死，
+    不得改动。
+    """
     out: list[float] = []
     for m in _NUMBER_PATTERN.finditer(text):
         token = m.group(0)
@@ -481,6 +486,30 @@ def _extract_numbers(text: str) -> list[float]:
             out.append(float(digits.replace(",", "").strip()) * _UNIT_SCALE[unit])
         except ValueError:
             continue
+    return out
+
+
+def _extract_number_candidates(text: str) -> list[float]:
+    """回声匹配候选数值：对每个单位后缀 token 同时产出面值与缩放值。
+
+    `_extract_numbers` 只返回缩放值（"0.68亿" → 6.8e7），但 claim 的
+    stated_value 常以亿元/万元面值申报（stated=0.68），缩放候选经
+    {1,100,0.01,1e4,1e8} 缩放集永远无法还原面值 → 误报。本函数对单位后缀
+    token 额外补一份面值（"0.68亿" → 0.68 与 6.8e7 并列），纯数字 token
+    只产面值一份。% / 元 单位缩放为 1.0，面值与缩放值相等（重复无副作用）。
+    """
+    out: list[float] = []
+    for m in _NUMBER_PATTERN.finditer(text):
+        token = m.group(0)
+        unit = token[-1] if token and token[-1] in _UNIT_SCALE else ""
+        digits = token[:-1] if unit else token
+        try:
+            face = float(digits.replace(",", "").strip())
+        except ValueError:
+            continue
+        out.append(face)
+        if unit:
+            out.append(face * _UNIT_SCALE[unit])
     return out
 
 
@@ -499,7 +528,7 @@ def _check_internal_echo(claim: Claim) -> CitationResult | None:
         stated = float(claim.stated_value)
     except (TypeError, ValueError):
         return None  # 非数值 stated（比较方向等）不适用回声检查
-    candidates = _extract_numbers(claim.interpretation or "")
+    candidates = _extract_number_candidates(claim.interpretation or "")
     if not candidates:
         return None  # 定性表述不强制回声（召回由正文覆盖率普查承担）
     for cand in candidates:
@@ -526,11 +555,30 @@ def _direction_hits(text: str, words: tuple[str, ...]) -> list[int]:
     return hits
 
 
+def _is_growth_claim(claim: Claim) -> bool:
+    """增长类 claim 判定（方向词核对适用面）。
+
+    收敛口径（防误报）：root == "growth_rates"，或 root == "quarterly_trend"
+    且系列段（parts[1]，去掉尾部 `[N]` 括号后）为 "yoy"/"qoq"。剔除原先
+    「同比/环比/增速 in field_ref」子串判定——该子串误伤 macro 级 claim
+    （macro_indicators.cpi.<idx>.全国-同比增长 引用的是 yoy RATE LEVEL，
+    其 interpretation 对走势的评述（「回落」描述动能而非否定正值）不该判 FAIL）。
+    """
+    parts = claim.field_ref.split(".")
+    root = parts[0] if parts else ""
+    if root == "growth_rates":
+        return True
+    if root == "quarterly_trend" and len(parts) >= 2:
+        series = re.sub(r"\[(-?\d+)\]$", "", parts[1])
+        return series in ("yoy", "qoq")
+    return False
+
+
 def _check_direction_words(claim: Claim, base: CitationResult) -> CitationResult | None:
     """方向词核对（仅值级 PASS 时）：方向词与比较方向/增长符号矛盾 → FAIL。
 
     适用面收敛（v1 防误报）：comparative 全量；numerical/computational 仅
-    growth_rates 根键或指标段含 同比/环比/增速 的增长类 claim。
+    growth_rates 根键或 quarterly_trend 的 yoy/qoq 系列增长类 claim。
     正负向词同时出现或均不出现 → 跳过（不赌复杂句语义）。
     """
     text = claim.interpretation or ""
@@ -545,10 +593,7 @@ def _check_direction_words(claim: Claim, base: CitationResult) -> CitationResult
         elif claim.stated_value == "less_than":
             expect_positive = False
     else:
-        is_growth = claim.field_ref.split(".")[0] == "growth_rates" or any(
-            k in claim.field_ref for k in ("同比", "环比", "增速")
-        )
-        if is_growth:
+        if _is_growth_claim(claim):
             try:
                 expect_positive = float(claim.stated_value) > 0
             except (TypeError, ValueError):

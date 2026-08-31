@@ -148,3 +148,43 @@ class TestDirectionWords:
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "PASS"
+
+
+class TestInternalConsistencyFalsePositiveRegression:
+    """incident-级回归：内部一致性误报类（汉森 fixture 残量漂移 5→8 根因钉死）。"""
+
+    def test_yi_face_value_echo_passes(self):
+        state = {"quarterly_trend": {"quarters": ["2026Q2"], "net_profit": [0.68]}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="quarterly_trend.net_profit.0",
+            stated_value=0.68,
+            interpretation="2026Q2净利润约0.68亿元，同比+19.0%",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS"
+
+    def test_macro_yoy_level_with_trend_commentary_passes(self):
+        state = {
+            "macro_indicators": {
+                "cpi": {
+                    "records": [
+                        {"月份": "2026年07月份", "全国-同比增长": 0.5},
+                        {"月份": "2026年06月份", "全国-同比增长": 1.0},
+                        {"月份": "2026年05月份", "全国-同比增长": 1.2},
+                    ],
+                    "as_of_date": "2026-07-01",
+                    "freshness": "fresh",
+                }
+            }
+        }
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="macro_indicators.cpi.2.全国-同比增长",
+            stated_value=1.2,
+            interpretation="5月CPI同比1.2%，近3个月同比涨幅逐月回落（1.2%→1.0%→0.5%），通胀动能持续走弱",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS"
