@@ -107,9 +107,12 @@ const SearchPart: DataMessagePartComponent = ({ data }) => {
   return <SearchBanner status={d.status} query={d.query} results={d.results} />
 }
 
-// 项目独有部件（Task 4.1）：管线时间线 / 报告（含 ECharts、导出 filePaths）
+// 项目独有部件（Task 4.1）：管线时间线 / 报告（含 ECharts、导出 filePaths）。
+// 报告卡挂 onOpenPanel：摘要卡「打开报告」→ App 打开右侧面板（add-report-side-panel）
 const PipelinePart: DataMessagePartComponent = ({ data }) => <PipelineCard msg={data as UIMessage} />
-const ReportPart: DataMessagePartComponent = ({ data }) => <ReportCard msg={data as UIMessage} />
+const ReportPart: DataMessagePartComponent = ({ data }) => (
+  <ReportCard msg={data as UIMessage} onOpenPanel={(m) => openReportHandler?.(m)} />
+)
 
 // system / error 消息（原 MessageRenderer 对应分支的视觉迁移）
 const SystemPart: DataMessagePartComponent = ({ data }) => (
@@ -194,6 +197,9 @@ function MessageActions({ text, onRegenerate }: { text: string; onRegenerate: ()
 
 // 模块级桥：App 的重新生成回调（ThreadMessages 渲染时更新，AssistantMessage 读取）
 let regenerateHandler: ((messageId: string) => void) | null = null
+
+// 模块级桥：App 的「打开报告」回调（摘要卡 → 右侧面板，add-report-side-panel）
+let openReportHandler: ((msg: UIMessage) => void) | null = null
 
 const AssistantMessage = () => {
   // 消息形态标记（adapter metadata.custom.kind）
@@ -282,11 +288,14 @@ export interface ThreadMessagesProps {
   footer?: ReactNode
   /** 消息 hover「重新生成」回调（App 按消息定位前驱 user 查询重提交） */
   onRegenerate?: (messageId: string) => void
+  /** 报告摘要卡「打开报告」回调（App 打开右侧面板；移动端由 App 端回退） */
+  onOpenReport?: (msg: UIMessage) => void
 }
 
 // 消息区：Viewport autoScroll 提供流式跟随/上翻暂停/回底恢复（delta spec）
-export function ThreadMessages({ footer, onRegenerate }: ThreadMessagesProps) {
+export function ThreadMessages({ footer, onRegenerate, onOpenReport }: ThreadMessagesProps) {
   regenerateHandler = onRegenerate ?? null
+  openReportHandler = onOpenReport ?? null
   return (
     <ThreadPrimitive.Root className="h-full">
       <ThreadPrimitive.Viewport autoScroll className="h-full overflow-y-auto">

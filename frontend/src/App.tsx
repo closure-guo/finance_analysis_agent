@@ -20,6 +20,7 @@ import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
 import { AnalysisRuntimeProvider, ThreadMessages } from './chat/AnalysisThread'
 import { SidebarProvider, Sidebar, SidebarTrigger, SidebarIcon, useSidebar } from './components/ui/sidebar'
+import { ReportSidePanel } from './components/ReportSidePanel'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -281,11 +282,12 @@ export default function App() {
   const [pendingQuickMessage, setPendingQuickMessage] = useState<string | null>(null)
   // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
   const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
-  // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
-  // 避免抽屉仍显示旧会话的下载按钮、点击导出旧会话文件。currentSessionId 为 null（新建
-  // 分析/首屏）时同样置 null（幂等，无副作用）。
+  // 报告右侧面板（add-report-side-panel）：非 null 时从右侧滑出展示完整报告
+  const [panelMessage, setPanelMessage] = useState<UIMessage | null>(null)
+  // 切换会话时关闭面板与抽屉（跨会话不串内容；同会话内开合由用户控制保持）
   useEffect(() => {
     setDrawerMessage(null)
+    setPanelMessage(null)
   }, [currentSessionId])
   const showWarning = useCallback((text: string) => {
     setWarningMessage(text)
@@ -874,6 +876,7 @@ export default function App() {
               <div className="fixed top-0 bottom-0 right-0" style={{ left: leftInset }}>
                 <ThreadMessages
                   onRegenerate={handleRegenerate}
+                  onOpenReport={setPanelMessage}
                   footer={
                     <>
                       {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
@@ -980,6 +983,10 @@ export default function App() {
       {drawerMessage && (
         <ReportFileDrawer drawerMessage={drawerMessage} onClose={() => setDrawerMessage(null)} />
       )}
+
+      {/* 报告右侧面板（add-report-side-panel）：桌面端展示；移动端不渲染（消息流全宽回退，
+          摘要卡「打开报告」点击时已同步展开消息流内完整区作为回退） */}
+      <ReportSidePanelWithViewport msg={panelMessage} onClose={() => setPanelMessage(null)} />
 
       {/* 全局 toast 容器（shadcn/sonner 封装；仅挂载，暂无调用方） */}
       <Toaster />
@@ -1241,6 +1248,16 @@ function SidebarMenuButton() {
     )
   }
   return <SidebarTrigger />
+}
+
+// 报告面板视口宿主：从 SidebarProvider 读移动端标记（add-report-side-panel 移动端回退）
+function ReportSidePanelWithViewport({ msg, onClose }: { msg: UIMessage | null; onClose: () => void }) {
+  const { isMobile } = useSidebar()
+  return (
+    <ReportSidePanel msg={msg} onClose={onClose} isMobile={isMobile}>
+      {msg && <ReportCard msg={msg} variant="panel" />}
+    </ReportSidePanel>
+  )
 }
 
 // ── Empty State ──
@@ -1887,9 +1904,35 @@ function withCitationMarks(children: ReactNode, citations: Citation[] | undefine
   return walk(children, 'r')
 }
 
+// 报告结论要点（add-report-side-panel 摘要卡）：取二级标题前 4 条，无标题回退首段截断。
+// 剥离 [[cite-N]] 标记（摘要不渲染上标）
+export function reportKeyPoints(markdown: string | undefined): string[] {
+  const md = (markdown ?? '').replace(/\[\[cite-[A-Za-z0-9_-]+\]\]/g, '')
+  if (!md.trim()) return []
+  const headings = md
+    .split('\n')
+    .map((l) => l.match(/^##\s+(.+?)\s*$/)?.[1])
+    .filter((h): h is string => !!h)
+  if (headings.length > 0) return headings.slice(0, 4)
+  const firstLine = md.split('\n').find((l) => l.trim()) ?? ''
+  return [firstLine.replace(/[#*`>\s]+/g, '').slice(0, 60)]
+}
+
 // ── Report Card ──
-// adopt-assistant-ui-chat：经 AnalysisThread 的 data-report 部件挂载（导出供部件复用）
-export function ReportCard({ msg }: { msg: UIMessage }) {
+// adopt-assistant-ui-chat：经 AnalysisThread 的 data-report 部件挂载（导出供部件复用）。
+// add-report-side-panel：完成态消息流收敛为摘要卡（要点 + 打开报告 + 折叠完整区）；
+// 面板内（variant="panel"）渲染完整报告。
+export function ReportCard({ msg, variant = 'inline', onOpenPanel }: {
+  msg: UIMessage
+  /** inline=消息流（完成态收敛摘要卡）；panel=右侧面板（完整渲染） */
+  variant?: 'inline' | 'panel'
+  /** 「打开报告」回调（App 据视口决定开面板或移动端回退）；缺省时按钮不渲染 */
+  onOpenPanel?: (msg: UIMessage) => void
+}) {
+  // 摘要卡（add-report-side-panel）：完成态 inline 收敛为摘要卡；完整区折叠保留渲染
+  const summaryMode = variant === 'inline' && !msg.streaming
+  const [inlineExpanded, setInlineExpanded] = useState(false)
+  const keyPoints = reportKeyPoints(msg.reportMarkdown)
   return (
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
@@ -1912,7 +1955,7 @@ export function ReportCard({ msg }: { msg: UIMessage }) {
 
             {/* Report Header */}
             {!msg.streaming && (
-              <div className="px-5 pt-4 pb-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+              <div className="px-5 pt-4 pb-3" style={{ borderBottom: summaryMode ? 'none' : '1px solid var(--border-neutral-l1)' }}>
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{formatReportTitle(msg)}</h3>
@@ -1923,6 +1966,49 @@ export function ReportCard({ msg }: { msg: UIMessage }) {
               </div>
             )}
 
+            {/* 摘要卡（add-report-side-panel）：结论要点 + 打开报告 + 展开完整区入口 */}
+            {summaryMode && (
+              <div className="px-5 py-3" data-testid="report-summary-card">
+                {keyPoints.length > 0 && (
+                  <ul className="flex flex-col gap-1 mb-3">
+                    {keyPoints.map((p, i) => (
+                      <li key={i} className="text-xs leading-relaxed flex items-start gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+                        <i className="fas fa-angle-right text-[10px] mt-0.5 flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
+                        <span className="min-w-0">{p}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex items-center gap-2">
+                  {onOpenPanel && (
+                    <Button
+                      data-testid="open-report-button"
+                      size="sm"
+                      onClick={() => { setInlineExpanded(true); onOpenPanel(msg) }}
+                    >
+                      <i className="fas fa-book-open text-[10px] mr-1"></i>
+                      打开报告
+                    </Button>
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    data-testid="toggle-inline-report"
+                    onClick={() => setInlineExpanded(v => !v)}
+                  >
+                    <i className={`fas ${inlineExpanded ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px] mr-1`}></i>
+                    {inlineExpanded ? '收起完整报告' : '在此展开完整报告'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* 完整报告区（摘要卡模式下折叠保留渲染；panel/流式/展开时可见） */}
+            <div
+              data-testid="report-full-section"
+              className={summaryMode && !inlineExpanded ? 'overflow-hidden' : undefined}
+              style={summaryMode && !inlineExpanded ? { maxHeight: 0, opacity: 0 } : undefined}
+            >
             {/* Charts Section */}
             {msg.chartData && msg.chartData.annual && msg.chartData.annual.length > 0 && (
               <div className="px-5 py-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
@@ -2075,6 +2161,7 @@ export function ReportCard({ msg }: { msg: UIMessage }) {
                 </p>
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>

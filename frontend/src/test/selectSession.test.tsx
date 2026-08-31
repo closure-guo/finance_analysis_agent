@@ -181,11 +181,11 @@ describe('selectSession 按会话状态恢复管线', () => {
     fireEvent.click(screen.getByTestId('pipeline-summary'))
 
     // 报告消息渲染（ReactMarkdown 渲染 markdown 内容）
-    expect(screen.getByText('交易决策报告')).toBeInTheDocument()
+    expect(screen.getAllByText('交易决策报告').length).toBeGreaterThan(0)
     // 静态时间轴与报告并存，且时间轴 DOM 在报告之前
     // （completed 态时间轴为静态快照，渲染过滤器需放行已完成时间轴）
     const timeline = screen.getByTestId('pipeline-timeline')
-    const report = screen.getByText('交易决策报告')
+    const report = screen.getAllByText('交易决策报告').pop()!
     expect(timeline.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -199,7 +199,7 @@ describe('selectSession 按会话状态恢复管线', () => {
 
     await renderAndSelect('s1', '历史会话')
 
-    expect(screen.getByText('历史报告')).toBeInTheDocument()
+    expect(screen.getAllByText('历史报告').length).toBeGreaterThan(0)
     expect(screen.queryByTestId('pipeline-timeline')).not.toBeInTheDocument()
   })
 
@@ -249,7 +249,7 @@ describe('selectSession 按会话状态恢复管线', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_100)
     })
-    expect(await screen.findByText('最终报告')).toBeInTheDocument()
+    expect((await screen.findAllByText('最终报告')).length).toBeGreaterThan(0)
 
     const detailCallsDone = fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/sessions/s1')).length
     // 再推进 4s：轮询已停止，不再有新的详情请求
@@ -580,7 +580,7 @@ describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
     const user1 = screen.getByText('分析热门股票')
     const user2 = screen.getByText('中际旭创')
     const timeline = screen.getByTestId('pipeline-timeline')
-    const report = screen.getByText('分析报告')
+    const report = screen.getAllByText('分析报告').pop()!
 
     // 关键断言：user2 在 timeline 之前（当前实现会失败：报告插在 user1 后，user2 被挤到报告后）
     assertBefore(user2, timeline)
@@ -615,7 +615,7 @@ describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
     const user1 = screen.getByText('分析茅台')
     const user2 = screen.getByText('再看看风险')
     const timeline = screen.getByTestId('pipeline-timeline')
-    const report = screen.getByText('茅台报告')
+    const report = screen.getAllByText('茅台报告').pop()!
 
     // 报告在 user1 之后、user2 之前
     assertBefore(user1, timeline)
@@ -644,7 +644,7 @@ describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
 
     const user1 = screen.getByText('分析茅台')
     const timeline = screen.getByTestId('pipeline-timeline')
-    const report = screen.getByText('旧报告')
+    const report = screen.getAllByText('旧报告').pop()!
 
     // 回退：user1 → timeline → report
     assertBefore(user1, timeline)

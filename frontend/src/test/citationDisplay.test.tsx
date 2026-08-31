@@ -75,7 +75,7 @@ describe('旧报告兼容（add-citation-display）', () => {
     render(<ReportCard msg={makeReportMsg({ citations: undefined })} />)
     expect(screen.queryByTestId('citation-list')).toBeNull()
     expect(screen.queryByTestId('citation-sup-cite-1')).toBeNull()
-    expect(screen.getByText(/62.5%/)).toBeInTheDocument() // 正文正常渲染
+    expect(screen.getAllByText(/62.5%/).length).toBeGreaterThan(0) // 正文正常渲染
   })
 
   it('流式中的报告不渲染引用列表（report_ready 前无完整数据）', () => {
