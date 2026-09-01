@@ -119,9 +119,19 @@ export function DownloadCenter({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="flex flex-col h-screen" data-testid="download-center">
-      {/* 标题栏（固定） */}
+      {/* 标题栏（固定）：返回入口在所有状态下可见（空态/列表/加载失败均可靠退回会话页） */}
       <div className="shrink-0 px-6 pt-5 pb-4 border-b border-border" style={{ background: 'var(--background)' }}>
         <div className="flex items-center gap-2">
+          <Button
+            onClick={onBack}
+            data-testid="downloads-back"
+            variant="ghost"
+            size="icon"
+            aria-label="返回对话"
+            className="h-7 w-7"
+          >
+            <i className="fas fa-arrow-left text-sm"></i>
+          </Button>
           <i className="fas fa-download text-sm" style={{ color: 'var(--primary)' }}></i>
           <h1 className="text-base font-semibold text-foreground">下载管理</h1>
         </div>

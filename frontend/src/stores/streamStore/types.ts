@@ -26,6 +26,9 @@ export interface SessionStreamState {
   // 首个回放事件到达时清除——种子里 user 气泡堆叠失序，真正的有序消息由
   // 全量回放（含后端注入的 user_message）重建。
   seededFromHistory?: boolean
+  // 快照管线启动时间戳（enhance-pipeline-progress）：rebuild 时从 pipeline_snapshot
+  // 提取，回放事件创建管线消息后据此校正 startedAt，刷新后已用时不归零
+  pipelineStartTs?: number
 }
 
 // 共享的 IDLE 常量（引用稳定，useSyncExternalStore 不触发重渲染）

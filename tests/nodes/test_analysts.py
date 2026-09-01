@@ -258,3 +258,28 @@ class TestTechnicalContextBudget:
 
         ctx = _build_technical_context({"stock_name": "X", "stock_code": "1"})
         assert "技术指标数据" not in ctx
+
+
+class TestTechnicalContextArrayOrder:
+    def test_context_declares_ascending_order_tail_latest(self):
+        """序列数组为时间正序（旧→新），末尾为最新一期（incident 022 第四类疾病）。"""
+        from finance_agent.nodes.analysts import _build_technical_context
+
+        ctx = _build_technical_context(
+            {
+                "stock_name": "中际旭创",
+                "stock_code": "300308",
+                "technical_indicators": {
+                    "MA": {"5": [1211.36, 858.318]},
+                    "MACD": {"DIF": [96.64, -44.09]},
+                    "RSI": {"14": [62.63, 41.56]},
+                    "BOLL": {
+                        "upper": [1282.05, 1016.9],
+                        "middle": [1100.09, 915.36],
+                        "lower": [918.14, 813.82],
+                    },
+                    "KDJ": {"K": [70.3, 19.57], "D": [78.28, 27.11], "J": [54.35, 4.49]},
+                },
+            }
+        )
+        assert "时间正序" in ctx and "末尾" in ctx and "最新" in ctx

@@ -125,18 +125,29 @@ export class StreamStore {
     this.emit()
   }
 
-  // 轮询快照刷新管线时间轴（无 pipeline 消息时按快照创建——SSE 不可用时的兜底）
-  updatePipelineSnapshot(sessionId: string, snap: { layerTree: string; currentNodeId: string; progress: number }): void {
+  // 轮询快照刷新管线时间轴（无 pipeline 消息时按快照创建——SSE 不可用时的兜底）。
+  // 计时源契约（enhance-pipeline-progress）：创建/校正均以快照 pipeline_start_ts 为准，
+  // 缺该字段回退本地时间；已有消息 startedAt 晚于快照起点（回放重置）时校正，不归零。
+  updatePipelineSnapshot(sessionId: string, snap: { layerTree: string; currentNodeId: string; progress: number; pipeline_start_ts?: number }): void {
     const state = this.streams.get(sessionId)
     if (!state) return
+    const startTs = snap.pipeline_start_ts
     const hasPipeline = state.messages.some((m) => m.type === 'pipeline' && m.progress !== 1)
     const nextMessages = hasPipeline
-      ? state.messages.map((m) =>
-          m.type === 'pipeline' && m.progress !== 1
-            ? { ...m, layerTree: deserializeLayerTree(snap.layerTree), currentNode: snap.currentNodeId, progress: snap.progress }
-            : m,
-        )
-      : [...state.messages, { id: genMsgId(), type: 'pipeline' as const, content: '', completedNodes: [], currentNode: snap.currentNodeId, nodeOutputs: {}, progress: snap.progress, startedAt: Date.now(), layerTree: deserializeLayerTree(snap.layerTree) }]
+      ? state.messages.map((m) => {
+          if (!(m.type === 'pipeline' && m.progress !== 1)) return m
+          const corrected =
+            startTs !== undefined && m.startedAt !== undefined && m.startedAt > startTs + 1000
+              ? { ...m, startedAt: startTs }
+              : m
+          return {
+            ...corrected,
+            layerTree: deserializeLayerTree(snap.layerTree),
+            currentNode: snap.currentNodeId,
+            progress: snap.progress,
+          }
+        })
+      : [...state.messages, { id: genMsgId(), type: 'pipeline' as const, content: '', completedNodes: [], currentNode: snap.currentNodeId, nodeOutputs: {}, progress: snap.progress, startedAt: startTs ?? Date.now(), layerTree: deserializeLayerTree(snap.layerTree) }]
     this.streams.set(sessionId, { ...state, messages: nextMessages })
     this.emit()
   }
@@ -431,7 +442,7 @@ export class StreamStore {
           }
         : null
 
-    // 已完成管线消息
+    // 已完成管线消息（enhance-pipeline-progress：携带 duration_ms 供完成摘要条显示总用时）
     const pipelineDoneMsg: UIMessage | null =
       data.status === 'completed' && snapshot && data.session_type !== 'chat'
         ? {
@@ -443,6 +454,7 @@ export class StreamStore {
             nodeOutputs: {},
             progress: 1,
             layerTree: deserializeLayerTree(snapshot.layerTree),
+            durationMs: data.duration_ms,
             ...(restoredNodeTimelines ? { nodeTimelines: restoredNodeTimelines } : {}),
           }
         : null
@@ -461,6 +473,8 @@ export class StreamStore {
             filePaths: data.file_paths || undefined,
             durationMs: data.duration_ms,
             sessionId: data.session_id,
+            // 结构化引用（add-citation-display）：旧会话 citations 为 null 不挂载
+            ...(data.citations ? { citations: data.citations } : {}),
           }
         : null
 
@@ -536,6 +550,18 @@ export class StreamStore {
     // 进行中：lastSeq=0（全量 replay）；终态：用后端 last_seq
     const lastSeq = isInFlight ? 0 : (data.last_seq ?? 0)
 
+    // 快照管线起点（enhance-pipeline-progress）：回放创建管线消息后由
+    // applyEvent 据此校正 startedAt，刷新后已用时不归零
+    let pipelineStartTs: number | undefined
+    if (isInFlight && data.pipeline_snapshot) {
+      try {
+        const snap = JSON.parse(data.pipeline_snapshot) as { pipeline_start_ts?: number }
+        if (typeof snap.pipeline_start_ts === 'number') pipelineStartTs = snap.pipeline_start_ts
+      } catch {
+        // 快照非法时无校正基准（回退本地计时）
+      }
+    }
+
     let phase: StreamPhase = 'idle'
     if (data.status === 'running') phase = 'streaming'
     else if (data.status === 'completed') phase = 'done'
@@ -551,6 +577,7 @@ export class StreamStore {
       // 进行中会话的 messages 只是 user 种子（预览/204 兜底）；首个回放事件
       // 到达时清除，由全量回放（含 user_message 注入）按原始顺序重建
       ...(isInFlight && messages.length > 0 ? { seededFromHistory: true } : {}),
+      ...(pipelineStartTs !== undefined ? { pipelineStartTs } : {}),
     })
     this.emit()
   }
@@ -665,8 +692,23 @@ export class StreamStore {
       }
     }
 
-    const next = reduce(prev, event)
+    let next = reduce(prev, event)
     next.lastSeq = event.seq ?? prev.lastSeq
+
+    // 管线计时源校正（enhance-pipeline-progress）：快照 pipeline_start_ts 存在时，
+    // 回放新建的管线消息 startedAt 晚于快照起点（Date.now() 重置）则校正回快照值
+    if (next.pipelineStartTs !== undefined) {
+      const pipelineMsg = next.messages.find((m) => m.type === 'pipeline')
+      if (pipelineMsg && pipelineMsg.startedAt !== undefined && pipelineMsg.startedAt > next.pipelineStartTs + 1000) {
+        next = {
+          ...next,
+          messages: next.messages.map((m) =>
+            m === pipelineMsg ? { ...m, startedAt: next.pipelineStartTs } : m,
+          ),
+        }
+      }
+    }
+
     this.streams.set(sessionId, next)
 
     // phase 变化通知

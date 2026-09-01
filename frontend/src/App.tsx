@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot } from './types'
+import { ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react'
+import type { PipelineStep, UIMessage, SessionMeta, SessionDetail, ToolCallEntry, PipelineSnapshot, Citation } from './types'
 import { ChartsSection } from './Charts'
 import { ReportFileDrawer } from './ReportFileDrawer'
 import { ReportNameBanner, AllFilesBanner, isExportableReport, formatReportTitle } from './ReportEntryBanners'
@@ -17,6 +18,21 @@ import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
+import { AnalysisRuntimeProvider, ThreadMessages } from './chat/AnalysisThread'
+import { SidebarProvider, Sidebar, SidebarFixedToggle, SidebarIcon, useSidebar } from './components/ui/sidebar'
+import { ReportSidePanel } from './components/ReportSidePanel'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './components/ui/dropdown-menu'
+import { SUGGESTION_CARDS } from './config/suggestions'
+import { formatSessionTime } from './lib/format'
+import { CommandPalette } from './CommandPalette'
+import { MenuToggleIcon } from './components/ui/menu-toggle-icon'
+import { loadThemeChoice, saveThemeChoice, applyTheme, watchSystemTheme, type ThemeChoice } from './theme'
+import { useHotkeys } from './hooks/useHotkeys'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -87,17 +103,6 @@ const getUserId = (): string => {
     localStorage.setItem(KEY, uid)
   }
   return uid
-}
-
-// 格式化会话时间，对非法/缺失的 created_at 兜底，绝不返回 "Invalid Date"
-function formatSessionTime(ts: string | undefined | null): string {
-  if (!ts) return '未知时间'
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return '未知时间'
-  // 后端用 epoch 占位的脏数据（无法还原真实时间）。浏览器解析 ISO 字符串时
-  // 可能按本地时区得到 epoch 之前的负值时间戳，所以用 <= 0 或年份 <= 1970 兜底。
-  if (d.getTime() <= 0 || d.getFullYear() <= 1970) return '未知时间'
-  return d.toLocaleString()
 }
 
 // 从 stream.phase 派生视图状态（替代原 appState 的流相关部分）
@@ -209,6 +214,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   // 后端默认 LLM 配置（GET /api/llm-config），用作设置面板输入框 placeholder（delta 5.3）
   const [backendDefaults, setBackendDefaults] = useState<{ model: string; baseUrl: string; thinking: string }>({ model: '', baseUrl: '', thinking: 'enabled' })
+  // add-collapsible-sidebar：侧边栏折叠状态由 SidebarProvider 管理（localStorage 持久化 + Ctrl/Cmd+B）
   useEffect(() => {
     let cancelled = false
     fetch('/api/llm-config')
@@ -247,7 +253,7 @@ export default function App() {
     }
     setCurrentSessionId(id)
   }, [])
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // add-collapsible-sidebar：侧边栏折叠状态由 SidebarProvider 管理（localStorage 持久化 + Ctrl/Cmd+B）
   // 下载中心路由（add-download-center）：/downloads 直达/刷新时主区域渲染下载管理页
   const pathname = usePathname()
   const [mode, setMode] = useState<'quick' | 'deep'>('deep')
@@ -260,6 +266,28 @@ export default function App() {
   // 渲染（rebuildSession 快照），Thread 只接管挂载后发起的新 run（调研 §3.3 路径 a）。
   const [quickActive, setQuickActive] = useState(false)
   const [quickRunning, setQuickRunning] = useState(false)
+  // 空态退场动画（replicate-chat-home）：首条消息发出后空态 200ms 淡出再卸载
+  const [emptyLeaving, setEmptyLeaving] = useState(false)
+  // 命令面板（polish-dark-mode-shortcuts）：Cmd/Ctrl+K 打开
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  // 主题三态（polish-dark-mode-shortcuts）：浅色/深色/跟随系统，持久化 + 系统跟随
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => loadThemeChoice())
+  useEffect(() => {
+    applyTheme(themeChoice)
+    const unwatch = watchSystemTheme(() => {
+      if (loadThemeChoice() === 'system') applyTheme('system')
+    })
+    return unwatch
+  }, [themeChoice])
+  const cycleTheme = useCallback(() => {
+    setThemeChoice((prev) => {
+      const next: ThemeChoice = prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light'
+      saveThemeChoice(next)
+      return next
+    })
+  }, [])
+  // `/` 聚焦输入框：经包装容器定位 Composer 内部 textarea
+  const composerWrapRef = useRef<HTMLDivElement>(null)
   // 重挂载纪元：会话切换/新建时 +1 → Thread 重置（切换守卫：abort 旧 run + 快照恢复不重复）
   const [aguiEpoch, setAguiEpoch] = useState(0)
   const quickThreadRef = useRef<QuickThreadHandle>(null)
@@ -268,11 +296,12 @@ export default function App() {
   const [pendingQuickMessage, setPendingQuickMessage] = useState<string | null>(null)
   // 导出抽屉：非 null 时渲染 ReportFileDrawer（报告「全部文件」横幅入口）
   const [drawerMessage, setDrawerMessage] = useState<UIMessage | null>(null)
-  // 抽屉展示的是当前会话报告的下载入口：切换会话（currentSessionId 变化）时自动关闭，
-  // 避免抽屉仍显示旧会话的下载按钮、点击导出旧会话文件。currentSessionId 为 null（新建
-  // 分析/首屏）时同样置 null（幂等，无副作用）。
+  // 报告右侧面板（add-report-side-panel）：非 null 时从右侧滑出展示完整报告
+  const [panelMessage, setPanelMessage] = useState<UIMessage | null>(null)
+  // 切换会话时关闭面板与抽屉（跨会话不串内容；同会话内开合由用户控制保持）
   useEffect(() => {
     setDrawerMessage(null)
+    setPanelMessage(null)
   }, [currentSessionId])
   const showWarning = useCallback((text: string) => {
     setWarningMessage(text)
@@ -355,14 +384,19 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
     let retryCount = 0
+    // 恢复指示退场阈值（fix: 后端持续不可用时「恢复会话中」永久占屏锁死主区）：
+    // 连续 3 次失败（约 3.5s）后退出恢复指示、放行空态首页，退避重试继续——
+    // 列表后续加载成功时 restoredRef 分支仍会自动恢复会话。
+    const BOOT_FAIL_LIMIT = 3
 
     const loadWithRetry = async () => {
       const loaded = await loadSessions()
       if (cancelled || loaded === null) {
         if (cancelled) return
-        // 退避：500ms, 1s, 2s, ... 封顶 10s，无限重试直到成功
-        const delay = Math.min(500 * Math.pow(2, retryCount), 10000)
         retryCount++
+        if (retryCount >= BOOT_FAIL_LIMIT) setBootRestoring(false)
+        // 退避：500ms, 1s, 2s, ... 封顶 10s，无限重试直到成功
+        const delay = Math.min(500 * Math.pow(2, retryCount - 1), 10000)
         setTimeout(loadWithRetry, delay)
         return
       }
@@ -566,18 +600,12 @@ export default function App() {
     quickThreadRef.current.send(message)
   }
 
-  // 排队的首条 quick 消息：QuickThread 挂载（视图切换渲染完成）后立即补发
-  useEffect(() => {
-    if (pendingQuickMessage === null) return
-    if (!quickThreadRef.current) return // 等待 QuickThread 挂载
-    const message = pendingQuickMessage
-    setPendingQuickMessage(null)
-    quickThreadRef.current.send(message)
-  }, [pendingQuickMessage])
-
   const handleSendFromEmpty = (text: string, sendMode: string = 'deep') => {
     const query = text.trim()
     if (!query) return
+    // 空态退场动画（replicate-chat-home）：首条消息发出后空态 200ms 淡出
+    setEmptyLeaving(true)
+    window.setTimeout(() => setEmptyLeaving(false), 200)
     if (sendMode === 'quick') {
       quickChat(query)
     } else {
@@ -595,6 +623,19 @@ export default function App() {
     }
 
     // Deep mode：直接走 /api/analyze，由 Agent 决定是否反问或执行分析
+    startAnalysis(t, currentSessionId)
+  }
+
+  // adopt-assistant-ui-chat：assistant-ui Composer 提交桥接（onNew → App 分发）。
+  // 拦截语义迁移至 runtime 状态判定（运行中 Composer 发送键变停止），此处的
+  // isSessionRunning/单飞守卫作为兜底保留（toast 提示语义不变）。
+  const handleComposerSubmit = (text: string) => {
+    const t = text.trim()
+    if (!t) return
+    if (mode === 'quick') {
+      quickChat(t)
+      return
+    }
     startAnalysis(t, currentSessionId)
   }
 
@@ -675,11 +716,23 @@ export default function App() {
   }, [appState, currentSessionId, store, stream.phase])
 
   // ── Render ──
-  const leftInset = sidebarOpen ? 256 : 48
+  // leftInset 由 MainContent 的 render prop 依据 SidebarProvider 状态派生
 
   // 视图状态：quick AG-UI 通道活跃（首页发起、streamStore 无消息/phase）时进入聊天视图。
   // 附加派生不改深度模式语义（quickActive 仅在 quick 发送后为 true）。
   const viewState = appState === 'empty' && quickActive ? 'clarifying' : appState
+
+  // 排队的首条 quick 消息：QuickThread 挂载（视图切换渲染完成）后立即补发。
+  // deps 含 viewState/emptyLeaving：空态退场动画期间聊天视图尚未挂载，
+  // 动画结束（emptyLeaving→false）后视图真正挂载 Thread，本 effect 重跑补发不丢
+  // （replicate-chat-home 空态退场与 add-assistant-ui-thread 补发机制的衔接）。
+  useEffect(() => {
+    if (pendingQuickMessage === null) return
+    if (!quickThreadRef.current) return // 等待 QuickThread 挂载
+    const message = pendingQuickMessage
+    setPendingQuickMessage(null)
+    quickThreadRef.current.send(message)
+  }, [pendingQuickMessage, viewState, emptyLeaving])
 
   // AG-UI quick 通道回调：新会话绑定（RUN_STARTED.thread_id）+ 完成刷新列表 + 错误提示
   const handleAguiSessionCreated = useCallback((id: string) => {
@@ -703,22 +756,105 @@ export default function App() {
     runningSessionIds.add(id)
   }
 
-  return (
+  // ── assistant-ui Thread 接线（adopt-assistant-ui-chat）──
+  // pipeline 消息渲染时机：运行中（analyzing）始终显示；completed 会话恢复的
+  // 静态完成时间轴（progress===1）随报告一并展示；其余（空树回退）不显示
+  const visibleMessages = messages.filter((msg) => {
+    if (msg.type === 'pipeline') return appState === 'analyzing' || msg.progress === 1
+    return true
+  })
+  // Composer 运行中判定（对齐 store 拦截语义 isSessionRunning：前端有活跃 reader 在消费），
+  // 叠加消息级流式标记（澄清阶段）与 quick run 进行中；恢复态（无 reader）不拦截发送
+  const composerRunning =
+    store.isSessionRunning(currentSessionId ?? '') ||
+    messages.some((m) => m.streaming) || quickRunning
+
+  // 消息 hover「重新生成」：定位该 assistant 消息前驱最近的 user 查询并重提交
+  // （运行中拦截由 handleComposerSubmit → startAnalysis/quickChat 守卫兜底）
+  const handleRegenerate = (messageId: string) => {
+    const idx = visibleMessages.findIndex((m) => m.id === messageId)
+    for (let i = idx - 1; i >= 0; i--) {
+      const m = visibleMessages[i]
+      if (m.type === 'user' && m.content.trim()) {
+        handleComposerSubmit(m.content)
+        return
+      }
+    }
+  }
+
+  // Composer 插槽：assistant-ui 输入区（Enter 发送 / Shift+Enter 换行 / 空禁用发送）
+  const composerInput = (
+    <div ref={composerWrapRef} className="flex-1 flex" data-testid="composer-wrap">
+      <ComposerPrimitive.Input
+        placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
+        className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+        style={{ color: 'var(--text-default)' }}
+      />
+    </div>
+  )
+  const composerSend = (
     <>
-      <Sidebar
+      {/* 运行中：发送键变停止按钮（runtime 状态判定，拦截语义迁移） */}
+      <ThreadPrimitive.If running>
+        <ComposerPrimitive.Cancel
+          data-testid="composer-stop"
+          className="w-9 h-9 rounded-xl mb-0.5 mr-0.5 flex items-center justify-center shrink-0"
+          style={{ background: 'var(--bg-brand)' }}
+        >
+          <i className="fas fa-stop text-xs text-white"></i>
+        </ComposerPrimitive.Cancel>
+      </ThreadPrimitive.If>
+      <ThreadPrimitive.If running={false}>
+        <ComposerPrimitive.Send
+          data-testid="send-button"
+          className="w-9 h-9 rounded-xl mb-0.5 mr-0.5 flex items-center justify-center shrink-0 disabled:opacity-50"
+          style={{ background: 'var(--bg-brand)' }}
+        >
+          <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
+        </ComposerPrimitive.Send>
+      </ThreadPrimitive.If>
+    </>
+  )
+
+  // 快捷键集中注册（polish-dark-mode-shortcuts Task 3.1/3.2）：
+  // Ctrl/Cmd+K 命令面板；Ctrl/Cmd+Shift+N 新建会话；`/` 聚焦输入框（输入态抑制在 useHotkeys 内）
+  useHotkeys([
+    { key: 'k', modifiers: ['ctrl', 'meta'], description: '打开命令面板', handler: () => setPaletteOpen(true), allowInInput: true },
+    {
+      key: 'n',
+      modifiers: ['ctrl', 'meta', 'shift'],
+      description: '新建会话',
+      handler: () => newAnalysis(),
+      allowInInput: true,
+    },
+    {
+      key: '/',
+      description: '聚焦输入框',
+      handler: () => {
+        const ta = composerWrapRef.current?.querySelector('textarea')
+        ta?.focus()
+      },
+    },
+  ])
+
+  return (
+    <SidebarProvider>
+      <SidebarFixedToggle />
+      <AppSidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
         onSelect={selectSession}
         onDelete={deleteSession}
         onRename={renameSession}
         onNew={newAnalysis}
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
         onOpenDownloads={() => navigate('/downloads')}
+        themeChoice={themeChoice}
+        onCycleTheme={cycleTheme}
         runningSessionIds={runningSessionIds}
         loading={!sessionsLoaded}
       />
-      <div className={`transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-12'}`}>
+      <MainContent>{(leftInset) => (
+      <div>
         {pathname === '/downloads' ? (
           <DownloadCenter onBack={() => navigate('/')} />
         ) : bootRestoring && viewState === 'empty' ? (
@@ -727,34 +863,33 @@ export default function App() {
             <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
             <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>恢复会话中…</p>
           </div>
-        ) : viewState === 'empty' ? (
-          <EmptyState
-            onSend={handleSendFromEmpty}
-            apiKey={apiKey}
-            capability={capability}
-            setShowSettings={setShowSettings}
-            mode={mode}
-            setMode={setMode}
-            profileName={getActiveProfileName(profileStore)}
-            profiles={profileStore.profiles}
-            activeProfileId={profileStore.activeId}
-            onSwitchProfile={switchProfile}
-          />
+        ) : viewState === 'empty' || emptyLeaving ? (
+          // 空态首页（replicate-chat-home）：首条消息发出后 200ms 淡出再切消息流
+          <div
+            data-testid="empty-state"
+            className={`transition-opacity duration-200 ease-out ${emptyLeaving ? 'opacity-0' : 'opacity-100'}`}
+          >
+            <EmptyState
+              onSend={handleSendFromEmpty}
+              apiKey={apiKey}
+              capability={capability}
+              setShowSettings={setShowSettings}
+              mode={mode}
+              setMode={setMode}
+              profileName={getActiveProfileName(profileStore)}
+              profiles={profileStore.profiles}
+              activeProfileId={profileStore.activeId}
+              onSwitchProfile={switchProfile}
+            />
+          </div>
         ) : (
           <>
             {/* Header */}
             <header
-              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3 glass-card"
-              style={{ left: leftInset }}
+              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3"
+              style={{ left: leftInset, background: 'var(--bg-base-default)' }}
             >
               <div className="flex items-center gap-3">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setSidebarOpen(!sidebarOpen)}
-                >
-                  <i className="fas fa-bars text-sm"></i>
-                </Button>
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--bg-brand)' }}>
                   <i className="fas fa-chart-line text-white text-sm"></i>
                 </div>
@@ -774,47 +909,48 @@ export default function App() {
               </div>
             </header>
 
-            {/* Chat messages */}
-            <div className="w-full max-w-3xl mx-auto px-4 pt-20 pb-40 space-y-6">
-              {messages
-                .filter(msg => {
-                  // pipeline 消息渲染时机：运行中（analyzing）始终显示；
-                  // completed 会话恢复的静态完成时间轴（progress===1）随报告一并展示；
-                  // 其他情况（如历史会话无快照回退的空树）不显示
-                  if (msg.type === 'pipeline') {
-                    return appState === 'analyzing' || msg.progress === 1;
+            {/* Chat messages（adopt-assistant-ui-chat）：assistant-ui Thread 渲染。
+                消息区为固定高度滚动容器，Viewport autoScroll 提供流式跟随/上翻暂停。 */}
+            <AnalysisRuntimeProvider
+              messages={visibleMessages}
+              isRunning={composerRunning}
+              onSubmit={handleComposerSubmit}
+              onCancel={stopGeneration}
+            >
+              <div className="fixed top-0 bottom-0 right-0" style={{ left: leftInset }}>
+                <ThreadMessages
+                  onRegenerate={handleRegenerate}
+                  onOpenReport={setPanelMessage}
+                  footer={
+                    <>
+                      {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
+                      {exportableReports.map((msg) => (
+                        <ReportNameBanner key={`rb-${msg.id}`} msg={msg} onOpen={setDrawerMessage} />
+                      ))}
+                      {lastExportableReport && (
+                        <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
+                      )}
+
+                      {/* AG-UI quick 通道（add-assistant-ui-thread）：历史消息由 Thread 渲染
+                          （rebuildSession 快照），Thread 只接管本 mount 的新 run。
+                          key= 纪元+apiKey：会话切换/新建重置 Thread；apiKey 变更重建 agent。 */}
+                      {mode === 'quick' && (
+                        <QuickThread
+                          key={`agui-${aguiEpoch}-${apiKey}`}
+                          ref={quickThreadRef}
+                          apiKey={apiKey}
+                          llmConfig={buildLlmConfigPayload(llmConfig)}
+                          sessionId={currentSessionId}
+                          onSessionCreated={handleAguiSessionCreated}
+                          onRunFinished={handleAguiRunFinished}
+                          onRunningChange={setQuickRunning}
+                          onError={showWarning}
+                        />
+                      )}
+                    </>
                   }
-                  return true;
-                })
-                .map(msg => (
-                  <MessageRenderer key={msg.id} msg={msg} />
-                ))}
-
-              {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
-              {exportableReports.map((msg) => (
-                <ReportNameBanner key={`rb-${msg.id}`} msg={msg} onOpen={setDrawerMessage} />
-              ))}
-              {lastExportableReport && (
-                <AllFilesBanner onOpen={() => setDrawerMessage(lastExportableReport!)} />
-              )}
-
-              {/* AG-UI quick 通道（add-assistant-ui-thread）：历史消息由上方 MessageItem
-                  渲染（rebuildSession 快照），Thread 只接管本 mount 的新 run。
-                  key= 纪元+apiKey：会话切换/新建重置 Thread；apiKey 变更重建 agent。 */}
-              {mode === 'quick' && (
-                <QuickThread
-                  key={`agui-${aguiEpoch}-${apiKey}`}
-                  ref={quickThreadRef}
-                  apiKey={apiKey}
-                  llmConfig={buildLlmConfigPayload(llmConfig)}
-                  sessionId={currentSessionId}
-                  onSessionCreated={handleAguiSessionCreated}
-                  onRunFinished={handleAguiRunFinished}
-                  onRunningChange={setQuickRunning}
-                  onError={showWarning}
                 />
-              )}
-            </div>
+              </div>
 
             {/* 「会话生成中」警告：fixed 顶部 toast，浮于 header(z-50)/输入框(z-40) 之上 */}
             {warningMessage && (
@@ -847,7 +983,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Fixed input at bottom */}
+            {/* Fixed input at bottom（Composer 插槽：assistant-ui 输入区，须在 Provider 内） */}
             <ChatInputBar
               onSend={handleSendFromChat}
               leftInset={leftInset}
@@ -861,10 +997,14 @@ export default function App() {
               profiles={profileStore.profiles}
               activeProfileId={profileStore.activeId}
               onSwitchProfile={switchProfile}
+              composerInput={composerInput}
+              composerSend={composerSend}
             />
-          </>
+              </AnalysisRuntimeProvider>
+            </>
         )}
       </div>
+      )}</MainContent>
 
       {/* LLM 设置面板（取代旧版仅 API Key 的弹窗） */}
       {showSettings && (
@@ -888,29 +1028,49 @@ export default function App() {
         <ReportFileDrawer drawerMessage={drawerMessage} onClose={() => setDrawerMessage(null)} />
       )}
 
+      {/* 报告右侧面板（add-report-side-panel）：桌面端展示；移动端不渲染（消息流全宽回退，
+          摘要卡「打开报告」点击时已同步展开消息流内完整区作为回退） */}
+      <ReportSidePanelWithViewport msg={panelMessage} onClose={() => setPanelMessage(null)} />
+
+      {/* 命令面板（polish-dark-mode-shortcuts）：Cmd/Ctrl+K */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        sessions={sessions}
+        onSelectSession={selectSession}
+        onNewSession={newAnalysis}
+        onOpenDownloads={() => navigate('/downloads')}
+        onCycleTheme={cycleTheme}
+        themeChoice={themeChoice}
+      />
+
       {/* 全局 toast 容器（shadcn/sonner 封装；仅挂载，暂无调用方） */}
       <Toaster />
-    </>
+    </SidebarProvider>
   )
 }
 
-// ── Sidebar ──
-function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, isOpen, onToggle, onOpenDownloads, runningSessionIds, loading = false }: {
+// ── Sidebar（add-collapsible-sidebar：shadcn Sidebar 原语重构）──
+function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, onOpenDownloads, runningSessionIds, loading = false, themeChoice, onCycleTheme }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onRename: (id: string, name: string) => void
   onNew: () => void
-  isOpen: boolean
-  onToggle: () => void
   onOpenDownloads: () => void
   runningSessionIds: Set<string>
   loading?: boolean
+  themeChoice: ThemeChoice
+  onCycleTheme: () => void
 }) {
+  const { state, setOpenMobile } = useSidebar()
+  const collapsed = state === 'collapsed'
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  // 删除二次确认（delta spec: 删除 SHALL 二次确认）
+  const [deletingSession, setDeletingSession] = useState<SessionMeta | null>(null)
 
   const filtered = sessions.filter(s =>
     (s.stock_name || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -918,30 +1078,52 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
     (s.display_name || '').toLowerCase().includes(search.toLowerCase())
   )
 
-  if (!isOpen) {
+  const handleSelect = (id: string) => {
+    onSelect(id)
+    // 移动端：选中会话后抽屉自动关闭（delta spec）
+    setOpenMobile(false)
+  }
+
+  // ── 收起态图标栏 ──
+  if (collapsed) {
     return (
-      <div className="fixed left-0 top-0 bottom-0 w-12 flex flex-col items-center py-4 z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
-        <Button variant="ghost" size="icon" onClick={onToggle} aria-label="展开侧边栏">
-          <i className="fas fa-bars"></i>
-        </Button>
-      </div>
+      <Sidebar expandedRail={null} collapsedRail={
+        <div className="flex flex-col items-center pt-14 gap-2 h-full">
+          <SidebarIcon label="新建分析">
+            <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
+              <i className="fas fa-plus text-xs"></i>
+            </Button>
+          </SidebarIcon>
+          <SidebarIcon label={`主题：${themeChoice === 'system' ? '跟随系统' : themeChoice === 'dark' ? '深色' : '浅色'}`}>
+            <Button variant="ghost" size="icon" onClick={onCycleTheme} aria-label="切换主题" data-testid="theme-toggle-collapsed">
+              <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : themeChoice === 'light' ? 'fa-sun' : 'fa-adjust'} text-xs`}></i>
+            </Button>
+          </SidebarIcon>
+          <div className="flex-1" />
+          <SidebarIcon label="下载管理">
+            <Button variant="ghost" size="icon" onClick={onOpenDownloads} aria-label="下载管理" data-testid="sidebar-downloads-collapsed">
+              <i className="fas fa-download text-xs"></i>
+            </Button>
+          </SidebarIcon>
+        </div>
+      } />
     )
   }
 
+  // ── 展开态（桌面）与移动端抽屉共用 ──
   return (
-    <div className="fixed left-0 top-0 bottom-0 w-64 flex flex-col z-50" style={{ background: 'var(--bg-base-secondary)', borderRight: '1px solid var(--border-neutral-l1)' }}>
+    <Sidebar collapsedRail={null} expandedRail={
+      <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+      <div className="py-3 pl-12 pr-3 flex items-center">
         <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle}>
-          <i className="fas fa-times text-xs"></i>
-        </Button>
       </div>
 
       {/* New analysis button */}
       <div className="p-3">
         <Button
           onClick={onNew}
+          data-testid="sidebar-new"
           className="w-full rounded-xl text-sm font-medium"
         >
           <i className="fas fa-plus text-xs"></i>
@@ -978,7 +1160,7 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
           filtered.map(s => (
             <div
               key={s.session_id}
-              onClick={() => onSelect(s.session_id)}
+              onClick={() => handleSelect(s.session_id)}
               className="group relative px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1"
               style={currentSessionId === s.session_id ? { background: 'var(--bg-overlay-l2)' } : { background: 'transparent' }}
               onMouseEnter={(e) => { if (currentSessionId !== s.session_id) e.currentTarget.style.background = 'var(--bg-overlay-l1)' }}
@@ -1024,17 +1206,32 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
                     <span>{s.stock_name}</span>
                     <span>{formatSessionTime(s.created_at)}</span>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={e => {
-                      e.stopPropagation()
-                      onDelete(s.session_id)
-                    }}
-                    className="absolute right-2 top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive"
-                  >
-                    <i className="fas fa-trash text-xs"></i>
-                  </Button>
+                  {/* 会话项操作菜单（hover 出现「···」）：重命名（原地输入）/ 删除（二次确认） */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={e => e.stopPropagation()}
+                        aria-label={`会话操作 ${s.display_name}`}
+                        data-testid={`session-menu-${s.session_id}`}
+                        className="absolute right-2 top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <i className="fas fa-ellipsis-h text-xs"></i>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                      <DropdownMenuItem onClick={() => { setEditingId(s.session_id); setEditText(s.display_name) }}>
+                        <i className="fas fa-pen text-[10px] mr-1.5"></i>重命名
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => setDeletingSession(s)}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <i className="fas fa-trash text-[10px] mr-1.5"></i>删除
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
               )}
             </div>
@@ -1042,8 +1239,8 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
         )}
       </div>
 
-      {/* 下载管理入口（add-download-center）：底部固定区 */}
-      <div className="p-3" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
+      {/* 下载管理入口（add-download-center）：底部固定区 + 主题切换（polish-dark-mode-shortcuts） */}
+      <div className="p-3 flex flex-col gap-1" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
         <Button
           variant="ghost"
           onClick={onOpenDownloads}
@@ -1053,8 +1250,68 @@ function Sidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onN
           <i className="fas fa-download text-xs"></i>
           下载管理
         </Button>
+        <Button
+          variant="ghost"
+          onClick={onCycleTheme}
+          data-testid="theme-toggle"
+          className="w-full justify-start text-sm text-secondary hover:text-foreground"
+        >
+          <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : themeChoice === 'light' ? 'fa-sun' : 'fa-adjust'} text-xs`}></i>
+          主题：{themeChoice === 'system' ? '跟随系统' : themeChoice === 'dark' ? '深色' : '浅色'}
+        </Button>
       </div>
+
+      {/* 删除二次确认弹窗 */}
+      <Dialog open={deletingSession !== null} onOpenChange={(o) => { if (!o) setDeletingSession(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogTitle className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>删除会话</DialogTitle>
+          <DialogDescription className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+            确定删除「{deletingSession?.display_name}」吗？删除后不可恢复。
+          </DialogDescription>
+          <div className="flex gap-2 justify-end mt-4">
+            <Button variant="secondary" size="sm" onClick={() => setDeletingSession(null)}>取消</Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              data-testid="confirm-delete"
+              onClick={() => {
+                if (deletingSession) onDelete(deletingSession.session_id)
+                setDeletingSession(null)
+              }}
+            >
+              删除
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      </div>
+    } />
+  )
+}
+
+// ── 主内容区包装：依据 SidebarProvider 状态派生左边距（200ms 过渡）──
+// render prop 注入 leftInset（fixed 定位的 header/输入栏/停止按钮使用）
+function MainContent({ children }: { children: (leftInset: number) => ReactNode }) {
+  const { state, isMobile } = useSidebar()
+  const collapsed = state === 'collapsed'
+  const leftInset = isMobile ? 0 : collapsed ? 52 : 256
+  return (
+    <div
+      className={isMobile ? '' : 'transition-[margin] duration-200 ease-out'}
+      style={isMobile ? undefined : { marginLeft: leftInset }}
+    >
+      {children(leftInset)}
     </div>
+  )
+}
+
+// 报告面板视口宿主：从 SidebarProvider 读移动端标记（add-report-side-panel 移动端回退）
+function ReportSidePanelWithViewport({ msg, onClose }: { msg: UIMessage | null; onClose: () => void }) {
+  const { isMobile } = useSidebar()
+  return (
+    <ReportSidePanel msg={msg} onClose={onClose} isMobile={isMobile}>
+      {msg && <ReportCard msg={msg} variant="panel" />}
+    </ReportSidePanel>
   )
 }
 
@@ -1110,15 +1367,19 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4 transition-all duration-700" style={{ minHeight: '100vh' }}>
-      {/* Logo & Title */}
+      {/* Logo & Greeting（replicate-chat-home：问候语 + 输入提示副标题） */}
       <div className="text-center mb-10 animate-fade-in-up">
         <div className="w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-5" style={{ background: 'var(--bg-brand)' }}>
           <i className="fas fa-chart-line text-white text-2xl"></i>
         </div>
         <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-default)', fontFamily: 'var(--font-family-heading)' }}>
-          Finance Analysis Agent
+          今天想研究什么？
         </h1>
         <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>AI 驱动的 A 股投研分析系统</p>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+          <i className="fas fa-keyboard mr-1"></i>
+          支持输入股票名称、代码或自然语言指令
+        </p>
       </div>
 
       {/* Input Box */}
@@ -1232,6 +1493,25 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
         )}
       </div>
 
+      {/* 建议卡片（replicate-chat-home）：点击填入输入框，不直接发送 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5 max-w-2xl w-full px-4 animate-fade-in-up" style={{ animationDelay: '0.15s' }}>
+        {SUGGESTION_CARDS.map(card => (
+          <button
+            key={card.title}
+            type="button"
+            data-testid={`suggestion-${card.title}`}
+            onClick={() => { setText(card.prompt) }}
+            className="glass-card rounded-xl px-3 py-3 text-left transition-transform hover:-translate-y-0.5 hover:shadow-md"
+          >
+            <div className="flex items-center gap-1.5 mb-1">
+              <i className={`fas ${card.icon} text-xs`} style={{ color: 'var(--text-brand)' }}></i>
+              <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>{card.title}</span>
+            </div>
+            <p className="text-[11px] leading-relaxed line-clamp-2" style={{ color: 'var(--text-tertiary)' }}>{card.prompt}</p>
+          </button>
+        ))}
+      </div>
+
       {/* Feature cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8 max-w-2xl w-full px-4 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
         {[
@@ -1248,143 +1528,6 @@ export function EmptyState({ onSend, apiKey, capability, setShowSettings, mode, 
       </div>
     </div>
   )
-}
-
-// ── Message Renderer ──
-function MessageRenderer({ msg }: { msg: UIMessage }) {
-  if (msg.type === 'user') {
-    return (
-      <div className="flex justify-end animate-slide-in">
-        <div className="max-w-[85%] md:max-w-[75%]">
-          <div className="msg-user rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-relaxed" style={{ color: 'var(--text-onbrand)' }}>
-            {msg.content}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'error') {
-    return (
-      <div className="flex justify-start animate-slide-in" data-testid="stream-error">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--status-error-default)' }}>
-              <i className="fas fa-exclamation text-white text-xs"></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-3 flex-1">
-              <p className="text-sm" style={{ color: 'var(--status-error-default)' }}>{msg.content}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'system' && msg.content === 'typing') {
-    return (
-      <div className="flex justify-start">
-        <div className="flex items-start gap-3">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'var(--bg-brand)' }}>
-            <i className="fas fa-robot text-white text-xs"></i>
-          </div>
-          <div className="msg-system rounded-xl rounded-tl-sm px-4 py-3">
-            <div className="flex gap-1.5">
-              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-              <div className="w-2 h-2 rounded-full typing-dot" style={{ background: 'var(--text-tertiary)' }}></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'system') {
-    return (
-      <div className="flex justify-start animate-slide-in">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-              <i className="fas fa-robot text-white text-xs"></i>
-            </div>
-            <div className="msg-system rounded-xl rounded-tl-sm px-5 py-3 flex-1">
-              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--status-success-default)' }}>
-                <i className="fas fa-check-circle"></i>
-                <span>{msg.content}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'chat') {
-    return (
-      <div className="flex justify-start animate-slide-in" data-testid="stream-output">
-        <div className="max-w-[95%] md:max-w-[90%] w-full">
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-1" style={{ background: 'var(--bg-brand)' }}>
-              <i className="fas fa-robot text-white text-xs"></i>
-            </div>
-            {/* Kimi 风格：思考区为统一白色时间轴容器，response 纯白底无框直接排版 */}
-            <div className="flex-1 min-w-0">
-              {/* 按 agentTimeline 数组顺序渲染：每个思考片段/搜索/工具调用一个独立横幅，
-                  包在统一白色容器内用左侧竖线串联（时间轴效果），
-                  反映 agent 实际执行时序（思考 -> 搜索 -> 再思考 -> 工具调用 -> ...） */}
-              {msg.agentTimeline && msg.agentTimeline.length > 0 && (
-                <TimelineRenderer
-                  timeline={msg.agentTimeline}
-                  streaming={!!msg.streaming}
-                  components={timelineBannerComponents}
-                />
-              )}
-              {/* response：纯白底、无框体、无背景色，像普通文档直接排版 */}
-              {msg.chatResponse ? (
-                <div className={`prose prose-sm max-w-none px-1 py-1 response-streaming ${msg.streaming ? 'is-streaming' : ''}`} style={{ color: 'var(--text-secondary)' }}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      a: ({href, children}) => (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--bg-brand)' }}>
-                          {children}
-                        </a>
-                      ),
-                    }}
-                  >
-                    {msg.chatResponse}
-                  </ReactMarkdown>
-                  {/* 流式输出中：动态图标跟在 response 文字末尾（与最后段落同行） */}
-                  {msg.streaming && (
-                    <span data-testid="stream-status" className="streaming-cursor">
-                      <span className="block w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></span>
-                    </span>
-                  )}
-                </div>
-              ) : null}
-              {/* 思考阶段（尚无 response）：动态图标单独显示，无文字 */}
-              {msg.streaming && !msg.chatResponse && (
-                <div data-testid="stream-status" className="mt-2 flex items-center">
-                  <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--bg-brand)' }}></div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (msg.type === 'pipeline') {
-    return <PipelineCard msg={msg} />
-  }
-
-  if (msg.type === 'report') {
-    return <ReportCard msg={msg} />
-  }
-
-  return null
 }
 
 // ── Thinking Banner (Kimi-style collapsible reasoning) ──
@@ -1568,12 +1711,17 @@ function getFavicon(url: string) {
 }
 
 // ── Pipeline Card ──
-function PipelineCard({ msg }: { msg: UIMessage }) {
+// adopt-assistant-ui-chat：经 AnalysisThread 的 data-pipeline 部件挂载（导出供部件复用）。
+// enhance-pipeline-progress：管线完成后时间线折叠为单行摘要条（阶段数 + 总用时），点击可再展开。
+export function PipelineCard({ msg }: { msg: UIMessage }) {
   const [showLog, setShowLog] = useState(false)
   const completed = msg.completedNodes || []
   const current = msg.currentNode || ''
   const progress = msg.progress || 0
   const outputs = msg.nodeOutputs || {}
+  // 完成折叠（delta spec）：progress=1 为完成态，摘要条默认收起、点击展开全部节点
+  const isCompleted = progress === 1
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
 
   // ETA 每秒刷新（仅管线运行中；完成后停止计时）
   const pipelineDone = completed.includes('generate_file') || completed.includes('fund_manager')
@@ -1590,6 +1738,13 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
   const etaText = pipelineDone
     ? `总耗时 ${formatDurationMs(elapsedMs)}`
     : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
+  // 完成摘要条总用时：重建路径 durationMs（报告耗时）优先，live 路径用 completedAt-startedAt
+  const totalMs = msg.durationMs ?? (msg.completedAt && msg.startedAt ? msg.completedAt - msg.startedAt : elapsedMs)
+  // 阶段数：completedNodes 优先；重建会话该字段为空，从 layerTree 统计已完成子节点回退
+  const completedCount =
+    completed.length > 0
+      ? completed.length
+      : (msg.layerTree ?? []).reduce((acc, layer) => acc + layer.children.filter(c => c.status === 'completed').length, 0)
 
   // 分层时间轴状态树（无事件数据的历史会话回退为空树，PipelineTimeline 空渲染）
   const layerTree = msg.layerTree ?? buildLayerTree()
@@ -1611,6 +1766,24 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
             <i className="fas fa-robot text-white text-xs"></i>
           </div>
           <div className="msg-system rounded-xl rounded-tl-sm overflow-hidden flex-1">
+            {/* 完成摘要条（enhance-pipeline-progress）：折叠为单行（阶段数 + 总用时），点击展开/收起 */}
+            {isCompleted && (
+              <button
+                type="button"
+                data-testid="pipeline-summary"
+                aria-expanded={summaryExpanded}
+                onClick={() => setSummaryExpanded(v => !v)}
+                className="w-full flex items-center gap-2 px-5 py-3 text-left"
+              >
+                <i className={`fas ${summaryExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} text-[10px]`} style={{ color: 'var(--text-tertiary)' }}></i>
+                <i className="fas fa-check-circle text-xs" style={{ color: 'var(--status-success-default)' }}></i>
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  分析完成 · {completedCount} 个阶段 · 总耗时 {formatDurationMs(totalMs)}
+                </span>
+              </button>
+            )}
+            {(!isCompleted || summaryExpanded) && (
+            <>
             {/* Progress Pipeline */}
             <div className="px-5 pt-4 pb-2">
               <div className="flex items-center justify-between mb-4">
@@ -1695,6 +1868,8 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
                 </div>
               </div>
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>
@@ -1702,8 +1877,117 @@ function PipelineCard({ msg }: { msg: UIMessage }) {
   )
 }
 
+// ── Citation display（add-citation-display）──
+
+// 引用校验状态视觉：verified 绿 / failed 红 / unchecked 灰
+const VERDICT_STYLE: Record<string, { color: string; label: string; icon: string }> = {
+  verified: { color: 'var(--status-success-default)', label: '已验证', icon: 'fa-check-circle' },
+  failed: { color: 'var(--status-error-default)', label: '校验未通过', icon: 'fa-times-circle' },
+  unchecked: { color: 'var(--text-tertiary)', label: '未校验', icon: 'fa-minus-circle' },
+}
+
+// 行内引用上标：hover 懒渲染预览卡（claim/来源/校验状态）
+function CitationSup({ citation }: { citation: Citation }) {
+  const [hovered, setHovered] = useState(false)
+  const style = VERDICT_STYLE[citation.verdict] ?? VERDICT_STYLE.unchecked
+  return (
+    <span
+      className="relative inline-block"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <sup
+        data-testid={`citation-sup-${citation.id}`}
+        className="cursor-pointer font-mono text-[10px] mx-0.5 px-1 rounded"
+        style={{ color: style.color, background: 'var(--bg-overlay-l1)' }}
+      >
+        {citation.id.replace('cite-', '')}
+      </sup>
+      {/* 预览卡：hover 时才挂载（懒渲染，长报告上百标记不预挂） */}
+      {hovered && (
+        <span
+          data-testid={`citation-preview-${citation.id}`}
+          className="absolute bottom-full left-1/2 -translate-x-1/2 z-[80] w-64 mb-1.5 px-3 py-2 rounded-lg text-left shadow-lg block"
+          style={{ background: 'var(--bg-base-default)', border: '1px solid var(--border-neutral-l1)' }}
+        >
+          <span className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: style.color }}>
+            <i className={`fas ${style.icon}`}></i>
+            {style.label}
+            <span className="font-mono" style={{ color: 'var(--text-tertiary)' }}>[{citation.id.replace('cite-', '')}]</span>
+          </span>
+          <span className="block text-[11px] leading-relaxed mt-1" style={{ color: 'var(--text-secondary)' }}>
+            {citation.claim}
+          </span>
+          <span className="block text-[10px] mt-1 truncate font-mono" style={{ color: 'var(--text-tertiary)' }}>
+            <i className="fas fa-database mr-1"></i>
+            {citation.source}
+          </span>
+          <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+            {citation.detail}
+          </span>
+        </span>
+      )}
+    </span>
+  )
+}
+
+// 递归替换 React children 中的 [[cite-<id>]] 文本标记为上标组件。
+// 旧报告无引用数据时 citations 为空 → 原样返回（不渲染任何标记）。
+function withCitationMarks(children: ReactNode, citations: Citation[] | undefined): ReactNode {
+  if (!citations || citations.length === 0) return children
+  const byId = new Map(citations.map((c) => [c.id, c] as const))
+  const replaceText = (text: string, keyPrefix: string): ReactNode => {
+    const parts = text.split(/(\[\[cite-[A-Za-z0-9_-]+\]\])/g)
+    if (parts.length === 1) return text
+    return parts.map((part, i) => {
+      const m = part.match(/^\[\[cite-([A-Za-z0-9_-]+)\]\]$/)
+      if (!m) return part
+      const citation = byId.get(`cite-${m[1]}`) ?? byId.get(part.slice(2, -2))
+      return citation ? <CitationSup key={`${keyPrefix}-${i}`} citation={citation} /> : null
+    })
+  }
+  const walk = (node: ReactNode, keyPrefix: string): ReactNode => {
+    if (typeof node === 'string') return replaceText(node, keyPrefix)
+    if (typeof node === 'number') return node
+    if (Array.isArray(node)) return node.map((n, i) => walk(n, `${keyPrefix}-${i}`))
+    if (isValidElement(node)) {
+      const el = node as ReactElement<{ children?: ReactNode }>
+      return cloneElement(el, undefined, walk(el.props.children, `${keyPrefix}-c`))
+    }
+    return node
+  }
+  return walk(children, 'r')
+}
+
+// 报告结论要点（add-report-side-panel 摘要卡）：取二级标题前 4 条，无标题回退首段截断。
+// 剥离 [[cite-N]] 标记（摘要不渲染上标）
+export function reportKeyPoints(markdown: string | undefined): string[] {
+  const md = (markdown ?? '').replace(/\[\[cite-[A-Za-z0-9_-]+\]\]/g, '')
+  if (!md.trim()) return []
+  const headings = md
+    .split('\n')
+    .map((l) => l.match(/^##\s+(.+?)\s*$/)?.[1])
+    .filter((h): h is string => !!h)
+  if (headings.length > 0) return headings.slice(0, 4)
+  const firstLine = md.split('\n').find((l) => l.trim()) ?? ''
+  return [firstLine.replace(/[#*`>\s]+/g, '').slice(0, 60)]
+}
+
 // ── Report Card ──
-function ReportCard({ msg }: { msg: UIMessage }) {
+// adopt-assistant-ui-chat：经 AnalysisThread 的 data-report 部件挂载（导出供部件复用）。
+// add-report-side-panel：完成态消息流收敛为摘要卡（要点 + 打开报告 + 折叠完整区）；
+// 面板内（variant="panel"）渲染完整报告。
+export function ReportCard({ msg, variant = 'inline', onOpenPanel }: {
+  msg: UIMessage
+  /** inline=消息流（完成态收敛摘要卡）；panel=右侧面板（完整渲染） */
+  variant?: 'inline' | 'panel'
+  /** 「打开报告」回调（App 据视口决定开面板或移动端回退）；缺省时按钮不渲染 */
+  onOpenPanel?: (msg: UIMessage) => void
+}) {
+  // 摘要卡（add-report-side-panel）：完成态 inline 收敛为摘要卡；完整区折叠保留渲染
+  const summaryMode = variant === 'inline' && !msg.streaming
+  const [inlineExpanded, setInlineExpanded] = useState(false)
+  const keyPoints = reportKeyPoints(msg.reportMarkdown)
   return (
     <div className="flex justify-start animate-slide-in">
       <div className="max-w-[95%] md:max-w-[90%] w-full">
@@ -1726,7 +2010,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 
             {/* Report Header */}
             {!msg.streaming && (
-              <div className="px-5 pt-4 pb-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
+              <div className="px-5 pt-4 pb-3" style={{ borderBottom: summaryMode ? 'none' : '1px solid var(--border-neutral-l1)' }}>
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-lg font-bold" style={{ color: 'var(--text-default)' }}>{formatReportTitle(msg)}</h3>
@@ -1737,6 +2021,49 @@ function ReportCard({ msg }: { msg: UIMessage }) {
               </div>
             )}
 
+            {/* 摘要卡（add-report-side-panel）：结论要点 + 打开报告 + 展开完整区入口 */}
+            {summaryMode && (
+              <div className="px-5 py-3" data-testid="report-summary-card">
+                {keyPoints.length > 0 && (
+                  <ul className="flex flex-col gap-1 mb-3">
+                    {keyPoints.map((p, i) => (
+                      <li key={i} className="text-xs leading-relaxed flex items-start gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+                        <i className="fas fa-angle-right text-[10px] mt-0.5 flex-shrink-0" style={{ color: 'var(--text-brand)' }}></i>
+                        <span className="min-w-0">{p}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex items-center gap-2">
+                  {onOpenPanel && (
+                    <Button
+                      data-testid="open-report-button"
+                      size="sm"
+                      onClick={() => { setInlineExpanded(true); onOpenPanel(msg) }}
+                    >
+                      <i className="fas fa-book-open text-[10px] mr-1"></i>
+                      打开报告
+                    </Button>
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    data-testid="toggle-inline-report"
+                    onClick={() => setInlineExpanded(v => !v)}
+                  >
+                    <i className={`fas ${inlineExpanded ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px] mr-1`}></i>
+                    {inlineExpanded ? '收起完整报告' : '在此展开完整报告'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* 完整报告区（摘要卡模式下折叠保留渲染；panel/流式/展开时可见） */}
+            <div
+              data-testid="report-full-section"
+              className={summaryMode && !inlineExpanded ? 'overflow-hidden' : undefined}
+              style={summaryMode && !inlineExpanded ? { maxHeight: 0, opacity: 0 } : undefined}
+            >
             {/* Charts Section */}
             {msg.chartData && msg.chartData.annual && msg.chartData.annual.length > 0 && (
               <div className="px-5 py-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
@@ -1765,16 +2092,16 @@ function ReportCard({ msg }: { msg: UIMessage }) {
                       h1: ({children}) => <h1 className="text-lg font-bold mt-4 mb-2" style={{ color: 'var(--text-default)' }}>{children}</h1>,
                       h2: ({children}) => <h2 className="text-base font-bold mt-4 mb-2 pb-1" style={{ color: 'var(--text-default)', borderBottom: '1px solid var(--border-neutral-l1)' }}>{children}</h2>,
                       h3: ({children}) => <h3 className="text-sm font-semibold mt-3 mb-1" style={{ color: 'var(--text-default)' }}>{children}</h3>,
-                      p: ({children}) => <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{children}</p>,
-                      ul: ({children}) => <ul className="text-sm mb-2 ml-4 list-disc" style={{ color: 'var(--text-secondary)' }}>{children}</ul>,
-                      ol: ({children}) => <ol className="text-sm mb-2 ml-4 list-decimal" style={{ color: 'var(--text-secondary)' }}>{children}</ol>,
-                      li: ({children}) => <li className="mb-0.5">{children}</li>,
-                      strong: ({children}) => <strong className="font-semibold" style={{ color: 'var(--text-default)' }}>{children}</strong>,
+                      p: ({children}) => <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</p>,
+                      ul: ({children}) => <ul className="text-sm mb-2 ml-4 list-disc" style={{ color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</ul>,
+                      ol: ({children}) => <ol className="text-sm mb-2 ml-4 list-decimal" style={{ color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</ol>,
+                      li: ({children}) => <li className="mb-0.5">{withCitationMarks(children, msg.citations)}</li>,
+                      strong: ({children}) => <strong className="font-semibold" style={{ color: 'var(--text-default)' }}>{withCitationMarks(children, msg.citations)}</strong>,
                       table: ({children}) => <table className="w-full text-xs border-collapse mb-2">{children}</table>,
                       th: ({children}) => <th className="border px-2 py-1 text-left" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }}>{children}</th>,
-                      td: ({children}) => <td className="border px-2 py-1" style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-neutral-l1)' }}>{children}</td>,
+                      td: ({children}) => <td className="border px-2 py-1" style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-neutral-l1)' }}>{withCitationMarks(children, msg.citations)}</td>,
                       hr: () => <hr className="my-3" style={{ borderColor: 'var(--border-neutral-l1)' }} />,
-                      blockquote: ({children}) => <blockquote className="border-l-2 pl-3 italic my-2" style={{ borderColor: 'var(--bg-brand)', color: 'var(--text-secondary)' }}>{children}</blockquote>,
+                      blockquote: ({children}) => <blockquote className="border-l-2 pl-3 italic my-2" style={{ borderColor: 'var(--bg-brand)', color: 'var(--text-secondary)' }}>{withCitationMarks(children, msg.citations)}</blockquote>,
                     }}
                   >
                     {msg.reportMarkdown}
@@ -1836,6 +2163,50 @@ function ReportCard({ msg }: { msg: UIMessage }) {
               </div>
             )}
 
+            {/* 引用与校验列表（add-citation-display）：编号/声明/来源/校验状态，failed 红标可辨 */}
+            {!msg.streaming && msg.citations && msg.citations.length > 0 && (
+              <div className="px-5 py-4 border-t" data-testid="citation-list" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+                <div className="flex items-center gap-2 mb-3">
+                  <i className="fas fa-clipboard-check text-xs" style={{ color: 'var(--text-tertiary)' }}></i>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                    引用与校验（{msg.citations.length} 条声明）
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {msg.citations.map((c) => {
+                    const style = VERDICT_STYLE[c.verdict] ?? VERDICT_STYLE.unchecked
+                    return (
+                      <div
+                        key={c.id}
+                        data-testid={`citation-item-${c.id}`}
+                        className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+                        style={{ background: 'var(--bg-overlay-l1)' }}
+                      >
+                        <span className="font-mono flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>[{c.id.replace('cite-', '')}]</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{c.claim}</div>
+                          <div className="text-[10px] mt-0.5 truncate font-mono" style={{ color: 'var(--text-tertiary)' }}>
+                            <i className="fas fa-database mr-1"></i>{c.source}
+                          </div>
+                          {c.detail && (
+                            <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{c.detail}</div>
+                          )}
+                        </div>
+                        <span
+                          data-testid={`citation-verdict-${c.id}`}
+                          className="flex-shrink-0 flex items-center gap-1 text-[10px] font-medium"
+                          style={{ color: style.color }}
+                        >
+                          <i className={`fas ${style.icon}`}></i>
+                          {style.label}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Disclaimer */}
             {!msg.streaming && (
               <div className="px-5 py-3">
@@ -1845,6 +2216,7 @@ function ReportCard({ msg }: { msg: UIMessage }) {
                 </p>
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -1853,7 +2225,11 @@ function ReportCard({ msg }: { msg: UIMessage }) {
 }
 
 // ── Chat Input Bar ──
-export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile }: {
+// adopt-assistant-ui-chat：输入区插槽化——App 内（assistant-ui Runtime Provider 内）
+// 传入 composerInput/composerSend 插槽（ComposerPrimitive 输入/发送/停止），保持
+// 「Enter 发送、Shift+Enter 换行、空禁用发送、运行中发送键变停止」；未传插槽时
+// 使用受控 Textarea+按钮（保持本组件可独立渲染，dropdownOutsideClick 等测试不变）。
+export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onNewAnalysis, apiKey, setShowSettings, profileName, profiles, activeProfileId, onSwitchProfile, composerInput, composerSend }: {
   onSend: (text: string) => void
   leftInset: number
   mode: 'quick' | 'deep'
@@ -1866,6 +2242,8 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
   profiles: LLMProfile[]
   activeProfileId: string
   onSwitchProfile: (id: string) => void
+  composerInput?: ReactNode
+  composerSend?: ReactNode
 }) {
   const [text, setText] = useState('')
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
@@ -1997,24 +2375,28 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
             >
               <i className="fas fa-plus text-xs"></i>
             </Button>
-            <Textarea
-              rows={1}
-              placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
-              className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
-              style={{ color: 'var(--text-default)' }}
-              value={text}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={handleKeydown}
-            />
-            <Button
-              data-testid="send-button"
-              variant="default"
-              size="icon"
-              onClick={handleSendClick}
-              className="w-9 h-9 rounded-xl mb-0.5 mr-0.5"
-            >
-              <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
-            </Button>
+            {composerInput ?? (
+              <Textarea
+                rows={1}
+                placeholder={mode === 'deep' ? '输入股票名称或代码，如 茅台、300750' : '输入问题，如：茅台、宁德时代怎么样'}
+                className="flex-1 border-0 bg-transparent px-2 py-3 shadow-none resize-none text-sm leading-relaxed focus-visible:ring-0 min-h-[40px] max-h-[100px]"
+                style={{ color: 'var(--text-default)' }}
+                value={text}
+                onChange={e => setText(e.target.value)}
+                onKeyDown={handleKeydown}
+              />
+            )}
+            {composerSend ?? (
+              <Button
+                data-testid="send-button"
+                variant="default"
+                size="icon"
+                onClick={handleSendClick}
+                className="w-9 h-9 rounded-xl mb-0.5 mr-0.5"
+              >
+                <i className="fas fa-arrow-up text-xs" style={{ color: 'var(--text-onbrand)' }}></i>
+              </Button>
+            )}
           </div>
         </div>
         <div className="text-center mt-1">

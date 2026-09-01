@@ -40,6 +40,15 @@ export interface NodeTimingEvent {
   timestamp: string
 }
 
+// 结构化引用（add-citation-display：后端 citation_report 转换下发，五字段契约）
+export interface Citation {
+  id: string            // 稳定锚点（cite-N），正文标记 [[cite-N]] 与之一一对应
+  claim: string         // 原子声明（interpretation）
+  source: string        // 数据来源（state 字段路径）
+  verdict: 'verified' | 'failed' | 'unchecked'
+  detail: string        // 重算说明（重算值/偏差/覆盖缺口）
+}
+
 export interface ReportReadyEvent {
   type: 'report_ready'
   analysis_id: string
@@ -51,6 +60,8 @@ export interface ReportReadyEvent {
   stock_name: string
   duration_ms: number
   web_sources?: Array<{ query: string; title: string; url: string; content: string }>
+  // 结构化引用（add-citation-display）；旧后端/旧数据缺省该字段
+  citations?: Citation[]
   timestamp: string
 }
 
@@ -318,6 +329,8 @@ export interface SessionDetail extends SessionMeta {
   last_seq?: number
   // 导出产物文件名映射（refresh-recover-export-files；缺省为旧会话/无导出）
   file_paths?: Record<string, string>
+  // 结构化引用数组（add-citation-display）；旧会话缺省 null
+  citations?: Citation[] | null
 }
 
 // Pipeline step definition
@@ -366,6 +379,9 @@ export interface UIMessage {
   progress?: number
   // 管线启动时间戳（ms epoch），用于 ETA 已用时长计算
   startedAt?: number
+  // 管线完成时刻（enhance-pipeline-progress：live 路径 node_complete progress=1 落值，
+  // 完成摘要条总用时数据源；重建路径用 durationMs）
+  completedAt?: number
   // 分层时间轴状态树（redesign delta）：node_start/node_complete 驱动的 6 层→子节点状态
   layerTree?: import('./pipelineTree').LayerNode[]
   // Report-specific
@@ -378,6 +394,8 @@ export interface UIMessage {
   sessionId?: string
   streaming?: boolean
   webSources?: Array<{ query: string; title: string; url: string; content: string }>
+  // 结构化引用（add-citation-display）：报告消息携带，驱动上标渲染与引用列表
+  citations?: Citation[]
   // Chat-specific
   chatResponse?: string
   // Agent 时序：思考/搜索/工具调用按 SSE 事件到达顺序纵向排列（chat 消息与管线消息共用）

@@ -134,6 +134,8 @@ function applyPipelineEvent(messages: UIMessage[], event: SSEEvent): UIMessage[]
         },
         layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
         content: `${event.layer}: ${event.desc} ✓`,
+        // 管线完成时刻（enhance-pipeline-progress：完成摘要条总用时数据源）
+        ...(event.progress >= 1 ? { completedAt: Date.now() } : {}),
       })
 
     case 'thinking_token':
@@ -187,6 +189,8 @@ function applyReportEvent(messages: UIMessage[], event: SSEEvent): UIMessage[] {
         sessionId: event.session_id,
         webSources: event.web_sources || [],
         streaming: false,
+        // 结构化引用（add-citation-display）：旧后端无该字段时不写入
+        ...(event.citations ? { citations: event.citations } : {}),
       }
       if (reportMsg) {
         return updateMessage(messages, reportMsg.id, updates)

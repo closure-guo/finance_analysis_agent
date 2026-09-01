@@ -45,8 +45,8 @@ def citation_retry_stagnated(fail_rates: list[float]) -> bool:
 
 
 def after_citation(state: dict) -> str:
-    """引用校验路由：PASS → 渲染，FAIL → 重试（最多 3 次，失败率停滞提前放行）。"""
-    if state.get("citation_pass", False):
+    """引用校验路由：PASS → 渲染，轻微失败（≤1 条且 ≤5%）→ 渲染，FAIL → 重试（最多 3 次）。"""
+    if state.get("citation_pass", False) or state.get("citation_minor_fail", False):
         return "render"
     if state.get("iteration_count", 0) < 3:
         # citation-retry-policy delta：重试无收益（失败率无显著改善）时

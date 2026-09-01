@@ -824,6 +824,67 @@ async def stream_session(session_id: str, request: Request):
 # ── Graph streaming (encapsulated as a reusable tool) ──
 
 
+def _citations_payload(citation_report: dict | None) -> list[dict]:
+    """把 citation_report（CitationReport.model_dump）转为前端引用数组。
+
+    add-citation-display 契约：每项含 id/claim/source/verdict/detail 五字段，
+    verdict 三级映射 PASS→verified / FAIL→failed / UNVERIFIABLE→unchecked。
+    无引用或旧数据（citation_report 缺失）返回空数组，不报错。
+    """
+    if not citation_report:
+        return []
+    results = citation_report.get("results") or []
+    verdict_map = {"PASS": "verified", "FAIL": "failed", "UNVERIFIABLE": "unchecked"}
+    citations: list[dict] = []
+    for i, r in enumerate(results, start=1):
+        claim = r.get("claim") or {}
+        field_ref = claim.get("field_ref") or ""
+        field_ref_b = claim.get("field_ref_b")
+        source = f"{field_ref} vs {field_ref_b}" if field_ref_b else field_ref
+        details: list[str] = []
+        ground_truth = r.get("ground_truth")
+        delta = r.get("delta")
+        if ground_truth is not None:
+            details.append(f"重算值 {ground_truth}")
+        if delta is not None:
+            details.append(f"偏差 {delta}")
+        if r.get("coverage_gap"):
+            details.append("指标未注册重算覆盖（覆盖缺口）")
+        if not details:
+            details.append("无法自动校验（LLM 推断类声明）")
+        citations.append(
+            {
+                "id": f"cite-{i}",
+                "claim": claim.get("interpretation") or "",
+                "source": source,
+                "verdict": verdict_map.get(r.get("status") or "", "unchecked"),
+                "detail": "；".join(details),
+            }
+        )
+    return citations
+
+
+# 引用标记模式：[[cite-<id>]]，前端渲染为行内上标
+_CITATION_MARK_RE = re.compile(r"\[\[cite-([A-Za-z0-9_-]+)\]\]")
+
+
+def inject_citation_marks(report_markdown: str, citations: list[dict]) -> str:
+    """在报告 Markdown 中为唯一出现的 claim 注入 [[cite-<id>]] 标记。
+
+    唯一匹配才注入（多处出现会导致锚点漂移，跳过）；零匹配不动正文。
+    """
+    if not report_markdown or not citations:
+        return report_markdown
+    for c in citations:
+        claim = (c.get("claim") or "").strip()
+        if not claim or claim not in report_markdown:
+            continue
+        if report_markdown.count(claim) != 1:
+            continue
+        report_markdown = report_markdown.replace(claim, f"{claim}[[{c['id']}]]", 1)
+    return report_markdown
+
+
 def _report_ready_event(
     analysis_id: str,
     session_id: str,
@@ -833,9 +894,13 @@ def _report_ready_event(
     stock_code: str,
     stock_name: str,
     duration_ms: int,
+    citations: list[dict] | None = None,
 ) -> dict:
-    """构造 report_ready SSE 事件载荷（供 _run_graph_streaming 下发）。"""
-    return {
+    """构造 report_ready SSE 事件载荷（供 _run_graph_streaming 下发）。
+
+    citations：结构化引用数组（add-citation-display）；None 时省略该键（旧路径兼容）。
+    """
+    event = {
         "type": "report_ready",
         "analysis_id": analysis_id,
         "session_id": session_id,
@@ -847,6 +912,9 @@ def _report_ready_event(
         "duration_ms": duration_ms,
         "timestamp": _now(),
     }
+    if citations is not None:
+        event["citations"] = citations
+    return event
 
 
 def _run_graph_streaming(
@@ -1058,6 +1126,9 @@ def _run_graph_streaming(
 
                 analyst_summaries = _extract_analyst_summaries(accumulated)
                 agent_process = _extract_agent_process(accumulated)
+                # add-citation-display：结构化引用随报告下发 + 正文注入引用标记 + 落库
+                citations = _citations_payload(accumulated.get("citation_report"))
+                report_md = inject_citation_marks(report_md, citations)
                 update_session_report(
                     session_id,
                     report_markdown=report_md,
@@ -1068,6 +1139,7 @@ def _run_graph_streaming(
                     duration_ms=duration_ms,
                     file_paths=file_paths,
                     status="completed",
+                    citations=citations,
                 )
                 # 旁路落库批准的 TradeDecision(失败仅 ERROR,不阻断报告)
                 _persist_decision_log(accumulated, session_id, stock_code, stock_name_final)
@@ -1082,6 +1154,7 @@ def _run_graph_streaming(
                         stock_code,
                         stock_name_final,
                         duration_ms,
+                        citations=citations,
                     )
                 )
 

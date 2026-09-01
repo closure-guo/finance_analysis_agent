@@ -41,7 +41,7 @@ type ChartTheme = ReturnType<typeof getChartTheme>
 // ── Base chart wrapper ──
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white border rounded-xl p-4" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+    <div className="border rounded-xl p-4" style={{ background: 'var(--card)', borderColor: 'var(--border-neutral-l1)' }}>
       <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-default)' }}>{title}</h4>
       {children}
     </div>
@@ -505,7 +505,7 @@ export function KpiCards({ data }: { data: ChartData }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
       {cards.map((c, i) => (
-        <div key={i} className="bg-white border rounded-lg p-3" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+        <div key={i} className="border rounded-lg p-3" style={{ background: 'var(--card)', borderColor: 'var(--border-neutral-l1)' }}>
           <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>{c.label}</div>
           <div className="text-base font-bold" style={{ color: 'var(--text-default)', fontFamily: 'var(--font-family-metric)' }}>{c.value}</div>
           {c.sub && <div className="text-[10px] mt-0.5" style={{ color: 'var(--status-success-default)' }}>{c.sub}</div>}

@@ -105,6 +105,8 @@ def init_db() -> None:
         # 报告文件产物（md/docx 等导出路径）：恢复会话后前端可还原导出入口。
         # 对应 delta spec: update-file-export-entry
         ("file_paths", "ALTER TABLE sessions ADD COLUMN file_paths TEXT"),
+        # 结构化引用数组（add-citation-display）：JSON 文本，NULL = 旧会话/未校验
+        ("citations", "ALTER TABLE sessions ADD COLUMN citations TEXT"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -473,11 +475,13 @@ def update_session_report(
     file_paths: dict | None = None,
     duration_ms: int = 0,
     status: str = "completed",
+    citations: list[dict] | None = None,
 ) -> bool:
     """更新 session 的报告数据和状态。
 
     用于管线启动时先创建 running session，完成后再回填报告。
     file_paths 记录报告文件产物路径（md/docx 等），供恢复会话还原导出入口。
+    citations 为结构化引用数组（add-citation-display），None = 未校验（旧路径兼容）。
     """
     conn = _get_db()
     cur = conn.execute(
@@ -490,7 +494,8 @@ def update_session_report(
             analyst_summaries = ?,
             file_paths = ?,
             duration_ms = ?,
-            status = ?
+            status = ?,
+            citations = ?
         WHERE session_id = ?
         """,
         (
@@ -502,6 +507,7 @@ def update_session_report(
             json.dumps(file_paths or {}, ensure_ascii=False),
             duration_ms,
             status,
+            json.dumps(citations, ensure_ascii=False) if citations is not None else None,
             session_id,
         ),
     )
@@ -598,6 +604,15 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     if raw_file_paths:
         with contextlib.suppress(json.JSONDecodeError, TypeError):
             d["file_paths"] = json.loads(raw_file_paths)
+    # citations：结构化引用数组（add-citation-display）。NULL/解析失败 → None
+    # （旧会话缺省，前端不渲染引用标记）
+    raw_citations = d.get("citations")
+    d["citations"] = None
+    if raw_citations:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_citations)
+            if isinstance(parsed, list):
+                d["citations"] = parsed
     return d
 
 

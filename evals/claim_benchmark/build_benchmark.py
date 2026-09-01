@@ -294,7 +294,7 @@ def build(
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
     csv_path = out_prefix.with_suffix(".csv")
-    with csv_path.open("w", encoding="utf-8", newline="") as f:
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
         w.writeheader()
         for e in entries:
@@ -325,7 +325,7 @@ def build(
     labeling_path = out_prefix.parent / f"{out_prefix.name}_for_labeling.csv"
     drop = {"verifier_status", "expected_label"}
     keep = [c for c in _CSV_COLUMNS if c not in drop]
-    with labeling_path.open("w", encoding="utf-8", newline="") as f:
+    with labeling_path.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keep, extrasaction="ignore")
         w.writeheader()
         for e in entries:
