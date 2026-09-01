@@ -265,6 +265,26 @@ async def _aclose(gen: Any) -> None:
         await gen.aclose()
 
 
+def _schedule_interrupted_persist(thread_id: str, collector: _AguiCollector) -> None:
+    """在独立任务中执行中断落库 + status=interrupted。
+
+    调用点可能处于已取消任务（await 会立即重抛 CancelledError）或生成器
+    aclose（GeneratorExit）上下文，两种情况下直接 await 落库都不安全/不可达，
+    必须 detach 到新任务保证执行——否则会话永久泄漏 running（E2E 实证：
+    quick 会话切换 abort 后状态再未收敛，会话被「生成中」守卫锁死）。
+    """
+
+    async def _run() -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_persist_interrupted, thread_id, collector)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(session_store.update_session_status, thread_id, "interrupted")
+
+    # 事件循环已关闭（进程退出路径）时无法调度：尽力而为
+    with contextlib.suppress(RuntimeError):
+        asyncio.get_running_loop().create_task(_run())
+
+
 async def _agui_run_stream(
     thread_id: str,
     run_id: str,
@@ -276,6 +296,8 @@ async def _agui_run_stream(
     from finance_agent.agent_factory import build_agent
 
     collector = _AguiCollector()
+    # 终态落库标记前置到 try 外：外层 finally 兜底在任何时机退出都要可读
+    terminal_persisted = False
     try:
         # user 消息任务内落库（调研 §3.1：409/single-flight 语义不适用于本通道）
         await asyncio.to_thread(session_store.append_chat, thread_id, "user", user_message)
@@ -307,7 +329,6 @@ async def _agui_run_stream(
         agui_events = translate_to_agui(agent_gen, thread_id=thread_id, run_id=run_id)
         next_task: asyncio.Task[BaseEvent] = asyncio.create_task(_next_event(agui_events))
         last_persist = time.monotonic()
-        terminal_persisted = False
         try:
             while True:
                 done, _ = await asyncio.wait({next_task}, timeout=_HEARTBEAT_INTERVAL)
@@ -382,10 +403,13 @@ async def _agui_run_stream(
             else:
                 await asyncio.to_thread(_upsert_assistant_chat, thread_id, collector)
                 await asyncio.to_thread(session_store.update_session_status, thread_id, "completed")
+            terminal_persisted = True
     except asyncio.CancelledError:
-        # 客户端断开/取消：中断落库 + interrupted（RunAgent abortRun 语义）
-        await asyncio.to_thread(_persist_interrupted, thread_id, collector)
-        await asyncio.to_thread(session_store.update_session_status, thread_id, "interrupted")
+        # 客户端断开/取消：中断落库 + interrupted（RunAgent abortRun 语义）。
+        # 已取消任务里 await 可能立即重抛（二次取消），落库 detach 到独立任务保证执行；
+        # 置终态标记避免外层 finally 重复调度（否则 [输出中断] 占位会落两遍）
+        _schedule_interrupted_persist(thread_id, collector)
+        terminal_persisted = True
         raise
     except Exception as exc:
         # agent.run() 自身异常（真 LLM 失败等）：RUN_ERROR 终止 + failed
@@ -399,7 +423,15 @@ async def _agui_run_stream(
             "failed",
             failure_reason=collector.error_message,
         )
+        terminal_persisted = True
         yield encoder.encode(RunErrorEvent(message=str(exc)))
+    finally:
+        # GeneratorExit（客户端断开时 StreamingResponse/uvicorn 走 aclose 清理
+        # 响应生成器）是 BaseException，不经上面任何 except——若无此兜底，
+        # 该路径下终态落库被整体跳过，会话永久泄漏 running（E2E debug-cursor
+        # 实证，2026-09-01）。aclose 上下文里 await 落库不安全，detach 执行。
+        if not terminal_persisted:
+            _schedule_interrupted_persist(thread_id, collector)
 
 
 @router.post("/api/agui/quick")
