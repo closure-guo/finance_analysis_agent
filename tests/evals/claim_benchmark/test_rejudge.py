@@ -252,3 +252,19 @@ class TestRejudgeSemantic:
             "interpretation": "资产负债率 40%",
         }
         assert rejudge_claim(claim, 40.0, 0.0) == "PASS"
+
+
+class TestRejudgeSemanticOutOfVocab:
+    """镜像同步：词表外 metric_name 离线复判同样不判 FAIL（与管线 D5 扩展口径一致）。"""
+
+    def test_out_of_vocab_term_not_failed_offline(self):
+        claim = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "health_score.total",
+            "stated_value": 78.1,
+            "interpretation": "综合健康度评分78.1分",
+            "metric_name": "健康度评分",
+            "period": "2025",
+        }
+        assert rejudge_claim(claim, 78.1, 0.0) == "PASS"

@@ -105,9 +105,11 @@ def _rejudge_semantic(claim: dict) -> Status | None:
     metric_name = (claim.get("metric_name") or "").strip()
     if metric_name:
         canonical = canonical_metric(metric_name)
-        seg_keys = {(canonical_metric(s) or s) for s in field_ref_metric_segments(field_ref)}
-        if canonical is None or canonical not in seg_keys:
-            return "FAIL"
+        # 词表外（无规范键）→ 跳过（镜像管线 D5 扩展：计缺口不 FAIL）
+        if canonical is not None:
+            seg_keys = {(canonical_metric(s) or s) for s in field_ref_metric_segments(field_ref)}
+            if canonical not in seg_keys:
+                return "FAIL"
     period = (claim.get("period") or "").strip()
     if period:
         actual = field_ref_period_segment(field_ref)

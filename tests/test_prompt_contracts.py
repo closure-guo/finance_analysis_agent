@@ -175,3 +175,20 @@ class TestClaimSemanticDeclarationPrompts:
         """舆情分析师以 entity claim 为主：metric_name/period 标注为可选。"""
         text = (_PROMPTS_DIR / "sentiment_analyst.md").read_text(encoding="utf-8")
         assert "metric_name" in text
+
+
+class TestOutOfVocabNullRule:
+    """三标的冒烟实证（2026-09-01）：词表外 metric_name 判 FAIL 全为误报 →
+    prompt 须指引「词表外/不确定置 null」；fundamental 另需 growth/quarterly 申报规则。"""
+
+    @pytest.mark.parametrize(
+        "prompt", ["technical_analyst", "macro_analyst", "fundamental_analyst"]
+    )
+    def test_prompts_mandate_null_for_out_of_vocab(self, prompt):
+        text = (_PROMPTS_DIR / f"{prompt}.md").read_text(encoding="utf-8")
+        assert "置 null" in text and "词表" in text
+
+    def test_fundamental_mandates_growth_base_metric(self):
+        """growth_rates.* 引用填基指标名（勿带 增长率/同比 后缀）。"""
+        text = (_PROMPTS_DIR / "fundamental_analyst.md").read_text(encoding="utf-8")
+        assert "基指标名" in text

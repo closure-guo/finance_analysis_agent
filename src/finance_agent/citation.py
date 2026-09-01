@@ -378,17 +378,28 @@ def _verify_event(claim: Claim, state: dict) -> CitationResult:
 # ── 语义层检查（harden-citation-semantic-coverage）──
 
 
-def _check_metric_term(claim: Claim) -> CitationResult | None:
-    """术语一致性：metric_name 规范键须命中 field_ref 指标段。不一致/词表外 → FAIL。"""
+def _check_metric_term(claim: Claim) -> tuple[CitationResult | None, bool]:
+    """术语一致性。返回 (FAIL 结果或 None, 是否覆盖缺口)。
+
+    词表内规范键不一致 → FAIL（张冠李戴拦截面）；词表外（无规范键）→ 跳过
+    检查计覆盖缺口（D5 扩展，2026-09-01 三标的冒烟实证：state 指标段空间
+    开放——报表行名/dupont/health_score/garp，词表不可闭合，词表外 FAIL
+    全为误报）。未申报（None）由外层缺口公式兜底，此处不重复计。
+    """
     name = (claim.metric_name or "").strip()
     if not name:
-        return None
+        return None, False
     canonical = canonical_metric(name)
+    if canonical is None:
+        return None, True
     segments = field_ref_metric_segments(claim.field_ref)
     seg_keys = {(canonical_metric(s) or s) for s in segments}
-    if canonical is None or canonical not in seg_keys:
-        return CitationResult(status="FAIL", claim=claim, bucket="semantic_term_mismatch")
-    return None
+    if canonical not in seg_keys:
+        return (
+            CitationResult(status="FAIL", claim=claim, bucket="semantic_term_mismatch"),
+            False,
+        )
+    return None, False
 
 
 def _resolve_index_period(field_ref: str, state: dict) -> str | None:
@@ -637,14 +648,19 @@ def _verify_data_claim(
     首个 FAIL 短路；术语/期次缺省或不可解析计覆盖缺口（D5 显式降级）。
     方向词检查只在值级 PASS 上执行（值级 FAIL 已由重试反馈携带真值）。
     """
-    term_fail = _check_metric_term(claim)
+    term_fail, term_gap = _check_metric_term(claim)
     if term_fail is not None:
         return term_fail
     period_fail, period_gap = _check_period(claim, state)
     if period_fail is not None:
         return period_fail
     # 缺口口径（D5）：任一申报字段缺失即计缺口，回声/方向提前 FAIL 不得丢失缺口标记
-    gap = period_gap or not (claim.metric_name or "").strip() or not (claim.period or "").strip()
+    gap = (
+        term_gap
+        or period_gap
+        or not (claim.metric_name or "").strip()
+        or not (claim.period or "").strip()
+    )
     echo_fail = _check_internal_echo(claim)
     if echo_fail is not None:
         echo_fail.coverage_gap = gap

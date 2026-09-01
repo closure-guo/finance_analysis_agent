@@ -65,8 +65,9 @@ class TestSemanticTermCheck:
         (r,) = verify_claims([claim], _state())
         assert r.status == "PASS"
 
-    def test_unknown_term_fails(self):
-        """词表外术语 = 契约违规 → FAIL（不静默放行）。"""
+    def test_unknown_term_counts_gap_not_fail(self):
+        """词表外术语（无规范键）→ 跳过检查计覆盖缺口（D5 扩展，三标的冒烟实证：
+        指标段空间开放词表不可闭合，词表外 FAIL 全为误报）；值级检查照常。"""
         claim = Claim(
             claim_type="numerical",
             source_type="data",
@@ -74,10 +75,11 @@ class TestSemanticTermCheck:
             stated_value=45.2,
             interpretation="毛利率为 45.2%",
             metric_name="神秘指标",
+            period="2024",
         )
         (r,) = verify_claims([claim], _state())
-        assert r.status == "FAIL"
-        assert r.bucket == "semantic_term_mismatch"
+        assert r.status == "PASS"
+        assert r.coverage_gap is True
 
     def test_missing_metric_name_skips_and_counts_gap(self):
         """D5：缺省 → 跳过检查 + 覆盖缺口，不静默 PASS 语义（值级检查照常）。"""
@@ -268,3 +270,72 @@ class TestResolveIndexPeriodDatetime:
 
         state = {"kline": pd.DataFrame({"日期": ["2026-08-27", "2026-08-28"]})}
         assert _resolve_index_period("technical_indicators.rsi.-1", state) == "2026-08-28"
+
+
+class TestTermCheckOutOfVocab:
+    """三标的冒烟实证修复（2026-09-01）：metric_name 已申报但词表无规范键 →
+    跳过术语检查、计覆盖缺口（D5 扩展），不得判 FAIL。
+    state 指标段空间开放（报表行名/dupont/health_score/garp），词表不可闭合；
+    词表内张冠李戴（毛利率 vs 净利率）仍判 FAIL，检查杀伤力保留。"""
+
+    def test_out_of_vocab_counts_gap_not_fail(self):
+        state = {"health_score": {"total": 78.1}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="health_score.total",
+            stated_value=78.1,
+            interpretation="综合健康度评分78.1分",
+            metric_name="健康度评分",  # 词表外（无规范键）
+            period="2025",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS"
+        assert r.coverage_gap is True
+
+    def test_in_vocab_mismatch_still_fails(self):
+        """词表内张冠李戴不受词表外降级影响，仍 FAIL。"""
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="profitability_metrics.毛利率.2024",
+            stated_value=45.2,
+            interpretation="毛利率为 45.2%",
+            metric_name="净利率",
+            period="2024",
+        )
+        (r,) = verify_claims([claim], _state())
+        assert r.status == "FAIL"
+        assert r.bucket == "semantic_term_mismatch"
+
+    def test_net_profit_alias_maps_to_parent(self):
+        """quarterly_trend.net_profit 实为归母净利润序列（net_profit alias 挂归母净利润）。"""
+        state = {"quarterly_trend": {"quarters": ["2026Q2"], "net_profit": [172.74]}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="quarterly_trend.net_profit.0",
+            stated_value=172.74,
+            interpretation="2026Q2归母净利润172.74亿元",
+            metric_name="归母净利润",
+            period="2026Q2",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS"
+        assert r.coverage_gap is False
+
+    def test_yoy_natural_alias(self):
+        """quarterly_trend.yoy 自然申报名（净利润同比增速/归母净利润同比）→ 词表命中。"""
+        state = {"quarterly_trend": {"quarters": ["2026Q2"], "yoy": [-6.9], "net_profit": [172.74]}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="quarterly_trend.yoy.0",
+            stated_value=-6.9,
+            interpretation="2026Q2归母净利润同比-6.9%",
+            metric_name="净利润同比增速",
+            period="2026Q2",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS"
+        assert r.coverage_gap is False

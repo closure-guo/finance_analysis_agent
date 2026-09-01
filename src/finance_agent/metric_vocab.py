@@ -56,11 +56,13 @@ _METRIC_ALIASES: dict[str, list[str]] = {
     "m2": ["m2", "广义货币供应量", "广义货币"],
     "lpr": ["lpr", "贷款市场报价利率"],
     # quarterly_trend
-    "yoy": ["yoy", "同比", "同比增速"],
+    "yoy": ["yoy", "同比", "同比增速", "净利润同比增速", "归母净利润同比", "营收同比"],
     # 报表常用行（field_ref 指标段即列名，别名收敛到真实列名）
     "营业总收入": ["营业总收入", "营业收入", "营收", "总收入", "revenue"],
-    "净利润": ["净利润", "net_profit", "net profit"],
-    "归母净利润": ["归母净利润", "归属母公司净利润", "归母净利润(单季)"],
+    "净利润": ["净利润", "net profit"],
+    # net_profit 是 quarterly_trend 的归母净利润序列键（冒烟实证：申报「归母净利润」
+    # 撞 net_profit→净利润 映射造成词表内误判 FAIL），归母净利润序列归此 canonical
+    "归母净利润": ["归母净利润", "归属母公司净利润", "归母净利润(单季)", "net_profit"],
 }
 
 _ALIAS_TO_CANONICAL: dict[str, str] = {
