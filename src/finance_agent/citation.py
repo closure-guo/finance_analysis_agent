@@ -31,6 +31,11 @@ from finance_agent.metrics.technical import calc_technical
 if TYPE_CHECKING:
     import pandas as pd
 
+# 容差常量（FinGround 标准）：数值/计算型裁决与 evals 离线复判（rejudge.py）
+# 共用此唯一来源——改这里即改契约，benchmark 标签语义随 CI 门禁同步生效。
+ABS_TOL = 0.01  # 绝对容差：|delta| < 0.01
+REL_TOL = 0.005  # 相对容差：|delta| / |gt| < 0.5%
+
 
 class Claim(BaseModel):
     """原子声明 — Agent 报告中的单个可验证数据点。"""
@@ -260,7 +265,7 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
     delta = abs(ground_truth - stated)
 
     # 相对容差 0.5%（FinGround 标准）
-    passed = delta < 0.01 if ground_truth == 0 else delta / abs(ground_truth) < 0.005
+    passed = delta < ABS_TOL if ground_truth == 0 else delta / abs(ground_truth) < REL_TOL
 
     return CitationResult(
         status="PASS" if passed else "FAIL",
@@ -300,7 +305,7 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     delta = abs(gt_float - sv_float)
     # fix-citation-contract-diseases 修 C：|delta|<0.01 或相对误差<0.5%
     # （与计算型容差对齐；绝对 0.01 对亿元级数值是假阴性——LLM 须精确到分才过）
-    tol = max(0.01, abs(gt_float) * 0.005)
+    tol = max(ABS_TOL, abs(gt_float) * REL_TOL)
     status: Literal["PASS", "FAIL"] = "PASS" if delta < tol else "FAIL"
     return CitationResult(
         status=status,
@@ -527,7 +532,7 @@ def _extract_number_candidates(text: str) -> list[float]:
 
 def value_close(a: float, b: float) -> bool:
     """容差比对（max(0.01, 0.5%)，与数值型校验同族，允许双向不对称）。"""
-    return abs(a - b) < max(0.01, 0.005 * max(abs(a), abs(b)))
+    return abs(a - b) < max(ABS_TOL, REL_TOL * max(abs(a), abs(b)))
 
 
 def _check_internal_echo(claim: Claim) -> CitationResult | None:

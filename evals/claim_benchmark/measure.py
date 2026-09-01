@@ -38,6 +38,7 @@ import numpy as np  # noqa: E402
 from evals.claim_benchmark.rejudge import rejudge_claim  # noqa: E402
 
 F1_GATE = 0.90
+MAX_REGRESSION = 0.02
 BOOTSTRAP_B = 2000
 BOOTSTRAP_SEED = 42
 
@@ -103,7 +104,7 @@ def _confusion(labels: list[str], preds: list[str]) -> dict[str, int]:
     }
 
 
-def measure(entries: list[dict]) -> dict:
+def measure(entries: list[dict], f1_gate: float = F1_GATE) -> dict:
     rows = [
         {
             "rejudged": _rejudge_entry(e),
@@ -184,7 +185,7 @@ def measure(entries: list[dict]) -> dict:
         "f1": round(f1, 4),
         "f1_ci_95": [round(ci[0], 4), round(ci[1], 4)],
         "accuracy": round(accuracy, 4),
-        "gate": {"f1_gate": F1_GATE, "passed": f1 >= F1_GATE},
+        "gate": {"f1_gate": f1_gate, "passed": f1 >= f1_gate},
         "near_miss_recall": None if nm_recall is None else round(nm_recall, 4),
         "hedged_fp_rate": None if hedged_fp is None else round(hedged_fp, 4),
         "near_miss_over_line_recall": None if over_recall is None else round(over_recall, 4),
@@ -229,10 +230,36 @@ def _print_report(rep: dict) -> None:
         print("fn 集中桶:", rep["fn_buckets"])
 
 
+def _baseline_regression(rep: dict, baseline_path: Path, max_regression: float) -> dict:
+    """与冻结基线比对：当前 F1 相对基线退步超过 max_regression 即不通过。"""
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    baseline_f1 = float(baseline["f1"])
+    delta = round(rep["f1"] - baseline_f1, 4)
+    return {
+        "baseline_path": str(baseline_path),
+        "baseline_f1": baseline_f1,
+        "f1_delta": delta,
+        "max_regression": max_regression,
+        "passed": delta >= -max_regression,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="校验器准度测量")
     ap.add_argument("--labeled", required=True, help="benchmark_v1_labeled.jsonl")
     ap.add_argument("--out-json", default=None, help="可省：报告另存路径")
+    ap.add_argument("--gate", type=float, default=F1_GATE, help="F1 门禁阈值（默认 0.90）")
+    ap.add_argument(
+        "--baseline",
+        default=None,
+        help="可省：冻结基线 measure JSON（如 results/v11-measure.json），提供则启用退步门禁",
+    )
+    ap.add_argument(
+        "--max-regression",
+        type=float,
+        default=MAX_REGRESSION,
+        help="相对基线的 F1 最大退步容忍（默认 0.02）",
+    )
     args = ap.parse_args()
 
     path = Path(args.labeled)
@@ -249,14 +276,26 @@ def main() -> int:
         )
         return 2
 
-    rep = measure(entries)
+    rep = measure(entries, f1_gate=args.gate)
+    if args.baseline:
+        rep["baseline_regression"] = _baseline_regression(
+            rep, Path(args.baseline), args.max_regression
+        )
+        br = rep["baseline_regression"]
+        print(
+            f"基线比对: F1 {br['baseline_f1']} → {rep['f1']}（Δ{br['f1_delta']:+}，"
+            f"容忍退步 ≤ {br['max_regression']}）: {'✅ 通过' if br['passed'] else '❌ 退步超限'}"
+        )
     _print_report(rep)
     if args.out_json:
         Path(args.out_json).write_text(
             json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         print(f"报告另存 {args.out_json}")
-    return 0 if rep["gate"]["passed"] and rep["semantic_gate"]["passed"] else 1
+    passed = rep["gate"]["passed"] and rep["semantic_gate"]["passed"]
+    if "baseline_regression" in rep:
+        passed = passed and rep["baseline_regression"]["passed"]
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
