@@ -8,7 +8,7 @@ judge 调用已迁移至 gateway 统一入口（purpose="judge"），mock 目标
 import os
 from unittest.mock import patch
 
-from evals.judges import JUDGE_ENV, RUBRICS, _judge_model, run_judge
+from evals.judges import JUDGE_ENV, RUBRIC_VERSIONS, RUBRICS, _judge_model, run_judge
 
 _GATEWAY = "finance_agent.llm.gateway.complete_text"
 
@@ -192,3 +192,21 @@ class TestInputMissingGuard:
         )
         assert result["score"] == 4
         mock_llm.assert_called_once()
+
+
+class TestDecisionGroundingRubricV3:
+    def test_version_incremented(self):
+        """rubric 变更递增版本号（evidence_refs 版为 v2，语义核对版为 v3）。"""
+        assert RUBRIC_VERSIONS["decision_grounding"] == 3
+
+    def test_other_rubrics_version_pinned(self):
+        assert RUBRIC_VERSIONS["report_relevance"] == 1
+        assert RUBRIC_VERSIONS["debate_quality"] == 1
+        assert RUBRIC_VERSIONS["consistency"] == 1
+
+    def test_rubric_includes_semantic_check(self):
+        """语义核对条款：术语/期次/方向与所引数值一致；解读失当扣分。"""
+        rubric = RUBRICS["decision_grounding"]
+        assert "语义一致" in rubric
+        assert "期次" in rubric
+        assert "行业领先" in rubric  # 反例锚点（垫底表述为领先）
