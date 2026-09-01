@@ -25,8 +25,8 @@ import { test, expect } from '@playwright/test'
 const API_BASE = 'http://localhost:8000'
 
 test('第二轮中途切换会话后游标也应消失', async ({ page }) => {
-  // 三轮 quick run + 两次会话切换，全量套件并发负载下放宽单测总时长
-  test.setTimeout(60_000)
+  // 三轮 quick run + 两次会话切换 + abort 落停轮询，全量套件并发负载下放宽单测总时长
+  test.setTimeout(90_000)
   await page.goto('/')
   await page.evaluate(() => {
     localStorage.setItem('fa_api_key', 'stub-key-for-testing')
@@ -58,8 +58,26 @@ test('第二轮中途切换会话后游标也应消失', async ({ page }) => {
   await page.getByTestId('send-button').click()
   await expect(page.getByTestId('agui-stream-status')).toBeVisible({ timeout: 10_000 })
 
-  // 流式中途切到 B 再立即切回 A（重挂载 Thread → rebuildSession 快照）
+  // 流式中途切到 B（触发 selectSession 守卫：abort A 的 quick run）
   await page.getByText('第一轮问题B').first().click()
+
+  // 等 A 的中止在后端落停再切回：abort 传播期间 A 仍为 running，此时切回会走
+  // resume 续传而非 rebuildSession 快照，快照断言会产生环境性抖动（CI 实测）
+  const sessionsList = await page.request.get(`${API_BASE}/api/sessions`)
+  const { sessions: sessionsNow } = (await sessionsList.json()) as {
+    sessions: Array<{ session_id: string; display_name?: string }>
+  }
+  const sessionAId = sessionsNow.find(s => (s.display_name ?? '').includes('第一轮问题A'))?.session_id
+  if (sessionAId) {
+    for (let i = 0; i < 15; i++) {
+      const resp = await page.request.get(`${API_BASE}/api/sessions/${sessionAId}`)
+      const d = (await resp.json()) as { status: string }
+      if (d.status !== 'running' && d.status !== 'clarifying') break
+      await page.waitForTimeout(1_000)
+    }
+  }
+
+  // 切回 A（重挂载 Thread → rebuildSession 快照）
   await page.getByText('第一轮问题A').first().click()
 
   // 切回后快照渲染正常
