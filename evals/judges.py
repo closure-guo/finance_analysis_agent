@@ -39,6 +39,15 @@ JUDGE_ENV = "langfuse-llm-as-a-judge"
 
 _JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以篇幅长短论优劣。'
 
+# rubric 版本（变更递增，校准门禁按版本重校准；decision_grounding：
+# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对）
+RUBRIC_VERSIONS: dict[str, int] = {
+    "report_relevance": 1,
+    "debate_quality": 1,
+    "decision_grounding": 3,
+    "consistency": 1,
+}
+
 RUBRICS: dict[str, str] = {
     "report_relevance": """你是投资研究报告评审专家。
 【用户查询】{{query}}
@@ -70,6 +79,10 @@ RUBRICS: dict[str, str] = {
 若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对：
 - claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager）的结论中找到出处，
   且 reasoning 的主要论据都能在 evidence_refs 中找到对应项 → 4-5 分；
+- 语义一致性核对：论据表述的指标术语、期次、方向须与所引数值语义一致——
+  数值有出处但术语张冠李戴（毛利率写成净利率）、期次错位（年报值说成季度值）、
+  方向失当（数值下降表述为「改善」、行业垫底表述为「行业领先」）属解读失当，
+  不得仅因数值有出处给高分 → 降至 2-3 分；
 - source 与论据对不上、claim 数值在来源中不存在（无中生有）、或 evidence_refs 缺失
   reasoning 中大量论据的引用 → 1-2 分。
 无 evidence_refs 时按以下原规则从自由文本推断（不因缺字段报错）:

@@ -130,3 +130,20 @@ class TestNestedLoopSafety:
         out = asyncio.run(_drive())  # 外层 loop
         assert out["report"] == "茅台是好公司"
         assert out["skipped"] is None
+
+
+class TestTaskCitationOutputs:
+    def test_deep_output_includes_citation_metrics(self, monkeypatch):
+        """deep task 输出携带 citation_pass/citation_coverage（来自管线 state）。"""
+        import evals.task as task_mod
+
+        class _FakeGraph:
+            def invoke(self, state, config=None):
+                return {"final_report": "r", "citation_pass": True, "citation_coverage": 0.92}
+
+        monkeypatch.setattr(task_mod, "build_5layer_graph", lambda: _FakeGraph())
+        monkeypatch.setattr(task_mod, "extract_judge_vars", lambda state, query="": {})
+        monkeypatch.setattr(task_mod, "get_callback_handler", lambda: None)
+        out = task_mod._run_deep({"stock_code": "600519", "query": "q"})
+        assert out["citation_pass"] == 1.0
+        assert out["citation_coverage"] == 0.92

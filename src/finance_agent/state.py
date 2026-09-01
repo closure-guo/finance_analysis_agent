@@ -105,6 +105,12 @@ class AnalysisState(TypedDict, total=False):
     # 各轮校验失败率历史（citation-retry-policy delta）：失败率停滞时
     # after_citation 提前放行渲染，不再全量重跑分析师
     citation_fail_rates: list[float]
+    citation_minor_fail: bool  # 轻微失败降级放行（skip-citation-retry-on-minor-failures）
+    # harden-citation-semantic-coverage：FAIL 分桶与定向重试
+    citation_retry_targets: list[str]  # 值级 FAIL 分析师（Send 定向重跑）
+    citation_retry_feedback: dict[str, list[dict]]  # 每分析师失败明细（重试上下文注入）
+    citation_fail_buckets: dict[str, int]  # 桶计数（value_mismatch/path_unresolvable/...）
+    citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──
     web_sources: list[dict]  # [{"query","title","url","content"}]

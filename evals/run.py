@@ -70,12 +70,10 @@ def _verify_prompt_sync(client) -> list[str]:
     mismatched: list[str] = []
     for name in _PROMPT_NAMES:
         try:
-            # newline="" 保留原文行尾,使 .replace 成为真实归一化路径(否则 universal-newlines 读入即转 LF,replace 成死代码)
-            local = (
-                (_PROMPTS_DIR / f"{name}.md")
-                .read_text(encoding="utf-8", newline="")
-                .replace("\r\n", "\n")
-            )
+            # newline="" 保留原文行尾,使 .replace 成为真实归一化路径(否则 universal-newlines 读入即转 LF,replace 成死代码);
+            # 用 open() 而非 Path.read_text:newline 形参 3.13+ 才加入 read_text,repo mypy 锁定 3.12
+            with open(_PROMPTS_DIR / f"{name}.md", encoding="utf-8", newline="") as f:
+                local = f.read().replace("\r\n", "\n")
         except OSError:
             mismatched.append(f"{name} (本地文件缺失)")
             continue
@@ -102,6 +100,39 @@ def eval_ticker_match(*, input, output, expected_output, metadata):
     return make_evaluation(result) if result else None
 
 
+def eval_citation_pass(*, input, output, expected_output, metadata):
+    """citation_pass（管线 trace 级布尔）经 output 透传为实验 Score。"""
+    value = (output or {}).get("citation_pass")
+    if value is None:
+        return None
+    return make_evaluation({"name": "citation_pass", "value": float(value), "comment": None})
+
+
+def eval_citation_coverage(*, input, output, expected_output, metadata):
+    """citation_coverage（正文数字普查覆盖率，harden-citation-semantic-coverage）。"""
+    value = (output or {}).get("citation_coverage")
+    if value is None:
+        return None
+    return make_evaluation({"name": "citation_coverage", "value": float(value), "comment": None})
+
+
+def _citation_ci(
+    vals: list[float],
+    B: int = 10_000,  # noqa: N803 - B 为 bootstrap 重采样次数的数学惯例命名
+    seed: int = 42,
+) -> tuple[float, float]:
+    """均值的 bootstrap 95% CI（非配对；配对显著性由 compare.py 契约承担）。"""
+    import numpy as np
+
+    if not vals:
+        return (0.0, 0.0)
+    arr = np.asarray(vals, dtype=float)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(arr), size=(B, len(arr)))
+    means = arr[idx].mean(axis=1)
+    return (float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5)))
+
+
 def _judge_adapter(dimension: str):
     def _eval(*, input, output, expected_output, metadata):
         mode = (output or {}).get("mode") or (input or {}).get("mode")
@@ -123,7 +154,12 @@ def _judge_adapter(dimension: str):
 
 
 def all_evaluators() -> list:
-    return [eval_section_coverage, eval_ticker_match] + [_judge_adapter(d) for d in _JUDGE_DIMS]
+    return [
+        eval_section_coverage,
+        eval_ticker_match,
+        eval_citation_pass,
+        eval_citation_coverage,
+    ] + [_judge_adapter(d) for d in _JUDGE_DIMS]
 
 
 def _mean_rows(rows: list[dict]) -> dict:
@@ -151,7 +187,9 @@ def _print_table(rows: list[dict], means: dict) -> None:
     print("均值:", json.dumps(means, ensure_ascii=False))
 
 
-def _write_report(rows: list[dict], means: dict, name: str, prompt_versions: dict) -> Path:
+def _write_report(
+    rows: list[dict], means: dict, name: str, prompt_versions: dict, citation_ci: dict
+) -> Path:
     out_dir = Path("reports/evals")
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -163,6 +201,7 @@ def _write_report(rows: list[dict], means: dict, name: str, prompt_versions: dic
                 "timestamp": ts,
                 "prompt_versions": prompt_versions,
                 "means": means,
+                "citation_ci": citation_ci,
                 "rows": rows,
             },
             ensure_ascii=False,
@@ -226,7 +265,18 @@ def main() -> None:
 
     means = _mean_rows(rows)
     _print_table(rows, means)
-    path = _write_report(rows, means, args.name, prompt_versions)
+    # citation 指标均值 CI（harden-citation-semantic-coverage spec：均值与 95% CI）
+    citation_ci = {}
+    for metric in ("citation_pass", "citation_coverage"):
+        vals = [
+            float(row["scores"][metric])
+            for row in rows
+            if (row.get("scores") or {}).get(metric) is not None
+        ]
+        if vals:
+            lo, hi = _citation_ci(vals)
+            citation_ci[metric] = [round(lo, 4), round(hi, 4)]
+    path = _write_report(rows, means, args.name, prompt_versions, citation_ci)
     print(f"结果已写入 {path}")
     client.flush()
 

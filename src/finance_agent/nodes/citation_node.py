@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from finance_agent.citation import CitationReport, Claim, verify_claims
+from finance_agent.citation import CitationReport, CitationResult, Claim, verify_claims
+from finance_agent.citation_coverage import CoverageReport, compute_coverage
 from finance_agent.langfuse_tracing import get_langfuse, update_current_span
 from finance_agent.models import AnalystReport
 from finance_agent.routing import citation_retry_stagnated
@@ -17,20 +18,58 @@ logger = logging.getLogger("finance_agent.citation")
 
 
 def verify_citations(state: dict) -> dict:
-    """从 analyst_reports 提取所有 Claim，批量校验。"""
+    """从 analyst_reports 提取所有 Claim，批量校验（按分析师归属聚合）。
+
+    harden-citation-semantic-coverage：FAIL 分桶；值级 FAIL 产出定向重试目标
+    与失败明细（供 after_citation 分流与重试上下文注入）；正文 markdown 数字
+    普查产出 citation_coverage（监控告警，不进路由）。
+    """
     reports = state.get("analyst_reports") or {}
 
-    all_claims: list[Claim] = []
-    for report in reports.values():
+    per_agent: dict[str, list[CitationResult]] = {}
+    claims_by_agent: dict[str, list[Claim]] = {}
+    for agent, report in reports.items():
         claims = _extract_claims(report)
-        all_claims.extend(claims)
-
-    results = verify_claims(all_claims, state)
+        claims_by_agent[agent] = claims
+        per_agent[agent] = verify_claims(claims, state)
+    results = [r for rs in per_agent.values() for r in rs]
     report = CitationReport.from_results(results)
 
-    # L0（ADR-0010 第 124 行兑现）：citation_pass 上报为 trace 级 boolean score，
-    # 明细附在 verify_citations span 的 metadata 上供下钻。
-    _report_to_langfuse(report)
+    # 分桶聚合：仅 value_mismatch 触发定向重试（D3）；格式类 FAIL 直判不重试
+    retry_targets: list[str] = []
+    retry_feedback: dict[str, list[dict]] = {}
+    fail_buckets: dict[str, int] = {}
+    for agent, rs in per_agent.items():
+        for r in rs:
+            if r.status != "FAIL" or r.bucket is None:
+                continue
+            fail_buckets[r.bucket] = fail_buckets.get(r.bucket, 0) + 1
+            if r.bucket != "value_mismatch":
+                continue
+            if agent not in retry_targets:
+                retry_targets.append(agent)
+            retry_feedback.setdefault(agent, []).append(
+                {
+                    "field_ref": r.claim.field_ref,
+                    "stated_value": r.claim.stated_value,
+                    "ground_truth": r.ground_truth,
+                    "delta": r.delta,
+                    "interpretation": r.claim.interpretation,
+                }
+            )
+    retry_targets.sort()
+
+    # 正文覆盖率：合并四分析师 markdown 普查，claim stated_value 全集为认领池
+    all_stated = [
+        float(c.stated_value)
+        for claims in claims_by_agent.values()
+        for c in claims
+        if _is_float(c.stated_value)
+    ]
+    markdown = "\n\n".join(_markdown_of(r) for r in reports.values())
+    coverage = compute_coverage(markdown, all_stated)
+
+    _report_to_langfuse(report, coverage)
 
     # 递增 iteration_count，使 after_citation 的重试上限（< 3）真正生效。
     # 否则 citation_pass=False 时会无限重试，图永远无法推进到辩论/报告阶段。
@@ -48,9 +87,16 @@ def verify_citations(state: dict) -> dict:
         # 不重跑分析师（校验器确定性，同 claim 重跑必复现——incident 022 实测
         # 汉森/茅台 1/46=2.2% FAIL 仍全量重跑 1-2 轮空转）。
         update_current_span(
+            metadata={"citation_minor_fail_deescalated": True, "fail_rates": fail_rates},
+            level="WARNING",
+        )
+
+    # 格式类 FAIL 直判放行（D3）：有 FAIL 但无值级重试目标 → incident 候选可观测
+    if not report.all_passed and not retry_targets:
+        update_current_span(
             metadata={
-                "citation_minor_fail_deescalated": True,
-                "fail_rates": fail_rates,
+                "citation_format_fail_incident_candidate": True,
+                "fail_buckets": fail_buckets,
             },
             level="WARNING",
         )
@@ -58,10 +104,7 @@ def verify_citations(state: dict) -> dict:
     if not report.all_passed and iteration_count + 1 < 3 and citation_retry_stagnated(fail_rates):
         # 降级决策须可观测：路由将因失败率停滞跳过下一轮重试
         update_current_span(
-            metadata={
-                "citation_retry_deescalated": True,
-                "fail_rates": fail_rates,
-            },
+            metadata={"citation_retry_deescalated": True, "fail_rates": fail_rates},
             level="WARNING",
         )
 
@@ -71,10 +114,30 @@ def verify_citations(state: dict) -> dict:
         "iteration_count": iteration_count + 1,
         "citation_fail_rates": fail_rates,
         "citation_minor_fail": minor_fail,
+        "citation_retry_targets": retry_targets,
+        "citation_retry_feedback": retry_feedback,
+        "citation_fail_buckets": fail_buckets,
+        "citation_coverage": coverage.coverage,
     }
 
 
-def _report_to_langfuse(report: CitationReport) -> None:
+def _is_float(v: object) -> bool:
+    try:
+        float(v)  # type: ignore[arg-type]
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _markdown_of(report: AnalystReport | dict) -> str:
+    if isinstance(report, AnalystReport):
+        return report.markdown
+    if isinstance(report, dict):
+        return str(report.get("markdown") or "")
+    return ""
+
+
+def _report_to_langfuse(report: CitationReport, coverage: CoverageReport) -> None:
     """上报 citation 校验结果到 Langfuse（trace 级 boolean score + span 明细）。
 
     citation_unverifiable_ratio（spec「UNVERIFIABLE 占比监控」）是数据层退化的
@@ -101,6 +164,31 @@ def _report_to_langfuse(report: CitationReport) -> None:
             data_type="NUMERIC",
             comment=f"UNVERIFIABLE {report.unverifiable}/{total}; coverage_gaps={report.coverage_gaps}",
         )
+        # citation_coverage（harden-citation-semantic-coverage）：NUMERIC 0-1，
+        # 只监控不进路由；< 0.8 告警（span WARNING + 日志）
+        client.score_current_trace(
+            name="citation_coverage",
+            value=round(coverage.coverage, 4),
+            data_type="NUMERIC",
+            comment=f"{coverage.matched}/{coverage.total} numbers claimed",
+            metadata={"unmatched": coverage.unmatched[:20]},
+        )
+        if coverage.coverage < 0.8:
+            logger.warning(
+                "citation_coverage %.4f < 0.8：%d/%d 未认领 %s",
+                coverage.coverage,
+                len(coverage.unmatched),
+                coverage.total,
+                coverage.unmatched[:10],
+            )
+            client.update_current_span(
+                metadata={
+                    "citation_coverage_alert": True,
+                    "citation_coverage": coverage.coverage,
+                    "unmatched": coverage.unmatched[:20],
+                },
+                level="WARNING",
+            )
         client.update_current_span(
             metadata={"citation_report": report.model_dump()},
         )

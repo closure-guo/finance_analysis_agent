@@ -100,3 +100,88 @@ class TestMeasure:
             assert e.code == 2
         else:  # pragma: no cover
             raise AssertionError("空 label 应拒绝测量")
+
+
+class TestMeasureV11Subsets:
+    def _entries(self) -> list[dict]:
+        def near_miss(label: str, stated: float, gt: float, i: int) -> dict:
+            return {
+                "entry_id": f"benchmark_v11_{i:04d}",
+                "claim": {
+                    "claim_type": "numerical",
+                    "source_type": "data",
+                    "field_ref": "profitability_metrics.毛利率.2024",
+                    "stated_value": stated,
+                    "interpretation": "x",
+                },
+                "ground_truth": gt,
+                "delta": abs(gt - stated),
+                "subsets": ["near_miss"],
+                "should_pass": label == "PASS",
+                "label": label,
+            }
+
+        def semantic(metric_name: str, label: str, i: int) -> dict:
+            return {
+                "entry_id": f"benchmark_v11_{100 + i:04d}",
+                "claim": {
+                    "claim_type": "numerical",
+                    "source_type": "data",
+                    "field_ref": "profitability_metrics.毛利率.2024",
+                    "stated_value": 45.2,
+                    "interpretation": "x",
+                    "metric_name": metric_name,
+                },
+                "ground_truth": 45.2,
+                "delta": 0.0,
+                "subsets": ["semantic_mismatch", "semantic_term"],
+                "label": label,
+            }
+
+        entries = [
+            near_miss("PASS", 45.2 * 1.003, 45.2, 0),  # 容差内 → 复判 PASS
+            near_miss("FAIL", 45.2 * 1.01, 45.2, 1),  # 过线 → 复判 FAIL
+            semantic("净利率", "FAIL", 0),  # 术语错配 → 复判 FAIL（检出）
+        ]
+        return entries
+
+    def test_near_miss_split_disclosed(self):
+        from evals.claim_benchmark.measure import measure
+
+        rep = measure(self._entries())
+        assert rep["near_miss_over_line_recall"] == 1.0  # 过线 1/1 检出
+        assert rep["near_miss_in_line_fp_rate"] == 0.0  # 线内 0 误报
+
+    def test_semantic_detection_gate(self):
+        from evals.claim_benchmark.measure import measure
+
+        rep = measure(self._entries())
+        assert rep["semantic_mismatch_detection"] == 1.0
+        assert rep["semantic_gate"] == {"gate": 0.9, "passed": True}
+
+    def test_semantic_gate_fails_below_90(self):
+        from evals.claim_benchmark.measure import measure
+
+        entries = self._entries()
+        # 再加 9 条术语正确但 label=FAIL 的构造（复判 PASS → 未检出）
+        for i in range(9):
+            entries.append(
+                {
+                    "entry_id": f"benchmark_v11_{200 + i:04d}",
+                    "claim": {
+                        "claim_type": "numerical",
+                        "source_type": "data",
+                        "field_ref": "profitability_metrics.毛利率.2024",
+                        "stated_value": 45.2,
+                        "interpretation": "x",
+                        "metric_name": "毛利率",
+                    },
+                    "ground_truth": 45.2,
+                    "delta": 0.0,
+                    "subsets": ["semantic_mismatch", "semantic_term"],
+                    "label": "FAIL",
+                }
+            )
+        rep = measure(entries)
+        assert rep["semantic_mismatch_detection"] == 0.1
+        assert rep["semantic_gate"]["passed"] is False

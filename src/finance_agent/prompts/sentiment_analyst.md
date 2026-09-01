@@ -29,7 +29,9 @@
       "source_type": "data",
       "field_ref": "news_list.0.title",
       "stated_value": "茅台Q1营收增15%",
-      "interpretation": "近期有正面业绩新闻"
+      "interpretation": "近期有正面业绩新闻",
+      "metric_name": null,
+      "period": null
     }
   ],
   "markdown": "## 舆情分析\n详细分析内容..."
@@ -43,6 +45,7 @@
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. 如果新闻数据缺失，标注"新闻数据暂不可用"，基于已有信息分析
 5. markdown 中包含完整的舆情分析章节
+6. entity/event 型 claim 的 metric_name 与 period 可置 null（舆情分析以实体/事件引用为主，不强制数值口径）；若引用了具体数值（如百分比、金额），则应补填 metric_name 与 period，规则同数据型分析师
 
 ## 分析方法论
 

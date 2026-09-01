@@ -152,3 +152,43 @@ class TestTechnicalArrayOrderContract:
         text = _load("technical_analyst.md")
         assert "序列尾部" in text or "末尾" in text
         assert "正序" in text
+
+
+class TestClaimSemanticDeclarationPrompts:
+    """harden-citation-semantic-coverage：分析师 prompt 声明 metric_name/period。"""
+
+    @pytest.mark.parametrize(
+        "prompt", ["technical_analyst", "macro_analyst", "fundamental_analyst"]
+    )
+    def test_data_analyst_prompts_declare_metric_name_and_period(self, prompt):
+        text = (_PROMPTS_DIR / f"{prompt}.md").read_text(encoding="utf-8")
+        assert '"metric_name"' in text
+        assert '"period"' in text
+
+    def test_prompts_declare_coverage_discipline(self):
+        """覆盖纪律：正文每个关键数值须可追溯到 claim（ALCE recall 压力）。"""
+        for prompt in ("technical_analyst", "macro_analyst", "fundamental_analyst"):
+            text = (_PROMPTS_DIR / f"{prompt}.md").read_text(encoding="utf-8")
+            assert "正文" in text and "claim" in text.lower()
+
+    def test_sentiment_prompt_declares_optional_fields(self):
+        """舆情分析师以 entity claim 为主：metric_name/period 标注为可选。"""
+        text = (_PROMPTS_DIR / "sentiment_analyst.md").read_text(encoding="utf-8")
+        assert "metric_name" in text
+
+
+class TestOutOfVocabNullRule:
+    """三标的冒烟实证（2026-09-01）：词表外 metric_name 判 FAIL 全为误报 →
+    prompt 须指引「词表外/不确定置 null」；fundamental 另需 growth/quarterly 申报规则。"""
+
+    @pytest.mark.parametrize(
+        "prompt", ["technical_analyst", "macro_analyst", "fundamental_analyst"]
+    )
+    def test_prompts_mandate_null_for_out_of_vocab(self, prompt):
+        text = (_PROMPTS_DIR / f"{prompt}.md").read_text(encoding="utf-8")
+        assert "置 null" in text and "词表" in text
+
+    def test_fundamental_mandates_growth_base_metric(self):
+        """growth_rates.* 引用填基指标名（勿带 增长率/同比 后缀）。"""
+        text = (_PROMPTS_DIR / "fundamental_analyst.md").read_text(encoding="utf-8")
+        assert "基指标名" in text

@@ -153,6 +153,27 @@ def measure(entries: list[dict]) -> dict:
 
     nm_recall: float | None = _near_miss_recall()
     hedged_fp: float | None = _hedged_fp_rate()
+
+    def _near_miss_split() -> tuple[float | None, float | None]:
+        """v1.1 分列：过线检出率（should_fail 召回）与线内误报率（should_pass 误判）。"""
+        sub = [r for r in core if "near_miss" in r["subsets"]]
+        over = [r for r in sub if r["label"] == "FAIL"]
+        inline = [r for r in sub if r["label"] == "PASS"]
+        over_recall = sum(1 for r in over if r["rejudged"] == "FAIL") / len(over) if over else None
+        inline_fp = (
+            sum(1 for r in inline if r["rejudged"] == "FAIL") / len(inline) if inline else None
+        )
+        return over_recall, inline_fp
+
+    def _semantic_detection() -> float | None:
+        """semantic_mismatch 子集检出率（label=FAIL 中复判 FAIL 占比）。"""
+        sub = [r for r in rows if "semantic_mismatch" in r["subsets"] and r["label"] == "FAIL"]
+        if not sub:
+            return None
+        return sum(1 for r in sub if r["rejudged"] == "FAIL") / len(sub)
+
+    over_recall, inline_fp = _near_miss_split()
+    semantic_det = _semantic_detection()
     regression = [r for r in rows if "regression" in r["subsets"]]
     return {
         "n_core": n,
@@ -166,6 +187,13 @@ def measure(entries: list[dict]) -> dict:
         "gate": {"f1_gate": F1_GATE, "passed": f1 >= F1_GATE},
         "near_miss_recall": None if nm_recall is None else round(nm_recall, 4),
         "hedged_fp_rate": None if hedged_fp is None else round(hedged_fp, 4),
+        "near_miss_over_line_recall": None if over_recall is None else round(over_recall, 4),
+        "near_miss_in_line_fp_rate": None if inline_fp is None else round(inline_fp, 4),
+        "semantic_mismatch_detection": None if semantic_det is None else round(semantic_det, 4),
+        "semantic_gate": {
+            "gate": 0.9,
+            "passed": semantic_det is None or semantic_det >= 0.9,
+        },
         "excluded_breakdown": {
             "rejudge_unverifiable": sum(1 for r in excluded if r["rejudged"] == "UNVERIFIABLE"),
             "regression": len(regression),
@@ -189,6 +217,12 @@ def _print_report(rep: dict) -> None:
     )
     print(f"near_miss 检出率（子集内人工 FAIL 召回）: {rep['near_miss_recall']}")
     print(f"hedged 假阳率（子集内复判 FAIL ∧ 人工非 FAIL 占比）: {rep['hedged_fp_rate']}")
+    print(
+        f"near_miss 过线检出率: {rep['near_miss_over_line_recall']}  线内误报率: {rep['near_miss_in_line_fp_rate']}"
+    )
+    print(
+        f"semantic_mismatch 检出率: {rep['semantic_mismatch_detection']}（门禁 ≥ 0.9: {'✅' if rep['semantic_gate']['passed'] else '❌/不适用'}）"
+    )
     print(f"排除明细: {rep['excluded_breakdown']}")
     if rep["fp_buckets"] or rep["fn_buckets"]:
         print("fp 集中桶:", rep["fp_buckets"])
@@ -222,7 +256,7 @@ def main() -> int:
             json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         print(f"报告另存 {args.out_json}")
-    return 0 if rep["gate"]["passed"] else 1
+    return 0 if rep["gate"]["passed"] and rep["semantic_gate"]["passed"] else 1
 
 
 if __name__ == "__main__":

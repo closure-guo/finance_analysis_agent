@@ -7,13 +7,19 @@ from unittest.mock import MagicMock, patch
 import evals.run
 import pytest
 from evals.dataset_seed import DATASET_NAME
-from evals.run import _mean_rows, all_evaluators
+from evals.run import (
+    _citation_ci,
+    _mean_rows,
+    all_evaluators,
+    eval_citation_coverage,
+    eval_citation_pass,
+)
 
 
 class TestEvaluatorAssembly:
-    def test_six_evaluators(self):
+    def test_eight_evaluators(self):
         evals = all_evaluators()
-        assert len(evals) == 6  # 2 确定性 + 4 judge
+        assert len(evals) == 8  # 4 确定性（含 citation_pass/citation_coverage）+ 4 judge
 
     def test_deterministic_evaluator_shape(self):
         evals = {e.__name__: e for e in all_evaluators()}
@@ -183,3 +189,35 @@ class TestVerifyPromptSync:
         monkeypatch.setattr(run, "_PROMPTS_DIR", prompts_dir)
         # 本地/远端读入都是字面 CRLF：靠 .replace 归一化后一致 → 门禁不得误报
         assert run._verify_prompt_sync(client) == []
+
+
+class TestCitationMetricEvaluators:
+    def test_pass_evaluator_reads_output(self):
+        ev = eval_citation_pass(
+            input={}, output={"citation_pass": 1.0}, expected_output={}, metadata={}
+        )
+        assert ev.name == "citation_pass"
+        assert ev.value == 1.0
+
+    def test_coverage_evaluator_reads_output(self):
+        ev = eval_citation_coverage(
+            input={}, output={"citation_coverage": 0.85}, expected_output={}, metadata={}
+        )
+        assert ev.name == "citation_coverage"
+        assert ev.value == 0.85
+
+    def test_missing_output_returns_none(self):
+        """quick/无 citation 数据 → None 不计入（与 expected 缺省跳过同口径）。"""
+        assert (
+            eval_citation_pass(input={}, output={"mode": "quick"}, expected_output={}, metadata={})
+            is None
+        )
+        assert (
+            eval_citation_coverage(input={}, output=None, expected_output={}, metadata={}) is None
+        )
+
+    def test_citation_ci_deterministic(self):
+        lo, hi = _citation_ci([0.8, 0.9, 1.0, 0.7])
+        assert lo <= 0.875 <= hi
+        assert _citation_ci([0.8, 0.9, 1.0, 0.7]) == (lo, hi)  # seed 固定可复现
+        assert _citation_ci([]) == (0.0, 0.0)
