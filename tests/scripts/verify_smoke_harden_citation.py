@@ -93,7 +93,16 @@ class LangfuseClient:
 
     def trace_scores(self, trace: dict, detail: dict) -> dict:
         scores = detail.get("scores") or trace.get("scores") or []
-        return {s.get("name"): s.get("value") for s in scores if isinstance(s, dict)}
+        # 同名 score 多条时取时间戳最新（重试会二次上报 citation_coverage，
+        # 列表序不保证时序，直接取最后一条会误读重试前的旧值）
+        best: dict[str, tuple[str, object]] = {}
+        for s in scores:
+            if not isinstance(s, dict):
+                continue
+            name, ts = s.get("name"), s.get("timestamp") or ""
+            if name and (name not in best or ts >= best[name][0]):
+                best[name] = (ts, s.get("value"))
+        return {k: v for k, (_, v) in best.items()}
 
 
 def start_analysis(stock_code: str, stock_name: str) -> str:

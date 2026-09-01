@@ -13,7 +13,7 @@
 ### context 语义声明（修期次错位）
 
 - [x] context 构建为每个序列数据块注入机器生成语义头（方向 + 最新期语义 + 期数），覆盖 technical / macro / fundamental 全部序列（T8，4c81415；`_series_semantic_header` 机生注入三构建器，tests/nodes/test_analysts.py 钉死）
-- [ ] 复现测试：中际旭创场景重跑，技术类期次错位 FAIL 清零（13 条 → 0）（live 遗留 3：三标的冒烟）
+- [x] 复现测试：中际旭创场景重跑，技术类期次错位 FAIL 清零（13 条 → 0）（2026-09-01 冒烟实证：三标的 semantic_period_mismatch 技术类 FAIL = 0，见 tests/validation/2026-09-01-harden-citation-smoke-validation.md）
 
 ### Claim schema 与术语/期次一致性
 
@@ -29,7 +29,7 @@
 ### 正文覆盖率
 
 - [x] markdown 数字普查（归一化 + 豁免清单），产出 `citation_coverage` 并上报 Langfuse（NUMERIC，不进路由，<0.8 告警）（T5+T6，33d0bf6/6cb0071；<0.8 时 warning + span 标记，不进路由）
-- [ ] 归一化与豁免规则 fixture 测试 ≥15 例（已达成 22 例，tests/test_citation_coverage.py）；首批产出人工抽查 20 条确认口径（live 遗留 4）
+- [ ] 归一化与豁免规则 fixture 测试 ≥15 例（已达成 22 例，tests/test_citation_coverage.py）；首批产出人工抽查 20 条确认口径（机器预分类材料已产出：reports/coverage_spotcheck.csv，20 条 = 修复后三标的全部 unmatched，human_verdict 列待人工终裁）
 
 ### 重试分流
 
@@ -45,13 +45,13 @@
 ### 通用
 
 - [x] `uv run pytest` 全过、`uv run ruff check`、`uv run mypy`（本任务范围）零错误（1663 passed / 2 skipped；4 failed 均为预存 @live 网络测试，本分支未触碰；ruff 全绿；mypy 本分支文件零错误，另修复 evals/run.py 预存 3.12 兼容错误）
-- [ ] 三标的冒烟（汉森制药/贵州茅台/中际旭创）：FAIL 率 <10%、coverage ≥0.8、无格式类重试触发（live 遗留 3）
+- [ ] 三标的冒烟（汉森制药/贵州茅台/中际旭创）：FAIL 率 <10% ✅（3.5%/0%/0%）、无格式类重试触发 ✅（唯一重试为 value_mismatch 定向重试，修复后全 PASS）、coverage ≥0.8 ⚠️ 部分达标（0.70/0.63/0.83——unmatched 归因已产出，口径阈值待人工裁决，见验证报告）（2026-09-01 两轮冒烟，首轮发现词表外 FAIL 误报类已修复 d42b60d）
 
 ## Live 遗留（archive 前置人工门禁）
 
-1. 人工 ADR（`docs/adr/`）：重试按桶分流 + `citation_coverage` 0.8 阈值默认值
-2. prompt 发布：`uv run python scripts/deploy_prompts.py`（T9 改了 4 个分析师 prompt，未发布则 eval 门禁拒绝运行）
-3. 三标的冒烟：汉森/茅台/中际旭创（FAIL<10%、coverage≥0.8、期次错位 13→0）
-4. 覆盖率抽查：首批产出人工抽查 20 条确认普查口径
-5. 基准集冻结：`build_v11.py` 生成 → `measure.py --labeled data/benchmark_v11.jsonl` 重跑 → results/v1.1.md 冻结 verifier-baseline-v1.1
-6. judge 重校准：rubric v3 按 Judge 校准门禁重校准（人工一致性 ≥80%）后上线
+1. 人工 ADR（`docs/adr/`）：重试按桶分流 + `citation_coverage` 0.8 阈值默认值（草稿已交付用户，2026-09-01）
+2. ~~prompt 发布~~ ✅ 2026-09-01 已执行 `deploy_prompts.py`（14 prompt 全 OK，含词表外置 null 规则）
+3. 三标的冒烟 ✅ 已跑两轮（验证报告落 tests/validation/2026-09-01-harden-citation-smoke-validation.md）：FAIL<10%/期次错位 13→0/无格式类重试 全过；**coverage ≥0.8 部分达标（0.70/0.63/0.83），口径阈值待人工裁决**
+4. 覆盖率抽查：机器预分类材料已产出（reports/coverage_spotcheck.csv，20 条），**human_verdict 人工终裁待填**
+5. ~~基准集冻结~~ ✅ verifier-baseline-v1.1 已冻结（69fa098；F1=1.0、near_miss 过线 1.0/线内 0.0、semantic 检出率 1.0 ≥0.9 门禁；results/v1.1.md）
+6. judge 重校准：rubric v3 按 Judge 校准门禁重校准（人工一致性 ≥80%）后上线（纯人工任务）
