@@ -108,6 +108,40 @@ class TestActionFallback:
         assert result["settlement"] is None
         assert "called" not in captured
 
+    def test_replay_decision_accepts_pydantic_trade_decision(self, monkeypatch):
+        """复现 [backtest-pilot] 缺陷：编排 state 的 final_trade_decision 是
+        TradeDecision pydantic 对象（非 dict），replay 必须归一化后走结算。"""
+        from finance_agent.models import TradeDecision
+
+        captured: dict = {}
+
+        class PydanticDecisionGraph:
+            def invoke(self, state):
+                return {
+                    "final_trade_decision": TradeDecision(
+                        action="buy", confidence=0.7, reasoning="x", stop_loss=11.0
+                    ),
+                    "final_report": "report",
+                }
+
+        monkeypatch.setattr(rp, "build_variant_graph", lambda variant: PydanticDecisionGraph())
+        monkeypatch.setattr(rp, "compute_metrics", lambda state: {})
+
+        def fake_evaluate(record, kline, benchmark):
+            captured["record"] = record
+            return None
+
+        monkeypatch.setattr(rp, "evaluate_decision", fake_evaluate)
+        snap = SnapshotResult(state={"kline": _kline(["2025-01-14"], [10.5])}, metadata={})
+        result = rp.replay_decision("600519", "2025-01-14", snapshot=snap)
+        assert result["action"] == "buy"
+        assert captured["record"]["action"] == "buy"
+        assert captured["record"]["stop_loss"] == 11.0
+        # 返回体必须 JSON 可序列化（pydantic 对象不能原样透传）
+        import json
+
+        json.dumps(result, default=str)
+
     def test_consistency_counts_missing_action_as_unknown(self, monkeypatch):
         monkeypatch.setattr(
             rp, "replay_decision", lambda *a, **k: {"decision": {}, "settlement": None}

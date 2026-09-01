@@ -40,7 +40,7 @@
 
 - [x] 基准集 v1.1：near_miss 改 ±{0.3,0.5,0.7,1}% 四档且 50% 为 should_pass（容差内）样本；新增 semantic_mismatch 子集（术语/期次张冠李戴，数值正确）（T10，920d323；真实 v1 数据实证 50% 配额）
 - [x] run_experiment 指标增加 `citation_coverage`；decision_grounding judge rubric 增加 interpretation 语义核对项，rubric 版本号递增（T12 d0ea90c：citation_pass/citation_coverage + 均值 CI；T13 36dae73：RUBRIC_VERSIONS decision_grounding=3 + 语义核对条款）
-- [ ] 全部合入后重跑 measure.py，冻结 verifier-baseline-v1.1（含 semantic_mismatch 子集检出率披露）（live 遗留 5：build_v11 生成 + measure.py 重跑 + results/v1.1.md 冻结）
+- [x] 全部合入后重跑 measure.py，冻结 verifier-baseline-v1.1（含 semantic_mismatch 子集检出率披露）（69fa098 冻结三件套：benchmark_v11.jsonl + results/v1.1.md + v11-measure.json；2026-09-01 复跑验证 F1=1.0 / semantic 检出率 1.0 与冻结值一致；此后 citation.py 容差常量唯一来源化重构经 CI 门禁复跑确认语义不变，见 results/ci-gate-verify.md）
 
 ### 通用
 
