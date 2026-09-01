@@ -63,7 +63,7 @@ test.describe('add-download-center: 下载管理页', () => {
     expect(visible, '轮询 6 次后空态仍未出现：/api/files 在全量套件负载下持续无响应窗口').toBe(true)
     await empty.getByRole('button', { name: '返回聊天' }).click()
     await expect(page).toHaveURL(/\/$/)
-    // 会话页 EmptyState 特征：标题与输入框
-    await expect(page.getByRole('heading', { name: 'Finance Analysis Agent' })).toBeVisible()
+    // 会话页 EmptyState 特征：标题与输入框（Kimi 风格改版后 hero 标题为「今天想研究什么？」）
+    await expect(page.getByRole('heading', { name: '今天想研究什么？' })).toBeVisible()
   })
 })
