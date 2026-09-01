@@ -252,3 +252,19 @@ class TestSemanticPeriodCheck:
         (r,) = verify_claims([claim], _state())
         assert r.status == "PASS"
         assert r.coverage_gap is True
+
+
+class TestResolveIndexPeriodDatetime:
+    def test_datetime64_date_normalized(self):
+        """终审 finding 3：kline 日期为 datetime64 时须渲染为 ISO 日期，
+        否则 normalize_period 解析失败会把缺口语义扭曲成系统性 FAIL。"""
+        from finance_agent.citation import _resolve_index_period
+
+        state = {"kline": pd.DataFrame({"日期": pd.to_datetime(["2026-08-27", "2026-08-28"])})}
+        assert _resolve_index_period("technical_indicators.rsi.-1", state) == "2026-08-28"
+
+    def test_string_date_unchanged(self):
+        from finance_agent.citation import _resolve_index_period
+
+        state = {"kline": pd.DataFrame({"日期": ["2026-08-27", "2026-08-28"]})}
+        assert _resolve_index_period("technical_indicators.rsi.-1", state) == "2026-08-28"

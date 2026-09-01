@@ -88,6 +88,15 @@ def _is_period_segment(seg: str) -> bool:
     return any(p.match(seg) for p in _PERIOD_PATTERNS)
 
 
+def render_date(value: object) -> str:
+    """日期值渲染：datetime/Timestamp → ISO 日期串，其余 str()。
+
+    akshare 日期列实为字符串；datetime64 来源（如直构 DataFrame）防御——
+    str(Timestamp) 会带 " 00:00:00" 尾部，normalize_period 无法解析。
+    """
+    return value.strftime("%Y-%m-%d") if hasattr(value, "strftime") else str(value)
+
+
 def field_ref_metric_segments(field_ref: str) -> list[str]:
     """field_ref 的指标段：去根键、去期次段、去纯整数段（索引/参数）。
 

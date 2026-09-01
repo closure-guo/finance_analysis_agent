@@ -18,6 +18,7 @@ from finance_agent.metric_vocab import (
     field_ref_period_segment,
     normalize_period,
     period_matches,
+    render_date,
 )
 from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
@@ -432,7 +433,7 @@ def _resolve_index_period(field_ref: str, state: dict) -> str | None:
             return None
         if root == "technical_indicators":
             dates = state["kline"]["日期"]
-            return str(dates.iloc[idx])
+            return render_date(dates.iloc[idx])
         if root == "quarterly_trend":
             return str(state["quarterly_trend"]["quarters"][idx]) or None
     except (KeyError, IndexError, TypeError, AttributeError):
@@ -574,7 +575,7 @@ def _is_growth_claim(claim: Claim) -> bool:
     return False
 
 
-def _check_direction_words(claim: Claim, base: CitationResult) -> CitationResult | None:
+def _check_direction_words(claim: Claim) -> CitationResult | None:
     """方向词核对（仅值级 PASS 时）：方向词与比较方向/增长符号矛盾 → FAIL。
 
     适用面收敛（v1 防误报）：comparative 全量；numerical/computational 仅
@@ -642,15 +643,18 @@ def _verify_data_claim(
     period_fail, period_gap = _check_period(claim, state)
     if period_fail is not None:
         return period_fail
+    # 缺口口径（D5）：任一申报字段缺失即计缺口，回声/方向提前 FAIL 不得丢失缺口标记
+    gap = period_gap or not (claim.metric_name or "").strip() or not (claim.period or "").strip()
     echo_fail = _check_internal_echo(claim)
     if echo_fail is not None:
+        echo_fail.coverage_gap = gap
         return echo_fail
     result = value_fn(claim, state)
     if result.status == "PASS":
-        direction_fail = _check_direction_words(claim, result)
+        direction_fail = _check_direction_words(claim)
         if direction_fail is not None:
+            direction_fail.coverage_gap = gap
             return direction_fail
-    gap = period_gap or not (claim.metric_name or "").strip() or not (claim.period or "").strip()
     if gap:
         result.coverage_gap = True
     return result

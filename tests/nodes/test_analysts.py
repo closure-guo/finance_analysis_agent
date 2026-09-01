@@ -405,3 +405,21 @@ class TestSeriesSemanticHeader:
         ctx = _build_fundamental_context(state)
         assert "行按报告期降序(新→旧), 首行 = 最新报告期(20251231)" in ctx
         assert "# 序列语义: 时间降序(新→旧), index 0 = 最新季度(2025Q4), 共2期" in ctx
+
+
+class TestTechnicalHeaderDatetime:
+    def test_kline_datetime64_header_iso_date(self):
+        """机生语义头对 datetime64 日期列渲染 ISO 日期（与校验器解析口径一致）。"""
+        import pandas as pd
+
+        from finance_agent.nodes.analysts import _build_technical_context
+
+        ctx = _build_technical_context(
+            {
+                "stock_name": "测试",
+                "stock_code": "000001",
+                "kline": pd.DataFrame({"日期": pd.to_datetime(["2026-08-27", "2026-08-28"])}),
+                "technical_indicators": {"RSI": {"14": [62.63, 41.56]}},
+            }
+        )
+        assert "最新交易日(2026-08-28)" in ctx

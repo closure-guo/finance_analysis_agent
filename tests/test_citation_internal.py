@@ -188,3 +188,52 @@ class TestInternalConsistencyFalsePositiveRegression:
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "PASS"
+
+
+class TestCoverageGapOnEarlyFail:
+    """D5 终审修复：未申报 metric_name/period 的 claim 即便在回声/方向检查提前 FAIL，
+    也必须计入覆盖缺口（不得因短路丢失缺口计数）。"""
+
+    def test_echo_fail_counts_gap(self):
+        state = {"profitability_metrics": {"毛利率": {"2024": 45.2}}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="profitability_metrics.毛利率.2024",
+            stated_value=45.2,
+            interpretation="毛利率约 30%",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "FAIL"
+        assert r.bucket == "internal_inconsistency"
+        assert r.coverage_gap is True
+
+    def test_direction_fail_counts_gap(self):
+        state = {"growth_rates": {"profitability": {"毛利率": -5.2}}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="growth_rates.profitability.毛利率",
+            stated_value=-5.2,
+            interpretation="毛利率同比增长 5.2%",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "FAIL"
+        assert r.bucket == "internal_inconsistency"
+        assert r.coverage_gap is True
+
+    def test_echo_fail_with_declared_fields_no_gap(self):
+        """对照组：字段申报齐全时回声 FAIL 不计缺口。"""
+        state = {"profitability_metrics": {"毛利率": {"2024": 45.2}}}
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="profitability_metrics.毛利率.2024",
+            stated_value=45.2,
+            interpretation="毛利率约 30%",
+            metric_name="毛利率",
+            period="2024",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "FAIL"
+        assert r.coverage_gap is False

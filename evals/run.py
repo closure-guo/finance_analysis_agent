@@ -70,12 +70,10 @@ def _verify_prompt_sync(client) -> list[str]:
     mismatched: list[str] = []
     for name in _PROMPT_NAMES:
         try:
-            # newline="" 保留原文行尾,使 .replace 成为真实归一化路径(否则 universal-newlines 读入即转 LF,replace 成死代码)
-            local = (
-                (_PROMPTS_DIR / f"{name}.md")
-                .read_text(encoding="utf-8", newline="")
-                .replace("\r\n", "\n")
-            )
+            # newline="" 保留原文行尾,使 .replace 成为真实归一化路径(否则 universal-newlines 读入即转 LF,replace 成死代码);
+            # 用 open() 而非 Path.read_text:newline 形参 3.13+ 才加入 read_text,repo mypy 锁定 3.12
+            with open(_PROMPTS_DIR / f"{name}.md", encoding="utf-8", newline="") as f:
+                local = f.read().replace("\r\n", "\n")
         except OSError:
             mismatched.append(f"{name} (本地文件缺失)")
             continue

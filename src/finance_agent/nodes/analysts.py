@@ -14,6 +14,7 @@ import json
 import logging
 
 from finance_agent.langfuse_tracing import truncate_for_trace, update_current_span
+from finance_agent.metric_vocab import render_date
 from finance_agent.models import AnalystReport
 from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
 from finance_agent.prompts.loader import load_prompt_with_meta
@@ -242,7 +243,9 @@ def _build_technical_context(state: dict) -> str:
         kline = state.get("kline")
         latest_date = ""
         try:
-            latest_date = str(kline["日期"].iloc[-1]) if kline is not None and len(kline) else ""
+            latest_date = (
+                render_date(kline["日期"].iloc[-1]) if kline is not None and len(kline) else ""
+            )
         except (KeyError, IndexError, TypeError):
             latest_date = ""
         latest_label = (
@@ -394,7 +397,9 @@ def _build_fundamental_context(state: dict) -> str:
             recent = df.head(3) if len(df) > 3 else df
             # 报表段：降序声明 + 首行最新报告期（机生）
             latest_period = (
-                str(recent["报告日"].iloc[0]) if "报告日" in recent.columns and len(recent) else ""
+                render_date(recent["报告日"].iloc[0])
+                if "报告日" in recent.columns and len(recent)
+                else ""
             )
             period_label = f", 首行 = 最新报告期({latest_period})" if latest_period else ""
             sections.append(
