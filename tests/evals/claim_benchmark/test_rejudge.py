@@ -103,9 +103,10 @@ class TestComparative:
             "field_ref_b": "b",
             "stated_value": "equal_to",
             "interpretation": "",
+            "stated_value_b": 5.0,  # v1.2：D3 双端申报（基期正确）
         }
-        assert rejudge_claim(c, 10.0, 0.005) == "PASS"
-        assert rejudge_claim(c, 10.0, 0.5) == "FAIL"
+        assert rejudge_claim(c, 10.0, 0.005, ground_truth_b=5.0) == "PASS"
+        assert rejudge_claim(c, 10.0, 0.5, ground_truth_b=5.0) == "FAIL"
 
     def test_greater_less_needs_sign(self):
         c = {
@@ -115,9 +116,10 @@ class TestComparative:
             "field_ref_b": "b",
             "stated_value": "greater_than",
             "interpretation": "",
+            "stated_value_b": 5.0,  # v1.2：D3 双端申报后 greater/less 仍离线不可判
         }
         # delta 无符号 → 离线不可判，返回 UNVERIFIABLE（诚实披露而非乱判）
-        assert rejudge_claim(c, 10.0, 5.0) == "UNVERIFIABLE"
+        assert rejudge_claim(c, 10.0, 5.0, ground_truth_b=5.0) == "UNVERIFIABLE"
 
 
 class TestEvent:
@@ -286,9 +288,9 @@ class TestRejudgeComparativeBase:
         return c
 
     def test_base_correct_passes(self):
-        # stated_value_b=21.93, gt_b=21.93 → 方向 equal_to 可判，PASS
+        # stated_value_b=21.93, gt_b=21.93 基期过；equal_to 且 dv=0.005 < 0.01 → PASS
         c = self._comp(stated_value="equal_to", stated_value_b=21.93)
-        assert rejudge_claim(c, 19.07, 2.86, ground_truth_b=21.93) == "PASS"
+        assert rejudge_claim(c, 19.07, 0.005, ground_truth_b=21.93) == "PASS"
 
     def test_base_missing_fails(self):
         # field_ref_b is set but stated_value_b is missing → FAIL (base period running loose)

@@ -44,7 +44,7 @@ jobs:
       # 校验器回归门禁（baseline-v2 r3 事故教训）：v1.1 标签构造即标签、纯离线，
       # 无需 Langfuse 凭据；F1 < 0.90 或相对冻结基线退步 > 0.02 即 exit 1
       - name: Verifier accuracy regression gate
-        run: uv run python evals/claim_benchmark/measure.py --labeled evals/claim_benchmark/data/benchmark_v11.jsonl --gate 0.90 --baseline evals/claim_benchmark/results/v11-measure.json
+        run: uv run python evals/claim_benchmark/measure.py --labeled evals/claim_benchmark/data/benchmark_v12.jsonl --gate 0.90 --baseline evals/claim_benchmark/results/v12-measure.json
 
   e2e:
     runs-on: ubuntu-latest

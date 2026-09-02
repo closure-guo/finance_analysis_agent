@@ -31,16 +31,22 @@ Status = Literal["PASS", "FAIL", "UNVERIFIABLE"]
 HEDGE_WORDS = ("约", "接近", "左右", "大约", "近似", "近", "约等于")
 
 
-def rejudge_claim(claim: dict, ground_truth: object | None, delta: object | None) -> Status:
+def rejudge_claim(
+    claim: dict,
+    ground_truth: object | None,
+    delta: object | None,
+    ground_truth_b: object | None = None,
+) -> Status:
     """按当前契约重建单条 claim 的校验器裁决。
 
     Args:
         claim: 收割到的 claim dict（含 claim_type / source_type / stated_value）。
         ground_truth: trace 记录的解析值（None = 解析层不可得）。
         delta: trace 记录的 |ground_truth - stated|（事件型为 None）。
+        ground_truth_b: comparative 基期真值（v1.2，镜像 D3 双端）。
 
     Returns:
-        PASS / FAIL / UNVERIFIABLE（UNVERIFIABLE = 离线不可复判，非校验器裁决）。
+        PASS / FAIL / UNVERIFIABLE（UNVERIFIABLE = 离线不可判，非校验器裁决）。
     """
     source_type = claim.get("source_type")
     if source_type == "llm_inference":
@@ -72,6 +78,18 @@ def rejudge_claim(claim: dict, ground_truth: object | None, delta: object | None
         return "PASS" if passed else "FAIL"
 
     if claim_type == "comparative":
+        # v1.2（镜像 D3 双端）：field_ref_b 设而 stated_value_b 缺 → FAIL（基期裸奔）；
+        # stated_value_b 与 ground_truth_b 超容差 → FAIL
+        if claim.get("field_ref_b") is not None:
+            stated_b = claim.get("stated_value_b")
+            gt_b = _coerce_numeric(ground_truth_b)
+            if stated_b is None:
+                return "FAIL"
+            svb = _coerce_numeric(stated_b)
+            if svb is None or gt_b is None:
+                return "UNVERIFIABLE"
+            if abs(gt_b - svb) >= max(ABS_TOL, abs(gt_b) * REL_TOL):
+                return "FAIL"
         # 方向存在性判定：equal_to 可复判（delta < 0.01）；greater/less 需符号 → 离线不可判
         direction = claim.get("stated_value")
         if direction == "equal_to":

@@ -1,0 +1,45 @@
+{
+  "n_core": 81,
+  "n_excluded": 0,
+  "confusion": {
+    "tp": 39,
+    "fp": 0,
+    "fn": 0,
+    "tn": 42
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "f1_ci_95": [
+    1.0,
+    1.0
+  ],
+  "accuracy": 1.0,
+  "gate": {
+    "f1_gate": 0.9,
+    "passed": true
+  },
+  "near_miss_recall": 1.0,
+  "hedged_fp_rate": null,
+  "near_miss_over_line_recall": 1.0,
+  "near_miss_in_line_fp_rate": 0.0,
+  "semantic_mismatch_detection": 1.0,
+  "semantic_gate": {
+    "gate": 0.9,
+    "passed": true
+  },
+  "excluded_breakdown": {
+    "rejudge_unverifiable": 0,
+    "regression": 0,
+    "regression_label_dist": {}
+  },
+  "fp_buckets": [],
+  "fn_buckets": [],
+  "baseline_regression": {
+    "baseline_path": "evals\\claim_benchmark\\results\\v11-measure.json",
+    "baseline_f1": 1.0,
+    "f1_delta": 0.0,
+    "max_regression": 0.02,
+    "passed": true
+  }
+}
