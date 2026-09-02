@@ -147,18 +147,52 @@ def truncate_state(full_state: dict, decision_date: str) -> dict:
     return out
 
 
-def build_snapshot(code: str, decision_date: str, *, client: Any = None) -> SnapshotResult:
-    """拉全量数据 → 截断 → 快照 + 审计元信息（prompt/模型版本随快照落盘，保证可复现审计）。"""
+def _kline_days_for(decision_date: str, *, window_days: int = 120) -> int:
+    """历史决策日所需的 K 线历史深度（issue #104）。
+
+    fetch_kline(days) 返回距今最近 N 个交易日。对历史决策日 D，须覆盖
+    D 及之前 ~window_days 个交易日（regime 窗口），故深度 = D→今天 的
+    交易日数 + window_days 缓冲。按 250 交易日/年折算日历日。
+    """
+    from datetime import date
+
+    try:
+        d = date.fromisoformat(decision_date[:10])
+    except ValueError:
+        return 250
+    today = date.today()
+    calendar_days = max(0, (today - d).days)
+    trading = int(calendar_days * 250 / 365)
+    return max(250, trading + window_days + 80)
+
+
+def build_snapshot(
+    code: str, decision_date: str, *, client: Any = None, kline_days: int | None = None
+) -> SnapshotResult:
+    """拉全量数据 → 截断 → 快照 + 审计元信息（prompt/模型版本随快照落盘，保证可复现审计）。
+
+    kline_days：K 线历史深度（issue #104）。None 时按决策日反推（历史决策日
+    需深拉，避免 250 日默认值截断后 K 线为空）；截断后 K 线为空显式报错
+    （issue #103 无失败信号），不再静默降级。
+    """
     from evals.run import _collect_prompt_versions
     from finance_agent.nodes.fetch import fetch_data
 
+    kline_days = kline_days or _kline_days_for(decision_date)
     base = {"stock_code": code, "enable_web_search": False}
-    full = {**base, **fetch_data(base, client=client)}
+    full = {**base, **fetch_data(base, client=client, kline_days=kline_days)}
     state = truncate_state(full, decision_date)
+    kline = state.get("kline")
+    if isinstance(kline, pd.DataFrame) and kline.empty:
+        raise ValueError(
+            f"快照 K 线在决策日 {decision_date} 截断后为空（kline_days={kline_days}）——"
+            "历史决策日需足够 K 线深度或数据源不可达，拒绝静默继续"
+        )
     metadata = {
         "code": code,
         "decision_date": decision_date,
         "data_cutoff": decision_date,
+        "kline_days": kline_days,
         "disclosure_rule": "legal-deadline-approx(Q1:0430,H1:0831,Q3:1031,FY:next-0430)",
         "excluded_fields": list(_EXCLUDED_POINT_IN_TIME),
         "prompt_versions": _collect_prompt_versions(),

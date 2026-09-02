@@ -219,7 +219,7 @@ class TestBuildSnapshotMetadata:
     def test_metadata_contains_prompt_versions_and_model(self, monkeypatch):
         monkeypatch.setattr(
             "finance_agent.nodes.fetch.fetch_data",
-            lambda base, client=None: {"kline": None},
+            lambda base, client=None, kline_days=250: {"kline": None},
         )
         monkeypatch.setenv("LLM_MODEL", "glm-test-4.7")
         result = build_snapshot("600519", "2025-01-14")
@@ -230,7 +230,7 @@ class TestBuildSnapshotMetadata:
     def test_metadata_model_unspecified_without_env(self, monkeypatch):
         monkeypatch.setattr(
             "finance_agent.nodes.fetch.fetch_data",
-            lambda base, client=None: {"kline": None},
+            lambda base, client=None, kline_days=250: {"kline": None},
         )
         monkeypatch.delenv("LLM_MODEL", raising=False)
         result = build_snapshot("600519", "2025-01-14")
@@ -239,7 +239,7 @@ class TestBuildSnapshotMetadata:
     def test_metadata_excluded_fields_covers_point_in_time(self, monkeypatch):
         monkeypatch.setattr(
             "finance_agent.nodes.fetch.fetch_data",
-            lambda base, client=None: {"kline": None},
+            lambda base, client=None, kline_days=250: {"kline": None},
         )
         result = build_snapshot("600519", "2025-01-14")
         assert set(result.metadata["excluded_fields"]) >= {
@@ -247,3 +247,74 @@ class TestBuildSnapshotMetadata:
             "industry_pe",
             "peer_financials",
         }
+
+
+def _mk_kline():
+    """模块级 K 线构造（供 kline 深度/校验测试复用）。"""
+    import pandas as pd
+
+    return pd.DataFrame(
+        {"日期": [f"202{i}-01-05" for i in range(0, 7)], "收盘": [10.0 + i for i in range(7)]}
+    )
+
+
+class TestKlineDepthIssue104:
+    """refine: 快照 K 线深度（issue #104）——历史决策日需深拉 + 截断后非空校验。"""
+
+    def test_kline_days_computed_for_old_decision_date(self):
+        from evals.backtest.data_snapshot import _kline_days_for
+
+        # 2023 决策日 → 距今天 ~3 年 → 需远大于 250 的历史深度
+        days = _kline_days_for("2023-01-05")
+        assert days > 1000
+
+    def test_recent_decision_date_minimum(self):
+        from evals.backtest.data_snapshot import _kline_days_for
+
+        assert _kline_days_for("2026-08-01") >= 250
+
+    def test_build_snapshot_passes_kline_days_to_fetch(self, monkeypatch):
+        import evals.backtest.data_snapshot as ds
+        from evals.backtest.data_snapshot import SnapshotResult
+
+        import finance_agent.nodes.fetch as fetch_mod
+
+        captured: dict = {}
+
+        def fake_fetch(base, client=None, kline_days=250):
+            captured["kline_days"] = kline_days
+            return {"kline": _mk_kline(), "benchmark_kline": _mk_kline()}
+
+        monkeypatch.setattr(fetch_mod, "fetch_data", fake_fetch)
+        import evals.run as run_mod
+
+        monkeypatch.setattr(run_mod, "_collect_prompt_versions", lambda: {})
+        # 2023 决策日 → 深拉
+        snap = ds.build_snapshot("600519", "2023-01-05")
+        assert captured["kline_days"] > 1000
+        assert isinstance(snap, SnapshotResult)
+
+    def test_truncated_kline_empty_raises(self, monkeypatch):
+        """历史决策日截断后 K 线为空 → 显式报错，不再静默降级（issue #103 无失败信号）。"""
+        import evals.backtest.data_snapshot as ds
+
+        import finance_agent.nodes.fetch as fetch_mod
+
+        def fake_fetch(base, client=None, kline_days=250):
+            # 只给最近 250 日（不覆盖 2023 决策日）
+            import pandas as pd
+
+            recent = pd.DataFrame(
+                {
+                    "日期": [f"2026-0{i}-0{i}" for i in range(1, 6)],
+                    "收盘": [10.0, 11.0, 12.0, 11.5, 12.5],
+                }
+            )
+            return {"kline": recent}
+
+        monkeypatch.setattr(fetch_mod, "fetch_data", fake_fetch)
+        import evals.run as run_mod
+
+        monkeypatch.setattr(run_mod, "_collect_prompt_versions", lambda: {})
+        with pytest.raises(ValueError, match="K 线"):
+            ds.build_snapshot("600519", "2023-01-05")

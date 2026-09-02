@@ -154,7 +154,7 @@ def _summarize_success_output(value: Any) -> dict:
     return {"status": "success"}
 
 
-def fetch_data(state: dict, cache=None, client=None) -> dict:
+def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -> dict:
     # TESTING=1：确定性 stub（不触 AKShare/网络），供管线 E2E 使用
     if os.getenv("TESTING") == "1":
         return _stub_fetch_data(state)
@@ -178,8 +178,8 @@ def fetch_data(state: dict, cache=None, client=None) -> dict:
         futures[pool.submit(ak.fetch_indicators, code)] = "financial_indicators"
         futures[pool.submit(ak.fetch_industry, code)] = "industry_info"
         futures[pool.submit(ak.fetch_stock_quote, code)] = "stock_quote"
-        futures[pool.submit(ak.fetch_kline, code)] = "kline"
-        futures[pool.submit(ak.fetch_benchmark_kline)] = "benchmark_kline"
+        futures[pool.submit(ak.fetch_kline, code, kline_days)] = "kline"
+        futures[pool.submit(ak.fetch_benchmark_kline, kline_days)] = "benchmark_kline"
         futures[pool.submit(ak.fetch_industry_pe, code)] = "industry_pe"
         futures[pool.submit(ak.fetch_quarterly_income, code)] = "quarterly_income"
         futures[pool.submit(ak.fetch_macro_indicators)] = "macro_indicators"
