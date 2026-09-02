@@ -1,6 +1,7 @@
 """准度测量测试：F1 门禁、near_miss 检出率、hedged 假阳率、回归子集披露。"""
 
 import json
+import sys
 from pathlib import Path
 
 from evals.claim_benchmark import measure
@@ -100,6 +101,44 @@ class TestMeasure:
             assert e.code == 2
         else:  # pragma: no cover
             raise AssertionError("空 label 应拒绝测量")
+
+
+class TestCliGates:
+    """--gate/--baseline CLI 门禁（CI 回归门禁契约）。"""
+
+    def _entries_f1_two_thirds(self) -> list[dict]:
+        """tp=1, fn=1, tn=1 → P=1.0 R=0.5 F1≈0.667。"""
+        return [
+            _entry("a", "FAIL", [], delta=1.0),  # 复判 FAIL → TP
+            _entry("b", "FAIL", [], delta=0.001),  # 复判 PASS → FN
+            _entry("c", "PASS", [], delta=0.001),  # 复判 PASS → TN
+        ]
+
+    def _run_main(self, tmp_path: Path, monkeypatch, extra_args: list[str], entries=None) -> int:
+        entries = entries if entries is not None else self._entries_f1_two_thirds()
+        labeled = tmp_path / "in.jsonl"
+        _write_entries(labeled, entries)
+        monkeypatch.setattr(sys, "argv", ["measure.py", "--labeled", str(labeled), *extra_args])
+        return measure.main()
+
+    def test_gate_flag_overrides_default(self, tmp_path: Path, monkeypatch, capsys):
+        # F1≈0.667：默认门禁 0.90 失败，--gate 0.5 放行
+        assert self._run_main(tmp_path, monkeypatch, []) == 1
+        assert self._run_main(tmp_path, monkeypatch, ["--gate", "0.5"]) == 0
+
+    def test_baseline_regression_within_tolerance_passes(self, tmp_path: Path, monkeypatch):
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({"f1": 0.68}), encoding="utf-8")
+        # F1≈0.667 ≥ 0.68 - 0.02 → 通过
+        code = self._run_main(tmp_path, monkeypatch, ["--gate", "0.5", "--baseline", str(baseline)])
+        assert code == 0
+
+    def test_baseline_regression_beyond_tolerance_exits_1(self, tmp_path: Path, monkeypatch):
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({"f1": 0.9}), encoding="utf-8")
+        # F1≈0.667 < 0.9 - 0.02 → 退步超限，exit 1
+        code = self._run_main(tmp_path, monkeypatch, ["--gate", "0.5", "--baseline", str(baseline)])
+        assert code == 1
 
 
 class TestMeasureV11Subsets:

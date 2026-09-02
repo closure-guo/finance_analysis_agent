@@ -94,6 +94,7 @@ class TestFailBuckets:
             stated_value="less_than",
             interpretation="2024 年 ROE 低于 2023 年",
             field_ref_b="profitability_metrics.ROE.2023",
+            stated_value_b=25.0,
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "FAIL"

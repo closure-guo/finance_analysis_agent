@@ -12,22 +12,20 @@
 - 比较型 greater/less 需要 |a-b| 的符号，delta 不含符号 → 离线不可复判；
 - 事件型 gt 缺失（事件是否存在不可知）→ 离线不可复判。
 
-防漂移：本模块公式与 citation.py 裁决函数逐条对齐，并用
-tests/evals/claim_benchmark/test_rejudge.py 的钉死测试锁定——
-若 citation.py 容差语义变更，钉死测试失败告警镜像漂移。
+防漂移：容差常量直接导入 citation.py（唯一来源，evals-boot 起取消镜像副本），
+其余裁决语义由 tests/evals/claim_benchmark/test_rejudge.py 的钉死测试锁定——
+citation.py 容差变更会直接改变复判结果，由 CI 准度门禁拦截。
 
-**不修改 citation.py**（红线：契约语义属上一 delta 冻结范围）。
+**不修改 citation.py 的契约语义**（红线：契约语义属上一 delta 冻结范围）。
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-Status = Literal["PASS", "FAIL", "UNVERIFIABLE"]
+from finance_agent.citation import ABS_TOL, REL_TOL
 
-# 与 citation.py 对齐的容差常量（修 C 双条件）
-ABS_TOL = 0.01  # 绝对容差：|delta| < 0.01
-REL_TOL = 0.005  # 相对容差：|delta| / |gt| < 0.5%
+Status = Literal["PASS", "FAIL", "UNVERIFIABLE"]
 
 # 模糊措辞词表（hedged 子集识别；与「约/接近」口径一致）
 HEDGE_WORDS = ("约", "接近", "左右", "大约", "近似", "近", "约等于")

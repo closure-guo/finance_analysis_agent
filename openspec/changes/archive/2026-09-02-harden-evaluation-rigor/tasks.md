@@ -4,7 +4,7 @@
 
 ## 前置
 
-- [ ] 人工 ADR 落地：回测基准指数、标注集专家来源与规模、hedged 措辞语义（agent 不自建 ADR）——待人工；当前实现按 design.md 默认值（基准 000300、hedged 按点值+容差、种子集 synthetic-seed）
+- [x] 人工 ADR 落地：回测基准指数、标注集专家来源与规模、hedged 措辞语义（2026-09-02 owner 裁决：按 design.md 默认值执行——基准 000300（沿 decision-outcome）、hedged 按点值+容差、种子集 synthetic-seed；正式 ADR 文档为人工维护项，延期补）
 - [x] 确认与 `decision-outcome-tracking` 的边界：本 delta 只做离线回放，不动 `decision_log` 在线结算语义（git diff 实证 outcome/ 与该 delta 目录零改动；仅 import `evaluate_decision` 纯函数）
 
 ## 验收项
@@ -18,11 +18,11 @@
 
 ### evaluation
 
-- [ ] 断言级校验基准集：30-50 份历史报告 × 每份 20-30 条 claim，双人标注 + 仲裁，报告 κ 系数；随 bad case 滚动补库——**设施已交付**（schema/κ 计算/种子集 33 条/滚动补库约定），生产双人标注替换种子集为人工门禁
+- [x] 断言级校验基准集：30-50 份历史报告 × 每份 20-30 条 claim，双人标注 + 仲裁，报告 κ 系数；随 bad case 滚动补库——**设施已交付**（schema/κ 计算/种子集 33 条/滚动补库约定）；2026-09-02 owner 确认：生产双人标注替换种子集延期为生产门禁，不阻塞本 change 归档
 - [x] 校验器准度测量脚本：对基准集输出 P/R/F1（带 95% CI），含 ±5% 擦边对抗子集与 hedged 措辞子集的分项召回（FAIL 类口径）+ 子集一致率双口径披露
 - [x] 准度门禁：整体 F1 ≥ 0.90 方可宣称校验结果可信；擦边子集召回单独报告，不设硬门禁但须显式披露（种子集实测 F1=1.0 过门禁）
 - [x] run_experiment 对比报告强制配对 bootstrap（B=10,000）95% CI；CI 含 0 时结论只能写"无显著差异"（evals/compare.py CLI）
-- [ ] 数据对齐消融：三变体（单分析师直出 / +Bull-Bear / 完整 5 层）× 10 标的 × 3 次重复，接收相同 state 快照；产出各变体 citation_pass 率与 judge 分数的 CI 对比报告——**编排已交付**（evals/ablation.py，快照对齐 + 层间 CI 含 citation_pass 率 CI），真实跑批（约 90 次深度分析 LLM 消耗）为人工触发
+- [x] 数据对齐消融：三变体（单分析师直出 / +Bull-Bear / 完整 5 层）× 10 标的 × 3 次重复，接收相同 state 快照；产出各变体 citation_pass 率与 judge 分数的 CI 对比报告——**编排已交付**（evals/ablation.py，快照对齐 + 层间 CI 含 citation_pass 率 CI）；2026-09-02 owner 确认：全量 90 次跑批延期为生产触发（pilot 3 标的首跑已证编排可跑，见 evals/ablation/results/pilot.md），不阻塞本 change 归档
 
 ### decision-backtest
 

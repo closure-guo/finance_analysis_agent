@@ -7,14 +7,108 @@ citation_pass 驱动 after_citation 路由：PASS -> 渲染，FAIL -> 重试。
 from __future__ import annotations
 
 import logging
+import re
 
 from finance_agent.citation import CitationReport, CitationResult, Claim, verify_claims
-from finance_agent.citation_coverage import CoverageReport, compute_coverage
+from finance_agent.citation_coverage import (
+    CoverageReport,
+    compute_coverage,
+    extract_census_numbers,
+)
 from finance_agent.langfuse_tracing import get_langfuse, update_current_span
 from finance_agent.models import AnalystReport
 from finance_agent.routing import citation_retry_stagnated
 
 logger = logging.getLogger("finance_agent.citation")
+
+# refine-citation-coverage-v3 D2/D4：growth_rates 双条件补登记。
+# 取整感知容差：整数百分比取整最大误差 0.5 个百分点
+_ROUNDING_PP_TOL = 0.5
+
+
+def _sentence_split(markdown: str) -> list[str]:
+    return [s for s in re.split(r"[。\n！？!?；;]", markdown) if s.strip()]
+
+
+def _event_values(state: dict) -> list[float]:
+    """从 state 事件源（key_events/news_list）提取数值（D5，供 event_covered 标记）。
+
+    事件数字（如新闻「出厂价由 969 元上调」）不建数值 claim 而按事件豁免，
+    普查命中 event_covered 而非 unmatched。
+    """
+    items: list[dict | str] = []
+    items.extend(state.get("key_events") or [])
+    items.extend(state.get("news_list") or [])
+    texts = []
+    for it in items:
+        if isinstance(it, dict):
+            for k in ("title", "summary", "content", "text", "date"):
+                v = it.get(k)
+                if isinstance(v, str):
+                    texts.append(v)
+        elif isinstance(it, str):
+            texts.append(it)
+    values: list[float] = []
+    for t in texts:
+        for n in extract_census_numbers(t):
+            if n.value not in values:
+                values.append(n.value)
+    return values
+
+
+def supplement_anomaly_claims(
+    markdown: str, state: dict, existing_claims: list[Claim | dict]
+) -> list[Claim]:
+    """state growth_rates 双条件共现自动补登记（D2 吸收 D4）。
+
+    触发双条件：① 同一句中指标名与正文数值共现；② 数值与
+    growth_rates.{dim}.{metric} 的整数百分比渲染按 0.5 个百分点容差匹配。
+    field_ref 指向结构化真值 growth_rates.{dim}.{metric}（字符串只定位不验证，
+    防循环验证）。与人工申报 claim 同 field_ref 的去重；state 无真值的不补
+    （反洗白：编造数字不满足双条件）。
+
+    来源为整个 growth_rates（而非仅 anomalies）——D4 吸收：可重算增速数字
+    （如 FCF 同比 96.6%）即使未触发 anomaly（|growth|≤0.5）也能补登记；
+    anomalies 是 growth_rates 的 |growth|>0.5 子集，天然覆盖。
+    """
+    growth_rates = state.get("growth_rates") or {}
+    sentences = _sentence_split(markdown)
+    existing_refs = {
+        (c.field_ref if isinstance(c, Claim) else c.get("field_ref")) for c in existing_claims
+    }
+    out: list[Claim] = []
+    for dim, metrics in growth_rates.items():
+        for metric, growth in metrics.items():
+            if not isinstance(growth, int | float) or growth is None:
+                continue
+            pct = int(round(growth * 100))  # 整数百分比渲染（compute.py:.0% 同源）
+            for sent in sentences:
+                if metric not in sent:
+                    continue
+                # 句中数值与 growth 整数百分比 0.5pp 容差匹配（percent 面值一致）
+                hit = any(
+                    abs(n.value - pct) <= _ROUNDING_PP_TOL
+                    for n in extract_census_numbers(sent)
+                    if n.kind == "percent"
+                )
+                if not hit:
+                    continue
+                ref = f"growth_rates.{dim}.{metric}"
+                if ref in existing_refs:
+                    continue
+                out.append(
+                    Claim(
+                        claim_type="numerical",
+                        source_type="data",
+                        field_ref=ref,
+                        stated_value=pct / 100,  # 分数制，与既有 growth claim 口径一致
+                        interpretation=f"{metric} 变化率 {pct}%",
+                        metric_name=metric,
+                    )
+                )
+                existing_refs.add(ref)
+                break
+    return out
 
 
 def verify_citations(state: dict) -> dict:
@@ -32,6 +126,20 @@ def verify_citations(state: dict) -> dict:
         claims = _extract_claims(report)
         claims_by_agent[agent] = claims
         per_agent[agent] = verify_claims(claims, state)
+
+    # D2（refine-citation-coverage-v3）：state anomalies 自动补登记——正文数字 +
+    # 指标名同句共现且 state 有结构化真值 → 补 claim，走与人工申报完全相同的校验路径。
+    # 编造数字（state 无对应）不满足双条件，保持 unmatched（反洗白）。
+    markdown = "\n\n".join(_markdown_of(r) for r in reports.values())
+    supplement = supplement_anomaly_claims(
+        markdown,
+        state,
+        [c for claims in claims_by_agent.values() for c in claims],
+    )
+    if supplement:
+        claims_by_agent["anomaly_supplement"] = supplement
+        per_agent["anomaly_supplement"] = verify_claims(supplement, state)
+
     results = [r for rs in per_agent.values() for r in rs]
     report = CitationReport.from_results(results)
 
@@ -60,14 +168,14 @@ def verify_citations(state: dict) -> dict:
     retry_targets.sort()
 
     # 正文覆盖率：合并四分析师 markdown 普查，claim stated_value 全集为认领池
+    # （含 anomaly_supplement 补登记 claim，认领池同步扩充）
     all_stated = [
         float(c.stated_value)
         for claims in claims_by_agent.values()
         for c in claims
         if _is_float(c.stated_value)
     ]
-    markdown = "\n\n".join(_markdown_of(r) for r in reports.values())
-    coverage = compute_coverage(markdown, all_stated)
+    coverage = compute_coverage(markdown, all_stated, event_values=_event_values(state))
 
     _report_to_langfuse(report, coverage)
 

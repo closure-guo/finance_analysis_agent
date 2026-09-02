@@ -54,3 +54,38 @@ FAIL 率 <10%、citation_coverage ≥0.8、无格式类重试触发、中际旭�
 
 - Langfuse trace 的 span 级观测不完整（observations 仅到 fetch 段），score/metadata 完整；verify_citations span 取证依赖 score 时序而非 span metadata。
 - 冒烟脚本已修「同名 score 取时间戳最新」（重试二次上报场景）。
+
+---
+
+## 附录 A：20 条抽查人工终裁（2026-09-02 追加）
+
+**裁决人**：用户逐条对照 `reports/coverage_spotcheck.csv` 的 `source_sentence` 复核。
+**材料**：`reports/coverage_spotcheck.csv`（v2，含 trace_id/出处原句/最近 claim 偏差/机制分类；human_verdict 已回填，另附 note 列）。
+
+### 7 类重分类（替代机器初分类）
+
+| 类 | 条目 | 实质 | 裁决 |
+|---|---|---|---|
+| A 普查误报 | 20%（仓位档位脚手架）、15%（辩论机会成本估计） | 正则把 prompt 模板/主观估计当事实数字 | accept + 修普查（排除模板文本、估计语境豁免） |
+| B state 有、没建 claim | -368%、-52%、-15.2%（state anomalies/红灯项原样输出） | 纯纪律失败，可校验数字裸奔 | reject → 确定性补 claim |
+| C 比较基期裸奔 | 21.93%、73.22%、17.48%（2024 基期值） | comparative claim 只建当期值 | reject → 启用 field_ref_b 补基期 |
+| D 计算值未申报 | 96.6%（FCF 同比） | computational claim 缺失 | reject → 补 computational claim |
+| E 约数/重述 | 91.93%、-4.5%、108%、21.67%、30%（ROE 超 30% 阈值式复述） | 同一指标口头约数 | accept（普查容差放宽 2%、不等式匹配） |
+| F 符号问题 | 10.05%、33.5%（方向词已表达） | 符号敏感 | accept（方向词符号不敏感匹配） |
+| G 事件数字 | 969元、1169元（新闻"出厂价由969上调"） | 事件溯源内容 | exempt（事件豁免/白名单，正文注明来源） |
+
+**1400 亿改判**：机器初判"value_mismatch 疑错"，人工复核出处原句为"账上货币资金+拆出资金合计超过1400亿元"——**非营收，是货币资金口径**，数字正确但未建 claim → 裁决 reject（去 balance_sheet 验并补 claim），非"疑似错误"。
+
+**75.85%**：无出处原句（未随 trace 落库），毛利率 77.36 差 2.0%，介于约数与错值之间 → needs_review（单独复核原句）。
+
+### 关键事实
+
+- **20 条中无一条是编造的错数字**——真正的幻觉召回压力目标（错且无人拦）在这批样本中为 0，与"真实幻觉≈0"的既有结论一致；coverage 工具抓到的主要是**纪律缺口（B/C/D）与普查自身噪声（A/F/E）**。
+- 机器初分类（value_mismatch/scale_miss 等）在"值不一致"上偏机械，会误报指标张冠李戴（1400亿 即例证）；人工按出处原句复核是必要环节。
+
+### 后续（另建 issue 跟踪，不在本 change 归档范围）
+
+1. 普查脚本 v3：排除模板/脚手架文本、方向词符号不敏感、容差 0.5%→2%、"超/约/近 X"不等式匹配；
+2. B 类：state anomalies 确定性自动补 claim（键名+数值都在 state，纯代码兜底）；
+3. C/D 类：产出后校验 + field_ref_b 双端建档落地；
+4. G 类：事件数字豁免纪律（匹配 event store 标记 event_covered）。
