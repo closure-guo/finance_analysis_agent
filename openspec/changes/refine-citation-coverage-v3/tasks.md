@@ -9,7 +9,7 @@
 - [x] 1.3 不等式匹配（ge/le/approx；自然面值 + 20% 邻域带防跨指标误认领）
 - [x] 1.4 模板/脚手架文本区间排除（_SCAFFOLD_HINTS：档位/仓位/如总资金/试探性/决策语义）
 - [x] 1.5 事件数字标记 event_covered（compute_coverage event_values 参数 + CoverageReport.event_covered 字段）
-- [ ] 1.6 用同一批冒烟 trace 重跑 spotcheck（tests/scripts/coverage_spotcheck_material.py）：A/E/F 类应消失，unmatched 降到个位数
+- [ ] 1.6 用同一批冒烟 trace 重跑 spotcheck（需从 Langfuse trace 重建完整报告 markdown 后跑新 compute_coverage；抽样材料生成器同步 v3 分类；待集成验证）
 
 ## 2. state anomalies 自动补登记（D2，issue #107-B，核心交付）
 
@@ -21,13 +21,13 @@
 
 ## 3. comparative 基期值双端建档（D3，issue #107-C）
 
-- [ ] 3.1 Claim comparative 基期校验（stated_value_b 缺失 → FAIL 记录）
-- [ ] 3.2 analysts prompt 强制比较值双端申报 + deploy_prompts 发布 + prompt 契约测试
-- [ ] 3.3 基期值校验走与当期相同容差语义；fixture 钉死
+- [x] 3.1 Claim comparative 基期校验（stated_value_b 缺失 → FAIL path_unresolvable；超容差 → FAIL value_mismatch）
+- [x] 3.2 analysts prompt 强制比较值双端申报（fundamental/macro/technical 已加规则）+ deploy_prompts 发布 14 全 OK
+- [x] 3.3 基期值校验走与当期相同容差语义（max(0.01, 0.5%)）；测试钉死（正确 PASS / 错值 FAIL / 缺申报 FAIL）
 
 ## 4. 可重算计算值补登记（D4，issue #107-D）
 
-- [ ] 4.1 可重算指标名共现 → 生成 computational claim（_COMPUTATIONAL_RECALC 注册表）
+- [ ] 4.1 可重算指标名共现 → 生成 computational claim（需 metric 名→重算路径映射设计：正文指标名（如 FCF）到 _COMPUTATIONAL_RECALC 根键/字段路径无可确定性映射，D4 留待设计后实施）
 - [ ] 4.2 公式重算路径验证；不可重算不补登记
 
 ## 5. 验证与回归

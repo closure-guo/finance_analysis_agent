@@ -145,6 +145,7 @@ class TestCitationReport:
             stated_value="greater_than",
             interpretation="2024 年 ROE 高于 2023 年",
             field_ref_b="profitability_metrics.ROE.2023",
+            stated_value_b=25.0,
         )
         results = verify_claims([claim], state)
         assert len(results) == 1
@@ -517,3 +518,37 @@ class TestComputationalRegistryCoverage:
         report = CitationReport.from_results(results)
         assert results[0].status == "PASS"
         assert report.coverage_gaps == 0
+
+
+class TestComparativeBaseDeclaration:
+    """refine-citation-coverage-v3 D3：comparative 基期值双端申报与校验。"""
+
+    _STATE = {"profitability_metrics": {"净利率": {"2025": 19.07, "2024": 21.93}}}
+
+    def _claim(self, **kw):
+        base = {
+            "claim_type": "comparative",
+            "source_type": "data",
+            "field_ref": "profitability_metrics.净利率.2025",
+            "stated_value": "less_than",
+            "interpretation": "2025 净利率较 2024 下滑",
+            "field_ref_b": "profitability_metrics.净利率.2024",
+        }
+        base.update(kw)
+        return Claim(**base)
+
+    def test_base_value_correct_passes(self):
+        (r,) = verify_claims([self._claim(stated_value_b=21.93)], self._STATE)
+        assert r.status == "PASS"
+
+    def test_base_value_mismatch_fails_value_mismatch(self):
+        # 正文「较2024年21.93%下滑」但申报基期 28.0（错值）→ FAIL
+        (r,) = verify_claims([self._claim(stated_value_b=28.0)], self._STATE)
+        assert r.status == "FAIL"
+        assert r.bucket == "value_mismatch"
+
+    def test_base_not_declared_fails(self):
+        # 基期裸奔：field_ref_b 设而 stated_value_b 缺 → FAIL（拦截）
+        (r,) = verify_claims([self._claim()], self._STATE)
+        assert r.status == "FAIL"
+        assert r.bucket == "path_unresolvable"

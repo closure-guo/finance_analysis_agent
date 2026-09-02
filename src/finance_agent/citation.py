@@ -53,6 +53,10 @@ class Claim(BaseModel):
     stated_value: float | str
     interpretation: str
     field_ref_b: str | None = None  # 比较型 claim 的第二个值路径
+    # refine-citation-coverage-v3 D3：comparative 基期值双端申报。基期数值，
+    # 与 field_ref_b 的真值按校验容差比对；缺申报（field_ref_b 设而
+    # stated_value_b 缺）判 FAIL——比较基期不得裸奔。
+    stated_value_b: float | str | None = None
     # harden-citation-semantic-coverage：术语/期次申报。None = 未申报（旧格式），
     # 校验器跳过对应检查并计覆盖缺口（显式降级，不静默 PASS）。
     metric_name: str | None = None  # 指标枚举（中文规范键或别名，见 metric_vocab）
@@ -317,7 +321,13 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
 
 
 def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
-    """比较型 claim：验证两侧数值 + 比较方向。"""
+    """比较型 claim：验证两侧数值 + 比较方向 + 基期值申报（v3 D3）。
+
+    stated_value 为比较方向（greater_than/less_than/equal_to）；
+    field_ref_b/stated_value_b 为基期双端（D3）：基期值按与当期相同容差语义
+    比对 field_ref_b 真值；field_ref_b 设而 stated_value_b 缺 → FAIL
+    （比较基期裸奔被拦截）。
+    """
     val_a = _resolve_field_ref(claim.field_ref, state)
     val_b = _resolve_field_ref(claim.field_ref_b, state) if claim.field_ref_b else None
     if not isinstance(val_a, int | float | str) or not isinstance(val_b, int | float | str):
@@ -343,6 +353,37 @@ def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
         passed = delta < 0.01
     else:
         return CitationResult(status="UNVERIFIABLE", claim=claim)
+
+    # D3：基期值申报与校验（comparative 双端建档）。基期真值 b 取自 field_ref_b；
+    # stated_value_b 缺失（裸奔）或与真值超容差 → FAIL。
+    if claim.field_ref_b is not None:
+        if claim.stated_value_b is None:
+            return CitationResult(
+                status="FAIL",
+                claim=claim,
+                ground_truth=b,
+                delta=None,
+                bucket="path_unresolvable",
+            )
+        try:
+            base_stated = float(claim.stated_value_b)
+        except (TypeError, ValueError):
+            return CitationResult(
+                status="FAIL",
+                claim=claim,
+                ground_truth=b,
+                delta=None,
+                bucket="path_unresolvable",
+            )
+        base_delta = abs(b - base_stated)
+        if base_delta >= max(ABS_TOL, abs(b) * REL_TOL):
+            return CitationResult(
+                status="FAIL",
+                claim=claim,
+                ground_truth=b,
+                delta=base_delta,
+                bucket="value_mismatch",
+            )
 
     status: Literal["PASS", "FAIL"] = "PASS" if passed else "FAIL"
     return CitationResult(

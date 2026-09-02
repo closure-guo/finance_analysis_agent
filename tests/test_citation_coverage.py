@@ -127,3 +127,22 @@ class TestV3CensusRules:
         # 1400亿 vs 营收 1720.5亿：18% 偏差、非不等式/方向词 → 保持黑数字
         rep = compute_coverage("账上货币资金+拆出资金合计超过1400亿元", [172054200000.0])
         assert rep.unmatched == ["1400亿"]
+
+
+class TestV3EventCovered:
+    """refine-citation-coverage-v3 D5：事件数字豁免。"""
+
+    def test_event_number_marked_event_covered_not_unmatched(self):
+        from finance_agent.citation_coverage import compute_coverage
+
+        md = "出厂价由 969 元上调至 1169 元"  # 无 claim 认领，但命中事件源
+        rep = compute_coverage(md, [0.0], event_values=[969.0, 1169.0])
+        assert rep.event_covered == ["969元", "1169元"]
+        assert rep.unmatched == []
+
+    def test_non_event_number_still_unmatched(self):
+        from finance_agent.citation_coverage import compute_coverage
+
+        md = "账上资金超过1400亿元"
+        rep = compute_coverage(md, [172054200000.0], event_values=[969.0])
+        assert rep.unmatched == ["1400亿"]

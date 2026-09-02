@@ -92,6 +92,7 @@ class TestDirectionWords:
             stated_value="greater_than",
             interpretation="ROE 同比下降",
             field_ref_b="profitability_metrics.ROE.2023",
+            stated_value_b=25.0,
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "FAIL"

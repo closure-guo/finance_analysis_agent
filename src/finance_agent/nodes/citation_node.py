@@ -31,6 +31,32 @@ def _sentence_split(markdown: str) -> list[str]:
     return [s for s in re.split(r"[。\n！？!?；;]", markdown) if s.strip()]
 
 
+def _event_values(state: dict) -> list[float]:
+    """从 state 事件源（key_events/news_list）提取数值（D5，供 event_covered 标记）。
+
+    事件数字（如新闻「出厂价由 969 元上调」）不建数值 claim 而按事件豁免，
+    普查命中 event_covered 而非 unmatched。
+    """
+    items: list[dict | str] = []
+    items.extend(state.get("key_events") or [])
+    items.extend(state.get("news_list") or [])
+    texts = []
+    for it in items:
+        if isinstance(it, dict):
+            for k in ("title", "summary", "content", "text", "date"):
+                v = it.get(k)
+                if isinstance(v, str):
+                    texts.append(v)
+        elif isinstance(it, str):
+            texts.append(it)
+    values: list[float] = []
+    for t in texts:
+        for n in extract_census_numbers(t):
+            if n.value not in values:
+                values.append(n.value)
+    return values
+
+
 def supplement_anomaly_claims(
     markdown: str, state: dict, existing_claims: list[Claim | dict]
 ) -> list[Claim]:
@@ -150,7 +176,7 @@ def verify_citations(state: dict) -> dict:
         for c in claims
         if _is_float(c.stated_value)
     ]
-    coverage = compute_coverage(markdown, all_stated)
+    coverage = compute_coverage(markdown, all_stated, event_values=_event_values(state))
 
     _report_to_langfuse(report, coverage)
 
