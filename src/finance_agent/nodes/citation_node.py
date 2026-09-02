@@ -7,14 +7,83 @@ citation_pass 驱动 after_citation 路由：PASS -> 渲染，FAIL -> 重试。
 from __future__ import annotations
 
 import logging
+import re
 
 from finance_agent.citation import CitationReport, CitationResult, Claim, verify_claims
-from finance_agent.citation_coverage import CoverageReport, compute_coverage
+from finance_agent.citation_coverage import (
+    CoverageReport,
+    compute_coverage,
+    extract_census_numbers,
+)
 from finance_agent.langfuse_tracing import get_langfuse, update_current_span
 from finance_agent.models import AnalystReport
 from finance_agent.routing import citation_retry_stagnated
 
 logger = logging.getLogger("finance_agent.citation")
+
+# refine-citation-coverage-v3 D2（issue #107-B 设计规格）：
+# anomaly 字符串形如 "solvency.净债务/EBITDA: 变化率-368%"（compute.py:186 渲染）。
+_ANOMALY_RATE_RE = re.compile(r"^(?P<dim>[A-Za-z_]+)\.(?P<metric>.+?): 变化率(?P<pct>-?\d+)%$")
+_ROUNDING_PP_TOL = 0.5  # 取整感知容差：整数百分比取整最大误差 0.5 个百分点
+
+
+def _sentence_split(markdown: str) -> list[str]:
+    return [s for s in re.split(r"[。\n！？!?；;]", markdown) if s.strip()]
+
+
+def supplement_anomaly_claims(
+    markdown: str, state: dict, existing_claims: list[Claim | dict]
+) -> list[Claim]:
+    """state anomalies 双条件共现自动补登记（D2）。
+
+    触发双条件：① 同一句中 anomaly 指标名与正文数值共现；② 数值与 anomaly
+    字符串取整值按 0.5 个百分点容差匹配。field_ref 指向结构化真值
+    growth_rates.{dim}.{metric}（anomaly 字符串只定位不验证，防循环验证）。
+    与人工申报 claim 同 field_ref 的去重；state 无真值（growth_rates 缺键）
+    的不补（反洗白：编造数字不满足双条件）。
+    """
+    anomalies = state.get("anomalies") or []
+    growth_rates = state.get("growth_rates") or {}
+    sentences = _sentence_split(markdown)
+    existing_refs = {
+        (c.field_ref if isinstance(c, Claim) else c.get("field_ref")) for c in existing_claims
+    }
+    out: list[Claim] = []
+    for a in anomalies:
+        m = _ANOMALY_RATE_RE.match(str(a))
+        if not m:
+            continue  # 「红灯」类无数值，不补
+        dim, metric, pct = m.group("dim"), m.group("metric"), int(m.group("pct"))
+        truth = (growth_rates.get(dim) or {}).get(metric)
+        if not isinstance(truth, int | float):
+            continue  # 结构化真值不在 state → 不补（反洗白）
+        for sent in sentences:
+            if metric not in sent:
+                continue
+            # 句中数值与 anomaly 取整值 0.5pp 容差匹配（percent 面值一致）
+            hit = any(
+                abs(n.value - pct) <= _ROUNDING_PP_TOL
+                for n in extract_census_numbers(sent)
+                if n.kind == "percent"
+            )
+            if not hit:
+                continue
+            ref = f"growth_rates.{dim}.{metric}"
+            if ref in existing_refs:
+                continue
+            out.append(
+                Claim(
+                    claim_type="numerical",
+                    source_type="data",
+                    field_ref=ref,
+                    stated_value=pct / 100,  # 分数制，与既有 growth claim 口径一致
+                    interpretation=f"{metric} 变化率 {pct}%",
+                    metric_name=metric,
+                )
+            )
+            existing_refs.add(ref)
+            break
+    return out
 
 
 def verify_citations(state: dict) -> dict:
@@ -32,6 +101,20 @@ def verify_citations(state: dict) -> dict:
         claims = _extract_claims(report)
         claims_by_agent[agent] = claims
         per_agent[agent] = verify_claims(claims, state)
+
+    # D2（refine-citation-coverage-v3）：state anomalies 自动补登记——正文数字 +
+    # 指标名同句共现且 state 有结构化真值 → 补 claim，走与人工申报完全相同的校验路径。
+    # 编造数字（state 无对应）不满足双条件，保持 unmatched（反洗白）。
+    markdown = "\n\n".join(_markdown_of(r) for r in reports.values())
+    supplement = supplement_anomaly_claims(
+        markdown,
+        state,
+        [c for claims in claims_by_agent.values() for c in claims],
+    )
+    if supplement:
+        claims_by_agent["anomaly_supplement"] = supplement
+        per_agent["anomaly_supplement"] = verify_claims(supplement, state)
+
     results = [r for rs in per_agent.values() for r in rs]
     report = CitationReport.from_results(results)
 
@@ -60,13 +143,13 @@ def verify_citations(state: dict) -> dict:
     retry_targets.sort()
 
     # 正文覆盖率：合并四分析师 markdown 普查，claim stated_value 全集为认领池
+    # （含 anomaly_supplement 补登记 claim，认领池同步扩充）
     all_stated = [
         float(c.stated_value)
         for claims in claims_by_agent.values()
         for c in claims
         if _is_float(c.stated_value)
     ]
-    markdown = "\n\n".join(_markdown_of(r) for r in reports.values())
     coverage = compute_coverage(markdown, all_stated)
 
     _report_to_langfuse(report, coverage)

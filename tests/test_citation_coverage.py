@@ -94,3 +94,36 @@ class TestCoverage:
         """claim stated 为小数形态（0.452），正文 45.2% → 缩放匹配。"""
         rep = compute_coverage("毛利率 45.2%", [0.452])
         assert rep.coverage == 1.0
+
+
+class TestV3CensusRules:
+    """refine-citation-coverage-v3 D1：普查四规则（issue #106 人工终裁）。"""
+
+    def test_rounding_tolerance_2pct(self):
+        # 91.93 vs 91.18：0.8% 偏差，旧 0.5% 判黑，v3 2% 认领
+        rep = compute_coverage("毛利率 91.93%", [91.18])
+        assert rep.coverage == 1.0
+
+    def test_direction_word_sign_insensitive(self):
+        # 正文「下滑 10.05%」正数，claim -10.05，符号不敏感认领
+        rep = compute_coverage("净利率下滑 10.05%", [-10.05])
+        assert rep.coverage == 1.0
+
+    def test_inequality_threshold_match(self):
+        # 「ROE 超 30%」→ claim 32.53 满足 ≥30，认领
+        rep = compute_coverage("ROE 超 30%", [32.53])
+        assert rep.coverage == 1.0
+        # 「ROE 超 30%」→ claim 20 不满足，不认领
+        rep2 = compute_coverage("ROE 超 30%", [20.0])
+        assert rep2.coverage == 0.0
+
+    def test_scaffold_text_excluded_from_total(self):
+        # 仓位档位说明的 10-20% 不计入普查总数
+        md = "position_size 档位：light=试探性仓位（如总资金 10-20%）"
+        nums = extract_census_numbers(md)
+        assert all(n.kind != "percent" for n in nums) or not nums
+
+    def test_value_mismatch_still_black(self):
+        # 1400亿 vs 营收 1720.5亿：18% 偏差、非不等式/方向词 → 保持黑数字
+        rep = compute_coverage("账上货币资金+拆出资金合计超过1400亿元", [172054200000.0])
+        assert rep.unmatched == ["1400亿"]
