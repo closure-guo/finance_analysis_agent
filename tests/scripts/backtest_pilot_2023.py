@@ -60,6 +60,47 @@ def _record_usage(tag: str, usage: Any, estimated: bool) -> None:
     )
 
 
+_TRANSIENT_HINTS = (
+    "burst",
+    "rate.?limit",
+    "APIConnectionError",
+    "429",
+    "slow down",
+    # incident 016/017 同族：半僵流（chunk 超时）是瞬时故障，adapter 层重试
+    "半僵流",
+    "chunk 超过",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    import re
+
+    msg = str(exc)
+    return any(re.search(hint, msg, re.IGNORECASE) for hint in _TRANSIENT_HINTS)
+
+
+def _retry_transient(fn, *, attempts: int = 6, base_delay: float = 8.0):
+    """瞬时故障（限流/连接重置，如 ark burst 保护）指数退避重试。
+
+    试跑 harness 层兜底——litellm 的 fallback 链在此环境会误切到已失效的
+    官方 key 直接崩溃，故在 adapter 层就重试原始调用。ark「System protection
+    triggered by request burst」需要较长冷却（实测短退避 4×2^n 顶不住），
+    默认 6 次、8/16/32/64/128/256s。
+    """
+    import time
+
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if not _is_transient(exc):
+                raise
+            time.sleep(base_delay * (2**attempt))
+    raise last  # type: ignore[misc]
+
+
 def install_usage_meter() -> None:
     """包装 adapter 的 raw_completion/raw_stream（gateway 内均为调用时惰性导入，
     模块属性补丁可拦截全部非流式/流式路径）。"""
@@ -69,7 +110,7 @@ def install_usage_meter() -> None:
     original_stream = litellm_adapter.raw_stream
 
     def metered_completion(**kwargs: Any) -> Any:
-        resp = original_completion(**kwargs)
+        resp = _retry_transient(lambda: original_completion(**kwargs))
         _record_usage("raw_completion", getattr(resp, "usage", None), estimated=False)
         return resp
 
@@ -77,28 +118,40 @@ def install_usage_meter() -> None:
         global _stream_include_usage_supported
         if _stream_include_usage_supported and "stream_options" not in kwargs:
             kwargs["stream_options"] = {"include_usage": True}
-        try:
-            gen = original_stream(**kwargs)
-        except Exception:
-            if kwargs.get("stream_options"):
-                _stream_include_usage_supported = False
-                kwargs.pop("stream_options", None)
-                gen = original_stream(**kwargs)
-            else:
+
+        def _fresh_gen():
+            try:
+                return original_stream(**kwargs)
+            except Exception:
+                if kwargs.get("stream_options"):
+                    _stream_include_usage_supported = False
+                    kwargs.pop("stream_options", None)
+                    return original_stream(**kwargs)
                 raise
 
         def _wrapper():
+            import time
+
             usage = None
-            for chunk in gen:
-                chunk_usage = getattr(chunk, "usage", None)
-                if chunk_usage is not None:
-                    usage = chunk_usage
-                # include_usage 的末 chunk choices=[]，下游消费方 choices[0] 会
-                # IndexError——记账后丢弃，不透传给消费方
-                if not getattr(chunk, "choices", None):
-                    continue
-                yield chunk
-            _record_usage("raw_stream", usage, estimated=usage is None)
+            attempt = 0
+            while True:
+                try:
+                    for chunk in _fresh_gen():
+                        chunk_usage = getattr(chunk, "usage", None)
+                        if chunk_usage is not None:
+                            usage = chunk_usage
+                        # include_usage 的末 chunk choices=[]，下游消费方 choices[0] 会
+                        # IndexError——记账后丢弃，不透传给消费方
+                        if not getattr(chunk, "choices", None):
+                            continue
+                        yield chunk
+                    _record_usage("raw_stream", usage, estimated=usage is None)
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    if not _is_transient(exc) or attempt >= 5:
+                        raise
+                    attempt += 1
+                    time.sleep(8 * (2**attempt))
 
         return _wrapper()
 
@@ -132,22 +185,49 @@ def _sina_kline_to_cn(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def install_index_kline_patch() -> None:
-    """AKShareClient.fetch_index_kline / fetch_benchmark_kline → 新浪指数日 K。"""
+    """AKShareClient 三处进程内补丁（试跑 harness，不动仓库代码）：
+
+    1. fetch_index_kline / fetch_benchmark_kline → 新浪指数日 K（东财指数源本机不可达）；
+    2. fetch_kline days 默认提至 1500（issue #104：fetch_data 默认 250 日，
+       历史决策日截断后 K 线为空）；
+    3. 全部加轻量重试（issue #103：并发下新浪源间歇返回空/失败）。
+    """
+    import time
+
     import akshare as ak
+
+    def _retry(fn, *args, **kwargs):
+        for attempt in range(4):
+            try:
+                df = fn(*args, **kwargs)
+                if df is not None and not df.empty:
+                    return df
+            except Exception:
+                pass
+            time.sleep(2 * (attempt + 1))
+        return pd.DataFrame()
 
     def _fetch_index_sina(self: Any, index_code: str, days: int = 250) -> pd.DataFrame:
         symbol = f"sh{index_code}" if str(index_code).startswith(("0", "6")) else str(index_code)
-        df = ak.stock_zh_index_daily(symbol=symbol)
-        if df is None or df.empty:
-            return pd.DataFrame()
+        df = _retry(ak.stock_zh_index_daily, symbol=symbol)
+        if df.empty:
+            return df
         return _sina_kline_to_cn(df).tail(days).reset_index(drop=True)
 
     AKShareClient.fetch_index_kline = _fetch_index_sina  # type: ignore[method-assign]
 
-    def _fetch_benchmark(self: Any, days: int = 250) -> pd.DataFrame:
+    def _fetch_benchmark(self: Any, days: int = 1500) -> pd.DataFrame:
         return _fetch_index_sina(self, BENCHMARK_CODE, days=days)
 
     AKShareClient.fetch_benchmark_kline = _fetch_benchmark  # type: ignore[method-assign]
+
+    def _fetch_kline_sina(self: Any, stock_code: str, days: int = 1500) -> pd.DataFrame:
+        df = _retry(ak.stock_zh_a_daily, symbol=self._to_sina_symbol(stock_code), adjust="qfq")
+        if df.empty:
+            return df
+        return _sina_kline_to_cn(df).tail(days).reset_index(drop=True)
+
+    AKShareClient.fetch_kline = _fetch_kline_sina  # type: ignore[method-assign]
 
 
 # ---------------------------------------------------------------- 抽样
@@ -181,6 +261,11 @@ def verify_truncation(code: str, decision_date: str) -> dict:
         max_date = str(kline["日期"].astype(str).str[:10].max())
         checks["kline_max_date"] = max_date
         checks["kline_truncated"] = max_date <= decision_date
+    else:
+        # 快照缺 K 线是硬失败（issue #103：并发 fetch 下新浪回退不稳），不得静默跳过
+        checks["kline_max_date"] = None
+        checks["kline_truncated"] = False
+        checks["kline_missing"] = True
     for key in ("balance_sheet", "income_statement", "financial_indicators"):
         df = state.get(key)
         if isinstance(df, pd.DataFrame) and not df.empty:
@@ -225,17 +310,25 @@ def verify_truncation(code: str, decision_date: str) -> dict:
 
 
 def _pin_pipeline_model() -> None:
-    """任务清单硬约束：管线模型用 deepseek 非 pro 档。在 load_dotenv 之后覆盖，
-    防止主仓库 .env 的 glm-5.3 配置串入试跑。
+    """试跑模型钉定（用户裁决 2026-09-02）：
+    - 分析管线 = glm-5.3（.env 生产默认，火山方舟）——试跑与生产同模型，数字可迁移；
+    - judge = deepseek-v4-flash，端点从 opencode zen 换成 ark（zen 余额见底）。
 
-    偏差披露（2026-09-01）：shell 环境 DEEPSEEK_API_KEY 已失效（官方端点 401
-    Authentication Fails），deepseek-chat 官方不可用；改用同非 pro 档位的
-    deepseek-v4-flash（zen relay，复用 JUDGE_* 凭据），试跑记录中披露。"""
-    os.environ["LLM_MODEL"] = "openai/deepseek-v4-flash"
-    os.environ["LLM_BASE_URL"] = os.environ.get("JUDGE_BASE_URL", "")
-    os.environ["LLM_API_KEY"] = os.environ.get("JUDGE_API_KEY", "")
-    for var in ("LLM_QUICK_MODEL", "LLM_REASONING_EFFORT"):
-        os.environ.pop(var, None)
+    历史偏差记录：首两轮试跑曾误用 deepseek-v4-flash 作分析模型（deepseek-chat
+    官方 key 失效后的错误替代），已弃用并按此裁决重跑。"""
+    ark_base_url = os.environ.get("LLM_BASE_URL", "")
+    ark_api_key = os.environ.get("LLM_API_KEY", "")
+    print("[pilot] 分析模型: glm-5.3（ark）/ judge: deepseek-v4-flash（ark）", flush=True)
+
+    os.environ["LLM_MODEL"] = "openai/glm-5.3"
+    os.environ["LLM_BASE_URL"] = ark_base_url
+    os.environ["LLM_API_KEY"] = ark_api_key
+    # judge 切 ark（zen 凭据不可用）；judge 保持 deepseek-v4-flash，与分析模型分离
+    os.environ["JUDGE_MODEL"] = "openai/deepseek-v4-flash"
+    os.environ["JUDGE_BASE_URL"] = ark_base_url
+    os.environ["JUDGE_API_KEY"] = ark_api_key
+    os.environ.pop("LLM_QUICK_MODEL", None)
+    os.environ["LLM_REASONING_EFFORT"] = os.environ.get("LLM_REASONING_EFFORT", "low")
 
 
 def main() -> None:
