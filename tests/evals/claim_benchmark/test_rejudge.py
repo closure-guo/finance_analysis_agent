@@ -268,3 +268,44 @@ class TestRejudgeSemanticOutOfVocab:
             "period": "2025",
         }
         assert rejudge_claim(claim, 78.1, 0.0) == "PASS"
+
+
+class TestRejudgeComparativeBase:
+    """refine v1.2：rejudge 镜像 D3 comparative 双端（基期值申报与校验）。"""
+
+    def _comp(self, **kw):
+        c = {
+            "claim_type": "comparative",
+            "source_type": "data",
+            "field_ref": "profitability_metrics.净利率.2025",
+            "stated_value": "less_than",
+            "interpretation": "2025 净利率较 2024 下滑",
+            "field_ref_b": "profitability_metrics.净利率.2024",
+        }
+        c.update(kw)
+        return c
+
+    def test_base_correct_passes(self):
+        # stated_value_b=21.93, gt_b=21.93 → 方向 equal_to 可判，PASS
+        c = self._comp(stated_value="equal_to", stated_value_b=21.93)
+        assert rejudge_claim(c, 19.07, 2.86, ground_truth_b=21.93) == "PASS"
+
+    def test_base_missing_fails(self):
+        # field_ref_b is set but stated_value_b is missing → FAIL (base period running loose)
+        c = self._comp(stated_value="equal_to")
+        assert rejudge_claim(c, 19.07, 2.86, ground_truth_b=21.93) == "FAIL"
+
+    def test_base_wrong_value_fails(self):
+        c = self._comp(stated_value="equal_to", stated_value_b=28.0)
+        assert rejudge_claim(c, 19.07, 2.86, ground_truth_b=21.93) == "FAIL"
+
+    def test_growth_rounding_passes(self):
+        # D2/D4 rounding-aware tolerance: stated=0.50 vs truth=0.504 (0.5pp) → PASS
+        c = {
+            "claim_type": "numerical",
+            "source_type": "data",
+            "field_ref": "growth_rates.cashflow.FCF",
+            "stated_value": 0.50,
+            "interpretation": "FCF grew 50% YoY",
+        }
+        assert rejudge_claim(c, 0.504, 0.004) == "PASS"
