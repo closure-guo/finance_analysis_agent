@@ -658,3 +658,34 @@ class TestAnomalySupplement:
         )
         results = verify_claims(claims, self._state(["solvency.净债务/EBITDA: 变化率-368%"]))
         assert all(r.status == "PASS" for r in results)
+
+
+class TestD4GrowthSupplement:
+    """refine-citation-coverage-v3 D4：growth_rates 全量补登记（吸收 anomalies）。"""
+
+    def test_non_anomaly_growth_supplemented(self):
+        """FCF 同比 96.6%：growth_rates 有真值但非 anomaly（|growth|≤0.5 之外的场景
+        也可；此处 0.966 即使无 anomaly 字符串也能补）。"""
+        from finance_agent.nodes.citation_node import supplement_anomaly_claims
+
+        state = {
+            "growth_rates": {"cashflow": {"FCF": 0.966}},
+            "anomalies": [],  # 无 anomaly 触发
+        }
+        md = "FCF 约2.34亿元，同比增长96.6%。"
+        claims = supplement_anomaly_claims(md, state, [])
+        assert len(claims) == 1
+        c = claims[0]
+        assert c.field_ref == "growth_rates.cashflow.FCF"
+        assert abs(c.stated_value - 0.97) < 1e-9  # 96.6% → 0.966 → 整数渲染 97%
+
+    def test_growth_value_close_rounding_passes_verification(self):
+        """补登记 stated=0.97 vs truth=0.966（0.5pp 内）→ 标准校验 PASS。"""
+        from finance_agent.citation import verify_claims
+        from finance_agent.nodes.citation_node import supplement_anomaly_claims
+
+        state = {"growth_rates": {"cashflow": {"FCF": 0.966}}}
+        md = "FCF 同比增长96.6%。"
+        claims = supplement_anomaly_claims(md, state, [])
+        results = verify_claims(claims, state)
+        assert all(r.status == "PASS" for r in results)

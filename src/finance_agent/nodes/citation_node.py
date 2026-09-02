@@ -21,10 +21,9 @@ from finance_agent.routing import citation_retry_stagnated
 
 logger = logging.getLogger("finance_agent.citation")
 
-# refine-citation-coverage-v3 D2（issue #107-B 设计规格）：
-# anomaly 字符串形如 "solvency.净债务/EBITDA: 变化率-368%"（compute.py:186 渲染）。
-_ANOMALY_RATE_RE = re.compile(r"^(?P<dim>[A-Za-z_]+)\.(?P<metric>.+?): 变化率(?P<pct>-?\d+)%$")
-_ROUNDING_PP_TOL = 0.5  # 取整感知容差：整数百分比取整最大误差 0.5 个百分点
+# refine-citation-coverage-v3 D2/D4：growth_rates 双条件补登记。
+# 取整感知容差：整数百分比取整最大误差 0.5 个百分点
+_ROUNDING_PP_TOL = 0.5
 
 
 def _sentence_split(markdown: str) -> list[str]:
@@ -60,55 +59,55 @@ def _event_values(state: dict) -> list[float]:
 def supplement_anomaly_claims(
     markdown: str, state: dict, existing_claims: list[Claim | dict]
 ) -> list[Claim]:
-    """state anomalies 双条件共现自动补登记（D2）。
+    """state growth_rates 双条件共现自动补登记（D2 吸收 D4）。
 
-    触发双条件：① 同一句中 anomaly 指标名与正文数值共现；② 数值与 anomaly
-    字符串取整值按 0.5 个百分点容差匹配。field_ref 指向结构化真值
-    growth_rates.{dim}.{metric}（anomaly 字符串只定位不验证，防循环验证）。
-    与人工申报 claim 同 field_ref 的去重；state 无真值（growth_rates 缺键）
-    的不补（反洗白：编造数字不满足双条件）。
+    触发双条件：① 同一句中指标名与正文数值共现；② 数值与
+    growth_rates.{dim}.{metric} 的整数百分比渲染按 0.5 个百分点容差匹配。
+    field_ref 指向结构化真值 growth_rates.{dim}.{metric}（字符串只定位不验证，
+    防循环验证）。与人工申报 claim 同 field_ref 的去重；state 无真值的不补
+    （反洗白：编造数字不满足双条件）。
+
+    来源为整个 growth_rates（而非仅 anomalies）——D4 吸收：可重算增速数字
+    （如 FCF 同比 96.6%）即使未触发 anomaly（|growth|≤0.5）也能补登记；
+    anomalies 是 growth_rates 的 |growth|>0.5 子集，天然覆盖。
     """
-    anomalies = state.get("anomalies") or []
     growth_rates = state.get("growth_rates") or {}
     sentences = _sentence_split(markdown)
     existing_refs = {
         (c.field_ref if isinstance(c, Claim) else c.get("field_ref")) for c in existing_claims
     }
     out: list[Claim] = []
-    for a in anomalies:
-        m = _ANOMALY_RATE_RE.match(str(a))
-        if not m:
-            continue  # 「红灯」类无数值，不补
-        dim, metric, pct = m.group("dim"), m.group("metric"), int(m.group("pct"))
-        truth = (growth_rates.get(dim) or {}).get(metric)
-        if not isinstance(truth, int | float):
-            continue  # 结构化真值不在 state → 不补（反洗白）
-        for sent in sentences:
-            if metric not in sent:
+    for dim, metrics in growth_rates.items():
+        for metric, growth in metrics.items():
+            if not isinstance(growth, int | float) or growth is None:
                 continue
-            # 句中数值与 anomaly 取整值 0.5pp 容差匹配（percent 面值一致）
-            hit = any(
-                abs(n.value - pct) <= _ROUNDING_PP_TOL
-                for n in extract_census_numbers(sent)
-                if n.kind == "percent"
-            )
-            if not hit:
-                continue
-            ref = f"growth_rates.{dim}.{metric}"
-            if ref in existing_refs:
-                continue
-            out.append(
-                Claim(
-                    claim_type="numerical",
-                    source_type="data",
-                    field_ref=ref,
-                    stated_value=pct / 100,  # 分数制，与既有 growth claim 口径一致
-                    interpretation=f"{metric} 变化率 {pct}%",
-                    metric_name=metric,
+            pct = int(round(growth * 100))  # 整数百分比渲染（compute.py:.0% 同源）
+            for sent in sentences:
+                if metric not in sent:
+                    continue
+                # 句中数值与 growth 整数百分比 0.5pp 容差匹配（percent 面值一致）
+                hit = any(
+                    abs(n.value - pct) <= _ROUNDING_PP_TOL
+                    for n in extract_census_numbers(sent)
+                    if n.kind == "percent"
                 )
-            )
-            existing_refs.add(ref)
-            break
+                if not hit:
+                    continue
+                ref = f"growth_rates.{dim}.{metric}"
+                if ref in existing_refs:
+                    continue
+                out.append(
+                    Claim(
+                        claim_type="numerical",
+                        source_type="data",
+                        field_ref=ref,
+                        stated_value=pct / 100,  # 分数制，与既有 growth claim 口径一致
+                        interpretation=f"{metric} 变化率 {pct}%",
+                        metric_name=metric,
+                    )
+                )
+                existing_refs.add(ref)
+                break
     return out
 
 

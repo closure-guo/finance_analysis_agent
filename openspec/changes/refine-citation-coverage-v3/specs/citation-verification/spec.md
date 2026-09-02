@@ -39,7 +39,7 @@
 
 ### Requirement: state anomalies 自动补登记
 
-系统 SHALL 在引用校验前执行异常补登记：对正文数值与 state 的 anomalies 字符串做**双条件共现匹配**——① 数值解析值与 anomaly 字符串中的数值按**取整感知容差**（|stated − truth| ≤ 0.5 个百分点）匹配；② anomaly 的指标名与数值出现在同一句/段落。双条件满足时 SHALL 自动生成 claim，field_ref **SHALL 指向结构化真值**（`growth_rates.{dim}.{metric}`），anomaly 字符串 SHALL 仅用于定位、不用于验证（禁止"字符串验字符串"）。不满足任一条件的数值 SHALL 保持 unmatched 走原流程。自动补登记的 claim SHALL 与人工申报 claim 走完全相同的校验路径（容差/桶/重试语义不变）。
+系统 SHALL 在引用校验前执行自动补登记：对正文数值与 state 的 `growth_rates`（含 anomalies 的 |growth|>0.5 子集，也含非 anomaly 增速）做**双条件共现匹配**——① 数值与 `growth_rates.{dim}.{metric}` 的整数百分比渲染（`:.0%`）按**取整感知容差**（≤ 0.5 个百分点）匹配；② 指标名与数值出现在同一句/段落。双条件满足时 SHALL 自动生成 claim，field_ref **SHALL 指向结构化真值**（`growth_rates.{dim}.{metric}`），渲染字符串 SHALL 仅用于定位、不用于验证（禁止"字符串验字符串"）。不满足任一条件的数值 SHALL 保持 unmatched 走原流程。自动补登记的 claim SHALL 与人工申报 claim 走完全相同的校验路径（容差/桶/重试语义不变）。
 
 #### Scenario: anomalies 数值自动补登记
 - **GIVEN** state 含 anomaly「solvency.净债务/EBITDA: 变化率-368%」，growth_rates.solvency.净债务/EBITDA = -3.676（即 -367.6%）
@@ -69,11 +69,12 @@
 - **THEN** 判 FAIL，原因：comparative 未申报基期 stated_value_b
 - **AND** 引导 LLM 补申报 2024 基期（21.93）与 field_ref_b
 
-### Requirement: 可重算计算值补登记
+### Requirement: 增速类计算值补登记（D2 吸收）
 
-系统 SHALL 对「正文数值 + 可重算指标名共现」（如 FCF 同比、毛利率等 `_COMPUTATIONAL_RECALC` 注册表内指标）执行计算值补登记：生成 computational claim，field_ref 指向可重算指标，交由公式重算路径验证。不可重算的数值 SHALL 不补登记，保持 unmatched。
+系统 SHALL 对「正文增速数值 + 增速指标名共现」执行补登记：`growth_rates` 中全部指标（含非 anomaly 的 |growth|≤0.5）按 D2 双条件补登记为 numerical claim（field_ref = `growth_rates.{dim}.{metric}`），取整感知容差验证。该机制覆盖「FCF 同比增长 96.6%」类可重算增速数字，即使未触发 anomaly 也补。不可定位结构化真值的数值 SHALL 不补登记，保持 unmatched。
 
-#### Scenario: 可重算计算值补登记
-- **GIVEN** 正文含「FCF 同比增长 96.6%」，FCF 属可重算指标且 state 可提取操作数
-- **WHEN** 执行计算值补登记
-- **THEN** 生成 computational claim，走公式重算验证（容差 0.5% 裁决语义不变）
+#### Scenario: 非 anomaly 增速补登记
+- **GIVEN** 正文含「FCF 同比增长 96.6%」，growth_rates.cashflow.FCF = 0.966（|growth|>0.5 会触发 anomaly，但补登记不依赖 anomaly 存在）
+- **WHEN** 执行增速补登记
+- **THEN** 生成 claim，field_ref = growth_rates.cashflow.FCF，stated_value = 0.97
+- **AND** 0.5pp 取整容差内与真值 0.966 匹配，标准校验 PASS

@@ -27,8 +27,8 @@
 
 ## 4. 可重算计算值补登记（D4，issue #107-D）
 
-- [ ] 4.1 可重算指标名共现 → 生成 computational claim（需 metric 名→重算路径映射设计：正文指标名（如 FCF）到 _COMPUTATIONAL_RECALC 根键/字段路径无可确定性映射，D4 留待设计后实施）
-- [ ] 4.2 公式重算路径验证；不可重算不补登记
+- [x] 4.1 增速类计算值补登记（D2 吸收）：supplement 源头从 anomalies 扩到整个 growth_rates——FCF 同比 96.6% 类即使非 anomaly 也补（数值 0.5pp 容差 ∧ 指标名共现）
+- [x] 4.2 补登记 claim 走标准校验路径（stated=0.97 vs truth=0.966 取整容差 PASS 已测）；不可定位结构化真值不补
 
 ## 5. 验证与回归
 
