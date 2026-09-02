@@ -60,11 +60,10 @@ def replay_decision(
     # 编排 state 的 final_trade_decision 是 TradeDecision pydantic 对象
     # （[backtest-pilot] 缺陷修复：按 dict 用 .get 会 AttributeError）
     raw_decision = final.get("final_trade_decision")
-    decision: dict = (
-        raw_decision.model_dump()
-        if hasattr(raw_decision, "model_dump")
-        else dict(raw_decision or {})
-    )
+    if raw_decision is not None and hasattr(raw_decision, "model_dump"):
+        decision: dict = raw_decision.model_dump()
+    else:
+        decision = dict(raw_decision or {})
     kline: pd.DataFrame | None = full_kline if full_kline is not None else state.get("kline")
     entry_price = _close_on_or_before(kline, decision_date)
     raw_action = decision.get("action")
