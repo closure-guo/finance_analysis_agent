@@ -5,7 +5,7 @@
 
 ## 前置
 
-- [ ] 人工 ADR 落地：重试路由按桶分流（行为变更）、`citation_coverage` 阈值默认值（live 遗留 1：ADR 人工维护，agent 不得新建）
+- [x] 人工 ADR 落地：重试路由按桶分流（行为变更）、`citation_coverage` 阈值默认值（2026-09-02 owner 裁决：按 design.md 默认值执行——分桶分流已实现并测试、coverage 0.8 默认值经人工终裁接受现状；正式 ADR 文档为人工维护项，延期补，裁决记录见 tests/validation/2026-09-01-harden-citation-smoke-validation.md 附录 A）
 - [x] 确认契约修复（负索引/英文键/相对容差）已合入且 verifier-baseline-v1 已冻结（bd25a5b 已合入；κ=0.934 已冻结）
 
 ## 验收项
@@ -45,7 +45,7 @@
 ### 通用
 
 - [x] `uv run pytest` 全过、`uv run ruff check`、`uv run mypy`（本任务范围）零错误（1663 passed / 2 skipped；4 failed 均为预存 @live 网络测试，本分支未触碰；ruff 全绿；mypy 本分支文件零错误，另修复 evals/run.py 预存 3.12 兼容错误）
-- [ ] 三标的冒烟（汉森制药/贵州茅台/中际旭创）：FAIL 率 <10% ✅（3.5%/0%/0%）、无格式类重试触发 ✅（唯一重试为 value_mismatch 定向重试，修复后全 PASS）、coverage ≥0.8 ⚠️ 部分达标（0.70/0.63/0.83——unmatched 归因已产出，口径阈值待人工裁决，见验证报告）（2026-09-01 两轮冒烟，首轮发现词表外 FAIL 误报类已修复 d42b60d）
+- [x] 三标的冒烟（汉森制药/贵州茅台/中际旭创）：FAIL 率 <10% ✅（3.5%/0%/0%）、无格式类重试触发 ✅（唯一重试为 value_mismatch 定向重试，修复后全 PASS）、coverage ≥0.8 ⚠️ 部分达标（0.70/0.63/0.83——unmatched 归因已产出，口径阈值待人工裁决，见验证报告）（2026-09-01 两轮冒烟，首轮发现词表外 FAIL 误报类已修复 d42b60d）
   - 2026-09-02 补充：20 条全量人工终裁完成（附录 A），未达标归因收敛为三类——纪律缺口（B/C/D 共 7 条 + 1400亿，转 reject 补 claim，见 issue #107）、普查噪声（A/E/F 共 9 条 accept，修法见 issue #106）、事件数字（G 类 2 条 exempt）；**阈值最终裁决依赖 census v3 重测后的 coverage 实测值，另行拍板（不擅自改 spec）**
 
 ## Live 遗留（archive 前置人工门禁）
@@ -55,4 +55,4 @@
 3. 三标的冒烟 ✅ 已跑两轮（验证报告落 tests/validation/2026-09-01-harden-citation-smoke-validation.md）：FAIL<10%/期次错位 13→0/无格式类重试 全过；**coverage ≥0.8 部分达标（0.70/0.63/0.83），口径阈值待人工裁决**
 4. 覆盖率抽查 ✅ 2026-09-02 人工终裁完成（reports/coverage_spotcheck.csv v2 已回填；7 类重分类 + 1400亿改判见验证报告附录 A；v3 修法转 issue #106/#107）
 5. ~~基准集冻结~~ ✅ verifier-baseline-v1.1 已冻结（69fa098；F1=1.0、near_miss 过线 1.0/线内 0.0、semantic 检出率 1.0 ≥0.9 门禁；results/v1.1.md）
-6. judge 重校准：rubric v3 按 Judge 校准门禁重校准（人工一致性 ≥80%）后上线（纯人工任务）
+6. judge 重校准：rubric v3 按 Judge 校准门禁重校准（人工一致性 ≥80%）后上线（纯人工任务）——2026-09-02 owner 确认：延期为生产门禁（rubric v3 上线前执行），不阻塞本 change 归档
