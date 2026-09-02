@@ -325,3 +325,39 @@ class TestRunBacktest:
         sample, outcomes, klines, _ = self._setup(up=0.014, down=-0.010)
         report = run_backtest(sample, klines, replay_fn=_fake_replay(outcomes))
         assert json.loads(json.dumps(report, ensure_ascii=False))["n_sample"] == 3
+
+
+class TestBaselineHorizonAlignment:
+    """refine: 基线按系统相同持有窗口切片（原 1500 日全窗口 vs 单笔持有期不可比）。"""
+
+    def _kline(self, dates, closes):
+        import pandas as pd
+
+        return pd.DataFrame({"日期": dates, "收盘": closes})
+
+    def test_buy_hold_window_returns_match_kline_daily_returns(self):
+        from evals.backtest.run_backtest import _baseline_window_returns
+
+        kline = self._kline(
+            ["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04", "2023-01-05"],
+            [100.0, 105.0, 100.0, 110.0, 115.0],
+        )
+        # 持有窗口 (2023-01-02, 2023-01-05] → 3 个交易日
+        rets = _baseline_window_returns(kline, "buy_hold", "2023-01-02", "2023-01-05")
+        # buy_hold 全程持仓：收益 = 逐日 pct_change
+        assert len(rets) == 3
+        assert abs(rets[0] - (100 / 105 - 1)) < 1e-9  # 01-03: 100/105-1
+        assert abs(rets[1] - (110 / 100 - 1)) < 1e-9  # 01-04
+        assert abs(rets[2] - (115 / 110 - 1)) < 1e-9  # 01-05
+
+    def test_baseline_window_shorter_than_full_kline(self):
+        from evals.backtest.run_backtest import _baseline_window_returns
+
+        kline = self._kline(
+            [f"2023-01-0{i}" for i in range(1, 10)],
+            [100.0 + i for i in range(9)],
+        )
+        full = _baseline_window_returns(kline, "buy_hold", "2023-01-01", "2023-01-09")
+        window = _baseline_window_returns(kline, "buy_hold", "2023-01-04", "2023-01-06")
+        assert len(full) == 8
+        assert len(window) == 2  # 只含 01-05, 01-06

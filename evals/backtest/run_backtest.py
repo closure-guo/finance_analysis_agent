@@ -57,6 +57,27 @@ def _trade_daily_returns(result: dict, kline: pd.DataFrame) -> list[float]:
     return [sign * (closes[i] / closes[i - 1] - 1.0) for i in range(1, len(closes))]
 
 
+def _baseline_window_returns(
+    kline: pd.DataFrame, strat: Strategy, start: str, end: str
+) -> list[float]:
+    """基线在系统持有窗口 (start, end] 内的日收益序列（horizon 对齐）。
+
+    原实现基线用全窗口（1500 日）与系统单笔持有期并列，两个 Sharpe 口径不可比
+    （record doc 2026-09-02：基线与系统 horizon 不可比）。此处把基线限定到
+    与系统相同的持有窗口：信号取窗口前一日（T-1 生成 T 生效），收益只取窗口内。
+    """
+    dates = kline["日期"].astype(str).str[:10]
+    hist = kline[dates <= end].reset_index(drop=True)
+    hist_dates = hist["日期"].astype(str).str[:10].reset_index(drop=True)
+    positions = baseline_positions(hist, strat)
+    ret = strategy_returns(hist, positions)  # ret[j-1] 对应 hist 行 j
+    out: list[float] = []
+    for j in range(1, len(hist_dates)):
+        if start < hist_dates[j] <= end:
+            out.append(ret[j - 1])
+    return out
+
+
 def _conclude(sharpe_ci: tuple[float, float] | None) -> str:
     """按超额 Sharpe CI 下结论：CI 含 0 → 无显著差异（spec 措辞约束）。"""
     if sharpe_ci is None:
@@ -103,7 +124,7 @@ def run_backtest(
     ]
     excluded = [p for p in per_symbol if p["agreement"] < CONSISTENCY_FLOOR]
     system_returns: list[float] = []
-    baseline_returns: dict[str, list[float]] = {s: [] for s in BASELINE_STRATEGIES}
+    baseline_returns: dict[Strategy, list[float]] = {s: [] for s in BASELINE_STRATEGIES}
     regime_returns: dict[str, list[float]] = {}
     for r in consistent:
         kline = klines.get(r["code"])
@@ -112,10 +133,12 @@ def run_backtest(
         trade_returns = _trade_daily_returns(r, kline)
         system_returns.extend(trade_returns)
         regime_returns.setdefault(r["regime"], []).extend(trade_returns)
+        # horizon 对齐：基线只算系统持有窗口 (decision_date, settle_date] 内的收益，
+        # 不再用全窗口（避免 1500 日基线 vs 单笔持有期并列误导）
+        start = str(r.get("decision_date", ""))[:10]
+        end = str((r.get("settlement") or {}).get("settle_date", ""))[:10]
         for strat in baseline_returns:
-            baseline_returns[strat].extend(
-                strategy_returns(kline, baseline_positions(kline, strat))  # type: ignore[arg-type]
-            )
+            baseline_returns[strat].extend(_baseline_window_returns(kline, strat, start, end))
     system_perf = perf_metrics(system_returns)
     sanity = validate_sanity(system_perf["Sharpe"], sanity_note)
 
