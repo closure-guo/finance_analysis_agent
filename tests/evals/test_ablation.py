@@ -85,3 +85,28 @@ class TestConclusionWording:
 
     def test_ci_negative_wording(self):
         assert conclusion_for_layer((-0.4, -0.05)) == "显著退步"
+
+
+class TestJudgeDimApplicability:
+    """#112：judge 维度按变体适用性过滤——plus_debate 无决策/风控层，不得评
+    consistency/decision_grounding（评不存在的层产伪影）。"""
+
+    def test_analysts_only_relevance(self):
+        from evals.ablation import _applicable_dims
+
+        assert _applicable_dims("analysts") == ("report_relevance",)
+
+    def test_plus_debate_no_decision_dims(self):
+        from evals.ablation import _applicable_dims
+
+        assert _applicable_dims("plus_debate") == ("report_relevance", "debate_quality")
+
+    def test_full_all_dims(self):
+        from evals.ablation import _applicable_dims
+
+        assert set(_applicable_dims("full")) == {
+            "report_relevance",
+            "debate_quality",
+            "decision_grounding",
+            "consistency",
+        }

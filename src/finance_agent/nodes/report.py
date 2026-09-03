@@ -356,7 +356,10 @@ def generate_report(state: dict) -> dict:
         # 中文标注呈现（ADR-0011 Layer V）：reject 需明确标注「未通过审批」，
         # 而非仅显示原始英文枚举值。未命中时回退原始值，容忍加固前写入的历史非法值
         annotation = _FUND_MANAGER_ANNOTATIONS.get(fm_decision, fm_decision)
-        sections.append(f"{next_title('基金经理决策')}\n\n**{annotation}**\n")
+        # #111：审批理由随决策渲染（在场时）；缺失时保持仅标注（历史 state 兼容）
+        fm_reasoning = (state.get("fund_manager_decision_reasoning") or "").strip()
+        reasoning_block = f"\n\n{fm_reasoning}\n" if fm_reasoning else "\n"
+        sections.append(f"{next_title('基金经理决策')}\n\n**{annotation}**{reasoning_block}")
 
     # ── 参考资料信源（Kimi 风格 URL 引用溯源）──
     # 信源列表在前端以卡片形式展示，报告 Markdown 中不再重复列出

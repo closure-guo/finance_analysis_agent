@@ -689,3 +689,44 @@ class TestD4GrowthSupplement:
         claims = supplement_anomaly_claims(md, state, [])
         results = verify_claims(claims, state)
         assert all(r.status == "PASS" for r in results)
+
+
+class TestReportMarkdownLogged:
+    """refine: verify_citations 的报告 markdown 随 span 落库（离线重判解锁）。"""
+
+    def test_report_markdown_in_span_metadata(self, monkeypatch):
+        from finance_agent.nodes import citation_node
+
+        captured: dict = {}
+
+        class FakeClient:
+            def score_current_trace(self, *a, **kw):
+                pass
+
+            def update_current_span(self, metadata=None, **kw):
+                captured["metadata"] = metadata
+
+        monkeypatch.setattr(citation_node, "get_langfuse", lambda: FakeClient())
+        state = {
+            "analyst_reports": {
+                "fundamental": {
+                    "agent_name": "fundamental",
+                    "summary": "x",
+                    "markdown": "## 基本面\n\n毛利率 45.2%，营收 10.39 亿",
+                    "claims": [
+                        {
+                            "claim_type": "numerical",
+                            "source_type": "data",
+                            "field_ref": "profitability_metrics.毛利率.2024",
+                            "stated_value": 45.2,
+                            "interpretation": "x",
+                        }
+                    ],
+                }
+            },
+            "iteration_count": 0,
+        }
+        citation_node.verify_citations(state)
+        md = (captured.get("metadata") or {}).get("report_markdown", "")
+        assert "毛利率 45.2%" in md
+        assert "10.39 亿" in md

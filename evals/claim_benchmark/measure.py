@@ -66,7 +66,7 @@ class SubsetReport:
 
 
 def _rejudge_entry(e: dict) -> str:
-    return rejudge_claim(e["claim"], e.get("ground_truth"), e.get("delta"))
+    return rejudge_claim(e["claim"], e.get("ground_truth"), e.get("delta"), e.get("ground_truth_b"))
 
 
 def _bootstrap_f1_ci(

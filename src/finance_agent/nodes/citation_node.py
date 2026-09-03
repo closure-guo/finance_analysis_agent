@@ -177,7 +177,7 @@ def verify_citations(state: dict) -> dict:
     ]
     coverage = compute_coverage(markdown, all_stated, event_values=_event_values(state))
 
-    _report_to_langfuse(report, coverage)
+    _report_to_langfuse(report, coverage, markdown=markdown)
 
     # 递增 iteration_count，使 after_citation 的重试上限（< 3）真正生效。
     # 否则 citation_pass=False 时会无限重试，图永远无法推进到辩论/报告阶段。
@@ -245,7 +245,9 @@ def _markdown_of(report: AnalystReport | dict) -> str:
     return ""
 
 
-def _report_to_langfuse(report: CitationReport, coverage: CoverageReport) -> None:
+def _report_to_langfuse(
+    report: CitationReport, coverage: CoverageReport, markdown: str = ""
+) -> None:
     """上报 citation 校验结果到 Langfuse（trace 级 boolean score + span 明细）。
 
     citation_unverifiable_ratio（spec「UNVERIFIABLE 占比监控」）是数据层退化的
@@ -298,7 +300,12 @@ def _report_to_langfuse(report: CitationReport, coverage: CoverageReport) -> Non
                 level="WARNING",
             )
         client.update_current_span(
-            metadata={"citation_report": report.model_dump()},
+            metadata={
+                "citation_report": report.model_dump(),
+                # 普查输入的合并报告 markdown 随 span 落库：coverage 问题可离线重判，
+                # 无需重跑管线（record doc 2026-09-02：trace 不落库 markdown 的债）
+                "report_markdown": markdown,
+            },
         )
     except Exception as e:
         logger.warning("Langfuse citation score 上报失败: %s", e)

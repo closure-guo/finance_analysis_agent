@@ -155,3 +155,26 @@ class TestGenerateReport:
         assert "★ 重点" in report
         # technical（未命中）被折叠
         assert "<details>" in report
+
+
+class TestFundManagerReasoningRendered:
+    """refine #111：报告渲染 FM 审批理由（在场时）。"""
+
+    def test_report_contains_fm_reasoning(self):
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {"action": "watch", "confidence": 0.5, "reasoning": "x"},
+            "fund_manager_decision": "reject",
+            "fund_manager_decision_reasoning": "最大回撤38.8%超出审慎投资标准",
+        }
+        md = generate_report(state)["final_report"]
+        assert "最大回撤38.8%超出审慎投资标准" in md
+
+    def test_no_reasoning_falls_back_to_annotation_only(self):
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {"action": "watch", "confidence": 0.5, "reasoning": "x"},
+            "fund_manager_decision": "approve",
+        }
+        md = generate_report(state)["final_report"]
+        assert "审批通过" in md

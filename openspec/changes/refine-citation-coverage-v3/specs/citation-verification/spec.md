@@ -78,3 +78,13 @@
 - **WHEN** 执行增速补登记
 - **THEN** 生成 claim，field_ref = growth_rates.cashflow.FCF，stated_value = 0.97
 - **AND** 0.5pp 取整容差内与真值 0.966 匹配，标准校验 PASS
+
+### Requirement: 覆盖率缺口打回补 claim（coverage 闭环最后一公里）
+
+系统 SHALL 在覆盖率普查产出 unmatched（D2/D4 自动补登记与 D5 事件豁免之后仍未被认领的数字）时，将缺口反馈回正文来源分析师节点做**局部补证**：反馈 SHALL 携带未认领数字（原文 + 解析值），提示分析师「补建对应 claim 或删除正文数字」；补证后 SHALL 重新校验与普查。打回上限 SHALL 与既有 citation 重试共享迭代上限（<3），停滞降级语义不变；纯评论性/无状态源数字（非硬数据）SHALL 不触发打回（属可接受口径）。
+
+#### Scenario: 无来源数字打回补证
+- **GIVEN** 正文含「账上资金超过 1400 亿元」，D2/D4 无法自动补登记（state 无对应真值），D5 不豁免
+- **WHEN** 覆盖率普查
+- **THEN** 将该数字加入打回反馈，定向重跑来源分析师
+- **AND** 分析师补建货币资金 claim 或删除该正文数字，复验后 unmatched 消除

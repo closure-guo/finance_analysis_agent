@@ -26,6 +26,7 @@
   "summary": "一句话总结宏观环境对股票的影响",
   "key_findings": ["关键发现1", "关键发现2"],
   "claims": [
+  "markdown": "## 宏观分析\n详细分析内容..."
     {
       "claim_type": "numerical",
       "source_type": "data",
@@ -36,7 +37,6 @@
       "period": "2026-07"
     }
   ],
-  "markdown": "## 宏观分析\n详细分析内容..."
 }
 ```
 
@@ -48,6 +48,7 @@
 4. data 型 claim 必填 metric_name 与 period：metric_name 取指标词表规范名（CPI/PMI/M2/LPR），须与 field_ref 的指标段一致；period 填该值对应的月份（YYYY-MM，见 context 序列语义头的最新期标注）。词表无对应规范名或不确定时 metric_name 置 null（计覆盖缺口，不判 FAIL，严禁编造词表外名称）
 5. 覆盖纪律：markdown 正文中每个关键数值（百分比/金额/倍数）都必须与某条 claim 的 stated_value 一致——未被 claim 认领的数字会被覆盖率审计计为黑数字
 6. context 中每个序列块开头的「# 序列语义」声明了排序方向与最新期位置，引用数值前先核对该声明
+9. 输出 JSON 的所有字段均为必填（含 markdown，完整章节正文写在其中），不得省略任何字段
 7. comparative/同比 claim 必须双端申报：field_ref_b 填基期字段路径、stated_value_b 填基期数值；未申报基期会被判 FAIL
 
 ## 分析方法论
