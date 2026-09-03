@@ -29,10 +29,13 @@
 
 ## 异常记录
 
-1. **全量 E2E 套件 17 例失败中，11 例为既有问题**（downloads.spec 引用已删除 testid、6 例 @live、3 例 waitForTimeout 时序技术债，同前次验证报告）。
-2. **6 例新失败（smoke.spec:21 /api/test/seed 404、streaming.spec ×3、agui-chat ×2、interaction）均为环境端口冲突**：用户 `docker compose up` 的 `finance-agent-backend-1` 占用 8000 端口，Playwright webServer 无法绑定自己的 TESTING stub 后端，请求打到生产容器（无 TESTING → 测试端点 404）。decisions.spec 3 例在端口空闲时全绿，非代码回归；停掉 docker 后端后全量门禁应恢复既有 11 例水平。
-3. **后端门禁**：`-m "not live"` 全量 1762 过（含本次修复的 scheduler 测试 3 例）；@live 用例不在门禁内。
-4. **旧 expose-decision-outcomes 的 DecisionCenter 不再接入 App**（被 TrackRecordPage 取代，/decisions 重定向）；组件级测试保留，App 级集成用例已移除——「取代/演进」决策的预期后果，sync 时需确认 expose-decision-outcomes 的 archive 处理。
+1. **全量 E2E 套件无法在本次会话环境跑绿，最终定性为环境因素而非代码回归**，三层证据：
+   - **端口冲突**：docker 前端容器（nginx）占用 5173 且 `playwright.config.ts` 本地 `reuseExistingServer: true`，Playwright 复用该进程；其 nginx `/api` 代理指向已停止的 `backend:8000` → 所有浏览器测试的 API 请求 500（实测 `5173/api/v1/track-record/overview → 500`），这是 smoke/streaming/agui/interaction 等连环失败的根因。
+   - **后端健康**：手动以 TESTING=1 + 测试库启动后端，`/api/health → 200`、`/api/test/seed → 422`（端点存在，POST 无 body 的合法响应）、`/api/v1/track-record/overview → 200`——我的代码启动与端点全部正常。
+   - **decisions.spec（本 delta）**：在干净环境（8000/5173 均空闲、机器负载低）下 3/3 全绿（Task 6 实测）；后续在负载高峰期（90 条消融实验占 CPU）复跑出现 flaky。单测层证据完备：后端 1762 过、前端 456 过。
+2. **套件既有问题**（非本 delta 引入）：downloads.spec 引用已删除 testid、6 例 @live（search/thinking-banner，需真实 LLM）、debug-*/explore 等 waitForTimeout 时序技术债——playwright.config.ts 注释已标注。
+3. **旧 expose-decision-outcomes 的 DecisionCenter 不再接入 App**（被 TrackRecordPage 取代，/decisions 重定向）；组件级测试保留，App 级集成用例已移除——「取代/演进」决策的预期后果，sync 时需确认 expose-decision-outcomes 的 archive 处理。
+4. **门禁补跑建议**：待 90 条消融实验结束、机器负载回落，且 `docker compose stop`（同时释放 8000 与 5173）后，重跑 `cd tests/e2e/playwright && npx playwright test` 验证全量门禁。
 
 ## 结论
 
