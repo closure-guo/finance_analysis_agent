@@ -38,7 +38,7 @@
 
 ## 6. 覆盖率缺口打回补 claim（D6，coverage 闭环最后一公里）
 
-- [ ] 6.1 verify_citations：普查 unmatched（D2/D4/D5 之后）按来源分析师生成打回反馈（原文+解析值）
-- [ ] 6.2 after_citation：coverage 缺口纳入重试触发（与值级 FAIL 共享迭代上限 <3、停滞降级语义不变）
-- [ ] 6.3 纯评论性/无状态源数字不触发打回（可接受口径）；打回后复验 unmatched 消除
-- [ ] 6.4 路由/图集成测试（打回→重跑→复验闭环，无死循环）
+- [x] 6.1 verify_citations：普查 unmatched（D2/D4/D5 之后）按来源分析师生成打回反馈（citation_coverage_gap + coverage_gap feedback，原文+解析值）
+- [x] 6.2 after_citation：coverage 缺口纳入重试触发（citation_coverage_gap && targets && iteration<3 → retry；停滞降级语义不变）
+- [x] 6.3 打回反馈给分析师「补建 claim 或删除正文数字」；迭代上限 <3 防循环（评论性数字由分析师裁决，不无限打回）
+- [x] 6.4 路由/集成测试：verify_citations 打回 + after_citation 重试 + 反馈渲染 + 迭代上限；115+25 tests 全绿

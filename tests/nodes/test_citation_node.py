@@ -730,3 +730,96 @@ class TestReportMarkdownLogged:
         md = (captured.get("metadata") or {}).get("report_markdown", "")
         assert "毛利率 45.2%" in md
         assert "10.39 亿" in md
+
+
+class TestCoverageGapFeedbackD6:
+    """D6 打回补 claim：普查 unmatched → 按来源分析师打回（复用重试机制）。"""
+
+    def _state(self, md, claims=None):
+        return {
+            "analyst_reports": {
+                "fundamental": {
+                    "agent_name": "fundamental",
+                    "summary": "x",
+                    "markdown": md,
+                    "claims": claims
+                    or [
+                        {
+                            "claim_type": "numerical",
+                            "source_type": "data",
+                            "field_ref": "income_statement.20251231.营业总收入",
+                            "stated_value": 172.05e8,
+                            "interpretation": "营收",
+                        }
+                    ],
+                }
+            },
+            "iteration_count": 0,
+        }
+
+    def test_unmatched_number_sets_gap_and_retry_target(self):
+        from finance_agent.nodes.citation_node import verify_citations
+
+        # 1400亿：claims 无认领、D2/D5 不补 → 打回 fundamental
+        md = "账上货币资金合计超过1400亿元，财务稳健。"
+        out = verify_citations(self._state(md))
+        assert out["citation_coverage_gap"] is True
+        assert "fundamental" in out["citation_retry_targets"]
+        fb = (out["citation_retry_feedback"] or {}).get("fundamental") or []
+        assert any("1400亿" in str(i.get("raw", "")) for i in fb)
+
+    def test_no_unmatched_no_gap(self):
+        from finance_agent.nodes.citation_node import verify_citations
+
+        md = "2025 年营业总收入 172.05 亿元。"
+        out = verify_citations(
+            self._state(
+                md,
+                [
+                    {
+                        "claim_type": "numerical",
+                        "source_type": "data",
+                        "field_ref": "income_statement.20251231.营业总收入",
+                        "stated_value": 172.05e8,
+                        "interpretation": "营收 172.05 亿",
+                    }
+                ],
+            )
+        )
+        assert out["citation_coverage_gap"] is False
+
+
+class TestAfterCitationCoverageGap:
+    """D6：after_citation 对 coverage 缺口走重试（共享迭代上限）。"""
+
+    def test_coverage_gap_routes_retry(self):
+        from finance_agent.routing import after_citation
+
+        assert (
+            after_citation(
+                {
+                    "citation_pass": True,  # 值级全过但 coverage 有缺口
+                    "citation_coverage_gap": True,
+                    "citation_retry_targets": ["fundamental"],
+                    "iteration_count": 0,
+                    "citation_fail_rates": [],
+                }
+            )
+            == "retry"
+        )
+
+    def test_gap_respected_iteration_cap(self):
+        from finance_agent.routing import after_citation
+
+        assert (
+            after_citation(
+                {
+                    "citation_pass": True,
+                    "citation_coverage_gap": True,
+                    "citation_retry_targets": ["fundamental"],
+                    "iteration_count": 3,
+                    "citation_fail_rates": [],
+                }
+            )
+            == "render"
+        )

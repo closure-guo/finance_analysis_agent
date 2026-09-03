@@ -45,6 +45,13 @@ def _retry_feedback_section(state: dict, agent_name: str) -> str:
         return ""
     lines = ["## 上轮引用校验失败（必须修正以下数据引用，ground_truth 为真实值）"]
     for item in feedback:
+        if item.get("kind") == "coverage_gap":
+            # D6：覆盖率缺口打回——补建 claim 或删除正文数字
+            lines.append(
+                f"- 正文数字 {item['raw']} 未被任何 claim 认领：请补建对应 claim "
+                f"（field_ref 指向 state 字段）或删除该正文数字"
+            )
+            continue
         lines.append(
             f"- field_ref={item['field_ref']}：你写的值 {item['stated_value']}，"
             f"真实值 {item['ground_truth']}（偏差 {item['delta']}）。"
