@@ -423,3 +423,40 @@ class TestTechnicalHeaderDatetime:
             }
         )
         assert "最新交易日(2026-08-28)" in ctx
+
+
+class TestCoverageGapFeedbackRender:
+    """D6：覆盖率缺口反馈渲染（补建 claim 或删除正文数字）。"""
+
+    def test_coverage_gap_line_rendered(self):
+        from finance_agent.nodes.analysts import _retry_feedback_section
+
+        state = {
+            "citation_retry_feedback": {
+                "fundamental": [{"kind": "coverage_gap", "raw": "1400亿", "value": 1.4e11}]
+            }
+        }
+        section = _retry_feedback_section(state, "fundamental")
+        assert "1400亿" in section
+        assert "补建对应 claim" in section
+        assert "删除该正文数字" in section
+
+    def test_value_mismatch_feedback_still_renders(self):
+        from finance_agent.nodes.analysts import _retry_feedback_section
+
+        state = {
+            "citation_retry_feedback": {
+                "fundamental": [
+                    {
+                        "field_ref": "x",
+                        "stated_value": 1.0,
+                        "ground_truth": 2.0,
+                        "delta": 1.0,
+                        "interpretation": "i",
+                    }
+                ]
+            }
+        }
+        section = _retry_feedback_section(state, "fundamental")
+        assert "field_ref=x" in section
+        assert "真实值 2.0" in section
