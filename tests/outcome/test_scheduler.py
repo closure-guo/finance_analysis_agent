@@ -66,7 +66,7 @@ class TestJobIsolation:
         start_scheduler()
         job_fn = sched.add_job.call_args.args[0]
         with patch(
-            "finance_agent.outcome.scheduler.settle_open_decisions",
+            "finance_agent.outcome.scheduler.settle_open_predictions",
             side_effect=RuntimeError("boom"),
         ):
             job_fn()  # 不抛异常
@@ -83,7 +83,7 @@ class TestJobRetry:
         start_scheduler()
         job_fn = sched.add_job.call_args.args[0]
         with patch(
-            "finance_agent.outcome.scheduler.settle_open_decisions",
+            "finance_agent.outcome.scheduler.settle_open_predictions",
             side_effect=RuntimeError("boom"),
         ) as mock_settle:
             job_fn()  # 不抛异常
@@ -99,7 +99,7 @@ class TestJobRetry:
         start_scheduler()
         job_fn = sched.add_job.call_args.args[0]
         with patch(
-            "finance_agent.outcome.scheduler.settle_open_decisions",
+            "finance_agent.outcome.scheduler.settle_open_predictions",
             side_effect=[RuntimeError("boom"), {"settled": 1}],
         ) as mock_settle:
             job_fn()
