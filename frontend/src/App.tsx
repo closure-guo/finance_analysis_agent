@@ -16,7 +16,7 @@ import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRende
 import { useClickOutside } from './useClickOutside'
 import { usePathname, navigate } from './route'
 import { DownloadCenter } from './pages/downloads/DownloadCenter'
-import { DecisionCenter } from './pages/decisions/DecisionCenter'
+import { TrackRecordPage } from './pages/trackRecord/TrackRecordPage'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
@@ -860,7 +860,7 @@ export default function App() {
         onRename={renameSession}
         onNew={newAnalysis}
         onOpenDownloads={() => navigate('/downloads')}
-        onOpenDecisions={() => navigate('/decisions')}
+        onOpenDecisions={() => navigate('/track-record')}
         onOpenSettings={() => setShowSettings(true)}
         themeChoice={themeChoice}
         onCycleTheme={cycleTheme}
@@ -869,15 +869,9 @@ export default function App() {
       />
       <MainContent>{(leftInset) => (
       <div>
-        {pathname === '/decisions' ? (
-          <DecisionCenter
-            onBack={() => navigate('/')}
-            onOpenSession={async (sessionId) => {
-              navigate('/')
-              const ok = await selectSession(sessionId)
-              if (!ok) toast.error('来源会话已不存在')
-            }}
-          />
+        {pathname === '/decisions' || pathname === '/track-record' ? (
+          // add-track-record:旧 /decisions 战绩页重定向语义,与新 /track-record 同渲染
+          <TrackRecordPage onBack={() => navigate('/')} />
         ) : pathname === '/downloads' ? (
           <DownloadCenter onBack={() => navigate('/')} />
         ) : bootRestoring && viewState === 'empty' ? (

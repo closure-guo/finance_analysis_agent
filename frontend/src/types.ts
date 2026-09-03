@@ -452,3 +452,53 @@ export interface DecisionStats {
   avg_return: number | null
   avg_excess: number | null
 }
+
+// 观点判定状态（add-track-record：与后端 PREDICTIONS_STATUSES 一致）
+export type PredictionStatus = 'open' | 'resolved_win' | 'resolved_loss' | 'resolved_neutral' | 'unresolvable'
+export type PredictionDirection = 'long' | 'short' | 'neutral'
+
+// 观点记录（GET /api/v1/track-record/predictions 返回项）
+export interface PredictionRecord {
+  prediction_id: string
+  source_type: 'backtest' | 'live'
+  symbol: string
+  symbol_name: string | null
+  direction: PredictionDirection
+  entry_price: number | null
+  target_price: number | null
+  horizon_days: number
+  confidence: number | null
+  benchmark: string
+  langfuse_trace_id: string | null
+  status: PredictionStatus
+  created_at: string
+  resolved_at: string | null
+  exit_price: number | null
+  raw_return: number | null
+  excess_return: number | null
+  resolution_rule: string | null
+}
+
+// 战绩总览（GET /api/v1/track-record/overview 返回项）
+export interface TrackRecordOverview {
+  total: number
+  open: number
+  settled: number
+  win_rate: number | null
+  avg_excess: number | null
+  status_counts: Record<string, number>
+  source_type: string | null
+  insufficient_sample: boolean
+  as_of: string
+  disclaimer: string
+}
+
+// 观点日志列表响应
+export interface PredictionsResponse {
+  predictions: PredictionRecord[]
+  page: number
+  page_size: number
+  total: number
+  as_of: string
+  disclaimer: string
+}

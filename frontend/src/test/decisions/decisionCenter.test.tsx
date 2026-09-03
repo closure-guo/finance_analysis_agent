@@ -1,27 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { DecisionCenter } from '../../pages/decisions/DecisionCenter'
-import App from '../../App'
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
   Toaster: () => null,
 }))
-
-// framer-motion 依赖 matchMedia，jsdom 需兜底
-beforeAll(() => {
-  if (!window.matchMedia) {
-    Object.defineProperty(window, 'matchMedia', {
-      writable: true,
-      value: (q: string) => ({
-        matches: false, media: q, onchange: null,
-        addListener: () => {}, removeListener: () => {},
-        addEventListener: () => {}, removeEventListener: () => {},
-        dispatchEvent: () => false,
-      }),
-    })
-  }
-})
 
 const open: Record<string, unknown> = {
   decision_id: 'd1', session_id: 's1', langfuse_trace_id: null,
@@ -137,28 +121,6 @@ describe('决策战绩页面（expose-decision-outcomes）', () => {
     expect(onOpen).toHaveBeenCalledWith('s2')
   })
 
-  it('App 整树渲染:直达 /decisions 渲染战绩页', async () => {
-    mockFetch({ decisions: [hit], stats: { total: 1, open: 0, settled: 1, by_status: { hit_target: 1 }, win_rate: 1, avg_return: 0.15, avg_excess: 0.1 } })
-    localStorage.clear()
-    localStorage.setItem('fa_api_key', 'test-key')
-    window.history.pushState({}, '', '/decisions')
-    render(<App />)
-    expect(await screen.findByTestId('decision-center')).toBeInTheDocument()
-    expect(screen.getByText('中际旭创')).toBeInTheDocument()
-    window.history.pushState({}, '', '/')
-  })
-
-  it('点击决策行跳转来源会话；会话已不存在时 toast 提示', async () => {
-    const { toast } = await import('sonner')
-    vi.mocked(toast.error).mockClear()
-    mockFetch({ decisions: [hit] })
-    localStorage.clear()
-    localStorage.setItem('fa_api_key', 'test-key')
-    window.history.pushState({}, '', '/decisions')
-    render(<App />)
-    // /api/sessions/s2 在 mockFetch 中未命中 → 404 → loadSession 返回 null → 弹提示
-    fireEvent.click(await screen.findByTestId('decision-row-d2'))
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('来源会话已不存在'))
-    window.history.pushState({}, '', '/')
-  })
+  // 注:App 级集成用例已移除——add-track-record 将 /decisions 战绩页替换为
+  // TrackRecordPage(见 frontend/src/test/trackRecord/),DecisionCenter 不再接入 App。
 })
