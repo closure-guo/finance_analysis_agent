@@ -38,7 +38,7 @@ sys.path.insert(0, str(_ROOT / "tests" / "scripts"))
 import backtest_pilot_2023 as pilot_util  # noqa: E402
 
 TICKERS = ["002412", "600519", "300308"]  # 汉森制药 / 贵州茅台 / 中际旭创
-REPEATS = 3
+REPEATS = int(__import__("os").environ.get("ABLATION_REPEATS", "3"))  # 扩样跑批可经环境覆盖
 RESUME_PATH = Path("reports/ablation/resume.json")
 
 
