@@ -62,6 +62,21 @@ from finance_agent.state import AnalysisState
 Variant = Literal["analysts", "plus_debate", "full"]
 JUDGE_DIMS = ["report_relevance", "debate_quality", "decision_grounding", "consistency"]
 _VARIANTS: tuple[Variant, ...] = ("analysts", "plus_debate", "full")
+
+
+def _applicable_dims(variant: Variant) -> tuple[str, ...]:
+    """judge 维度按变体适用性过滤（#112）。
+
+    plus_debate 无 Trader/风控辩论/RJ/FM 层——consistency/decision_grounding
+    评不存在的层只会产伪影（宽容评虚层 vs 挑剔评真层的不对称）。
+    """
+    if variant == "analysts":
+        return ("report_relevance",)
+    if variant == "plus_debate":
+        return ("report_relevance", "debate_quality")
+    return tuple(JUDGE_DIMS)
+
+
 _ANALYST_NODES = (
     "technical_analyst",
     "macro_analyst",
@@ -337,8 +352,8 @@ def run_ablation(
                 out = run_variant_once(variant, snapshot, query)
                 judge_scores: dict[str, float | None] = {}
                 for dim in JUDGE_DIMS:
-                    if variant == "analysts" and dim != "report_relevance":
-                        judge_scores[dim] = None  # 无辩论/决策层维度不适用
+                    if dim not in _applicable_dims(variant):
+                        judge_scores[dim] = None  # 该变体无对应层，维度不适用（#112）
                         continue
                     result = run_judge(dim, out["judge_vars"])
                     judge_scores[dim] = (

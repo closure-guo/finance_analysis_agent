@@ -24,6 +24,7 @@
   "summary": "一句话总结舆情面状况",
   "key_findings": ["关键发现1", "关键发现2"],
   "claims": [
+  "markdown": "## 舆情分析\n详细分析内容..."
     {
       "claim_type": "entity",
       "source_type": "data",
@@ -34,7 +35,6 @@
       "period": null
     }
   ],
-  "markdown": "## 舆情分析\n详细分析内容..."
 }
 ```
 

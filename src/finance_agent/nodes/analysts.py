@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import logging
 
+from pydantic import ValidationError
+
 from finance_agent.langfuse_tracing import truncate_for_trace, update_current_span
 from finance_agent.metric_vocab import render_date
 from finance_agent.models import AnalystReport
@@ -115,6 +117,32 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
         data = _sanitize_claims(parse_json_response(response), agent_name)
         return AnalystReport.model_validate(data)
     except Exception as e:
+        # #109 重新定性：JSON 可解析但漏尾字段 markdown（glm 常见，schema 尾字段
+        # 易被省略）——不整体降级，用 summary/key_findings 合成 markdown、claims 保留
+        if isinstance(e, ValidationError) and isinstance(data, dict) and "markdown" not in data:
+            try:
+                parts = [f"## 分析摘要\n{data.get('summary', '')}"]
+                findings = data.get("key_findings") or []
+                if findings:
+                    parts.append("### 关键发现\n" + "\n".join(f"- {f}" for f in findings))
+                synthesized = AnalystReport(
+                    agent_name=data.get("agent_name", agent_name),
+                    summary=str(data.get("summary", ""))[:200],
+                    key_findings=findings,
+                    claims=data.get("claims") or [],
+                    markdown="\n\n".join(parts),
+                )
+                logger.warning(
+                    "分析师 %s 漏输出 markdown 字段，已用 summary/key_findings 合成（#109）",
+                    agent_name,
+                )
+                update_current_span(
+                    metadata={"degradation": "markdown_synthesized", "agent": agent_name},
+                    level="WARNING",
+                )
+                return synthesized
+            except Exception as synth_err:  # noqa: BLE001 -- 合成失败走原降级
+                logger.warning("markdown 合成失败，走原始文本降级: %s", synth_err)
         logger.warning(
             "分析师 %s 的 LLM 输出解析失败，降级为原始文本报告：%s: %s",
             agent_name,
