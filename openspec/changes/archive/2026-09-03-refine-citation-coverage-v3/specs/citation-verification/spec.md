@@ -13,6 +13,13 @@
 3. **不等式匹配**：数值带「超/约/近/低于/高于/达到」修饰时，与 claim stated_value 按阈值比较（|value − stated| ≤ 2%·|stated| 视为命中），不再要求等值。
 4. **事件数字标记**：数值能匹配到 state 事件源（key_events/news 中出现的数值）时，标记 `event_covered` 而非 unmatched；事件来源数字 SHALL 允许不建数值 claim，但正文 SHALL 内联注明来源事件。
 
+#### Scenario: 黑数字暴露
+
+- **GIVEN** 报告正文含数值"营收 10.39 亿"，但无任何 claim 的 stated_value 与其匹配
+- **WHEN** 执行数字普查
+- **THEN** 该数值计为未认领，`citation_coverage` 相应降低
+- **AND** 低于阈值时产生告警记录，不阻断报告产出
+
 #### Scenario: 方向词符号认领
 - **GIVEN** 报告正文含「净利率下滑 10.05%」，claim stated_value = -10.05，字段可校验
 - **WHEN** 执行数字普查
