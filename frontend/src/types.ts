@@ -414,3 +414,41 @@ export interface ExportFileInfo {
 
 // 下载中心类型筛选（'all' 为全部）
 export type DownloadType = 'docx' | 'pptx' | 'pdf' | 'md'
+
+// 决策结算状态（expose-decision-outcomes：与后端 DECISION_STATUSES 一致）
+export type DecisionStatus = 'open' | 'hit_stop' | 'hit_target' | 'expired'
+
+// 决策记录（GET /api/decisions 返回项）
+export interface DecisionRecord {
+  decision_id: string
+  session_id: string
+  langfuse_trace_id: string | null
+  timestamp: string
+  ticker: string
+  name: string | null
+  action: string
+  entry_price: number
+  stop_loss: number | null
+  target_price: number | null
+  confidence: number
+  position_size: number | null
+  status: DecisionStatus
+  settled_at: string | null
+  settle_price: number | null
+  hold_days: number | null
+  decision_return: number | null
+  benchmark_return: number | null
+  decision_excess: number | null
+  updated_at: string
+}
+
+// 聚合战绩（GET /api/decisions/stats 返回项）
+export interface DecisionStats {
+  total: number
+  open: number
+  settled: number
+  by_status: Record<string, number>
+  win_rate: number | null
+  avg_return: number | null
+  avg_excess: number | null
+}
