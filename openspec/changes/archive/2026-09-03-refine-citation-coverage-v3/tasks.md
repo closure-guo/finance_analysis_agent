@@ -32,8 +32,8 @@
 
 ## 5. 验证与回归
 
-- [ ] 5.1 `uv run pytest -m "not live"`、ruff、mypy（任务范围）全绿
-- [ ] 5.2 openspec validate <change-id> --strict 通过
+- [x] 5.1 全量 pytest -m not live 1721 passed / 0 failed；ruff/mypy 任务范围零错误
+- [x] 5.2 openspec validate --strict / --all 55 passed / 0 failed
 - [x] 5.3 v3 效应实证（对 20 条抽查逐条模拟新普查）：E/F 类 8 条全部认领；A 类脚手架被普查排除、G 类走 event_covered（单元测试已证）；剩余 unmatched 收敛到 8 条真缺口（B/C/D + 1400亿），正是 reject 补 claim 集——目标达成
 
 ## 6. 覆盖率缺口打回补 claim（D6，coverage 闭环最后一公里）
