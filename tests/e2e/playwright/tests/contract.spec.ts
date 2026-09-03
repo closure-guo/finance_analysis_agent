@@ -1,21 +1,19 @@
 import { test, expect } from '@playwright/test'
 
 /**
- * F3a 前后端契约：验证 POST /api/chat 请求体和 SSE 响应
+ * F3a 前后端契约：验证快速模式发送的请求体和 SSE 响应
  *
- * Selector 调整说明（相对 plan 原稿）：
- * 初始 appState='empty'，渲染的是 EmptyState 组件，其模式切换是"模式："下拉菜单
- * （选项 label="快速模式"），而非 ChatInputBar 的"快速对话"按钮（该按钮仅在发送
- * 消息、appState 切换到非 empty 后才渲染）。因此将 plan 中
- * `getByRole('button', { name: /快速对话/ }).click()` 调整为两步下拉菜单操作：
- *   1) 点击 "模式：" 按钮展开下拉
- *   2) 点击 "快速模式" 选项切换 mode
- * 其余 selector（getByPlaceholder(/输入问题/)、getByTestId('send-button')）与
- * 实际 DOM 一致，保持不变。
+ * 通道迁移说明（2026-09-01）：quick 模式对话自 add-assistant-ui-thread（#93）
+ * 起改走 assistant-ui Thread + POST /api/agui/quick（AG-UI RunAgentInput →
+ * SSE 事件流），旧 /api/chat 通道仅服务深度模式。本 spec 同步迁移到 AG-UI
+ * 契约：
+ *   - 请求体为 RunAgentInput：messages 末条为用户文本，forwardedProps.apiKey
+ *     透传 LLM key（aguiAgent.ts 的 prepareRunAgentInput 注入），threadId
+ *     字段存在（新会话为空串，服务端建会话后经 RUN_STARTED 回传）
+ *   - 响应 content-type 为 text/event-stream
  *
- * 另：waitForResponse 的 SSE 验证需注意，POST /api/chat 在前端被解析为一个 EventSource
- * 请求（fetch + ReadableStream），Playwright 会捕获该请求与响应。响应 headers 的
- * content-type 应为 text/event-stream。
+ * Selector 约定（与其他 spec 一致）：初始 appState='empty'，EmptyState 的
+ * 模式切换是"模式："下拉菜单（选项 label="快速模式"），两步操作。
  */
 test('点击发送发出正确请求并收到 SSE', async ({ page }) => {
   await page.goto('/')
@@ -30,22 +28,32 @@ test('点击发送发出正确请求并收到 SSE', async ({ page }) => {
   await page.getByRole('button', { name: /快速模式/ }).click()
 
   // 监听请求和响应（在点击发送前注册，避免竞态）
-  const reqPromise = page.waitForRequest(r => r.url().includes('/api/chat'))
+  const reqPromise = page.waitForRequest(r => r.url().includes('/api/agui/quick'))
   const respPromise = page.waitForResponse(
-    r => r.url().includes('/api/chat') && r.status() === 200
+    r => r.url().includes('/api/agui/quick') && r.status() === 200
   )
 
   // 输入并发送
   await page.getByPlaceholder(/输入问题/).fill('测试问题')
   await page.getByTestId('send-button').click()
 
-  // 验证请求体包含 message/user_id/api_key
+  // 验证请求体为 AG-UI RunAgentInput：用户文本 + apiKey 透传 + threadId 字段
   const req = await reqPromise
-  expect(req.postDataJSON()).toMatchObject({
-    message: '测试问题',
-  })
-  expect(req.postDataJSON()).toHaveProperty('user_id')
-  expect(req.postDataJSON()).toHaveProperty('api_key')
+  const body = req.postDataJSON() as {
+    threadId?: string
+    // AG-UI Message.content 两种形态：纯文本串 或 ContentPart 数组
+    messages?: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>
+    forwardedProps?: { apiKey?: string }
+  }
+  expect(body).toHaveProperty('threadId')
+  const lastMessage = body.messages?.[body.messages.length - 1]
+  expect(lastMessage?.role).toBe('user')
+  const text =
+    typeof lastMessage?.content === 'string'
+      ? lastMessage.content
+      : lastMessage?.content?.[0]?.text
+  expect(text).toBe('测试问题')
+  expect(body.forwardedProps?.apiKey).toBe('stub-key-for-testing')
 
   // 验证响应是 SSE（content-type 含 text/event-stream）
   const resp = await respPromise

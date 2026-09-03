@@ -348,11 +348,58 @@ async def test_client_disconnect_persists_interrupted(isolated_db, monkeypatch):
     with contextlib.suppress(asyncio.CancelledError):
         await task
 
-    session = session_store.get_session(sid)
+    # 中断落库在独立任务中异步完成（已取消任务里 await 不安全，detach 执行），
+    # 轮询收敛
+    session: dict[str, Any] | None = None
+    for _ in range(100):
+        session = session_store.get_session(sid)
+        if session is not None and session["status"] == "interrupted":
+            break
+        await asyncio.sleep(0.02)
+
     assert session is not None
     assert session["status"] == "interrupted"
     history = session["chat_history"]
     # 中断占位：部分回复 + [输出中断]，无悬空 user 消息
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[1]["content"] == "部分回复\n\n[输出中断]"
+
+
+async def test_client_disconnect_via_aclose_persists_interrupted(isolated_db, monkeypatch):
+    """客户端断开的另一条路径：响应生成器被 aclose（GeneratorExit 注入）而非任务 cancel。
+
+    生产实证（E2E debug-cursor，2026-09-01）：quick 会话切换触发 abortRun，经
+    vite 代理 + uvicorn 的断连传播表现为 StreamingResponse 清理（aclose），
+    GeneratorExit 是 BaseException 不经 except CancelledError/except Exception，
+    终态落库被整体跳过 → 会话永久泄漏 running（该会话之后被「生成中」守卫锁死）。
+    本用例钉死该路径：aclose 后同样必须 中断落库 + status=interrupted。
+    """
+    sid = session_store.create_chat_session("测试会话")
+    stub = _SlowAgent("部分回复")
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: stub)
+
+    encoder = EventEncoder()
+    agen = _agui_run_stream(sid, "run-aclose", "问题", None, encoder)
+    chunks: list[str] = []
+    async for chunk in agen:
+        chunks.append(chunk)
+        if "TEXT_MESSAGE_CONTENT" in chunk:
+            break  # 拿到部分内容后模拟客户端断开
+    assert chunks
+
+    await agen.aclose()  # GeneratorExit 注入（StreamingResponse 清理路径）
+
+    # 中断落库允许在独立任务中异步完成（aclose 上下文里 await 不安全），轮询收敛
+    session: dict[str, Any] | None = None
+    for _ in range(100):
+        session = session_store.get_session(sid)
+        if session is not None and session["status"] == "interrupted":
+            break
+        await asyncio.sleep(0.02)
+
+    assert session is not None
+    assert session["status"] == "interrupted"
+    history = session["chat_history"]
     assert [m["role"] for m in history] == ["user", "assistant"]
     assert history[1]["content"] == "部分回复\n\n[输出中断]"
 
