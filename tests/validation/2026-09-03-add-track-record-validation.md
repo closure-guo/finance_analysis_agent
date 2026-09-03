@@ -29,9 +29,10 @@
 
 ## 异常记录
 
-1. **全量 E2E 套件 11 例既有失败与本 delta 无关**：downloads.spec.ts 引用已删除 testid、6 例 @live（search/thinking-banner）、3 例 waitForTimeout 时序技术债（同前次验证报告）。
-2. **旧 expose-decision-outcomes 的 DecisionCenter 组件不再接入 App**（被 TrackRecordPage 取代，/decisions 重定向）；其组件级测试保留，App 级集成用例已移除——这是「取代/演进」决策的预期后果，sync 时需确认 expose-decision-outcomes 的 archive 处理。
-3. **后端门禁**：`-m "not live"` 全量（结果见执行日志）；@live 用例（outcome/trace_content live）不在门禁内。
+1. **全量 E2E 套件 17 例失败中，11 例为既有问题**（downloads.spec 引用已删除 testid、6 例 @live、3 例 waitForTimeout 时序技术债，同前次验证报告）。
+2. **6 例新失败（smoke.spec:21 /api/test/seed 404、streaming.spec ×3、agui-chat ×2、interaction）均为环境端口冲突**：用户 `docker compose up` 的 `finance-agent-backend-1` 占用 8000 端口，Playwright webServer 无法绑定自己的 TESTING stub 后端，请求打到生产容器（无 TESTING → 测试端点 404）。decisions.spec 3 例在端口空闲时全绿，非代码回归；停掉 docker 后端后全量门禁应恢复既有 11 例水平。
+3. **后端门禁**：`-m "not live"` 全量 1762 过（含本次修复的 scheduler 测试 3 例）；@live 用例不在门禁内。
+4. **旧 expose-decision-outcomes 的 DecisionCenter 不再接入 App**（被 TrackRecordPage 取代，/decisions 重定向）；组件级测试保留，App 级集成用例已移除——「取代/演进」决策的预期后果，sync 时需确认 expose-decision-outcomes 的 archive 处理。
 
 ## 结论
 
