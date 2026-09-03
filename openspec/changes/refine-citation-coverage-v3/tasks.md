@@ -9,7 +9,7 @@
 - [x] 1.3 不等式匹配（ge/le/approx；自然面值 + 20% 邻域带防跨指标误认领）
 - [x] 1.4 模板/脚手架文本区间排除（_SCAFFOLD_HINTS：档位/仓位/如总资金/试探性/决策语义）
 - [x] 1.5 事件数字标记 event_covered（compute_coverage event_values 参数 + CoverageReport.event_covered 字段）
-- [ ] 1.6 用同一批冒烟 trace 重跑 spotcheck——**留待 v3 合入后冒烟重跑**：Langfuse 观测仅存分析师 answer（summary），普查扫描的完整报告 markdown 不落库、无法离线重建（已实证）；5.3 的逐句模拟 + 单元测试已证 D1 效果，端到端实证须用 v3 代码重跑冒烟管线
+- [x] 1.6 冒烟终版（#109 修复后，smoke_v3_final.py）：报告完整（40 数字），coverage 0.6957→0.7500（+5.4pp）；剩 10 unmatched 归因到真缺口/口径/契约残差（见记录 §十一）
 
 ## 2. state anomalies 自动补登记（D2，issue #107-B，核心交付）
 
