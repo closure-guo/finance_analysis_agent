@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react'
@@ -379,7 +380,7 @@ export default function App() {
   }, [messages, scrollToBottom])
 
   // selectSession 引用：mount 自动恢复在 selectSession 定义之前执行，经 ref 取最新引用
-  const selectSessionRef = useRef<((id: string) => Promise<void>) | null>(null)
+  const selectSessionRef = useRef<((id: string) => Promise<boolean>) | null>(null)
   // 刷新自动恢复仅执行一次（避免 loadSessions 后续触发时重复恢复覆盖用户已切换视图）
   const restoredRef = useRef(false)
 
@@ -466,14 +467,14 @@ export default function App() {
       if (stillRunning && !store.hasActiveReader()) {
         void store.resume(sessionId)
       }
-      return
+      return true
     }
 
     // pending：从后端重建消息（chat_history + 管线快照 + 报告锚点定位）
     setSessionSwitching(true)
     try {
       const data = await store.loadSession(sessionId)
-      if (!data) return
+      if (!data) return false
       setMode(data.session_type === 'chat' ? 'quick' : 'deep')
       store.rebuildSession(sessionId, data)
       // running/clarifying 会话恢复事件流（ReAct 路径 status 为 clarifying 但任务可能仍在运行）。
@@ -484,6 +485,7 @@ export default function App() {
       if (data.status === 'running' || data.status === 'clarifying') {
         void store.resume(sessionId)
       }
+      return true
     } finally {
       setSessionSwitching(false)
     }
@@ -870,9 +872,10 @@ export default function App() {
         {pathname === '/decisions' ? (
           <DecisionCenter
             onBack={() => navigate('/')}
-            onOpenSession={(sessionId) => {
+            onOpenSession={async (sessionId) => {
               navigate('/')
-              void selectSession(sessionId)
+              const ok = await selectSession(sessionId)
+              if (!ok) toast.error('来源会话已不存在')
             }}
           />
         ) : pathname === '/downloads' ? (

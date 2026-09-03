@@ -147,4 +147,18 @@ describe('决策战绩页面（expose-decision-outcomes）', () => {
     expect(screen.getByText('中际旭创')).toBeInTheDocument()
     window.history.pushState({}, '', '/')
   })
+
+  it('点击决策行跳转来源会话；会话已不存在时 toast 提示', async () => {
+    const { toast } = await import('sonner')
+    vi.mocked(toast.error).mockClear()
+    mockFetch({ decisions: [hit] })
+    localStorage.clear()
+    localStorage.setItem('fa_api_key', 'test-key')
+    window.history.pushState({}, '', '/decisions')
+    render(<App />)
+    // /api/sessions/s2 在 mockFetch 中未命中 → 404 → loadSession 返回 null → 弹提示
+    fireEvent.click(await screen.findByTestId('decision-row-d2'))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('来源会话已不存在'))
+    window.history.pushState({}, '', '/')
+  })
 })
