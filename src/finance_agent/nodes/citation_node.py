@@ -209,6 +209,25 @@ def verify_citations(state: dict) -> dict:
             level="WARNING",
         )
 
+    # D6 打回补 claim：普查 unmatched（D2/D4 自动补 + D5 事件豁免后）按来源分析师打回，
+    # 复用重试机制（iteration<3 上限 + 停滞降级语义不变）
+    coverage_gap_feedback: dict[str, list[dict]] = {}
+    if coverage.unmatched:
+        for raw in coverage.unmatched:
+            val = _census_value_from_raw(raw)
+            for agent, rpt in reports.items():
+                if raw in _markdown_of(rpt):
+                    coverage_gap_feedback.setdefault(agent, []).append(
+                        {"kind": "coverage_gap", "raw": raw, "value": val}
+                    )
+                    break
+    gap_targets = sorted(coverage_gap_feedback)
+    if gap_targets:
+        retry_targets = sorted(set(retry_targets) | set(gap_targets))
+        for agent, items in coverage_gap_feedback.items():
+            retry_feedback.setdefault(agent, []).extend(items)
+    citation_coverage_gap = bool(gap_targets)
+
     if not report.all_passed and iteration_count + 1 < 3 and citation_retry_stagnated(fail_rates):
         # 降级决策须可观测：路由将因失败率停滞跳过下一轮重试
         update_current_span(
@@ -226,6 +245,7 @@ def verify_citations(state: dict) -> dict:
         "citation_retry_feedback": retry_feedback,
         "citation_fail_buckets": fail_buckets,
         "citation_coverage": coverage.coverage,
+        "citation_coverage_gap": citation_coverage_gap,
     }
 
 
@@ -321,3 +341,13 @@ def _extract_claims(report: AnalystReport | dict) -> list[Claim]:
         return [Claim.model_validate(c) if isinstance(c, dict) else c for c in raw_claims]
 
     return []
+
+
+def _census_value_from_raw(raw: str) -> float:
+    """unmatched 原文 → 解析值（与 census 缩放一致，供打回反馈）。"""
+    num = "".join(ch for ch in raw if ch.isdigit() or ch in ".-")
+    try:
+        v = float(num)
+    except ValueError:
+        return 0.0
+    return v * (1e8 if "亿" in raw else 1e4 if "万" in raw else 1.0)

@@ -54,6 +54,13 @@ def after_citation(state: dict) -> str:
     失败是系统性的（claim field_ref 与数据形态不匹配），非随机噪声，降级
     判定按最新失败率 ≥ 上一轮 × 80% 触发）；轮次上限与停滞降级语义不变。
     """
+    # D6：coverage 缺口（值级全过但正文数字未认领）→ 定向打回补 claim，共享迭代上限
+    if (
+        state.get("citation_coverage_gap")
+        and state.get("citation_retry_targets")
+        and state.get("iteration_count", 0) < 3
+    ):
+        return "retry"
     if state.get("citation_pass", False) or state.get("citation_minor_fail", False):
         return "render"
     if not state.get("citation_retry_targets"):
