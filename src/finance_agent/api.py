@@ -136,6 +136,8 @@ from finance_agent.outcome.store import (  # noqa: E402
 from finance_agent.outcome.track_record.model import (  # noqa: E402
     init_predictions,
     insert_prediction,
+    list_predictions,
+    prediction_stats,
 )
 
 init_decision_log()
@@ -2144,6 +2146,69 @@ async def get_decisions(
 async def get_decision_stats() -> dict[str, Any]:
     """expose-decision-outcomes:聚合战绩统计(胜率/均值只基于已结算记录)。"""
     return await asyncio.to_thread(decision_stats)
+
+
+# ── track-record 战绩体系(add-track-record):predictions 只读接口 ──
+_DISCLAIMER = "历史业绩不代表未来表现"
+
+
+def _track_as_of() -> str:
+    """北京时间日期(YYYY-MM-DD),战绩口径 as_of。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+
+
+@app.get("/api/v1/track-record/overview")
+async def track_record_overview(source: str | None = None) -> dict[str, Any]:
+    """add-track-record:战绩总览(胜率/超额/样本量 + as_of + 免责声明)。
+
+    显著性门槛:已结算 < 10 时 win_rate 置 null 并带 insufficient_sample 标注
+    (前端显示「样本积累中」)。回测/实盘经 source 参数分离,不合并不展示。
+    """
+    stats = await asyncio.to_thread(prediction_stats, source_type=source)
+    settled = stats["settled"]
+    insufficient = settled < 10
+    return {
+        **stats,
+        "source_type": source,
+        "insufficient_sample": insufficient,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+        "win_rate": None if insufficient else stats["win_rate"],
+    }
+
+
+@app.get("/api/v1/track-record/predictions")
+async def track_record_predictions(
+    status: str | None = None,
+    symbol: str | None = None,
+    source: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """add-track-record:观点日志列表(默认全部状态,含 loss)。分页上限 50。"""
+    page = max(1, page)
+    limit = max(1, min(page_size, 50))
+    offset = (page - 1) * limit
+    items = await asyncio.to_thread(
+        list_predictions,
+        ticker=symbol,
+        status=status,
+        source_type=source,
+        limit=limit,
+        offset=offset,
+    )
+    total = (await asyncio.to_thread(prediction_stats, source_type=source))["total"]
+    return {
+        "predictions": items,
+        "page": page,
+        "page_size": limit,
+        "total": total,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
 
 
 def _now() -> str:
