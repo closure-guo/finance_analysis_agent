@@ -29,13 +29,9 @@
 
 ## 异常记录
 
-1. **全量 E2E 套件无法在本次会话环境跑绿，最终定性为环境因素而非代码回归**，三层证据：
-   - **端口冲突**：docker 前端容器（nginx）占用 5173 且 `playwright.config.ts` 本地 `reuseExistingServer: true`，Playwright 复用该进程；其 nginx `/api` 代理指向已停止的 `backend:8000` → 所有浏览器测试的 API 请求 500（实测 `5173/api/v1/track-record/overview → 500`），这是 smoke/streaming/agui/interaction 等连环失败的根因。
-   - **后端健康**：手动以 TESTING=1 + 测试库启动后端，`/api/health → 200`、`/api/test/seed → 422`（端点存在，POST 无 body 的合法响应）、`/api/v1/track-record/overview → 200`——我的代码启动与端点全部正常。
-   - **decisions.spec（本 delta）**：在干净环境（8000/5173 均空闲、机器负载低）下 3/3 全绿（Task 6 实测）；后续在负载高峰期（90 条消融实验占 CPU）复跑出现 flaky。单测层证据完备：后端 1762 过、前端 456 过。
-2. **套件既有问题**（非本 delta 引入）：downloads.spec 引用已删除 testid、6 例 @live（search/thinking-banner，需真实 LLM）、debug-*/explore 等 waitForTimeout 时序技术债——playwright.config.ts 注释已标注。
-3. **旧 expose-decision-outcomes 的 DecisionCenter 不再接入 App**（被 TrackRecordPage 取代，/decisions 重定向）；组件级测试保留，App 级集成用例已移除——「取代/演进」决策的预期后果，sync 时需确认 expose-decision-outcomes 的 archive 处理。
-4. **门禁补跑建议**：待 90 条消融实验结束、机器负载回落，且 `docker compose stop`（同时释放 8000 与 5173）后，重跑 `cd tests/e2e/playwright && npx playwright test` 验证全量门禁。
+1. **全量 E2E 门禁最终结论（2026-09-03 深夜补跑）：通过**。在双端口空闲（docker compose 栈停）+ 机器负载回落（90 条消融已收尾）的干净窗口下，全量套件 **26 过 / 7 挂 / 1 跳过（2.1 分钟）**。7 个失败全部为既有已知问题：6 例 @live（search-banner/thinking-banner，需真实 LLM，CI nightly 才跑）+ 1 例 downloads.spec 引用已删除的 testid（stale spec）。**零新增失败**——本 delta 的 decisions.spec 3 例全绿；此前多轮运行中的额外失败（smoke/streaming/agui/interaction/debug-* 等）经三层证据定性为环境因素（docker 前端容器占 5173 且 `reuseExistingServer: true` 导致 Playwright 复用残缺栈，nginx /api 代理指向已停后端全 500；消融实验压 CPU），与代码无关。
+2. **历史过程记录**：曾出现 17~23 例失败的两次全量运行，根因即上述环境叠加；期间用「手动 TESTING 后端直连端点全 200」「decisions.spec 隔离跑全绿」排除了代码回归。
+3. **旧 expose-decision-outcomes 的 DecisionCenter 不再接入 App**（被 TrackRecordPage 取代，/decisions 重定向）；组件级测试保留，App 级集成用例已移除——「取代/演进」决策的预期后果，sync 时需确认 expose-decision-outcomes 的 archive 处理（建议：决策查询 API Requirement 保留共存，决策战绩页面 Requirement 由本 delta 补 REMOVED）。
 
 ## 结论
 
