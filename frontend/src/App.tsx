@@ -15,11 +15,13 @@ import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRende
 import { useClickOutside } from './useClickOutside'
 import { usePathname, navigate } from './route'
 import { DownloadCenter } from './pages/downloads/DownloadCenter'
+import { DecisionCenter } from './pages/decisions/DecisionCenter'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
 import { AnalysisRuntimeProvider, ThreadMessages } from './chat/AnalysisThread'
 import { SidebarProvider, Sidebar, SidebarFixedToggle, SidebarIcon, useSidebar } from './components/ui/sidebar'
+import { motion } from 'framer-motion'
 import { ReportSidePanel } from './components/ReportSidePanel'
 import {
   DropdownMenu,
@@ -268,6 +270,9 @@ export default function App() {
   const [quickRunning, setQuickRunning] = useState(false)
   // 空态退场动画（replicate-chat-home）：首条消息发出后空态 200ms 淡出再卸载
   const [emptyLeaving, setEmptyLeaving] = useState(false)
+  // 会话切换加载过渡（fix-session-switch-flash）：目标会话置 pending 后 detail
+  // 加载期间 viewState 会派生出 'empty'，用加载圈过渡避免闪空态首页
+  const [sessionSwitching, setSessionSwitching] = useState(false)
   // 命令面板（polish-dark-mode-shortcuts）：Cmd/Ctrl+K 打开
   const [paletteOpen, setPaletteOpen] = useState(false)
   // 主题三态（polish-dark-mode-shortcuts）：浅色/深色/跟随系统，持久化 + 系统跟随
@@ -465,17 +470,22 @@ export default function App() {
     }
 
     // pending：从后端重建消息（chat_history + 管线快照 + 报告锚点定位）
-    const data = await store.loadSession(sessionId)
-    if (!data) return
-    setMode(data.session_type === 'chat' ? 'quick' : 'deep')
-    store.rebuildSession(sessionId, data)
-    // running/clarifying 会话恢复事件流（ReAct 路径 status 为 clarifying 但任务可能仍在运行）。
-    // 刷新后必须 resume 续传增量事件（thinking_token/chat_token 等）——思考/文本不进入
-    // pipeline_snapshot，轮询 effect 只刷新管线快照，不 resume 则新生思考内容停止输出。
-    // after_seq 用 rebuild 的 lastSeq：已持久化事件经 chat_history/thinking 重建并被
-    // seq 守门去重，仅续传 journal 之后的新事件；无新事件时后端回 204，resume 收敛 idle。
-    if (data.status === 'running' || data.status === 'clarifying') {
-      void store.resume(sessionId)
+    setSessionSwitching(true)
+    try {
+      const data = await store.loadSession(sessionId)
+      if (!data) return
+      setMode(data.session_type === 'chat' ? 'quick' : 'deep')
+      store.rebuildSession(sessionId, data)
+      // running/clarifying 会话恢复事件流（ReAct 路径 status 为 clarifying 但任务可能仍在运行）。
+      // 刷新后必须 resume 续传增量事件（thinking_token/chat_token 等）——思考/文本不进入
+      // pipeline_snapshot，轮询 effect 只刷新管线快照，不 resume 则新生思考内容停止输出。
+      // after_seq 用 rebuild 的 lastSeq：已持久化事件经 chat_history/thinking 重建并被
+      // seq 守门去重，仅续传 journal 之后的新事件；无新事件时后端回 204，resume 收敛 idle。
+      if (data.status === 'running' || data.status === 'clarifying') {
+        void store.resume(sessionId)
+      }
+    } finally {
+      setSessionSwitching(false)
     }
   }
   // 同步到 ref：供 mount 自动恢复（定义顺序在 selectSession 之前的 effect）调用
@@ -848,6 +858,8 @@ export default function App() {
         onRename={renameSession}
         onNew={newAnalysis}
         onOpenDownloads={() => navigate('/downloads')}
+        onOpenDecisions={() => navigate('/decisions')}
+        onOpenSettings={() => setShowSettings(true)}
         themeChoice={themeChoice}
         onCycleTheme={cycleTheme}
         runningSessionIds={runningSessionIds}
@@ -855,13 +867,31 @@ export default function App() {
       />
       <MainContent>{(leftInset) => (
       <div>
-        {pathname === '/downloads' ? (
+        {pathname === '/decisions' ? (
+          <DecisionCenter
+            onBack={() => navigate('/')}
+            onOpenSession={(sessionId) => {
+              navigate('/')
+              void selectSession(sessionId)
+            }}
+          />
+        ) : pathname === '/downloads' ? (
           <DownloadCenter onBack={() => navigate('/')} />
         ) : bootRestoring && viewState === 'empty' ? (
           // 刷新恢复中：有持久化会话但尚未重建消息，显示恢复指示而非闪首页空态
           <div data-testid="restoring-state" className="flex flex-col items-center justify-center h-screen gap-3">
             <i className="fas fa-circle-notch fa-spin text-2xl" style={{ color: 'var(--bg-brand)' }}></i>
             <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>恢复会话中…</p>
+          </div>
+        ) : sessionSwitching ? (
+          // 会话切换加载过渡：加载圈（motion.dev loading-circle-spinner 样式）
+          <div data-testid="session-switch-loading" className="flex items-center justify-center h-screen">
+            <motion.div
+              className="w-10 h-10 rounded-full"
+              style={{ border: '4px solid var(--bg-overlay-l2)', borderTopColor: 'var(--bg-brand)' }}
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+            />
           </div>
         ) : viewState === 'empty' || emptyLeaving ? (
           // 空态首页（replicate-chat-home）：首条消息发出后 200ms 淡出再切消息流
@@ -886,7 +916,7 @@ export default function App() {
           <>
             {/* Header */}
             <header
-              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3"
+              className="fixed top-0 right-0 z-50 flex items-center justify-between px-6 py-3 transition-[left] duration-200 ease-out"
               style={{ left: leftInset, background: 'var(--bg-base-default)' }}
             >
               <div className="flex items-center gap-3">
@@ -917,7 +947,7 @@ export default function App() {
               onSubmit={handleComposerSubmit}
               onCancel={stopGeneration}
             >
-              <div className="fixed top-0 bottom-0 right-0" style={{ left: leftInset }}>
+              <div className="fixed top-0 bottom-0 right-0 transition-[left] duration-200 ease-out" style={{ left: leftInset }}>
                 <ThreadMessages
                   onRegenerate={handleRegenerate}
                   onOpenReport={setPanelMessage}
@@ -966,7 +996,7 @@ export default function App() {
             {/* 停止按钮（流式输出时显示；quick AG-UI 通道由 quickRunning 驱动） */}
             {(appState === 'analyzing' || messages.some(m => m.streaming) || quickRunning) && (
               <div
-                className="fixed right-0 z-40 flex flex-col items-center gap-2 px-4"
+                className="fixed right-0 z-40 flex flex-col items-center gap-2 px-4 transition-[left] duration-200 ease-out"
                 style={{ left: leftInset, bottom: '90px' }}
               >
                 {(appState === 'analyzing' || quickRunning) && (
@@ -1051,7 +1081,7 @@ export default function App() {
 }
 
 // ── Sidebar（add-collapsible-sidebar：shadcn Sidebar 原语重构）──
-function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, onOpenDownloads, runningSessionIds, loading = false, themeChoice, onCycleTheme }: {
+function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, onNew, onOpenDownloads, onOpenDecisions, onOpenSettings, runningSessionIds, loading = false, themeChoice, onCycleTheme }: {
   sessions: SessionMeta[]
   currentSessionId: string | null
   onSelect: (id: string) => void
@@ -1059,6 +1089,8 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   onRename: (id: string, name: string) => void
   onNew: () => void
   onOpenDownloads: () => void
+  onOpenDecisions: () => void
+  onOpenSettings: () => void
   runningSessionIds: Set<string>
   loading?: boolean
   themeChoice: ThemeChoice
@@ -1088,7 +1120,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   if (collapsed) {
     return (
       <Sidebar expandedRail={null} collapsedRail={
-        <div className="flex flex-col items-center pt-14 gap-2 h-full">
+        <div className="flex flex-col items-start pl-3.5 pt-14 gap-2 h-full">
           <SidebarIcon label="新建分析">
             <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
               <i className="fas fa-plus text-xs"></i>
@@ -1096,13 +1128,31 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
           </SidebarIcon>
           <SidebarIcon label={`主题：${themeChoice === 'system' ? '跟随系统' : themeChoice === 'dark' ? '深色' : '浅色'}`}>
             <Button variant="ghost" size="icon" onClick={onCycleTheme} aria-label="切换主题" data-testid="theme-toggle-collapsed">
-              <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : themeChoice === 'light' ? 'fa-sun' : 'fa-adjust'} text-xs`}></i>
+              {themeChoice === 'light' ? (
+                // 空心太阳：FA6 free 无描边款，用内联 SVG（圆 + 八条放射线）
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+                </svg>
+              ) : (
+                <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : 'fa-adjust'} text-xs`}></i>
+              )}
             </Button>
           </SidebarIcon>
           <div className="flex-1" />
+          <SidebarIcon label="决策战绩">
+            <Button variant="ghost" size="icon" onClick={onOpenDecisions} aria-label="决策战绩" data-testid="sidebar-decisions-collapsed">
+              <i className="fas fa-chart-line text-xs"></i>
+            </Button>
+          </SidebarIcon>
           <SidebarIcon label="下载管理">
             <Button variant="ghost" size="icon" onClick={onOpenDownloads} aria-label="下载管理" data-testid="sidebar-downloads-collapsed">
               <i className="fas fa-download text-xs"></i>
+            </Button>
+          </SidebarIcon>
+          <SidebarIcon label="设置">
+            <Button variant="ghost" size="icon" onClick={onOpenSettings} aria-label="设置" data-testid="sidebar-settings-collapsed">
+              <i className="fas fa-cog text-xs"></i>
             </Button>
           </SidebarIcon>
         </div>
@@ -1114,10 +1164,8 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   return (
     <Sidebar collapsedRail={null} expandedRail={
       <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="py-3 pl-12 pr-3 flex items-center">
-        <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>会话历史</span>
-      </div>
+      {/* 顶部占位：撑起高度使下方「新建分析」按钮避开悬浮折叠按钮（fixed top-3 left-3，h-10） */}
+      <div className="h-11 shrink-0" />
 
       {/* New analysis button */}
       <div className="p-3">
@@ -1142,8 +1190,14 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
         />
       </div>
 
-      {/* Session list */}
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
+      {/* Session list（展开渐入场：fade + 左移滑入，与 aside 宽度动画同节奏） */}
+      <motion.div
+        data-testid="session-list"
+        className="flex-1 overflow-y-auto px-2 pb-2"
+        initial={{ opacity: 0, x: -10 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+      >
         {loading && sessions.length === 0 ? (
           // 加载骨架：/api/sessions 首次返回前显示占位行，避免闪「暂无历史会话」
           <div data-testid="sidebar-skeleton" className="space-y-2 px-1 pt-1">
@@ -1237,29 +1291,9 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
             </div>
           ))
         )}
-      </div>
+      </motion.div>
 
-      {/* 下载管理入口（add-download-center）：底部固定区 + 主题切换（polish-dark-mode-shortcuts） */}
-      <div className="p-3 flex flex-col gap-1" style={{ borderTop: '1px solid var(--border-neutral-l1)' }}>
-        <Button
-          variant="ghost"
-          onClick={onOpenDownloads}
-          data-testid="sidebar-downloads"
-          className="w-full justify-start text-sm text-secondary hover:text-foreground"
-        >
-          <i className="fas fa-download text-xs"></i>
-          下载管理
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={onCycleTheme}
-          data-testid="theme-toggle"
-          className="w-full justify-start text-sm text-secondary hover:text-foreground"
-        >
-          <i className={`fas ${themeChoice === 'dark' ? 'fa-moon' : themeChoice === 'light' ? 'fa-sun' : 'fa-adjust'} text-xs`}></i>
-          主题：{themeChoice === 'system' ? '跟随系统' : themeChoice === 'dark' ? '深色' : '浅色'}
-        </Button>
-      </div>
+      {/* 底部固定区已移除：下载管理入口保留在折叠态图标栏与命令面板（⌘K） */}
 
       {/* 删除二次确认弹窗 */}
       <Dialog open={deletingSession !== null} onOpenChange={(o) => { if (!o) setDeletingSession(null) }}>
@@ -2288,7 +2322,7 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
 
   return (
     <div
-      className="fixed bottom-0 right-0 z-40 px-4 pb-4 pt-2"
+      className="fixed bottom-0 right-0 z-40 px-4 pb-4 pt-2 transition-[left] duration-200 ease-out"
       style={{ left: leftInset, background: 'linear-gradient(to top, var(--bg-base-default) 80%, transparent)' }}
     >
       <div className="max-w-3xl mx-auto">
