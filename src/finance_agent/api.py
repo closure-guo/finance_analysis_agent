@@ -129,11 +129,17 @@ from finance_agent.outcome.store import (  # noqa: E402
     DECISION_STATUSES,
     decision_stats,
     init_decision_log,
-    insert_decision,
     list_decisions,
 )
 
+# predictions 战绩体系(add-track-record):全量观点记录取代 decision_log 写入
+from finance_agent.outcome.track_record.model import (  # noqa: E402
+    init_predictions,
+    insert_prediction,
+)
+
 init_decision_log()
+init_predictions()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -606,13 +612,17 @@ def _safe_dump(obj: Any) -> Any:
 def _persist_decision_log(
     accumulated: dict, session_id: str, stock_code: str, stock_name: str
 ) -> None:
-    """批准的 TradeDecision 落 decision_log(旁路:任何失败仅 ERROR,不阻断报告)。"""
+    """观点全量落 predictions(add-track-record:approve/reject/hold/watch 均记录)。
+
+    旁路:任何失败仅 ERROR,不阻断报告。缺 entry_price(quote 与 kline 均不可得)的
+    存档记录标 unresolvable(计入样本不计入胜率),不丢弃。
+    """
     try:
-        if accumulated.get("fund_manager_decision") != "approve":
-            return
         decision = accumulated.get("final_trade_decision") or {}
         if not decision.get("action"):
             return
+        action = decision["action"]
+        direction = "long" if action == "buy" else ("short" if action == "sell" else "neutral")
         # entry_price 代码回填:quote 优先,kline 收盘兜底
         entry_price = (accumulated.get("stock_quote") or {}).get("price")
         if entry_price is None:
@@ -620,31 +630,37 @@ def _persist_decision_log(
             if kline is not None and len(kline) > 0:
                 last = kline.iloc[-1] if hasattr(kline, "iloc") else kline[-1]
                 entry_price = float(last["收盘"])
+        status = "open"
+        resolution_rule = None
         if entry_price is None:
-            _logger.warning("decision_log 跳过: %s 无可靠 entry_price", stock_code)
-            return
-        position_size = decision.get("position_size")
-        insert_decision(
+            status = "unresolvable"
+            resolution_rule = "missing_entry_price"
+        symbol = f"{stock_code}.SH" if str(stock_code).startswith("6") else f"{stock_code}.SZ"
+        insert_prediction(
             {
-                "decision_id": None,  # store 生成
-                "session_id": session_id,
-                "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
-                "timestamp": datetime.now().isoformat(),
-                "ticker": stock_code,
-                "name": stock_name,
-                "action": decision["action"],
-                "entry_price": float(entry_price),
-                "stop_loss": decision.get("stop_loss"),
+                "source_type": "live",
+                "symbol": symbol,
+                "symbol_name": stock_name,
+                "direction": direction,
+                "entry_price": float(entry_price) if entry_price is not None else None,
                 "target_price": decision.get("target_price"),
                 "confidence": decision.get("confidence"),
-                "position_size": float(position_size)
-                if isinstance(position_size, (int, float))
-                else None,
-            }
+                "rationale_snapshot": {
+                    "action": action,
+                    "fund_manager_decision": accumulated.get("fund_manager_decision"),
+                    "fund_manager_decision_reasoning": accumulated.get(
+                        "fund_manager_decision_reasoning"
+                    ),
+                },
+                "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
+                "timestamp": datetime.now().isoformat(),
+                "resolution_rule": resolution_rule,
+            },
+            status=status,
         )
-        _logger.info("decision_log 已落库: %s %s", stock_code, decision["action"])
+        _logger.info("prediction 已落库: %s %s status=%s", stock_code, action, status)
     except Exception:
-        _logger.exception("decision_log 落库失败(不阻断业务)")
+        _logger.exception("prediction 落库失败(不阻断业务)")
 
 
 def _stream_report_chunks(markdown: str, chunk_size: int = 200) -> list[str]:

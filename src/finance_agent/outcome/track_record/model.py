@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS predictions (
   symbol            TEXT NOT NULL,
   symbol_name       TEXT,
   direction         TEXT NOT NULL CHECK (direction IN ('long','short','neutral')),
-  entry_price       REAL NOT NULL,
+  entry_price       REAL,
   target_price      REAL,
   horizon_days      INTEGER NOT NULL DEFAULT 252,
   confidence        REAL CHECK (confidence BETWEEN 0 AND 1),
@@ -90,8 +90,14 @@ def init_predictions(db_path: str | Path | None = None) -> None:
         conn.close()
 
 
-def insert_prediction(record: dict[str, Any], db_path: str | Path | None = None) -> str:
-    """插入一条观点;created_at 服务端生成;快照 JSON 序列化后冻结。"""
+def insert_prediction(
+    record: dict[str, Any], db_path: str | Path | None = None, status: str = "open"
+) -> str:
+    """插入一条观点;created_at 服务端生成;快照 JSON 序列化后冻结。
+
+    status 默认 open;缺可判定要素(如 entry_price)的存档记录由调用方传
+    status='unresolvable' + resolution_rule 说明,计入样本但不计入胜率。
+    """
     prediction_id = record.get("prediction_id") or f"p_{uuid.uuid4().hex[:12]}"
     created_at = record.get("created_at") or record.get("timestamp") or datetime.now().isoformat()
     conn = _connect(db_path)
@@ -100,23 +106,26 @@ def insert_prediction(record: dict[str, Any], db_path: str | Path | None = None)
             """INSERT INTO predictions (
                  prediction_id, source_type, symbol, symbol_name, direction,
                  entry_price, target_price, horizon_days, confidence, benchmark,
-                 rationale_snapshot, langfuse_trace_id, status, created_at, updated_at
-               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)""",
+                 rationale_snapshot, langfuse_trace_id, status, created_at, updated_at,
+                 resolution_rule
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 prediction_id,
                 record["source_type"],
                 record["symbol"],
                 record.get("symbol_name"),
                 record["direction"],
-                record["entry_price"],
+                record.get("entry_price"),
                 record.get("target_price"),
                 int(record.get("horizon_days", 252)),
                 record.get("confidence"),
                 record.get("benchmark", "000300.SH"),
                 json.dumps(record.get("rationale_snapshot") or {}, ensure_ascii=False),
                 record.get("langfuse_trace_id"),
+                status,
                 created_at,
                 created_at,
+                record.get("resolution_rule"),
             ),
         )
         conn.commit()

@@ -16,7 +16,7 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from finance_agent.outcome.job import settle_open_decisions
+from finance_agent.outcome.track_record.job import settle_open_predictions
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ def _settle_job() -> None:
     """scheduler 入口:全部异常吞掉(旁路铁律),意外异常指数退避重试 3 次。"""
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            result = settle_open_decisions()
-            logger.info("decision settle job 完成: %s", result)
+            result = settle_open_predictions()
+            logger.info("prediction settle job 完成: %s", result)
             return
         except Exception as e:  # noqa: BLE001
             if attempt < _MAX_ATTEMPTS - 1:
