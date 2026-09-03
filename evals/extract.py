@@ -113,7 +113,13 @@ def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
         "research_manager_decision": _trunc(state.get("research_manager_conclusion") or ""),
         "trade_decision": _trunc(decision_txt),
         "risk_judgment": _trunc(decision_txt + ("\n" + risk_tail if risk_tail else "")),
-        "fund_manager_decision": state.get("fund_manager_decision") or "",
+        # #111：FM 理由随决策进 judge 变量（consistency 维度可见否决依据）
+        "fund_manager_decision": (state.get("fund_manager_decision") or "")
+        + (
+            f"\n理由: {state.get('fund_manager_decision_reasoning')}"
+            if state.get("fund_manager_decision_reasoning")
+            else ""
+        ),
     }
 
 

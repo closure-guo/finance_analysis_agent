@@ -32,9 +32,14 @@ def fund_manager(state: dict) -> dict:
     )
     # 枚举强校验：非法值/缺键抛 ValidationError 中断管线，不静默降级为 approve
     # （加固前为 data["decision"] 裸取键，非法值经 routing 的 else 分支被当作批准放行）
-    decision = FundManagerDecision.model_validate(data).decision
+    parsed = FundManagerDecision.model_validate(data)
+    decision = parsed.decision
 
-    result: dict = {"fund_manager_decision": decision}
+    # #111：审批理由不得丢弃——reasoning 落 state，报告渲染 + judge 可见
+    result: dict = {
+        "fund_manager_decision": decision,
+        "fund_manager_decision_reasoning": parsed.reasoning,
+    }
     if decision == "return":
         result["return_count"] = state.get("return_count", 0) + 1
     if decision == "approve":

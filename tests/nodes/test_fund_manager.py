@@ -101,3 +101,16 @@ class TestFundManagerValidation:
         result = fund_manager(_base_state())
         assert result["fund_manager_decision"] == "return"
         assert result["return_count"] == 1
+
+
+class TestReasoningPreserved:
+    """refine #111：FM 审批理由不得丢弃——完整落 state，报告可渲染。"""
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_reasoning_flows_to_state(self, mock_llm):
+        mock_llm.return_value = json.dumps(
+            {"decision": "reject", "reasoning": "回撤38.8%超审慎标准"}, ensure_ascii=False
+        )
+        result = fund_manager({"final_trade_decision": {}, "risk_metrics": {}})
+        assert result["fund_manager_decision"] == "reject"
+        assert result["fund_manager_decision_reasoning"] == "回撤38.8%超审慎标准"
