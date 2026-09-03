@@ -35,3 +35,10 @@
 - [ ] 5.1 `uv run pytest -m "not live"`、ruff、mypy（任务范围）全绿
 - [ ] 5.2 openspec validate <change-id> --strict 通过
 - [x] 5.3 v3 效应实证（对 20 条抽查逐条模拟新普查）：E/F 类 8 条全部认领；A 类脚手架被普查排除、G 类走 event_covered（单元测试已证）；剩余 unmatched 收敛到 8 条真缺口（B/C/D + 1400亿），正是 reject 补 claim 集——目标达成
+
+## 6. 覆盖率缺口打回补 claim（D6，coverage 闭环最后一公里）
+
+- [ ] 6.1 verify_citations：普查 unmatched（D2/D4/D5 之后）按来源分析师生成打回反馈（原文+解析值）
+- [ ] 6.2 after_citation：coverage 缺口纳入重试触发（与值级 FAIL 共享迭代上限 <3、停滞降级语义不变）
+- [ ] 6.3 纯评论性/无状态源数字不触发打回（可接受口径）；打回后复验 unmatched 消除
+- [ ] 6.4 路由/图集成测试（打回→重跑→复验闭环，无死循环）
