@@ -125,7 +125,13 @@ def resolve_reports_path(file_name: str) -> Path:
 init_db()
 
 # 决策日志表(幂等建表,decision_log 与 sessions 同库;decision-outcome-tracking)
-from finance_agent.outcome.store import init_decision_log, insert_decision  # noqa: E402
+from finance_agent.outcome.store import (  # noqa: E402
+    DECISION_STATUSES,
+    decision_stats,
+    init_decision_log,
+    insert_decision,
+    list_decisions,
+)
 
 init_decision_log()
 
@@ -2104,6 +2110,24 @@ async def delete_export_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     file_path.unlink()
     return {"deleted": file_path.name}
+
+
+@app.get("/api/decisions")
+async def get_decisions(
+    ticker: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """expose-decision-outcomes:只读决策列表(决策战绩页数据源)。非法 status 返回 422。"""
+    if status is not None and status not in DECISION_STATUSES:
+        raise HTTPException(status_code=422, detail=f"invalid status: {status}")
+    return await asyncio.to_thread(list_decisions, ticker=ticker, status=status, limit=limit)
+
+
+@app.get("/api/decisions/stats")
+async def get_decision_stats() -> dict[str, Any]:
+    """expose-decision-outcomes:聚合战绩统计(胜率/均值只基于已结算记录)。"""
+    return await asyncio.to_thread(decision_stats)
 
 
 def _now() -> str:
