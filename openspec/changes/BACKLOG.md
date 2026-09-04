@@ -1,33 +1,26 @@
-# Backlog 索引（2026-09-04 盘点立项）
+# Backlog 索引
 
-来源：「完善 agent 功能与可观测性」总盘点后的剩余事项。全部为提案级脚手架（proposal + 最小 delta spec + tasks 骨架），实施前需按 §3 管线补全设计。
+> 状态（2026-09-04 晚）：立项的 8 条 delta 已全部实施完毕（提交 225b10d / 12af347 /
+> 417fd28 / ee1159c / a038970 / 3f429ad / 269c841 / 52a6451）。各 delta 的待办仅剩
+> 人工环节或需 LLM 余额的验证项，明细见各 delta tasks.md 与 tests/validation/ 报告。
 
-## 历史战绩（依赖序：stage-b → stage-c）
+## 已实施
 
-| Delta | 内容 | 前置 |
+| Delta | 内容 | 验证报告 |
 |---|---|---|
-| `add-track-record-stage-b` | 盯市/净值曲线/风险收益指标引擎（年化/回撤/夏普/风险分），P4 收益风险成对 | 阶段 A 已完成 ✅ |
-| `add-track-record-stage-c` | 校准分桶+Brier、四维切片、观点详情页、版本分段（P6）、完整性校验+审计 | stage-b |
+| calibrate-fm-approval | 取证证伪「FM 永不批准」+ return 回路反馈修复 + FM 决策双向门禁 | tests/validation/calibrate-fm-approval-validation.md |
+| add-track-record-stage-b | 盯市/净值/风险收益指标 + 战绩页风险卡与净值图 | tests/validation/track-record-stage-b-validation.md |
+| add-track-record-stage-c | 校准页/四维切片/详情页/版本分段（P6）/完整性校验 | tests/validation/track-record-stage-c-validation.md |
+| add-toolcall-evaluation | 工具调用埋点（_trace_tool）+ 四维评估 + is_streaming 回归修复 | tests/validation/eval-suite-additions-validation.md |
+| add-hallucination-rate-metric | v1 数值型 claim 抽取 + 证据校验 + 幻觉率门禁 | 同上 |
+| add-latency-cost-regression | 时延/token/成本聚合 + 基线回归门禁 + 趋势检测 | 同上 |
+| add-judge-human-calibration | 标注导出 CLI + Spearman/MAE/方向一致率 + 校准触发 | 同上 |
+| enable-hosted-evaluator | 降级方案：scores 轮询 + 告警 + 口径对齐 + 模板快照 | 同上 |
 
-> 注：原计划的 `add-track-record-versioning` 已并入 stage-c（版本分段属 P6 语义，单独拆开会重复造 agents 表）。
+## 遗留待人工/待资源
 
-## 决策质量
-
-| Delta | 内容 | 前置 |
-|---|---|---|
-| `calibrate-fm-approval` | FM 永不批准问题：取证 + prompt 校准 + 决策分布双向门禁（防永不批准/防无脑批准） | 无；建议与 judge-human-calibration 共用人工抽检 |
-
-## 评估体系补强（均落在 agent-evaluation-suite 能力上）
-
-| Delta | 内容 | 前置 |
-|---|---|---|
-| `add-judge-human-calibration` | judge 与人工标注对齐（Spearman/MAE/方向一致率）+ 校准回路 | 人工标注资源 |
-| `add-toolcall-evaluation` | quick 模式工具调用维度（合法集合断言/循环检测/失败恢复） | trace 归因已完成 ✅ |
-| `add-hallucination-rate-metric` | 事实性 claim 抽取 + 证据校验 + 幻觉率门禁 | 可与 toolcall 共用证据源 |
-| `add-latency-cost-regression` | 时延/token/成本基线与回归门禁 + 趋势告警 | 无（纯评测侧增量） |
-| `enable-hosted-evaluator` | Langfuse hosted evaluator 在线评分 + 口径对齐 + 告警 | 需先确认自托管版本能力（tasks 0.1） |
-
-## 并行冲突提示
-
-- 5 个评估类 delta 都 MODIFIED `agent-evaluation-suite`：同时只做一条，sync 后再开下一条，避免 delta 互相覆盖。
-- 评估类 delta 共用「人工抽检批次」，建议 calibrate-fm-approval 与 add-judge-human-calibration 结对实施。
+1. **ADR-0018 落地**（tmp/adr-0018-draft.md → docs/adr/）→ 解锁 archive 链：
+   decision-outcome-tracking → expose-decision-outcomes → add-track-record
+2. LLM 余额恢复后：FM return 回路真实验证（tasks 4.3）、judge 首轮人工标注、
+   hosted evaluator UI 配置、幻觉率事实型 claim（LLM 抽取）
+3. 下个交易日收盘后：真实行情盯市/净值确认（stage-b tasks 4.3）

@@ -8,7 +8,8 @@
 
 ## 验收项
 
-- [ ] `decision_log` 表建立（SQLite migration），TradeDecision 产出即落库，`status=open`，含 `langfuse_trace_id`
+- [x] `decision_log` 表建立（SQLite migration），TradeDecision 产出即落库，`status=open`，含 `langfuse_trace_id`
+  （2026-09-04 核对：表与 schema 已存在并有线上数据；后续 add-track-record 以 predictions 取代其职责，decision_log 保留共存）
 - [x] 落库旁路不阻断业务（SQLite 写失败时管线仍正常完成，仅日志）
 - [x] 日批定时任务（收盘后）结算 open 决策：`hit_stop`/`hit_target`/`expired`，止损优先于目标，超期强制结算
 - [x] 任务幂等（已 settled 跳过）+ 失败重试 + `data_stale` 告警（连续无数据）
