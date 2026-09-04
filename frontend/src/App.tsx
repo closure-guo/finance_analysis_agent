@@ -17,6 +17,7 @@ import { useClickOutside } from './useClickOutside'
 import { usePathname, navigate } from './route'
 import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { TrackRecordPage } from './pages/trackRecord/TrackRecordPage'
+import { CalibrationPage } from './pages/trackRecord/CalibrationPage'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
@@ -875,7 +876,10 @@ export default function App() {
       />
       <MainContent>{(leftInset) => (
       <div>
-        {pathname === '/decisions' || pathname === '/track-record' ? (
+        {pathname === '/track-record/calibration' ? (
+          // add-track-record-stage-c:置信度校准页
+          <CalibrationPage onBack={() => navigate('/track-record')} />
+        ) : pathname === '/decisions' || pathname === '/track-record' ? (
           // add-track-record:旧 /decisions 战绩页重定向语义,与新 /track-record 同渲染
           <TrackRecordPage onBack={() => navigate('/')} />
         ) : pathname === '/downloads' ? (
@@ -950,7 +954,7 @@ export default function App() {
               onSubmit={handleComposerSubmit}
               onCancel={stopGeneration}
             >
-              <div className="fixed top-0 bottom-0 right-0 transition-[left] duration-200 ease-out" style={{ left: leftInset }}>
+              <div className="fixed top-0 bottom-0 right-0 transition-[left] duration-200 ease-out" style={{ left: leftInset }} data-testid="thread-main">
                 <ThreadMessages
                   onRegenerate={handleRegenerate}
                   onOpenReport={setPanelMessage}

@@ -520,6 +520,23 @@ export interface EquityCurveResponse {
   disclaimer: string
 }
 
+// 校准分桶（add-track-record-stage-c）
+export interface CalibrationBucket {
+  bucket: string
+  mid: number
+  n: number
+  hit_rate: number | null
+}
+
+// 校准响应
+export interface CalibrationResponse {
+  buckets: CalibrationBucket[]
+  brier: number | null
+  sample_size: number
+  as_of: string
+  disclaimer: string
+}
+
 // 观点日志列表响应
 export interface PredictionsResponse {
   predictions: PredictionRecord[]

@@ -2,24 +2,26 @@
 
 ## 1. 校准
 
-- [ ] 1.1 失败测试先行：分桶边界/neutral 处理/Brier 计算
-- [ ] 1.2 校准分桶 + Brier Score 计算与 API
-- [ ] 1.3 校准页（校准曲线 + Brier 成对展示）
+- [x] 1.1 失败测试先行：分桶边界/neutral 处理/Brier 计算
+- [x] 1.2 校准分桶 + Brier Score 计算与 API（/api/v1/track-record/calibration）
+- [x] 1.3 校准页（校准曲线 + Brier 卡 + 分桶表，路由 /track-record/calibration）
 
 ## 2. 切片与详情
 
-- [ ] 2.1 四维切片指标（行业/市值/市场环境/持有期，牛熊判定）
-- [ ] 2.2 战绩页切片面板
-- [ ] 2.3 观点详情页 /predictions/:id（叠加图/快照/判定卡/时间轴）
+- [x] 2.1 四维切片引擎（行业静态映射/市值桶/市场环境 250 日均线信号/持有期桶）+ API /segments
+- [ ] 2.2 战绩页切片面板（前端展示四维桶表；外部数据源（市值/基准均线实盘值）接入后启用牛熊/市值维度）——**待办**
+- [x] 2.3 观点详情 API /predictions/:id（快照/audit/判定 + daily_marks 盯市叠加序列）
+- [ ] 2.4 观点详情页前端（叠加图/快照/判定卡/时间轴）——**待办**
 
 ## 3. 版本与完整性
 
-- [ ] 3.1 agents 表 + 版本登记流程
-- [ ] 3.2 统计分段封存（P6）与版本切换展示
-- [ ] 3.3 rationale_snapshot 哈希 + integrity-check 日批 + 审计日志
+- [x] 3.1 agents 表 + 版本登记（register_agent 封存旧版）+ insert 自动归属活跃版本
+- [x] 3.2 统计分段封存（P6）：overview version 参数，缺省当前活跃版本；响应带版本列表
+- [ ] 3.3 前端版本切换查看——**待办**（API 已支持 version 参数）
+- [x] 3.4 rationale_snapshot 哈希（sha256 规范化 JSON，写入即冻结）+ integrity-check 日批（16:40）+ 审计日志（状态变更留痕 action=status_change，篡改留痕 action=integrity_mismatch）
 
 ## 4. 验证
 
-- [ ] 4.1 uv run pytest / ruff / mypy 全绿
-- [ ] 4.2 E2E：校准页/详情页/版本切换
-- [ ] 4.3 人工验证报告落 tests/validation/
+- [x] 4.1 uv run pytest（全套 1857 passed）/ ruff / mypy 全绿
+- [x] 4.2 前端 vitest 全绿；E2E 门禁 19 passed / 7 skipped（CI 镜像环境）
+- [ ] 4.3 人工验证：切真实模型版本（register_agent）确认分段统计 + 校准页看真实 hit 率曲线

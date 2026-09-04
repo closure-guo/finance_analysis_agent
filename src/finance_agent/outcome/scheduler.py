@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from finance_agent.outcome.track_record.job import settle_open_predictions
 from finance_agent.outcome.track_record.marking import persist_metrics_snapshot, run_daily_marking
+from finance_agent.outcome.track_record.model import integrity_check
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,11 @@ def _metrics_job() -> None:
     _with_retry("metrics snapshot", persist_metrics_snapshot)
 
 
+def _integrity_job() -> None:
+    """add-track-record-stage-c：快照哈希完整性校验（16:40，篡改告警）。"""
+    _with_retry("integrity check", integrity_check)
+
+
 def start_scheduler() -> BackgroundScheduler | None:
     """启动日批 scheduler;TESTING/禁用时返回 None。"""
     if os.getenv("TESTING") == "1" or os.getenv("DECISION_SETTLE_ENABLED") == "0":
@@ -79,9 +85,16 @@ def start_scheduler() -> BackgroundScheduler | None:
         id="metrics_snapshot",
         replace_existing=True,
     )
+    # stage-c：完整性校验（16:40）——快照哈希逐条比对，篡改写审计并告警
+    scheduler.add_job(
+        _integrity_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Shanghai"),
+        id="integrity_check",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
-        "decision settle scheduler 已启动(工作日 16:00);daily marking 16:30;metrics snapshot 16:35"
+        "decision settle scheduler 已启动(工作日 16:00);daily marking 16:30;metrics snapshot 16:35;integrity check 16:40"
     )
     return scheduler
 

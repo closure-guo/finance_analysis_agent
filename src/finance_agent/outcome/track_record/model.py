@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -36,7 +37,9 @@ CREATE TABLE IF NOT EXISTS predictions (
   raw_return        REAL,
   excess_return     REAL,
   resolution_rule   TEXT,
-  updated_at        TEXT NOT NULL
+  updated_at        TEXT NOT NULL,
+  version_seq       INTEGER,
+  snapshot_hash     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_status ON predictions(status);
 CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
@@ -127,18 +130,220 @@ CREATE TABLE IF NOT EXISTS agent_metrics_daily (
   risk_label    TEXT,
   segment_json  TEXT NOT NULL DEFAULT '{}'
 );
+
+-- ── add-track-record-stage-c ──
+CREATE TABLE IF NOT EXISTS agents (
+  agent_id          TEXT PRIMARY KEY,
+  model_version     TEXT NOT NULL,
+  strategy_version  TEXT,
+  version_seq       INTEGER NOT NULL,
+  retired_at        TEXT,
+  created_at        TEXT NOT NULL,
+  note              TEXT,
+  UNIQUE(version_seq)
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  log_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  prediction_id TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  old_status    TEXT,
+  new_status    TEXT,
+  detail        TEXT,
+  source        TEXT,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_pred ON audit_log(prediction_id);
 """
 
 
 def init_track_record_tables(db_path: str | Path | None = None) -> None:
-    """建 predictions（若缺）与三张 stage-b 表；幂等，可重复调用。"""
+    """建 predictions（若缺）与全部 stage-b/c 表；幂等，可重复调用。"""
     conn = _connect(db_path)
     try:
         conn.executescript(PREDICTIONS_DDL)
         conn.executescript(TRACK_RECORD_EXTRA_DDL)
+        _migrate_stage_c_columns(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+# stages-c 迁移列：旧库 ALTER TABLE 补列（幂等：先查 PRAGMA table_info）
+_STAGE_C_COLUMNS = (
+    ("version_seq", "ALTER TABLE predictions ADD COLUMN version_seq INTEGER"),
+    ("snapshot_hash", "ALTER TABLE predictions ADD COLUMN snapshot_hash TEXT"),
+)
+
+
+def _migrate_stage_c_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+    for col, ddl in _STAGE_C_COLUMNS:
+        if col not in cols:
+            conn.execute(ddl)
+
+
+def compute_snapshot_hash(rationale_snapshot: Any) -> str:
+    """SHA-256(canonical JSON)。dict 递归排序键、ensure_ascii=False，稳定跨运行。"""
+    import hashlib
+
+    def _canon(v: Any) -> Any:
+        if isinstance(v, dict):
+            return {str(k): _canon(x) for k, x in sorted(v.items(), key=lambda kv: str(kv[0]))}
+        if isinstance(v, list):
+            return [_canon(x) for x in v]
+        return v
+
+    canonical = json.dumps(_canon(rationale_snapshot), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# ── agents：模型/策略版本登记与活跃版本（P6 分段封存）──
+def register_agent(
+    model_version: str,
+    strategy_version: str | None = None,
+    note: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """登记新版本 agent：旧活跃版本 retired_at 落时间戳，新版本接任活跃。"""
+    conn = _connect(db_path)
+    try:
+        now = datetime.now().isoformat()
+        active = conn.execute("SELECT * FROM agents WHERE retired_at IS NULL").fetchone()
+        if active is not None:
+            conn.execute(
+                "UPDATE agents SET retired_at=? WHERE agent_id=?", (now, active["agent_id"])
+            )
+        agent_id = f"ag_{uuid.uuid4().hex[:12]}"
+        seq_row = conn.execute(
+            "SELECT COALESCE(MAX(version_seq), 0) + 1 AS n FROM agents"
+        ).fetchone()
+        version_seq = int(seq_row["n"])
+        conn.execute(
+            """INSERT INTO agents (agent_id, model_version, strategy_version, version_seq,
+                 retired_at, created_at, note)
+               VALUES (?, ?, ?, ?, NULL, ?, ?)""",
+            (agent_id, model_version, strategy_version, version_seq, now, note),
+        )
+        conn.commit()
+        return {
+            "agent_id": agent_id,
+            "model_version": model_version,
+            "strategy_version": strategy_version,
+            "version_seq": version_seq,
+            "retired_at": None,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def get_active_agent(db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM agents WHERE retired_at IS NULL").fetchone()  # noqa: S608
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_agents(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute("SELECT * FROM agents ORDER BY version_seq ASC").fetchall()  # noqa: S608
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_agent(version_seq: int, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM agents WHERE version_seq=?", (version_seq,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+# ── audit_log：状态变更留痕（不可变事实流）──
+def append_audit(
+    prediction_id: str,
+    action: str,
+    *,
+    old_status: str | None = None,
+    new_status: str | None = None,
+    detail: str | None = None,
+    source: str = "system",
+    db_path: str | Path | None = None,
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO audit_log (prediction_id, action, old_status, new_status,
+                 detail, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                prediction_id,
+                action,
+                old_status,
+                new_status,
+                detail,
+                source,
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_audit(prediction_id: str, db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE prediction_id=? ORDER BY log_id ASC",
+            (prediction_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def integrity_check(db_path: str | Path | None = None) -> dict[str, Any]:
+    """快照哈希完整性校验：逐条重算 rationale_snapshot 哈希比对 snapshot_hash。
+
+    篡改（hash 不一致）不自动修复，写审计日志（action='integrity_mismatch'）并
+    返回 mismatches 清单供告警。幂等：重复执行仅追加审计，不改数据。
+    """
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT prediction_id, rationale_snapshot, snapshot_hash, status FROM predictions"
+        ).fetchall()  # noqa: S608
+    finally:
+        conn.close()
+
+    mismatches: list[dict[str, Any]] = []
+    for r in rows:
+        expected = r["snapshot_hash"]
+        if not expected:
+            continue  # 旧数据无哈希列，不判篡改
+        try:
+            actual = compute_snapshot_hash(json.loads(r["rationale_snapshot"]))
+        except (json.JSONDecodeError, TypeError):
+            actual = compute_snapshot_hash(r["rationale_snapshot"])
+        if actual != expected:
+            mismatches.append(
+                {"prediction_id": r["prediction_id"], "expected": expected, "actual": actual}
+            )
+            append_audit(
+                r["prediction_id"],
+                "integrity_mismatch",
+                detail=f"期望 {expected[:12]}… 实际 {actual[:12]}…",
+                source="integrity-check",
+                db_path=db_path,
+            )
+    return {"checked": len(rows), "mismatches": mismatches, "mismatch_count": len(mismatches)}
 
 
 # ── daily_marks：盯市（upsert 幂等；同一 (prediction_id, mark_date) 覆盖重写）──
@@ -309,6 +514,16 @@ def insert_prediction(
     """
     prediction_id = record.get("prediction_id") or f"p_{uuid.uuid4().hex[:12]}"
     created_at = record.get("created_at") or record.get("timestamp") or datetime.now().isoformat()
+    version_seq = record.get("version_seq")
+    if version_seq is None:
+        # 版本关联为增强字段：老库（未建 agents 表）不阻断落库
+        try:
+            active = get_active_agent(db_path=db_path)
+            version_seq = active["version_seq"] if active else None
+        except sqlite3.OperationalError:
+            version_seq = None
+    snapshot = record.get("rationale_snapshot") or {}
+    snapshot_hash = record.get("snapshot_hash") or compute_snapshot_hash(snapshot)
     conn = _connect(db_path)
     try:
         conn.execute(
@@ -316,8 +531,8 @@ def insert_prediction(
                  prediction_id, source_type, symbol, symbol_name, direction,
                  entry_price, target_price, horizon_days, confidence, benchmark,
                  rationale_snapshot, langfuse_trace_id, status, created_at, updated_at,
-                 resolution_rule
-               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 resolution_rule, version_seq, snapshot_hash
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 prediction_id,
                 record["source_type"],
@@ -329,12 +544,14 @@ def insert_prediction(
                 int(record.get("horizon_days", 252)),
                 record.get("confidence"),
                 record.get("benchmark", "000300.SH"),
-                json.dumps(record.get("rationale_snapshot") or {}, ensure_ascii=False),
+                json.dumps(snapshot, ensure_ascii=False),
                 record.get("langfuse_trace_id"),
                 status,
                 created_at,
                 created_at,
                 record.get("resolution_rule"),
+                version_seq,
+                snapshot_hash,
             ),
         )
         conn.commit()
@@ -344,16 +561,24 @@ def insert_prediction(
 
 
 def update_prediction_status(
-    prediction_id: str, resolved: dict[str, Any], db_path: str | Path | None = None
+    prediction_id: str,
+    resolved: dict[str, Any],
+    db_path: str | Path | None = None,
+    source: str = "system",
 ) -> None:
-    """判定结果更新。尝试改冻结字段抛 FrozenFieldError;幂等由调用方保证。"""
+    """判定结果更新。尝试改冻结字段抛 FrozenFieldError;幂等由调用方保证。
+
+    stage-c：任何状态变更写审计日志（old/new status + source）。
+    """
     frozen_hits = [f for f in _FROZEN_FIELDS if f in resolved]
     if frozen_hits:
         raise FrozenFieldError(f"attempt to mutate frozen field(s): {frozen_hits}")
     conn = _connect(db_path)
     try:
-        cur = conn.execute("SELECT * FROM predictions WHERE prediction_id=?", (prediction_id,))
-        if cur.fetchone() is None:
+        row = conn.execute(
+            "SELECT * FROM predictions WHERE prediction_id=?", (prediction_id,)
+        ).fetchone()
+        if row is None:
             return
         fields = [f for f in _MUTABLE_FIELDS if f in resolved]
         if not fields:
@@ -363,6 +588,24 @@ def update_prediction_status(
         # 列名来自固定常量元组 _MUTABLE_FIELDS，值已参数化
         sql = f"UPDATE predictions SET {sets} WHERE prediction_id=?"  # noqa: S608
         conn.execute(sql, (*params, prediction_id))
+        old_status = row["status"]
+        new_status = resolved.get("status")
+        if new_status is not None and new_status != old_status:
+            # 老库无 audit_log 表：审计为增强字段，缺表不阻断判定
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(
+                    """INSERT INTO audit_log (prediction_id, action, old_status, new_status,
+                         detail, source, created_at)
+                       VALUES (?, 'status_change', ?, ?, ?, ?, ?)""",
+                    (
+                        prediction_id,
+                        old_status,
+                        new_status,
+                        resolved.get("resolution_rule"),
+                        source,
+                        datetime.now().isoformat(),
+                    ),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -401,15 +644,39 @@ def list_predictions(
         conn.close()
 
 
-def prediction_stats(
-    source_type: str | None = None, db_path: str | Path | None = None
-) -> dict[str, Any]:
-    """胜率/超额聚合。胜率只基于 resolved_win/resolved_loss;neutral/unresolvable 不进分母。"""
+def get_prediction(prediction_id: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
     conn = _connect(db_path)
     try:
-        where, params = (" WHERE source_type=?", [source_type]) if source_type else ("", [])
-        src_cond = " AND source_type=?" if source_type else ""
-        # where/src_cond 均为固定字面量，值已参数化
+        row = conn.execute(
+            "SELECT * FROM predictions WHERE prediction_id=?", (prediction_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def prediction_stats(
+    source_type: str | None = None,
+    db_path: str | Path | None = None,
+    version_seq: int | None = None,
+) -> dict[str, Any]:
+    """胜率/超额聚合。胜率只基于 resolved_win/resolved_loss;neutral/unresolvable 不进分母。
+
+    stage-c：version_seq 过滤用于分段封存（P6），缺省统计全部版本。
+    """
+    conn = _connect(db_path)
+    try:
+        cond = ""
+        params: list[Any] = []
+        if source_type:
+            cond += " AND source_type=?"
+            params.append(source_type)
+        if version_seq is not None:
+            cond += " AND version_seq=?"
+            params.append(version_seq)
+        where = " WHERE 1=1" + cond
+        src_cond = cond  # 除 COUNT(*) 无 WHERE 的查询外，条件部分相同
+        # where/src_cond 均为固定字面量拼装 + 值参数化
         q_total = f"SELECT COUNT(*) FROM predictions{where}"  # noqa: S608
         q_open = f"SELECT COUNT(*) FROM predictions WHERE status='open'{src_cond}"  # noqa: S608
         q_win = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_win'{src_cond}"  # noqa: S608

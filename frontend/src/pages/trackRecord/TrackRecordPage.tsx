@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
 import type { EquityCurvePoint, PredictionRecord, PredictionStatus, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
+import { navigate } from '../../route'
 
 const STATUS_LABEL: Record<PredictionStatus, string> = {
   open: '进行中',
@@ -100,7 +101,10 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
     <div className="mx-auto max-w-5xl px-6 py-8" data-testid="track-record">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold" style={{ color: 'var(--text-default)' }}>历史战绩</h1>
-        <Button variant="ghost" size="sm" onClick={onBack} data-testid="track-record-back">返回聊天</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/track-record/calibration')} data-testid="track-record-calibration-link">校准查看</Button>
+          <Button variant="ghost" size="sm" onClick={onBack} data-testid="track-record-back">返回聊天</Button>
+        </div>
       </div>
 
       {error ? (

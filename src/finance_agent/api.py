@@ -133,19 +133,26 @@ from finance_agent.outcome.store import (  # noqa: E402
     init_decision_log,
     list_decisions,
 )
+from finance_agent.outcome.track_record.calibration import calibration_table  # noqa: E402
 
 # predictions 战绩体系(add-track-record):全量观点记录取代 decision_log 写入
 from finance_agent.outcome.track_record.ingest import (  # noqa: E402
     persist_prediction_from_accumulated,
 )
 from finance_agent.outcome.track_record.model import (  # noqa: E402
+    get_active_agent,
     get_latest_metrics,
+    get_prediction,
     init_predictions,
     init_track_record_tables,
+    list_agents,
+    list_audit,
+    list_daily_marks,
     list_equity_curve,
     list_predictions,
     prediction_stats,
 )
+from finance_agent.outcome.track_record.segments import segment_all  # noqa: E402
 
 init_decision_log()
 init_predictions()
@@ -2138,15 +2145,22 @@ def _track_as_of() -> str:
 
 
 @app.get("/api/v1/track-record/overview")
-async def track_record_overview(source: str | None = None) -> dict[str, Any]:
+async def track_record_overview(
+    source: str | None = None, version: int | None = None
+) -> dict[str, Any]:
     """add-track-record:战绩总览(胜率/超额/样本量 + as_of + 免责声明)。
 
     显著性门槛:已结算 < 10 时 win_rate 置 null 并带 insufficient_sample 标注
     (前端显示「样本积累中」)。回测/实盘经 source 参数分离,不合并不展示。
     stage-b:总览追加组合指标块(年化/波动/夏普/回撤/风险分,来自 agent_metrics_daily
     最新快照;无快照时 portfolio.available=false)。
+    stage-c(P6):统计按版本分段——version 缺省取当前活跃 agent 版本
+    (无登记 agent 时统计全部);响应带 version_seq 与可用版本列表。
     """
-    stats = await asyncio.to_thread(prediction_stats, source_type=source)
+    if version is None:
+        active = await asyncio.to_thread(get_active_agent)
+        version = active["version_seq"] if active else None
+    stats = await asyncio.to_thread(prediction_stats, source_type=source, version_seq=version)
     settled = stats["settled"]
     insufficient = settled < 10
     metrics = await asyncio.to_thread(get_latest_metrics)
@@ -2168,6 +2182,8 @@ async def track_record_overview(source: str | None = None) -> dict[str, Any]:
         "disclaimer": _DISCLAIMER,
         "win_rate": None if insufficient else stats["win_rate"],
         "portfolio": portfolio,
+        "version_seq": version,
+        "versions": await asyncio.to_thread(list_agents),
     }
 
 
@@ -2189,6 +2205,79 @@ async def track_record_equity_curve() -> dict[str, Any]:
     ]
     return {
         "points": points,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/calibration")
+async def track_record_calibration() -> dict[str, Any]:
+    """add-track-record-stage-c:置信度校准（分桶 + Brier Score）。
+
+    桶含中值/样本数/实际命中率；Brier 越低校准越好。neutral 按 0.5 计，
+    unresolvable 与 open 不进桶。
+    """
+    preds = await asyncio.to_thread(list_predictions, limit=10000)
+    result = await asyncio.to_thread(calibration_table, preds)
+    return {
+        "buckets": result.buckets,
+        "brier": result.brier,
+        "sample_size": result.sample_size,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/segments")
+async def track_record_segments() -> dict[str, Any]:
+    """add-track-record-stage-c:四维切片指标（持有期/行业/市值/市场环境）。
+
+    市值与市场环境需外部数据（市值快照/基准均线），当前无数据时对应桶归
+    「未知」并如实标注——不伪造数据。
+    """
+    preds = await asyncio.to_thread(list_predictions, limit=10000)
+
+    def _run() -> list[dict[str, Any]]:
+        dims = segment_all(preds)
+        return [
+            {
+                "dimension": d.dimension,
+                "total": d.total,
+                "settled": d.settled,
+                "buckets": [
+                    {
+                        "name": b.name,
+                        "sample_size": b.sample_size,
+                        "win_rate": b.win_rate,
+                        "avg_excess": b.avg_excess,
+                        "insufficient": b.insufficient,
+                    }
+                    for b in d.buckets
+                ],
+            }
+            for d in dims
+        ]
+
+    dimensions = await asyncio.to_thread(_run)
+    return {
+        "dimensions": dimensions,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/predictions/{prediction_id}")
+async def track_record_prediction_detail(prediction_id: str) -> dict[str, Any]:
+    """add-track-record-stage-c:观点详情（快照只读 + 判定信息 + 审计轨迹 + 盯市叠加）。"""
+    prediction = await asyncio.to_thread(get_prediction, prediction_id)
+    if prediction is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
+    audit = await asyncio.to_thread(list_audit, prediction_id)
+    marks = await asyncio.to_thread(list_daily_marks, prediction_id=prediction_id)
+    return {
+        "prediction": prediction,
+        "audit": audit,
+        "marks": marks,
         "as_of": _track_as_of(),
         "disclaimer": _DISCLAIMER,
     }
