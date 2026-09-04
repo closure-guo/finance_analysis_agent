@@ -458,6 +458,9 @@ export default function App() {
     }
     store.switchSession(sessionId)
     setAndPersistSession(sessionId)
+    // 全页视图(战绩/下载中心)下点会话也应回聊天首页——否则切了会话但主内容
+    // 仍渲染全页,所选会话不可见
+    if (pathname !== '/') navigate('/')
 
     const state = store.getSnapshot(sessionId)
     if (!forceRebuild && state.origin === 'live') {
@@ -542,6 +545,9 @@ export default function App() {
     // delta spec Task 5.3：新建分析仅断开本地订阅
     store.switchSession(null)
     setAndPersistSession(null)
+    // 全页视图(战绩/下载中心)下回到聊天首页——否则新建后 pathname 不变,
+    // 主内容仍渲染全页,新建会话不可见
+    if (pathname !== '/') navigate('/')
   }
 
   // 停止当前会话的生成任务（quick AG-UI 通道 abort；深度模式本地 abort + 后端 cancel）

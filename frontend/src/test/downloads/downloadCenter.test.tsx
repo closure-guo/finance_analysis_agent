@@ -89,6 +89,17 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
   })
 
+  it('全页视图下点击「新建分析」应回聊天首页（bug 复现）', async () => {
+    goDownloads()
+    mockFetch({ files: [] })
+    render(<App />)
+    await screen.findByTestId('downloads-empty')
+    // 侧边栏「新建分析」按钮:任何页面都应收敛回首页聊天
+    fireEvent.click(screen.getByTestId('sidebar-new'))
+    await waitFor(() => expect(window.location.pathname).toBe('/'))
+    expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
+  })
+
   it('接口失败 toast 报错且不以空态冒充', async () => {
     goDownloads()
     mockFetch({ status: 500 })
@@ -144,10 +155,11 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
   })
 
-  it('侧边栏底部「下载管理」入口跳转 /downloads', async () => {
+  it('侧边栏「下载管理」入口跳转 /downloads（展开态底部入口已移除，走折叠态图标栏）', async () => {
+    localStorage.setItem('fa_sidebar_collapsed', '1')
     mockFetch({ files })
     render(<App />)
-    const entry = await screen.findByTestId('sidebar-downloads')
+    const entry = await screen.findByTestId('sidebar-downloads-collapsed')
     fireEvent.click(entry)
     await waitFor(() => expect(window.location.pathname).toBe('/downloads'))
     expect(await screen.findAllByTestId('download-row')).toHaveLength(2)

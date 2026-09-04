@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { TrackRecordPage } from '../../pages/trackRecord/TrackRecordPage'
+import App from '../../App'
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -92,5 +93,48 @@ describe('track-record 战绩页（add-track-record）', () => {
     renderPage()
     await screen.findByText('贵州茅台')
     expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+})
+
+describe('战绩页全页视图下的导航（bug 复现：新建会话应回聊天首页）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('fa_api_key', 'test-key')
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    window.history.pushState({}, '', '/')
+  })
+
+  function appMock() {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/v1/track-record/overview')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          total: 0, open: 0, settled: 0, win_rate: null, avg_excess: null,
+          status_counts: {}, source_type: null, insufficient_sample: true,
+          as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
+        }), { status: 200 }))
+      }
+      if (url.includes('/api/v1/track-record/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({ predictions: [], page: 1, page_size: 50, total: 0, as_of: '2026-09-03', disclaimer: 'x' }), { status: 200 }))
+      }
+      if (url === '/api/sessions') {
+        return Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    }))
+  }
+
+  it('战绩页点击「新建分析」回到聊天首页', async () => {
+    appMock()
+    window.history.pushState({}, '', '/track-record')
+    render(<App />)
+    await screen.findByTestId('track-record')
+    fireEvent.click(screen.getByTestId('sidebar-new'))
+    await waitFor(() => expect(window.location.pathname).toBe('/'))
+    expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
   })
 })
