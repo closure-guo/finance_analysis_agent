@@ -26,6 +26,7 @@ _logger = logging.getLogger("finance_agent.api")
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
 from finance_agent.graph import build_5layer_graph  # noqa: E402
+from finance_agent.langfuse_tracing import get_langfuse  # noqa: E402
 from finance_agent.llm import LLMConfig  # noqa: E402
 from finance_agent.pipeline_runner import PipelineRunner, build_layer_tree  # noqa: E402
 from finance_agent.react_agent import (  # noqa: E402
@@ -39,6 +40,7 @@ from finance_agent.session_store import (  # noqa: E402
     delete_session,
     get_max_event_seq,
     get_session,
+    get_session_trace_id,
     get_terminal_event,
     init_db,
     list_session_events,
@@ -263,6 +265,13 @@ class ChatRequest(BaseModel):
 
 class RenameRequest(BaseModel):
     display_name: str
+
+
+class FeedbackRequest(BaseModel):
+    """用户点赞/点踩反馈请求体（add-user-feedback）。"""
+
+    session_id: str
+    value: str  # like | dislike
 
 
 class ModelsRequest(BaseModel):
@@ -2167,6 +2176,37 @@ async def track_record_predictions(
         "as_of": _track_as_of(),
         "disclaimer": _DISCLAIMER,
     }
+
+
+@app.post("/api/feedback")
+async def submit_feedback(req: FeedbackRequest) -> dict[str, Any]:
+    """add-user-feedback:用户点赞/点踩落 Langfuse trace(按 session 解析最近一次运行)。
+
+    旁路铁律:Langfuse 不可达/trace 不存在/session 无关联 trace 时仅 WARN,不报 5xx;
+    前端不因后端失败报错(本地 toggle 语义保留)。value 非法经 Pydantic 校验 422。
+    """
+    if req.value not in ("like", "dislike"):
+        raise HTTPException(status_code=422, detail="value must be like|dislike")
+    trace_id = await asyncio.to_thread(get_session_trace_id, req.session_id)
+    if not trace_id:
+        _logger.warning("feedback 跳过: session %s 无关联 trace", req.session_id)
+        return {"ok": True, "submitted": False}
+    lf = get_langfuse()
+    if lf is None:
+        _logger.warning("feedback 跳过: Langfuse 未配置")
+        return {"ok": True, "submitted": False}
+    try:
+        lf.create_score(
+            name="user_feedback",
+            value=1 if req.value == "like" else 0,
+            trace_id=trace_id,
+            data_type="BOOLEAN",
+        )
+        lf.flush()
+        return {"ok": True, "submitted": True}
+    except Exception:  # noqa: BLE001 - 旁路铁律
+        _logger.warning("feedback 上报失败(trace 不可查?): %s", trace_id, exc_info=True)
+        return {"ok": True, "submitted": False}
 
 
 def _now() -> str:

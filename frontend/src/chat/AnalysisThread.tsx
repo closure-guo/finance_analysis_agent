@@ -165,20 +165,29 @@ const UserMessage = () => (
 
 // 消息操作条（复制/重试/点赞/点踩）——小图标 + aria-label（项目图标库 FontAwesome）。
 // 固定高度行恒渲染(消除 hover 挂载导致的文本块布局位移);按钮仅在 hover 且非流式
-// 时挂载。重试只出现在最后一段 agent 输出下(showRetry);点赞/点踩为本地 toggle。
+// 时挂载。重试只出现在最后一段 agent 输出下(showRetry);点赞/点踩经 feedbackHandler
+// 桥上报(add-user-feedback),本地 toggle 语义保留。
 export function MessageActions({
   text,
   onRegenerate,
   visible,
   showRetry,
+  onFeedback,
 }: {
   text: string
   onRegenerate: () => void
   visible: boolean
   showRetry: boolean
+  /** 点赞/点踩上报（缺省走 feedbackHandler 桥，由 ThreadMessages 注入） */
+  onFeedback?: (value: 'like' | 'dislike') => void
 }) {
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<'like' | 'dislike' | null>(null)
+  const toggleFeedback = (k: 'like' | 'dislike') => {
+    const next = feedback === k ? null : k
+    setFeedback(next)
+    if (next) (onFeedback ?? feedbackHandler)?.(next)
+  }
   const activeCls = (k: 'like' | 'dislike') =>
     feedback === k ? { color: 'var(--bg-brand)', background: 'var(--bg-brand-popup)' } : undefined
   return (
@@ -213,7 +222,7 @@ export function MessageActions({
           <button
             aria-label="点赞"
             title="点赞"
-            onClick={() => setFeedback(feedback === 'like' ? null : 'like')}
+            onClick={() => toggleFeedback('like')}
             className="flex items-center justify-center size-6 rounded-md transition-colors"
             style={{ color: 'var(--text-tertiary)', ...activeCls('like') }}
           >
@@ -222,7 +231,7 @@ export function MessageActions({
           <button
             aria-label="点踩"
             title="点踩"
-            onClick={() => setFeedback(feedback === 'dislike' ? null : 'dislike')}
+            onClick={() => toggleFeedback('dislike')}
             className="flex items-center justify-center size-6 rounded-md transition-colors"
             style={{ color: 'var(--text-tertiary)', ...activeCls('dislike') }}
           >
@@ -233,6 +242,9 @@ export function MessageActions({
     </div>
   )
 }
+
+// 模块级桥:App 提供点赞/点踩上报(add-user-feedback),MessageActions 调用
+let feedbackHandler: ((value: 'like' | 'dislike') => void) | null = null
 
 // 判断指定消息是否为线程中最后一条 assistant 消息（重试按钮只出现在最后一段 agent 输出下）
 export function isLastAssistantMessageId(
@@ -347,12 +359,15 @@ export interface ThreadMessagesProps {
   onRegenerate?: (messageId: string) => void
   /** 报告摘要卡「打开报告」回调（App 打开右侧面板；移动端由 App 端回退） */
   onOpenReport?: (msg: UIMessage) => void
+  /** 点赞/点踩上报回调（add-user-feedback；App 按 session POST /api/feedback） */
+  onFeedback?: (value: 'like' | 'dislike') => void
 }
 
 // 消息区：Viewport autoScroll 提供流式跟随/上翻暂停/回底恢复（delta spec）
-export function ThreadMessages({ footer, onRegenerate, onOpenReport }: ThreadMessagesProps) {
+export function ThreadMessages({ footer, onRegenerate, onOpenReport, onFeedback }: ThreadMessagesProps) {
   regenerateHandler = onRegenerate ?? null
   openReportHandler = onOpenReport ?? null
+  feedbackHandler = onFeedback ?? null
   return (
     <ThreadPrimitive.Root className="h-full">
       <ThreadPrimitive.Viewport autoScroll className="h-full overflow-y-auto">

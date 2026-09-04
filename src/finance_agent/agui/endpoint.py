@@ -353,6 +353,13 @@ async def _agui_run_stream(
                     await asyncio.to_thread(
                         session_store.update_session_status, thread_id, "completed"
                     )
+                    # add-user-feedback:把本次运行的 Langfuse trace 关联到 session
+                    # (反馈端点按 session 解析最近一次运行的 trace 落 score)
+                    _trace_id = getattr(react_obs, "trace_id", None)
+                    if _trace_id:
+                        await asyncio.to_thread(
+                            session_store.set_session_trace_id, thread_id, _trace_id
+                        )
                     terminal_persisted = True
                 elif isinstance(event, RunErrorEvent):
                     # 终态先落库再下发：部分内容落库 + failed（不落库成功回复）

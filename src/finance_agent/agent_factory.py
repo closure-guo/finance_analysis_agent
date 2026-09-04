@@ -745,6 +745,22 @@ def _make_run_deep_analysis(
                         stock_code,
                         stock_name,
                     )
+                    # add-user-feedback:把本次深分析运行的 Langfuse trace 关联到
+                    # session(反馈端点按 session 解析最近一次运行落 score)
+                    _tid = accumulated.get("langfuse_trace_id")
+                    if not _tid:
+                        try:
+                            from finance_agent.langfuse_tracing import get_langfuse as _lf_get
+
+                            _lfc = _lf_get()
+                            if _lfc is not None:
+                                _tid = _lfc.get_current_trace_id()
+                        except Exception:  # noqa: BLE001 - 取不到则降级(前端本地 toggle)
+                            _tid = None
+                    if _tid:
+                        await asyncio.to_thread(
+                            _session_store.set_session_trace_id, session_id, _tid
+                        )
 
                 metadata = {
                     "chart_data": accumulated.get("chart_data") or {},

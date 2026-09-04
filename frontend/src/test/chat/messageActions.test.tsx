@@ -64,6 +64,28 @@ describe('MessageActions 操作条（bug 复现 + 设计要求）', () => {
     expect(writeText).toHaveBeenCalledWith('正文内容')
     vi.unstubAllGlobals()
   })
+
+  it('点赞/点踩触发 onFeedback 上报(add-user-feedback)', () => {
+    const onFeedback = vi.fn()
+    render(
+      <MessageActions text="t" onRegenerate={vi.fn()} visible showRetry={false} onFeedback={onFeedback} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '点赞' }))
+    expect(onFeedback).toHaveBeenCalledWith('like')
+    fireEvent.click(screen.getByRole('button', { name: '点踩' }))
+    expect(onFeedback).toHaveBeenCalledWith('dislike')
+  })
+
+  it('再点同一切换按钮取消(不上报)', () => {
+    const onFeedback = vi.fn()
+    render(
+      <MessageActions text="t" onRegenerate={vi.fn()} visible showRetry={false} onFeedback={onFeedback} />,
+    )
+    const like = screen.getByRole('button', { name: '点赞' })
+    fireEvent.click(like)
+    fireEvent.click(like) // 取消
+    expect(onFeedback).toHaveBeenCalledTimes(1) // 仅首次上报
+  })
 })
 
 describe('isLastAssistantMessageId（重试只出现在最后一段 agent 输出）', () => {

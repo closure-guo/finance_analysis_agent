@@ -954,6 +954,15 @@ export default function App() {
                 <ThreadMessages
                   onRegenerate={handleRegenerate}
                   onOpenReport={setPanelMessage}
+                  onFeedback={(value) => {
+                    // add-user-feedback:点赞/点踩上报(按当前会话解析 trace,后端旁路容错)
+                    if (!currentSessionId) return
+                    void fetch('/api/feedback', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ session_id: currentSessionId, value }),
+                    }).catch(() => {})
+                  }}
                   footer={
                     <>
                       {/* 会话级文件导出入口：报告名横幅（每份报告，标题「名称（代码）」）尾部追加全部文件横幅 */}
