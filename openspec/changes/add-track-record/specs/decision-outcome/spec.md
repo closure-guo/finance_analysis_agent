@@ -90,3 +90,20 @@
 - **WHEN** 拉取日 K 计算区间收益
 - **THEN** SHALL 使用后复权（adj）口径
 - **AND** 分红除权处理遵循后复权口径，不做首版近似
+
+## REMOVED Requirements
+
+### Requirement: 决策战绩页面
+
+> 被本 delta 新增的「战绩页面」（track-record 能力，/track-record）取代：旧 /decisions 页面废弃、路由改指新页，仅保留决策查询 API（`GET /api/decisions` 与 `/api/decisions/stats`）与前端共存，页面行为与数据口径以后者为准。
+
+#### Scenario: 旧页面废弃
+
+- **WHEN** 用户访问 /decisions 或 /track-record
+- **THEN** SHALL 渲染统一的新战绩页面（TrackRecordPage）
+- **AND** 旧 DecisionCenter 页面 SHALL 不再存在（/decisions 路由指向新页面）
+
+#### Scenario: API 共存
+
+- **WHEN** 前端或外部仍调用 `GET /api/decisions` 与 `/api/decisions/stats`
+- **THEN** 两端点 SHALL 继续可用并返回既有契约（决策列表现状/过滤参数/统计口径不变）
