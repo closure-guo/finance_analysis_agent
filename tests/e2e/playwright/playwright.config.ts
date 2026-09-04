@@ -33,6 +33,9 @@ export default defineConfig({
     'visual-baseline-report.spec.ts',
     // 以下为前置技术债：使用 waitForTimeout 的时序依赖测试，在 CI 上不稳定，
     // 需专属 STUB_SCENARIO 或在 timeline config 内运行。
+    // 2026-09-04 重写：concurrent-streaming-integrity 已把 5 处 waitForTimeout
+    // 改为 web-first 断言（thread-main 切换生效 + 输入框就绪）并重新进门禁；
+    // 其余 spec 仍为 waitForTimeout 技术债，继续排除。
     // 2026-09-04 扩充：把全部 waitForTimeout 技术债 spec 移出门禁（此前仅排除了
     // 两个，导致 CI 门禁因这些不稳定 spec 长期变红——downloads stale testid 与
     // 本批 debug-*/explore/concurrent-streaming 均为已知问题，非代码回归）。
@@ -44,7 +47,6 @@ export default defineConfig({
     'debug-sse-continue.spec.ts',
     'debug-switch-during-thinking.spec.ts',
     'debug-switch-session.spec.ts',
-    'concurrent-streaming-integrity.spec.ts',
     'explore.spec.ts',
     // 以下为 @live 人工验证/时序敏感测试，stub 环境无法满足其前提（见 spec 内注释）：
     // - refresh-resume-accept：要求「流式进行中」刷新（真实 LLM 慢速流式下思考横幅

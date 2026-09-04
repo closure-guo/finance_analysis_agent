@@ -7,6 +7,15 @@ import { test, expect } from '@playwright/test'
  * 后端 TESTING=1 走 StubLLMClient（固定文本，零 token 消耗），
  * 前端真实 Vite dev server，SSE 全链路真实——满足 E2E 禁 mock 红线。
  *
+ * 核心技术债改造（2026-09-04）：原 spec 含 5 处 waitForTimeout（引导/切换
+ * 固定等待），CI 上时序漂移导致不稳定、被移出门禁。现全部改为 web-first 断言：
+ *   - 页面/新建会话就绪：等主输入框可见（真实交互面，非计时）
+ *   - 新建会话后发送：以「输入值落定 → 发送键可点击」为闸门，值被视图
+ *     remount 清空则重填再发（sendMessage，上限 5 次，无固定 sleep）
+ *   - 会话间快速切换：等主线程（thread-main）渲染出目标会话的用户消息，
+ *     才允许点下一个——既保留「切换生效后再点下一个」的竞态约束，又
+ *     不再依赖固定 sleep（Playwright 自动重试至超时）。
+ *
  * 核心断言（精准，因 stub 文本固定已知）：
  *   会话 A / 会话 B 的最终回答必须完整等于 STUB_ANSWER，
  *   无缺字（缺失）、无交叉混入对方内容（串字）。
@@ -25,6 +34,9 @@ const API_BASE = process.env.E2E_API_BASE ?? 'http://localhost:8000'
 const FRONTEND = process.env.E2E_FRONTEND ?? 'http://localhost:5173'
 const LLM_KEY = process.env.LLM_API_KEY || 'stub-key-for-testing'
 
+// 主输入框（quick/deep 占位符不同，但都以「输入」开头；空态与对话态不同时挂载）
+const COMPOSER = /输入/
+
 // 会话库含历史遗留数据（同名会话可能存在多条），每个测试用独立唯一 tag
 // 使 display_name 全局唯一，避免 find 命中历史/上一轮会话导致断言错位。
 // 注意：必须在每个 test 内生成（模块级常量在 --repeat-each 下会被复用）
@@ -37,15 +49,69 @@ function makeQueries() {
 // 拼接后为完整字符串；若流式丢字/串字，页面最终文本不会等于它
 const STUB_ANSWER = '这是一段测试用的固定回复。用于验证流式渲染的增量累积。'
 
-// 快速来回切换 N 次：模拟用户在同标签内切换会话
-async function rapidSwitch(page: import('@playwright/test').Page, displayNames: [string, string], times: number) {
-  for (let i = 0; i < times; i++) {
-    const target = displayNames[i % 2]
-    const item = page.getByText(target, { exact: false }).first()
-    if (await item.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await item.click()
-      await page.waitForTimeout(300)
+/**
+ * 主线程已切到目标会话（web-first）。
+ *
+ * 切回 live 会话时无加载遮罩，可观察的「切换生效」信号=主线程渲染出该
+ * 会话的用户消息（History 由 ThreadMessages/streamStore 渲染，new run 由
+ * QuickThread 渲染，两者都在 thread-main 容器内）。侧边栏同名文本用
+ * session-list 作用域隔离，不与 thread-main 混淆。
+ */
+async function expectThreadShows(page: import('@playwright/test').Page, query: string) {
+  await expect(
+    page.getByTestId('thread-main').getByText(query, { exact: false }).first(),
+  ).toBeVisible({ timeout: 10_000 })
+}
+
+/** 主输入框就绪（空态/对话态统一入口：页面引导、新建会话后都等它） */
+async function expectComposerReady(page: import('@playwright/test').Page) {
+  await expect(page.getByPlaceholder(COMPOSER)).toBeVisible()
+}
+
+/**
+ * 向当前会话发送一条消息（web-first 重试版）。
+ *
+ * 新建会话存在真实瞬态：abort 完成/视图 remount 会清空输入值，输入框身份
+ * 可能被替换（fill 的值随之丢失 → 发送键保持 disabled）。不用固定 sleep，
+ * 以「输入值落定（toHaveValue）→ 发送键可点击」两个可观察状态为闸门重试；
+ * 值被清空就重填，直到稳定发出（上限 5 次，超出即报错而非静默成功）。
+ */
+async function sendMessage(page: import('@playwright/test').Page, query: string) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const input = page.getByPlaceholder(COMPOSER)
+    await expect(input).toBeVisible()
+    await input.fill(query)
+    try {
+      await expect(input).toHaveValue(query, { timeout: 3_000 })
+      await page.getByTestId('send-button').click({ timeout: 5_000 })
+      return
+    } catch (err) {
+      console.log(`[E2E] 输入被清空/发送键不可用（第 ${attempt}/5 次重试）：${(err as Error).message?.slice(0, 120)}`)
     }
+  }
+  throw new Error(`发送失败：输入框无法稳定持有消息「${query}」`)
+}
+
+/**
+ * 快速来回切换 N 次：模拟用户在同标签内切换会话。
+ *
+ * web-first 化：每次点击后先断言 thread-main 已渲染目标会话的用户消息
+ * （=切换已生效）才点下一个。没有固定 sleep → CI 时序漂移免疫；同时守住
+ * 原 300ms 的语义：点击队列里不允许叠加「未生效的切换」，否则测的是浏览器
+ * 事件队列而不是 abort/resume 竞态。
+ */
+async function rapidSwitch(
+  page: import('@playwright/test').Page,
+  sessions: Array<{ display_name: string; query: string }>,
+  times: number,
+) {
+  const list = page.getByTestId('session-list')
+  for (let i = 0; i < times; i++) {
+    const target = sessions[i % 2]
+    const item = list.getByText(target.display_name, { exact: false }).first()
+    await expect(item).toBeVisible()
+    await item.click()
+    await expectThreadShows(page, target.query)
   }
 }
 
@@ -62,7 +128,7 @@ test.describe('并发流式输出完整性', () => {
       localStorage.setItem('fa_user_id', 'e2e-concurrent-stream')
     }, LLM_KEY)
     await page.reload()
-    await page.waitForTimeout(500)
+    await expectComposerReady(page)
   })
 
   test('两会话并发流式输出 + 快速切换，文本完整无缺字无串字', async ({ page }) => {
@@ -70,8 +136,7 @@ test.describe('并发流式输出完整性', () => {
     const { queryA: QUERY_A, queryB: QUERY_B } = makeQueries()
 
     // ── 会话 A：发起第一条消息 ──
-    await page.getByPlaceholder(/输入/).fill(QUERY_A)
-    await page.getByTestId('send-button').click()
+    await sendMessage(page, QUERY_A)
 
     // 等会话 A 流式输出开始（stub 思考文本先出现）
     await expect(page.getByText(/分析思路|测试问题/i).first()).toBeVisible({ timeout: 30_000 })
@@ -79,10 +144,9 @@ test.describe('并发流式输出完整性', () => {
 
     // ── 立即新建会话 B（此刻 A 的 reader 被 abort，B 的 reader 启动）──
     await page.getByRole('button', { name: /新建分析/ }).click()
-    await page.waitForTimeout(200)
+    await expectComposerReady(page)
 
-    await page.getByPlaceholder(/输入/).fill(QUERY_B)
-    await page.getByTestId('send-button').click()
+    await sendMessage(page, QUERY_B)
     await expect(page.getByText(/分析思路|测试问题/i).first()).toBeVisible({ timeout: 30_000 })
     console.log('[E2E] 会话 B 流式输出已开始，两流并发中')
 
@@ -103,7 +167,10 @@ test.describe('并发流式输出完整性', () => {
 
     // ── 快速来回切换（模拟用户切标签，触发 reader abort/恢复竞态）──
     console.log('[E2E] 开始快速切换...')
-    await rapidSwitch(page, [sA.display_name, sB.display_name], 6)
+    await rapidSwitch(page, [
+      { display_name: sA.display_name, query: QUERY_A },
+      { display_name: sB.display_name, query: QUERY_B },
+    ], 6)
 
     // ── 等两个任务都完成（status=completed/clarifying）──
     console.log('[E2E] 等待两任务完成...')
@@ -120,8 +187,8 @@ test.describe('并发流式输出完整性', () => {
     })
 
     // ── 切回会话 A，断言最终文本完整 ──
-    // 用轮询而非固定等待：切回触发 chat_history 重建 + resumeStream，渲染耗时不确定
-    await page.getByText(sA.display_name, { exact: false }).first().click()
+    // 轮询而非固定等待：切回触发 chat_history 重建 + resumeStream，渲染耗时不确定
+    await page.getByTestId('session-list').getByText(sA.display_name, { exact: false }).first().click()
     await expect.poll(
       async () => (await page.locator('body').textContent())?.includes(STUB_ANSWER) ?? false,
       { timeout: 15_000, intervals: [500], message: '会话 A 流式文本应完整（无缺字/串字）' },
@@ -129,7 +196,7 @@ test.describe('并发流式输出完整性', () => {
     console.log('[E2E] 会话 A 文本完整')
 
     // ── 切回会话 B，断言最终文本完整 ──
-    await page.getByText(sB.display_name, { exact: false }).first().click()
+    await page.getByTestId('session-list').getByText(sB.display_name, { exact: false }).first().click()
     await expect.poll(
       async () => (await page.locator('body').textContent())?.includes(STUB_ANSWER) ?? false,
       { timeout: 15_000, intervals: [500], message: '会话 B 流式文本应完整（无缺字/串字）' },
@@ -152,18 +219,16 @@ test.describe('并发流式输出完整性', () => {
 
     // 带 ?sse_debug 重新加载，开启前端诊断日志
     await page.goto(`${FRONTEND}/?sse_debug`)
-    await page.waitForTimeout(500)
+    await expectComposerReady(page)
 
     // 会话 A 发起
-    await page.getByPlaceholder(/输入/).fill(QUERY_A)
-    await page.getByTestId('send-button').click()
+    await sendMessage(page, QUERY_A)
     await expect(page.getByText(/分析思路|测试问题/i).first()).toBeVisible({ timeout: 30_000 })
 
     // 立即新建会话 B 发起（不切回 A）
     await page.getByRole('button', { name: /新建分析/ }).click()
-    await page.waitForTimeout(200)
-    await page.getByPlaceholder(/输入/).fill(QUERY_B)
-    await page.getByTestId('send-button').click()
+    await expectComposerReady(page)
+    await sendMessage(page, QUERY_B)
     await expect(page.getByText(/分析思路|测试问题/i).first()).toBeVisible({ timeout: 30_000 })
 
     const sessionsResp = await page.request.get(`${API_BASE}/api/sessions`)
