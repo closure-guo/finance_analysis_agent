@@ -504,6 +504,8 @@ export interface TrackRecordOverview {
   as_of: string
   disclaimer: string
   portfolio: TrackRecordPortfolio
+  version_seq: number | null
+  versions: AgentVersion[]
 }
 
 // 净值曲线点（add-track-record-stage-b）
@@ -533,6 +535,67 @@ export interface CalibrationResponse {
   buckets: CalibrationBucket[]
   brier: number | null
   sample_size: number
+  as_of: string
+  disclaimer: string
+}
+
+// 切片桶（add-track-record-stage-c）
+export interface SegmentBucket {
+  name: string
+  sample_size: number
+  win_rate: number | null
+  avg_excess: number | null
+  insufficient: boolean
+}
+
+// 切片维度
+export interface SegmentDimension {
+  dimension: string
+  total: number
+  settled: number
+  buckets: SegmentBucket[]
+}
+
+// 切片响应
+export interface SegmentsResponse {
+  dimensions: SegmentDimension[]
+  as_of: string
+  disclaimer: string
+}
+
+// 版本信息（P6 分段封存）
+export interface AgentVersion {
+  agent_id: string
+  model_version: string
+  strategy_version: string | null
+  version_seq: number
+  retired_at: string | null
+  created_at: string
+  note: string | null
+}
+
+// 观点详情（add-track-record-stage-c）
+export interface PredictionDetail {
+  prediction: PredictionRecord
+  audit: Array<{
+    log_id: number
+    prediction_id: string
+    action: string
+    old_status: string | null
+    new_status: string | null
+    detail: string | null
+    source: string | null
+    created_at: string
+  }>
+  marks: Array<{
+    mark_id: string
+    prediction_id: string
+    mark_date: string
+    mark_price: number | null
+    cum_return: number | null
+    cum_excess: number | null
+    benchmark_price: number | null
+  }>
   as_of: string
   disclaimer: string
 }

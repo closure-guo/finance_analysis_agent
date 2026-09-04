@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
-import type { EquityCurvePoint, PredictionRecord, PredictionStatus, TrackRecordOverview } from '../../types'
+import type { EquityCurvePoint, PredictionRecord, PredictionStatus, SegmentDimension, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
 
@@ -55,35 +55,41 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [overview, setOverview] = useState<TrackRecordOverview | null>(null)
   const [records, setRecords] = useState<PredictionRecord[] | null>(null)
   const [curve, setCurve] = useState<EquityCurvePoint[] | null>(null)
+  const [segments, setSegments] = useState<SegmentDimension[] | null>(null)
+  const [version, setVersion] = useState<number | null>(null)
   const [error, setError] = useState(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (ver: number | null) => {
     setError(false)
     try {
-      const [ovResp, prResp, cvResp] = await Promise.all([
-        fetch('/api/v1/track-record/overview'),
+      const [ovResp, prResp, cvResp, sgResp] = await Promise.all([
+        fetch(`/api/v1/track-record/overview${ver !== null ? `?version=${ver}` : ''}`),
         fetch('/api/v1/track-record/predictions'),
         fetch('/api/v1/track-record/equity-curve'),
+        fetch('/api/v1/track-record/segments'),
       ])
-      if (!ovResp.ok || !prResp.ok || !cvResp.ok) throw new Error(String(ovResp.status))
+      if (!ovResp.ok || !prResp.ok || !cvResp.ok || !sgResp.ok) throw new Error(String(ovResp.status))
       setOverview((await ovResp.json()) as TrackRecordOverview)
       const pr = (await prResp.json()) as { predictions: PredictionRecord[] }
       setRecords(pr.predictions)
       const cv = (await cvResp.json()) as { points: EquityCurvePoint[] }
       setCurve(cv.points)
+      const sg = (await sgResp.json()) as { dimensions: SegmentDimension[] }
+      setSegments(sg.dimensions)
     } catch {
       setError(true)
       toast.error('战绩数据加载失败')
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load(version) }, [load, version])
 
   const disclaimer = overview?.disclaimer ?? '历史业绩不代表未来表现'
   const rows = records ?? []
   const showWinRate = overview !== null && !overview.insufficient_sample && overview.win_rate !== null
   const portfolio = overview?.portfolio
   const showCurve = curve !== null && curve.length >= 2
+  const versions = overview?.versions ?? []
 
   const chartOption = {
     color: ['#1677ff', '#fa8c16'],
@@ -106,6 +112,26 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           <Button variant="ghost" size="sm" onClick={onBack} data-testid="track-record-back">返回聊天</Button>
         </div>
       </div>
+
+      {/* 版本切换（P6 分段封存：统计按版本分段查看） */}
+      {versions.length > 1 && (
+        <div data-testid="track-record-version-selector" className="flex items-center gap-2 mb-4">
+          <label className="text-xs" style={{ color: 'var(--text-tertiary)' }}>版本</label>
+          <select
+            value={version ?? overview?.version_seq ?? ''}
+            onChange={e => setVersion(e.target.value === '' ? null : Number(e.target.value))}
+            className="text-xs rounded-lg px-2 py-1 border"
+            style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }}
+            data-testid="track-record-version-select"
+          >
+            {versions.map(v => (
+              <option key={v.agent_id} value={v.version_seq}>
+                v{v.version_seq} {v.model_version}{v.retired_at ? '（已封存）' : '（当前）'}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {error ? (
         <div className="text-sm py-16 text-center" style={{ color: 'var(--text-tertiary)' }}>数据加载失败，请刷新重试</div>
@@ -182,6 +208,43 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
+          {/* 切片指标（stage-c：持有期/行业/市值/市场环境，n<10 标样本不足） */}
+          {segments !== null && segments.length > 0 && (
+            <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-segments">
+              <div className="text-xs mb-3" style={{ color: 'var(--text-tertiary)' }}>切片指标（n&lt;10 标注「样本不足」）</div>
+              <div className="grid md:grid-cols-2 gap-4">
+                {segments.map(d => (
+                  <div key={d.dimension}>
+                    <div className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>{d.dimension}</div>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr style={{ color: 'var(--text-tertiary)' }}>
+                          <th className="py-1 pr-2 text-left font-normal">分桶</th>
+                          <th className="py-1 pr-2 text-right font-normal">样本</th>
+                          <th className="py-1 pr-2 text-right font-normal">胜率</th>
+                          <th className="py-1 text-right font-normal">平均超额</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {d.buckets.filter(b => b.sample_size > 0).map(b => (
+                          <tr key={b.name} className="border-t" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+                            <td className="py-1 pr-2" style={{ color: 'var(--text-default)' }}>
+                              {b.name}
+                              {b.insufficient && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>样本不足</span>}
+                            </td>
+                            <td className="py-1 pr-2 text-right" style={{ color: 'var(--text-secondary)' }}>{b.sample_size}</td>
+                            <td className="py-1 pr-2 text-right" style={{ color: 'var(--text-secondary)' }}>{b.win_rate === null ? '—' : `${(b.win_rate * 100).toFixed(1)}%`}</td>
+                            <td className="py-1 text-right"><Delta value={b.avg_excess} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 净值曲线（stage-b：agent vs 沪深300，起点归一 1.0；数据缺口断点不插值） */}
           {showCurve && (
             <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-curve">
@@ -211,7 +274,13 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 </thead>
                 <tbody>
                   {rows.map(r => (
-                    <tr key={r.prediction_id} className="border-t" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+                    <tr
+                      key={r.prediction_id}
+                      className="border-t cursor-pointer hover:opacity-80"
+                      style={{ borderColor: 'var(--border-neutral-l1)' }}
+                      onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
+                      data-testid={`prediction-row-${r.prediction_id}`}
+                    >
                       <td className="px-4 py-3">
                         <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
                         <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>

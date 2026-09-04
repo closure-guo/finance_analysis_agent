@@ -18,6 +18,7 @@ import { usePathname, navigate } from './route'
 import { DownloadCenter } from './pages/downloads/DownloadCenter'
 import { TrackRecordPage } from './pages/trackRecord/TrackRecordPage'
 import { CalibrationPage } from './pages/trackRecord/CalibrationPage'
+import { PredictionDetailPage } from './pages/trackRecord/PredictionDetailPage'
 import { getStreamStore } from './stores/streamStore'
 import { useSessionStream } from './stores/streamStore/useSessionStream'
 import QuickThread, { type QuickThreadHandle } from './chat/QuickThread'
@@ -876,7 +877,13 @@ export default function App() {
       />
       <MainContent>{(leftInset) => (
       <div>
-        {pathname === '/track-record/calibration' ? (
+        {pathname.startsWith('/track-record/predictions/') ? (
+          // add-track-record-stage-c:观点详情页（prediction_id 为路径末段）
+          <PredictionDetailPage
+            predictionId={decodeURIComponent(pathname.split('/').pop() ?? '')}
+            onBack={() => navigate('/track-record')}
+          />
+        ) : pathname === '/track-record/calibration' ? (
           // add-track-record-stage-c:置信度校准页
           <CalibrationPage onBack={() => navigate('/track-record')} />
         ) : pathname === '/decisions' || pathname === '/track-record' ? (

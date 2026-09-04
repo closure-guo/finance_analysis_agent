@@ -40,7 +40,7 @@ const PREDICTIONS: Record<string, unknown>[] = [
   },
 ]
 
-function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown } = {}) {
+function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown } = {}) {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/api/v1/track-record/overview')) {
@@ -55,6 +55,11 @@ function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: u
     if (url.includes('/api/v1/track-record/equity-curve')) {
       return Promise.resolve(new Response(JSON.stringify({
         points: opts.equity ?? [], as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
+      }), { status: 200 }))
+    }
+    if (url.includes('/api/v1/track-record/segments')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        dimensions: opts.segments ?? [], as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
       }), { status: 200 }))
     }
     if (url.includes('/api/v1/track-record/predictions')) {
@@ -139,6 +144,9 @@ describe('战绩页全页视图下的导航（bug 复现：新建会话应回聊
       if (url.includes('/api/v1/track-record/equity-curve')) {
         return Promise.resolve(new Response(JSON.stringify({ points: [], as_of: '2026-09-03', disclaimer: 'x' }), { status: 200 }))
       }
+      if (url.includes('/api/v1/track-record/segments')) {
+        return Promise.resolve(new Response(JSON.stringify({ dimensions: [], as_of: '2026-09-03', disclaimer: 'x' }), { status: 200 }))
+      }
       if (url.includes('/api/v1/track-record/predictions')) {
         return Promise.resolve(new Response(JSON.stringify({ predictions: [], page: 1, page_size: 50, total: 0, as_of: '2026-09-03', disclaimer: 'x' }), { status: 200 }))
       }
@@ -211,5 +219,82 @@ describe('组合风险指标与净值曲线（add-track-record-stage-b）', () =
     await screen.findByText('贵州茅台')
     const score = screen.getByText('10')
     expect(score.className).toContain('text-red-500')
+  })
+})
+
+describe('切片面板/版本切换/详情跳转（add-track-record-stage-c）', () => {
+  beforeEach(() => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  })
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('切片面板渲染四维桶表并标注样本不足', async () => {
+    mockFetch({
+      overview: OVERVIEW,
+      predictions: PREDICTIONS,
+      segments: [
+        {
+          dimension: '行业', total: 1, settled: 1,
+          buckets: [{ name: '白酒', sample_size: 1, win_rate: 1, avg_excess: 0.05, insufficient: true }],
+        },
+        {
+          dimension: '持有期', total: 1, settled: 1,
+          buckets: [{ name: '6-20天', sample_size: 1, win_rate: 1, avg_excess: 0.05, insufficient: true }],
+        },
+        {
+          dimension: '市值', total: 0, settled: 0,
+          buckets: [{ name: '未知', sample_size: 0, win_rate: null, avg_excess: null, insufficient: true }],
+        },
+        {
+          dimension: '市场环境', total: 0, settled: 0,
+          buckets: [{ name: '未知', sample_size: 0, win_rate: null, avg_excess: null, insufficient: true }],
+        },
+      ],
+    })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const panel = screen.getByTestId('track-record-segments')
+    expect(panel.textContent).toContain('白酒')
+    expect(panel.textContent).toContain('样本不足')
+    expect(panel.textContent).toContain('持有期')
+  })
+
+  it('多版本时渲染版本选择器，切换后带 version 参数请求', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/overview')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          ...OVERVIEW,
+          version_seq: 2,
+          versions: [
+            { agent_id: 'a1', model_version: 'v1', strategy_version: null, version_seq: 1, retired_at: '2026-09-01', created_at: 'x', note: null },
+            { agent_id: 'a2', model_version: 'v2', strategy_version: null, version_seq: 2, retired_at: null, created_at: 'x', note: null },
+          ],
+        }), { status: 200 }))
+      }
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({ predictions: [], page: 1, page_size: 50, total: 0, as_of: 'x', disclaimer: 'x' }), { status: 200 }))
+      }
+      if (url.includes('/equity-curve') || url.includes('/segments')) {
+        return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [], as_of: 'x', disclaimer: 'x' }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    }))
+    renderPage()
+    const selector = await screen.findByTestId('track-record-version-select')
+    expect(selector).toBeInTheDocument()
+    fireEvent.change(selector, { target: { value: '1' } })
+    await waitFor(() => expect(calls.some(u => u.includes('/overview?version=1'))).toBe(true))
+    expect(screen.getByText(/已封存/)).toBeInTheDocument()
+  })
+
+  it('点击观点行跳转详情页', async () => {
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    fireEvent.click(screen.getByTestId('prediction-row-p1'))
+    await waitFor(() => expect(window.location.pathname).toBe('/track-record/predictions/p1'))
   })
 })
