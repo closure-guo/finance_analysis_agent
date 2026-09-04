@@ -1654,6 +1654,12 @@ async def _run_react_analysis(
                         "timestamp": _now(),
                     },
                 )
+            # 澄清轮显式刷出 trace：root observation 随流关闭才闭合，不主动 flush 的话
+            # 澄清 trace 要等 SDK 批处理周期(~5s)才可见——用户此刻正在 Langfuse 里找它
+            _lf_clarify = get_langfuse()
+            if _lf_clarify is not None:
+                with contextlib.suppress(Exception):
+                    _lf_clarify.flush()
         # 分析已执行：session 状态已被 _run_graph_streaming 更新为 completed
 
         # done 终态（完整展示字段；registry._run_task 的自动 done 被终态 CAS 拒绝）
