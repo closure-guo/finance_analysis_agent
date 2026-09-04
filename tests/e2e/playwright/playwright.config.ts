@@ -33,21 +33,16 @@ export default defineConfig({
     'visual-baseline-report.spec.ts',
     // 以下为前置技术债：使用 waitForTimeout 的时序依赖测试，在 CI 上不稳定，
     // 需专属 STUB_SCENARIO 或在 timeline config 内运行。
-    // 2026-09-04 重写：concurrent-streaming-integrity 已把 5 处 waitForTimeout
-    // 改为 web-first 断言（thread-main 切换生效 + 输入框就绪）并重新进门禁；
-    // 其余 spec 仍为 waitForTimeout 技术债，继续排除。
+    // 2026-09-04 技术债清偿：
+    //   - concurrent-streaming-integrity 重写为 web-first 已回门禁；
+    //   - session-switch-resumption 重写为 web-first 已回门禁；
+    //   - debug-*×7 / explore 共 8 个一次性调试/探索脚本删除（debug-cursor 注明
+    //     旧通道语义已迁移 AG-UI；switch-during-response/thinking/sse-continue
+    //     的场景由 session-switch-resumption + concurrent-streaming-integrity 覆盖，
+    //     见 incident 023「UI 通道迁移必须带走旧 E2E」教训的收尾）。
     // 2026-09-04 扩充：把全部 waitForTimeout 技术债 spec 移出门禁（此前仅排除了
     // 两个，导致 CI 门禁因这些不稳定 spec 长期变红——downloads stale testid 与
     // 本批 debug-*/explore/concurrent-streaming 均为已知问题，非代码回归）。
-    'session-switch-resumption.spec.ts',
-    'debug-switch-during-response.spec.ts',
-    'debug-cursor-followup-switch.spec.ts',
-    'debug-precise-switch.spec.ts',
-    'debug-explore.spec.ts',
-    'debug-sse-continue.spec.ts',
-    'debug-switch-during-thinking.spec.ts',
-    'debug-switch-session.spec.ts',
-    'explore.spec.ts',
     // 以下为 @live 人工验证/时序敏感测试，stub 环境无法满足其前提（见 spec 内注释）：
     // - refresh-resume-accept：要求「流式进行中」刷新（真实 LLM 慢速流式下思考横幅
     //   持续可见）；stub 瞬时输出使「思考中」无可见窗口，仅能验证完成态渲染。
