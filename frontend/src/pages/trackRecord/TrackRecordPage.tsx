@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import type { PredictionRecord, PredictionStatus, TrackRecordOverview } from '../../types'
+import ReactECharts from 'echarts-for-react'
+import type { EquityCurvePoint, PredictionRecord, PredictionStatus, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
 
 const STATUS_LABEL: Record<PredictionStatus, string> = {
@@ -37,22 +38,38 @@ function fmt(value: number | null, digits = 2) {
   return value === null ? '—' : value.toFixed(digits)
 }
 
+function pct(value: number | null, digits = 1) {
+  return value === null ? '—' : `${(value * 100).toFixed(digits)}%`
+}
+
+// 风险分 → 展示色（stage-b：分数越高风险越高）
+function riskColor(score: number | null) {
+  if (score === null) return ''
+  if (score >= 8) return 'text-red-500'
+  if (score >= 5) return 'text-orange-500'
+  return 'text-green-600'
+}
+
 export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [overview, setOverview] = useState<TrackRecordOverview | null>(null)
   const [records, setRecords] = useState<PredictionRecord[] | null>(null)
+  const [curve, setCurve] = useState<EquityCurvePoint[] | null>(null)
   const [error, setError] = useState(false)
 
   const load = useCallback(async () => {
     setError(false)
     try {
-      const [ovResp, prResp] = await Promise.all([
+      const [ovResp, prResp, cvResp] = await Promise.all([
         fetch('/api/v1/track-record/overview'),
         fetch('/api/v1/track-record/predictions'),
+        fetch('/api/v1/track-record/equity-curve'),
       ])
-      if (!ovResp.ok || !prResp.ok) throw new Error(String(ovResp.status))
+      if (!ovResp.ok || !prResp.ok || !cvResp.ok) throw new Error(String(ovResp.status))
       setOverview((await ovResp.json()) as TrackRecordOverview)
       const pr = (await prResp.json()) as { predictions: PredictionRecord[] }
       setRecords(pr.predictions)
+      const cv = (await cvResp.json()) as { points: EquityCurvePoint[] }
+      setCurve(cv.points)
     } catch {
       setError(true)
       toast.error('战绩数据加载失败')
@@ -64,6 +81,20 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const disclaimer = overview?.disclaimer ?? '历史业绩不代表未来表现'
   const rows = records ?? []
   const showWinRate = overview !== null && !overview.insufficient_sample && overview.win_rate !== null
+  const portfolio = overview?.portfolio
+  const showCurve = curve !== null && curve.length >= 2
+
+  const chartOption = {
+    color: ['#1677ff', '#fa8c16'],
+    tooltip: { trigger: 'axis' as const, valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)) },
+    grid: { left: 48, right: 16, top: 24, bottom: 28 },
+    xAxis: { type: 'category' as const, data: (curve ?? []).map(p => p.date), axisLabel: { fontSize: 10 } },
+    yAxis: { type: 'value' as const, axisLabel: { fontSize: 10 } },
+    series: [
+      { name: '组合净值', type: 'line' as const, data: (curve ?? []).map(p => p.agent_nav), showSymbol: false, connectNulls: false },
+      { name: '沪深300', type: 'line' as const, data: (curve ?? []).map(p => p.benchmark_nav), showSymbol: false, connectNulls: false },
+    ],
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8" data-testid="track-record">
@@ -104,6 +135,54 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           {overview.insufficient_sample && (
             <div className="mb-4 rounded-lg px-4 py-3 text-xs" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-secondary)' }} data-testid="track-record-insufficient">
               样本积累中（已判定 {overview.settled} 条，满 10 条解锁胜率）
+            </div>
+          )}
+
+          {/* 组合风险指标（add-track-record-stage-b：P4 收益与风险成对） */}
+          <div data-testid="track-record-risk" className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>组合风险指标 <span className="ml-1 text-[10px]">年化/波动/夏普/最大回撤/风险分</span></div>
+              {portfolio?.as_of && (
+                <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>快照截至 {portfolio.as_of}</div>
+              )}
+            </div>
+            {portfolio && portfolio.available ? (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>年化收益</div>
+                  <div className="text-lg font-semibold" style={{ color: portfolio.annual_return !== null && portfolio.annual_return >= 0 ? 'var(--text-default)' : 'var(--text-default)' }}>
+                    <Delta value={portfolio.annual_return} />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>波动率</div>
+                  <div className="text-lg font-semibold" style={{ color: 'var(--text-default)' }}>{pct(portfolio.volatility)}</div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>夏普比率</div>
+                  <div className="text-lg font-semibold" style={{ color: 'var(--text-default)' }}>{fmt(portfolio.sharpe)}</div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>最大回撤</div>
+                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= 0.2 ? 'text-red-500' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>风险分（{portfolio.risk_label ?? '—'}）</div>
+                  <div className={`text-lg font-semibold ${riskColor(portfolio.risk_score)}`}>{portfolio.risk_score ?? '—'}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs py-2" style={{ color: 'var(--text-tertiary)' }} data-testid="track-record-risk-empty">
+                暂无净值快照——每个交易日收盘后自动生成组合净值与风险指标
+              </div>
+            )}
+          </div>
+
+          {/* 净值曲线（stage-b：agent vs 沪深300，起点归一 1.0；数据缺口断点不插值） */}
+          {showCurve && (
+            <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-curve">
+              <div className="text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>组合净值 vs 沪深300（起点归一 1.0）</div>
+              <ReactECharts option={chartOption} style={{ height: 240 }} notMerge />
             </div>
           )}
 

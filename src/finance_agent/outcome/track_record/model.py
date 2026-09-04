@@ -90,6 +90,215 @@ def init_predictions(db_path: str | Path | None = None) -> None:
         conn.close()
 
 
+# ── add-track-record-stage-b：盯市/净值/日批指标 三表（幂等 DDL）──
+TRACK_RECORD_EXTRA_DDL = """
+CREATE TABLE IF NOT EXISTS daily_marks (
+  mark_id          TEXT PRIMARY KEY,
+  prediction_id    TEXT NOT NULL,
+  mark_date        TEXT NOT NULL,
+  mark_price       REAL,
+  cum_return       REAL,
+  cum_excess       REAL,
+  benchmark_price  REAL,
+  UNIQUE(prediction_id, mark_date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_marks_pred ON daily_marks(prediction_id);
+CREATE INDEX IF NOT EXISTS idx_daily_marks_date ON daily_marks(mark_date);
+
+CREATE TABLE IF NOT EXISTS equity_curve (
+  curve_date    TEXT PRIMARY KEY,
+  agent_nav     REAL NOT NULL,
+  benchmark_nav REAL,
+  daily_return  REAL,
+  trades_count  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS agent_metrics_daily (
+  metric_date   TEXT PRIMARY KEY,
+  sample_size   INTEGER NOT NULL DEFAULT 0,
+  settled       INTEGER NOT NULL DEFAULT 0,
+  win_rate      REAL,
+  avg_excess    REAL,
+  annual_return REAL,
+  volatility    REAL,
+  sharpe        REAL,
+  max_drawdown  REAL,
+  risk_score    INTEGER,
+  risk_label    TEXT,
+  segment_json  TEXT NOT NULL DEFAULT '{}'
+);
+"""
+
+
+def init_track_record_tables(db_path: str | Path | None = None) -> None:
+    """建 predictions（若缺）与三张 stage-b 表；幂等，可重复调用。"""
+    conn = _connect(db_path)
+    try:
+        conn.executescript(PREDICTIONS_DDL)
+        conn.executescript(TRACK_RECORD_EXTRA_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ── daily_marks：盯市（upsert 幂等；同一 (prediction_id, mark_date) 覆盖重写）──
+def insert_daily_mark(
+    prediction_id: str,
+    mark_date: str,
+    mark_price: float | None = None,
+    cum_return: float | None = None,
+    cum_excess: float | None = None,
+    benchmark_price: float | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO daily_marks (mark_id, prediction_id, mark_date, mark_price,
+                 cum_return, cum_excess, benchmark_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(prediction_id, mark_date) DO UPDATE SET
+                 mark_price=excluded.mark_price,
+                 cum_return=excluded.cum_return,
+                 cum_excess=excluded.cum_excess,
+                 benchmark_price=excluded.benchmark_price""",
+            (
+                f"m_{prediction_id}_{mark_date}",
+                prediction_id,
+                mark_date,
+                mark_price,
+                cum_return,
+                cum_excess,
+                benchmark_price,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_daily_marks(
+    db_path: str | Path | None = None,
+    prediction_id: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT * FROM daily_marks"  # noqa: S608 — 无外部拼接
+        if prediction_id:
+            sql += " WHERE prediction_id=?"
+        sql += " ORDER BY mark_date ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+        params: list[Any] = ([prediction_id] if prediction_id else []) + (
+            [limit] if limit is not None else []
+        )
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── equity_curve：组合净值（同日期覆盖；幂等）──
+def upsert_equity_point(
+    curve_date: str,
+    agent_nav: float,
+    benchmark_nav: float | None = None,
+    daily_return: float | None = None,
+    trades_count: int | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO equity_curve (curve_date, agent_nav, benchmark_nav, daily_return, trades_count)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(curve_date) DO UPDATE SET
+                 agent_nav=excluded.agent_nav,
+                 benchmark_nav=excluded.benchmark_nav,
+                 daily_return=excluded.daily_return,
+                 trades_count=excluded.trades_count""",
+            (curve_date, agent_nav, benchmark_nav, daily_return, trades_count),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_equity_curve(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT curve_date, agent_nav, benchmark_nav, daily_return, trades_count FROM equity_curve ORDER BY curve_date ASC"
+        ).fetchall()  # noqa: S608
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── agent_metrics_daily：日批指标快照（同日覆盖）──
+_METRICS_COLUMNS = (
+    "sample_size",
+    "settled",
+    "win_rate",
+    "avg_excess",
+    "annual_return",
+    "volatility",
+    "sharpe",
+    "max_drawdown",
+    "risk_score",
+    "risk_label",
+)
+
+
+def upsert_metrics_daily(
+    metric_date: str,
+    metrics: dict[str, Any],
+    db_path: str | Path | None = None,
+) -> None:
+    """写入/覆盖当日指标快照。metrics 缺省列按默认置空（全列静态 upsert）。"""
+    values = []
+    for c in _METRICS_COLUMNS:
+        v = metrics.get(c)
+        if v is None and c in ("sample_size", "settled"):  # NOT NULL 整数列兜底 0
+            v = 0
+        values.append(v)
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO agent_metrics_daily (metric_date, sample_size, settled,
+                 win_rate, avg_excess, annual_return, volatility, sharpe,
+                 max_drawdown, risk_score, risk_label)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(metric_date) DO UPDATE SET
+                 sample_size=excluded.sample_size,
+                 settled=excluded.settled,
+                 win_rate=excluded.win_rate,
+                 avg_excess=excluded.avg_excess,
+                 annual_return=excluded.annual_return,
+                 volatility=excluded.volatility,
+                 sharpe=excluded.sharpe,
+                 max_drawdown=excluded.max_drawdown,
+                 risk_score=excluded.risk_score,
+                 risk_label=excluded.risk_label""",
+            [metric_date, *values],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_latest_metrics(db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_metrics_daily ORDER BY metric_date DESC LIMIT 1"
+        ).fetchone()  # noqa: S608
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def insert_prediction(
     record: dict[str, Any], db_path: str | Path | None = None, status: str = "open"
 ) -> str:

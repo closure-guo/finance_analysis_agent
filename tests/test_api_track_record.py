@@ -4,9 +4,11 @@ from fastapi.testclient import TestClient
 
 from finance_agent.api import app
 from finance_agent.outcome.track_record.model import (
-    init_predictions,
+    init_track_record_tables,
     insert_prediction,
     update_prediction_status,
+    upsert_equity_point,
+    upsert_metrics_daily,
 )
 
 BASE = {
@@ -24,7 +26,7 @@ BASE = {
 
 def _use_db(monkeypatch, tmp_path):
     db = tmp_path / "t.db"
-    init_predictions(db)
+    init_track_record_tables(db)
     monkeypatch.setattr("finance_agent.outcome.track_record.model._default_db_path", lambda: db)
     return db
 
@@ -114,3 +116,59 @@ def test_predictions_filter_and_page(monkeypatch, tmp_path):
     )
     page1 = c.get("/api/v1/track-record/predictions", params={"page": 1, "page_size": 2}).json()
     assert len(page1["predictions"]) == 2 and page1["total"] == 5
+
+
+# ── add-track-record-stage-b：组合指标块 + 净值曲线端点 ──
+
+
+def test_overview_portfolio_block_empty(monkeypatch, tmp_path):
+    """无指标快照时 portfolio.available=false 且各字段 null，不报错。"""
+    _use_db(monkeypatch, tmp_path)
+    data = TestClient(app).get("/api/v1/track-record/overview").json()
+    portfolio = data["portfolio"]
+    assert portfolio["available"] is False
+    assert portfolio["annual_return"] is None
+    assert portfolio["risk_score"] is None
+    assert portfolio["as_of"] is None
+
+
+def test_overview_portfolio_block_with_snapshot(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    upsert_metrics_daily(
+        "2026-09-04",
+        {
+            "sample_size": 3,
+            "settled": 2,
+            "win_rate": 0.5,
+            "annual_return": 0.12,
+            "volatility": 0.2,
+            "sharpe": 0.5,
+            "max_drawdown": 0.05,
+            "risk_score": 5,
+            "risk_label": "中",
+        },
+        db_path=db,
+    )
+    data = TestClient(app).get("/api/v1/track-record/overview").json()
+    p = data["portfolio"]
+    assert p["available"] is True
+    assert p["annual_return"] == 0.12
+    assert p["risk_score"] == 5
+    assert p["risk_label"] == "中"
+    assert p["as_of"] == "2026-09-04"
+
+
+def test_equity_curve_empty(monkeypatch, tmp_path):
+    _use_db(monkeypatch, tmp_path)
+    data = TestClient(app).get("/api/v1/track-record/equity-curve").json()
+    assert data["points"] == []
+    assert data["disclaimer"]
+
+
+def test_equity_curve_returns_points(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    upsert_equity_point("2026-09-01", 1.0, 1.0, 0.0, 1, db_path=db)
+    upsert_equity_point("2026-09-02", 1.01, 1.005, 0.01, 1, db_path=db)
+    data = TestClient(app).get("/api/v1/track-record/equity-curve").json()
+    assert [p["date"] for p in data["points"]] == ["2026-09-01", "2026-09-02"]
+    assert data["points"][-1]["agent_nav"] == 1.01

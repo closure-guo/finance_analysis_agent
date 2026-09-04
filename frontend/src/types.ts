@@ -481,6 +481,17 @@ export interface PredictionRecord {
 }
 
 // 战绩总览（GET /api/v1/track-record/overview 返回项）
+export interface TrackRecordPortfolio {
+  available: boolean
+  annual_return: number | null
+  volatility: number | null
+  sharpe: number | null
+  max_drawdown: number | null
+  risk_score: number | null
+  risk_label: string | null
+  as_of: string | null
+}
+
 export interface TrackRecordOverview {
   total: number
   open: number
@@ -490,6 +501,21 @@ export interface TrackRecordOverview {
   status_counts: Record<string, number>
   source_type: string | null
   insufficient_sample: boolean
+  as_of: string
+  disclaimer: string
+  portfolio: TrackRecordPortfolio
+}
+
+// 净值曲线点（add-track-record-stage-b）
+export interface EquityCurvePoint {
+  date: string
+  agent_nav: number
+  benchmark_nav: number | null
+}
+
+// 净值曲线响应
+export interface EquityCurveResponse {
+  points: EquityCurvePoint[]
   as_of: string
   disclaimer: string
 }

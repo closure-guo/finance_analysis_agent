@@ -17,31 +17,41 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from finance_agent.outcome.track_record.job import settle_open_predictions
+from finance_agent.outcome.track_record.marking import persist_metrics_snapshot, run_daily_marking
 
 logger = logging.getLogger(__name__)
 
 _MAX_ATTEMPTS = 3
 
 
-def _settle_job() -> None:
-    """scheduler 入口:全部异常吞掉(旁路铁律),意外异常指数退避重试 3 次。"""
+def _with_retry(name: str, fn) -> None:
+    """日批统一入口：异常吞掉(旁路铁律)，指数退避重试 3 次。"""
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            result = settle_open_predictions()
-            logger.info("prediction settle job 完成: %s", result)
+            result = fn()
+            logger.info("%s job 完成: %s", name, result)
             return
         except Exception as e:  # noqa: BLE001
             if attempt < _MAX_ATTEMPTS - 1:
                 backoff = 5 * (4**attempt)  # 5s / 20s
-                logger.warning(
-                    "decision settle job 第 %d 次失败(%s),%ds 后重试",
-                    attempt + 1,
-                    e,
-                    backoff,
-                )
+                logger.warning("%s job 第 %d 次失败(%s),%ds 后重试", name, attempt + 1, e, backoff)
                 time.sleep(backoff)
             else:
-                logger.exception("decision settle job 重试 3 次全部失败(下交易日再试)")
+                logger.exception("%s job 重试 3 次全部失败(下交易日再试)", name)
+
+
+def _settle_job() -> None:
+    _with_retry("prediction settle", settle_open_predictions)
+
+
+def _marking_job() -> None:
+    """add-track-record-stage-b：每日盯市 + 净值曲线（16:30，settle 之后）。"""
+    _with_retry("daily marking", run_daily_marking)
+
+
+def _metrics_job() -> None:
+    """add-track-record-stage-b：指标快照重算（16:35）。"""
+    _with_retry("metrics snapshot", persist_metrics_snapshot)
 
 
 def start_scheduler() -> BackgroundScheduler | None:
@@ -55,8 +65,24 @@ def start_scheduler() -> BackgroundScheduler | None:
         id="decision_settle_daily",
         replace_existing=True,
     )
+    # stage-b：先结算（16:00）再盯市（16:30）——已结算观点不再盯市；
+    # 指标快照（16:35）独立任务，可手动重算
+    scheduler.add_job(
+        _marking_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Shanghai"),
+        id="daily_marking",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _metrics_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=35, timezone="Asia/Shanghai"),
+        id="metrics_snapshot",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("decision settle scheduler 已启动(工作日 16:00)")
+    logger.info(
+        "decision settle scheduler 已启动(工作日 16:00);daily marking 16:30;metrics snapshot 16:35"
+    )
     return scheduler
 
 

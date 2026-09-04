@@ -49,6 +49,9 @@ test.describe('add-track-record: 战绩页', () => {
       }
     }
     expect(visible, '轮询 6 次后样本积累提示仍未出现：track-record API 在全量套件负载下持续无响应窗口').toBe(true)
+    // add-track-record-stage-b：无净值快照时展示风险指标空态（不渲染曲线）
+    await expect(page.getByTestId('track-record-risk-empty')).toBeVisible()
+    await expect(page.getByTestId('track-record-curve')).toHaveCount(0)
     await page.getByTestId('track-record-back').click()
     await expect(page).toHaveURL(/\/$/)
     await expect(page.getByRole('heading', { name: '今天想研究什么？' })).toBeVisible()

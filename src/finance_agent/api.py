@@ -139,13 +139,17 @@ from finance_agent.outcome.track_record.ingest import (  # noqa: E402
     persist_prediction_from_accumulated,
 )
 from finance_agent.outcome.track_record.model import (  # noqa: E402
+    get_latest_metrics,
     init_predictions,
+    init_track_record_tables,
+    list_equity_curve,
     list_predictions,
     prediction_stats,
 )
 
 init_decision_log()
 init_predictions()
+init_track_record_tables()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -2139,10 +2143,23 @@ async def track_record_overview(source: str | None = None) -> dict[str, Any]:
 
     显著性门槛:已结算 < 10 时 win_rate 置 null 并带 insufficient_sample 标注
     (前端显示「样本积累中」)。回测/实盘经 source 参数分离,不合并不展示。
+    stage-b:总览追加组合指标块(年化/波动/夏普/回撤/风险分,来自 agent_metrics_daily
+    最新快照;无快照时 portfolio.available=false)。
     """
     stats = await asyncio.to_thread(prediction_stats, source_type=source)
     settled = stats["settled"]
     insufficient = settled < 10
+    metrics = await asyncio.to_thread(get_latest_metrics)
+    portfolio = {
+        "available": metrics is not None,
+        "annual_return": metrics.get("annual_return") if metrics else None,
+        "volatility": metrics.get("volatility") if metrics else None,
+        "sharpe": metrics.get("sharpe") if metrics else None,
+        "max_drawdown": metrics.get("max_drawdown") if metrics else None,
+        "risk_score": metrics.get("risk_score") if metrics else None,
+        "risk_label": metrics.get("risk_label") if metrics else None,
+        "as_of": metrics.get("metric_date") if metrics else None,
+    }
     return {
         **stats,
         "source_type": source,
@@ -2150,6 +2167,30 @@ async def track_record_overview(source: str | None = None) -> dict[str, Any]:
         "as_of": _track_as_of(),
         "disclaimer": _DISCLAIMER,
         "win_rate": None if insufficient else stats["win_rate"],
+        "portfolio": portfolio,
+    }
+
+
+@app.get("/api/v1/track-record/equity-curve")
+async def track_record_equity_curve() -> dict[str, Any]:
+    """add-track-record-stage-b:净值曲线(agent 组合 vs 基准,首个盯市日归一 1.0)。
+
+    数据来自 equity_curve 表(daily-marking 日批落库);无净值点时返回空数组。
+    输出字段统一 {date, agent_nav, benchmark_nav} 与指标引擎 nav_points 对齐。
+    """
+    rows = await asyncio.to_thread(list_equity_curve)
+    points = [
+        {
+            "date": row["curve_date"],
+            "agent_nav": row["agent_nav"],
+            "benchmark_nav": row["benchmark_nav"],
+        }
+        for row in rows
+    ]
+    return {
+        "points": points,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
     }
 
 
