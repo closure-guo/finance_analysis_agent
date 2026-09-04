@@ -40,11 +40,46 @@ def _is_not_found(e: Exception) -> bool:
     return "404" in s or "not found" in s or "does not exist" in s
 
 
-def precheck(client, files: list[Path], exclude: set[str]) -> tuple[list[str], list[str]]:
+def _head_contents(repo_root: Path, files: list[Path]) -> dict[str, str]:
+    """取每个 prompt 文件在 git HEAD 的已提交内容(新增未跟踪文件无 HEAD → 缺项)。
+
+    用于区分「本地领先」(local≠HEAD, remote==HEAD —— 正常待发布)与
+    「Langfuse 领先」(remote≠HEAD —— UI 编辑未收编)。
+    """
+    import subprocess
+
+    heads: dict[str, str] = {}
+    for f in files:
+        rel = f.relative_to(repo_root).as_posix()
+        try:
+            out = subprocess.run(  # noqa: S603 - 固定参数 git show,无外部输入
+                ["git", "show", f"HEAD:{rel}"],  # noqa: S607 - git 走 PATH 解析,rel 为仓库内相对路径
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        except subprocess.CalledProcessError:
+            continue
+        heads[f.stem] = _normalize(out)
+    return heads
+
+
+def precheck(
+    client,  # noqa: ANN001 - langfuse client
+    files: list[Path],
+    exclude: set[str],
+    head_contents: dict[str, str] | None = None,
+) -> tuple[list[str], list[str]]:
     """发布预检(add-prompt-hot-reload):Langfuse 领先(UI 编辑未收编)则拒绝盲推。
 
-    返回 (mismatched, unreachable)。prompt 在 Langfuse 不存在(404)视为首部属,
-    不拦;拉取失败(网络/凭证)保守归 unreachable。CRLF 归一后逐字比对。
+    判别式(以 git HEAD 为基准区分领先方向):
+    - remote == local → 一致,放行
+    - remote == HEAD  → Langfuse 仍在上次提交状态,本地已改(正常待发布),放行
+    - remote != HEAD 且 remote != local → Langfuse 有未收编变更(UI 编辑),拒绝
+    - HEAD 内容未知(未跟踪/无 git) → 保守:任何差异都拒绝
+    返回 (mismatched, unreachable)。prompt 在 Langfuse 不存在(404)视为首部属不拦;
+    拉取失败(网络/凭证)保守归 unreachable。CRLF 归一后逐字比对。
     """
     mismatched: list[str] = []
     unreachable: list[str] = []
@@ -62,8 +97,12 @@ def precheck(client, files: list[Path], exclude: set[str]) -> tuple[list[str], l
             if not _is_not_found(e):
                 unreachable.append(name)
             continue
-        if local != remote:
-            mismatched.append(name)
+        if local == remote:
+            continue
+        head = head_contents.get(name) if head_contents is not None else None
+        if head is not None and remote == head:
+            continue  # 本地领先(正常待发布)
+        mismatched.append(name)
     return mismatched, unreachable
 
 
@@ -120,7 +159,13 @@ def main() -> int:
 
     # 预检(add-prompt-hot-reload):Langfuse 领先/不可达时拒绝整批发布,
     # 防止本地盲推创建新版本抢走 production 标签覆盖 UI 编辑。
-    mismatched, unreachable = precheck(client, files, exclude)
+    # 以 git HEAD 为基准区分「本地领先(正常待发布,放行)」与「Langfuse 领先(拒绝)」。
+    mismatched, unreachable = precheck(
+        client,
+        files,
+        exclude,
+        head_contents=_head_contents(Path(__file__).resolve().parents[1], files),
+    )
     if mismatched or unreachable:
         for name in mismatched:
             print(
