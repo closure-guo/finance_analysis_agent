@@ -73,6 +73,19 @@ function closeAllThinking(timeline: TimelineItem[]): TimelineItem[] {
   )
 }
 
+// 正文也走时间轴(add-prompt-hot-reload 排查的时序修复):正文作为 'answer' item
+// 与思考/工具调用同轴按到达序排列,adapter 按序渲染——解决「正文先于工具调用时
+// 被排到所有 timeline 之后」的非时序问题。
+function appendAnswerToken(timeline: TimelineItem[], token: string): TimelineItem[] {
+  const last = timeline[timeline.length - 1]
+  if (last && last.type === 'answer') {
+    const next = timeline.slice()
+    next[next.length - 1] = { ...last, content: last.content + token }
+    return next
+  }
+  return [...timeline, { type: 'answer', content: token }]
+}
+
 // 对话流事件（快速模式 + 深度澄清阶段共用）应用到消息的 agentTimeline。
 // 返回新消息对象（不可变更新）。仅处理对话流相关事件，其他事件原样返回。
 export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage {
@@ -94,13 +107,15 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
     }
 
     case 'thinking_to_answer': {
-      // 流末判定为最终回答：将末尾 thinking item 与 answer 匹配的部分移至 chatResponse
+      // 流末判定为最终回答：将末尾 thinking item 与 answer 匹配的部分转为 answer item
+      //（保持时间轴位置，正文与思考/工具同轴按序渲染）
       const last = timeline[timeline.length - 1]
       if (last && last.type === 'thinking' && event.answer) {
         const idx = last.content.lastIndexOf(event.answer)
         if (idx >= 0) {
           const next = timeline.slice()
           next[next.length - 1] = { ...last, content: last.content.slice(0, idx), done: true }
+          next.push({ type: 'answer', content: event.answer })
           return { ...msg, agentTimeline: next, chatResponse: event.answer }
         }
       }
@@ -191,8 +206,13 @@ export function applyChatStreamEvent(msg: UIMessage, event: SSEEvent): UIMessage
     }
 
     case 'chat_token':
-      // 思考后接回答：末尾未完成 thinking item 显式收口
-      return { ...msg, chatResponse: (msg.chatResponse || '') + event.token, agentTimeline: closeLastThinking(timeline) }
+      // 正文进时间轴 answer item(与思考/工具同轴排序);chatResponse 保留为派生
+      // 拼接(供历史重建等消费方),不再作为 adapter 的排版来源。
+      return {
+        ...msg,
+        chatResponse: (msg.chatResponse || '') + event.token,
+        agentTimeline: appendAnswerToken(closeLastThinking(timeline), event.token),
+      }
 
     case 'chat_done': {
       // 流式结束：所有 thinking item 收口并提取标题写入 title

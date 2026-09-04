@@ -360,6 +360,7 @@ export interface ToolCallEntry {
 // - tool_call：其他工具调用（每次调用一个独立条目）
 export type TimelineItem =
   | { type: 'thinking'; content: string; title?: string; done?: boolean }
+  | { type: 'answer'; content: string }
   | {
       type: 'search'
       query: string

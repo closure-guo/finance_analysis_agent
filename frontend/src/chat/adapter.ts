@@ -64,6 +64,17 @@ function timelineParts(msg: UIMessage): AnalysisPart[] {
       })
       return
     }
+    if (item.type === 'answer') {
+      // 正文作为时间轴 item(时序修复):与思考/工具同轴按到达序渲染
+      parts.push({
+        type: 'text',
+        text: item.content,
+        ...(msg.streaming && i === timeline.length - 1
+          ? { status: { type: 'running' as const } }
+          : {}),
+      })
+      return
+    }
     if (item.type === 'search') {
       parts.push({
         type: DATA_PART.search,
@@ -97,7 +108,9 @@ export function translateMessage(msg: UIMessage): ThreadMessageLike {
       }
     case 'chat': {
       const parts: AnalysisPart[] = [...timelineParts(msg)]
-      if (msg.chatResponse) {
+      // 正文已作为 'answer' 时间轴 item 由 timelineParts 按序渲染;chatResponse
+      // 仅作历史重建/旧数据兜底(无 answer item 时末尾追加,保持现状不回归)。
+      if (msg.chatResponse && !parts.some((p) => p.type === 'text')) {
         parts.push({
           type: 'text',
           text: msg.chatResponse,
