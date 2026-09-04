@@ -30,6 +30,43 @@ PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src" / "finance_agent" / "p
 DEFAULT_EXCLUDE: set[str] = set()
 
 
+def _normalize(text: str) -> str:
+    """CRLF/LF 归一(口径同 evals.run._verify_prompt_sync / sync_prompts)。"""
+    return text.replace("\r\n", "\n")
+
+
+def _is_not_found(e: Exception) -> bool:
+    s = str(e).lower()
+    return "404" in s or "not found" in s or "does not exist" in s
+
+
+def precheck(client, files: list[Path], exclude: set[str]) -> tuple[list[str], list[str]]:
+    """发布预检(add-prompt-hot-reload):Langfuse 领先(UI 编辑未收编)则拒绝盲推。
+
+    返回 (mismatched, unreachable)。prompt 在 Langfuse 不存在(404)视为首部属,
+    不拦;拉取失败(网络/凭证)保守归 unreachable。CRLF 归一后逐字比对。
+    """
+    mismatched: list[str] = []
+    unreachable: list[str] = []
+    for f in files:
+        name = f.stem
+        if name in exclude:
+            continue
+        try:
+            local = _normalize(f.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        try:
+            remote = _normalize(str(getattr(client.get_prompt(name), "prompt", "")))
+        except Exception as e:  # noqa: BLE001
+            if not _is_not_found(e):
+                unreachable.append(name)
+            continue
+        if local != remote:
+            mismatched.append(name)
+    return mismatched, unreachable
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="导入本地 prompt 到 Langfuse")
     p.add_argument("--dry-run", action="store_true", help="只打印不导入")
@@ -79,6 +116,24 @@ def main() -> int:
         return 1
     except Exception as e:
         print(f"[ERROR] Langfuse 初始化失败: {e}", file=sys.stderr)
+        return 1
+
+    # 预检(add-prompt-hot-reload):Langfuse 领先/不可达时拒绝整批发布,
+    # 防止本地盲推创建新版本抢走 production 标签覆盖 UI 编辑。
+    mismatched, unreachable = precheck(client, files, exclude)
+    if mismatched or unreachable:
+        for name in mismatched:
+            print(
+                f"  [预检拦截] {name}  Langfuse production 与本地不一致(UI 编辑未收编?)",
+                file=sys.stderr,
+            )
+        for name in unreachable:
+            print(f"  [预检拦截] {name}  Langfuse 拉取失败(保守拒绝)", file=sys.stderr)
+        print(
+            "\n[ERROR] 预检未通过,已拒绝发布。Langfuse 侧有变更时先执行: "
+            "uv run python scripts/sync_prompts.py --once 收编后再发布",
+            file=sys.stderr,
+        )
         return 1
 
     ok, skip, fail = 0, 0, 0
