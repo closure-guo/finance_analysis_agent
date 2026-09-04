@@ -25,6 +25,9 @@ export default defineConfig({
     // 报告导出抽屉依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175），
     // 由 playwright.timeline.config.ts 运行，默认 config 无此后端，故排除
     'report-export.spec.ts',
+    // 消息操作条（复制/重试/点赞/点踩）同依赖 8002/5175 pipeline 环境，
+    // 由 playwright.timeline.config.ts 运行，默认 config 排除
+    'message-actions.spec.ts',
     // 视觉基线截图采集（会话页/报告渲染态）同依赖 8002/5175 管线环境，
     // 由 playwright.timeline.config.ts 运行（未设 BASELINE_DIR 时自跳过），默认 config 排除
     'visual-baseline-report.spec.ts',
