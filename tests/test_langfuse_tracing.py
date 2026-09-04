@@ -222,3 +222,26 @@ class TestGetCallbackHandler:
             handler = get_callback_handler()
         assert handler is None
         assert not caplog.records
+
+
+# ── add-user-feedback:OTel detach 已知无害错误日志过滤 ──────────────────
+
+
+def test_benign_detach_error_filtered_genuine_error_kept():
+    """「Failed to detach context」被过滤；同 logger 的其他错误照常通过。"""
+    from finance_agent.langfuse_tracing import _silence_benign_detach_errors
+
+    _silence_benign_detach_errors()
+
+    logger = logging.getLogger("opentelemetry.context")
+    handled: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = lambda record: handled.append(record)  # type: ignore[method-assign]
+    logger.addHandler(handler)
+    try:
+        logger.error("Failed to detach context")  # 已知无害噪音 → 被过滤
+        logger.error("other genuine tracing error")  # 真实错误 → 保留
+    finally:
+        logger.removeHandler(handler)
+
+    assert [r.getMessage() for r in handled] == ["other genuine tracing error"]
