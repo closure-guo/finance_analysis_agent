@@ -26,7 +26,14 @@ def persist_prediction_from_accumulated(
     缺入场价(quote 与 kline 均不可得)存档为 unresolvable(计入样本不计入胜率)。
     """
     try:
-        decision = accumulated.get("final_trade_decision") or {}
+        decision = accumulated.get("final_trade_decision")
+        if decision is None:
+            return
+        # 真实管线 state 携带 pydantic TradeDecision 对象（非 dict）——归一化访问。
+        # 线上事故：decision.get() 在 pydantic 对象上抛 AttributeError 被旁路吞掉，
+        # 深度分析完成后 predictions 恒为 0（历史战绩空）。
+        if not isinstance(decision, dict):
+            decision = decision.model_dump()
         if not decision.get("action"):
             return
         action = decision["action"]

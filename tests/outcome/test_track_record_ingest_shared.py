@@ -89,3 +89,35 @@ def test_no_decision_skips(monkeypatch, tmp_path):
         "贵州茅台",
     )
     assert list_predictions(db_path=db) == []
+
+
+def test_pydantic_trade_decision_recorded(monkeypatch, tmp_path):
+    """真实管线 state 的 final_trade_decision 是 pydantic TradeDecision 对象（非 dict）。
+
+    线上事故回归：ingest 用 decision.get() 访问 pydantic 对象抛 AttributeError，
+    被旁路吞掉 → 深度分析完成后 predictions 恒为 0（历史战绩空）。
+    """
+    from finance_agent.models import TradeDecision
+
+    db = _db(monkeypatch, tmp_path)
+    model_decision = TradeDecision(
+        action="buy",
+        confidence=0.8,
+        reasoning="x",
+        entry_price=100.0,
+        stop_loss=90.0,
+        target_price=120.0,
+    )
+    persist_prediction_from_accumulated(
+        _reat_accumulated(final_trade_decision=model_decision),
+        "sess-deep-1",
+        "600519",
+        "贵州茅台",
+    )
+    rows = list_predictions(db_path=db)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["direction"] == "long"
+    assert row["entry_price"] == 100.0  # quote 优先于模型 entry_price
+    assert row["target_price"] == 120.0
+    assert row["confidence"] == 0.8
