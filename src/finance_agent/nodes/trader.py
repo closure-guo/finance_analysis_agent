@@ -50,6 +50,13 @@ def _build_trader_context(state: dict) -> str:
     if conclusion:
         sections.append(f"研究经理结论: {conclusion}")
 
+    # 基金经理退回意见（calibrate-fm-approval）：FM return 重跑时注入退回理由，
+    # 使 Trader 能针对「风险缓释/仓位控制/止损安排」等要求改进方案；
+    # 非 return 路径（approve/reject）或空理由不注入，避免误导。
+    fm_reasoning = state.get("fund_manager_decision_reasoning")
+    if state.get("fund_manager_decision") == "return" and fm_reasoning:
+        sections.append(f"基金经理退回意见: {fm_reasoning}")
+
     # 辩论历史
     history = state.get("debate_history") or []
     if history:

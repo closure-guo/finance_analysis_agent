@@ -2,14 +2,20 @@
 
 ## Why
 
-排查确认：基金经理（FM）节点历史上从未产出 `approve`，100% `reject`/`modify`。这意味着五层流水线的最后一关实际退化为「否决器」——approve 路径代码、前端批准态展示、战绩体系的「批准买入」语义全部从未被真实触发。根因候选：prompt 过度风险厌恶（v2 合并后需复核）、输入上下文缺少「必须给出可执行结论」的约束、或 approve 的判定门槛表述模糊。
+原假设「基金经理从不 approve、只有 reject」经取证证伪。Langfuse 153 条 `fund_manager` trace 中 approve 81（53%）、return 44（29%）、reject 24（16%）；09-03 当天 approve 19/44（43%）。FM 批准行为正常，**历史战绩为空是此前落库缺陷（已单独修复）造成的错觉，不是 FM 不批准**。
+
+用户观察到的「连续只见 reject」窗口 = 同一高风险标的（力鼎光电，真实计算回撤 41.2%/波动率 75.6%）被反复重跑：`return → trader 重跑 → FM 再评` 回路中 **trader 重跑未携带 FM 的退回理由**（`_build_trader_context` 不读 `fund_manager_decision_reasoning`），产出同方案 → FM 依风控职责再拒 → 以 reject 收场（012:31–13:15 的 11 连非 approve 全是这一标的）。
+
+结论：FM 否决高风险标的（回撤 41%/波动 76%）是职责所需，**不得用「approve 占比下限」放松风控**。可修的真实缺陷是 return 回路反馈断裂 + 评估侧缺少 FM 决策质量守门。
 
 ## What Changes
 
-- 取证：基于 Langfuse trace + 战绩库统计 FM 决策分布，定位 prompt 层 vs 数据层根因（只读分析，先落结论）
-- prompt 校准：在保留风控职责的前提下，明确三档决策的判定标准与「不得无限期回避决策」约束；给出 approve/modify/reject 的示例锚点
-- 校准指标：`fm_decision_distribution` 进入评估体系（approve/modify/reject 占比 + 与人工抽检的一致率），防止「校准成无脑 approve」的反向漂移
-- 回归门禁：评测集新增 FM 决策分布断言（如 approve+modify 占比下限），纳入 nightly @live
+- **return 回路修复**：trader 节点在 return 重跑时把 `fund_manager_decision_reasoning` 并入 LLM context，使 Trader 能按 FM 要求补充论据（风险缓释/仓位控制/止损安排），FM 再评时面对改进后的方案
+- **评估接入**：
+  - `fm_decision_distribution` 指标：从 Langfuse trace 聚合 approve/return/reject 分布与趋势，nightly 报告（不设占比下限，仅记录波动防漂移）
+  - 风控否决召回门禁：对回撤/波动超阈值的对抗样本，FM 必须否决（approve 即失败）——防「无脑批准」反向漂移
+  - 否决理由完整门禁：approve/return/reject 必须附带 reasoning，缺失/为空即失败（防无理由拒绝的退化）
+- **prompt 不改**：取证证明 FM prompt 行为健康，改动反而引入生产风险；如需再校准，走既有 deploy 管线另立条目
 
 ## Capabilities
 
@@ -19,12 +25,12 @@
 
 ### Modified Capabilities
 
-- `agent-evaluation-suite`: 新增 FM 决策分布指标与门禁断言
-- `prompt-deploy-consistency`: FM prompt 变更走既有部署管线（无新规则，仅声明受影响 prompt）
+- `agent-evaluation-suite`: 新增 FM 决策分布追踪 + 风控否决召回门禁 + 否决理由完整门禁
 
 ## Impact
 
-- 受影响 prompt：`src/finance_agent/prompts/fund_manager.md`（改后必须 `scripts/deploy_prompts.py` 发布）
-- 评估：`evals/` 新增指标与断言；nightly @live 用例
-- 前置：无代码结构依赖，但建议与 add-judge-human-calibration 共用人工抽检样本
-- 风险：校准过度会使 FM 形同虚设——指标设计必须双向约束（approve 率上限 + 风控否决召回率下限）
+- 代码：仅 `src/finance_agent/nodes/trader.py`（context 注入 + 对应单测）；graph/routing 不变（return 回路已存在）
+- 数据：无新表
+- 评估：`evals/fm_decision/` 模块（Langfuse 拉取 + fixtures 离线断言）+ 对抗样本集
+- 前端：无
+- 前置：无

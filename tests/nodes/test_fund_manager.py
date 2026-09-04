@@ -39,10 +39,13 @@ class TestFundManager:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_return_decision(self, mock_llm):
+        """return 决策：递增 return_count 且退回理由落 state（calibrate-fm-approval
+        回路契约：FM 理由 → state → trader 重跑 context，缺一不可）。"""
         mock_llm.return_value = _mock_response("return")
         result = fund_manager(_base_state())
         assert result["fund_manager_decision"] == "return"
         assert result["return_count"] == 1
+        assert result["fund_manager_decision_reasoning"] == "测试理由"
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_reject_decision(self, mock_llm):
