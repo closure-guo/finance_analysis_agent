@@ -163,36 +163,86 @@ const UserMessage = () => (
   </div>
 )
 
-// 消息 hover 操作（delta spec: 消息操作与独有部件）：复制 / 重新生成。
-// JS 条件渲染（hover 才挂载）——既满足 hover 显示语义，又保持既有测试的
-// button 计数契约（未 hover 时 DOM 无额外按钮）。
-function MessageActions({ text, onRegenerate }: { text: string; onRegenerate: () => void }) {
+// 消息操作条（复制/重试/点赞/点踩）——小图标 + aria-label（项目图标库 FontAwesome）。
+// 固定高度行恒渲染(消除 hover 挂载导致的文本块布局位移);按钮仅在 hover 且非流式
+// 时挂载。重试只出现在最后一段 agent 输出下(showRetry);点赞/点踩为本地 toggle。
+export function MessageActions({
+  text,
+  onRegenerate,
+  visible,
+  showRetry,
+}: {
+  text: string
+  onRegenerate: () => void
+  visible: boolean
+  showRetry: boolean
+}) {
   const [copied, setCopied] = useState(false)
+  const [feedback, setFeedback] = useState<'like' | 'dislike' | null>(null)
+  const activeCls = (k: 'like' | 'dislike') =>
+    feedback === k ? { color: 'var(--bg-brand)', background: 'var(--bg-brand-popup)' } : undefined
   return (
-    <div className="flex items-center gap-1 mt-1" data-testid="message-actions">
-      <button
-        onClick={() => {
-          void navigator.clipboard?.writeText(text).then(() => {
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          }).catch(() => {})
-        }}
-        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors"
-        style={{ color: 'var(--text-tertiary)', background: 'var(--bg-overlay-l1)' }}
-      >
-        <i className={`fas ${copied ? 'fa-check' : 'fa-copy'} text-[10px]`}></i>
-        {copied ? '已复制' : '复制'}
-      </button>
-      <button
-        onClick={onRegenerate}
-        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors"
-        style={{ color: 'var(--text-tertiary)', background: 'var(--bg-overlay-l1)' }}
-      >
-        <i className="fas fa-redo text-[10px]"></i>
-        重新生成
-      </button>
+    <div className="flex items-center gap-1 h-7" data-testid="message-actions">
+      {visible && (
+        <>
+          <button
+            aria-label={copied ? '已复制' : '复制'}
+            title="复制"
+            onClick={() => {
+              void navigator.clipboard?.writeText(text).then(() => {
+                setCopied(true)
+                setTimeout(() => setCopied(false), 1500)
+              }).catch(() => {})
+            }}
+            className="flex items-center justify-center size-6 rounded-md transition-colors"
+            style={{ color: 'var(--text-tertiary)' }}
+          >
+            <i className={`fas ${copied ? 'fa-check' : 'fa-copy'} text-[10px]`}></i>
+          </button>
+          {showRetry && (
+            <button
+              aria-label="重试"
+              title="重试"
+              onClick={onRegenerate}
+              className="flex items-center justify-center size-6 rounded-md transition-colors"
+              style={{ color: 'var(--text-tertiary)' }}
+            >
+              <i className="fas fa-redo text-[10px]"></i>
+            </button>
+          )}
+          <button
+            aria-label="点赞"
+            title="点赞"
+            onClick={() => setFeedback(feedback === 'like' ? null : 'like')}
+            className="flex items-center justify-center size-6 rounded-md transition-colors"
+            style={{ color: 'var(--text-tertiary)', ...activeCls('like') }}
+          >
+            <i className="fas fa-thumbs-up text-[10px]"></i>
+          </button>
+          <button
+            aria-label="点踩"
+            title="点踩"
+            onClick={() => setFeedback(feedback === 'dislike' ? null : 'dislike')}
+            className="flex items-center justify-center size-6 rounded-md transition-colors"
+            style={{ color: 'var(--text-tertiary)', ...activeCls('dislike') }}
+          >
+            <i className="fas fa-thumbs-down text-[10px]"></i>
+          </button>
+        </>
+      )}
     </div>
   )
+}
+
+// 判断指定消息是否为线程中最后一条 assistant 消息（重试按钮只出现在最后一段 agent 输出下）
+export function isLastAssistantMessageId(
+  messages: { role: string; id: string }[],
+  messageId: string,
+): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') return messages[i].id === messageId
+  }
+  return false
 }
 
 // 模块级桥：App 的重新生成回调（ThreadMessages 渲染时更新，AssistantMessage 读取）
@@ -210,6 +260,13 @@ const AssistantMessage = () => {
     const c = s.message.content
     return Array.isArray(c) ? c.map((p) => (p.type === 'text' ? p.text : '')).join('') : ''
   })
+  // 重试只出现在最后一段 agent 输出下
+  const isLastAssistant = useAuiState((s) =>
+    isLastAssistantMessageId(
+      s.thread.messages.map((m) => ({ role: m.role, id: m.id })),
+      messageId,
+    ),
+  )
   const [hovered, setHovered] = useState(false)
   if (kind === 'chat') {
     // chat 消息容器：思考/工具横幅与正文同容器（stream-output 测试契约）
@@ -225,13 +282,13 @@ const AssistantMessage = () => {
             <AssistantAvatar />
             <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-secondary)' }}>
               <MessagePrimitive.Parts components={chatPartsComponents} />
-              {/* hover 操作：流式中不显示（生成中的消息无复制/重生语义） */}
-              {hovered && !isRunning && (
-                <MessageActions
-                  text={messageText}
-                  onRegenerate={() => regenerateHandler?.(messageId)}
-                />
-              )}
+              {/* 操作条：固定高度行恒渲染(消除布局位移);按钮 hover 且非流式时挂载 */}
+              <MessageActions
+                text={messageText}
+                onRegenerate={() => regenerateHandler?.(messageId)}
+                visible={hovered && !isRunning}
+                showRetry={isLastAssistant && !isRunning}
+              />
             </div>
           </div>
         </div>
