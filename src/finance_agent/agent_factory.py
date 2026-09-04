@@ -17,6 +17,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import json
+import logging
 import os
 import threading
 from collections.abc import Callable
@@ -25,7 +26,10 @@ from typing import Any
 from finance_agent.harness import Agent, PermissionMode
 from finance_agent.harness.context import ContextBudget
 from finance_agent.llm import LLMConfig
+from finance_agent.outcome.track_record.ingest import persist_prediction_from_accumulated
 from finance_agent.prompts.loader import PromptInfo, load_prompt_with_meta
+
+logger = logging.getLogger("finance_agent.agent_factory")
 
 # ───────────────────────────────────────────────
 # System Prompts（ADR-0016：从 prompts/*.md 加载，Langfuse 优先 + 本地兜底）
@@ -284,6 +288,20 @@ _pipeline_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=max(4, min(32, (os.cpu_count() or 4) + 4)),
     thread_name_prefix="pipeline",
 )
+
+
+def _persist_decision_from_tool(
+    accumulated: dict, session_id: str, stock_code: str, stock_name: str
+) -> None:
+    """ReAct 深模式完成时落库观点(旁路:函数内部已吞异常,此处仅兜底日志)。
+
+    经共享入口(ingest.persist_prediction_from_accumulated)与旧 /api/analyze
+    路径同语义;同步 SQLite 写,由调用方 to_thread 移出事件循环。
+    """
+    try:
+        persist_prediction_from_accumulated(accumulated, session_id, stock_code, stock_name)
+    except Exception as e:  # noqa: BLE001 - 旁路铁律
+        logger.warning("ReAct 深模式落库兜底失败(不阻断): %s", e)
 
 
 def _make_run_deep_analysis(
@@ -716,6 +734,16 @@ def _make_run_deep_analysis(
                         duration_ms=int((_time_module.time() - _pipeline_start_time) * 1000),
                         file_paths=accumulated.get("file_paths") or {},
                         status="completed",
+                    )
+                    # add-track-record:ReAct 深模式完成即落库观点(全量记录,含 reject)。
+                    # 挂点曾只存在于旧 /api/analyze 路径,深模式经工具路径无挂点 →
+                    # predictions 恒为 0(真实事故);现经共享入口与旧路径同语义。
+                    await asyncio.to_thread(
+                        _persist_decision_from_tool,
+                        accumulated,
+                        session_id,
+                        stock_code,
+                        stock_name,
                     )
 
                 metadata = {

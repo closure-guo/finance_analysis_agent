@@ -133,9 +133,11 @@ from finance_agent.outcome.store import (  # noqa: E402
 )
 
 # predictions 战绩体系(add-track-record):全量观点记录取代 decision_log 写入
+from finance_agent.outcome.track_record.ingest import (  # noqa: E402
+    persist_prediction_from_accumulated,
+)
 from finance_agent.outcome.track_record.model import (  # noqa: E402
     init_predictions,
-    insert_prediction,
     list_predictions,
     prediction_stats,
 )
@@ -614,55 +616,12 @@ def _safe_dump(obj: Any) -> Any:
 def _persist_decision_log(
     accumulated: dict, session_id: str, stock_code: str, stock_name: str
 ) -> None:
-    """观点全量落 predictions(add-track-record:approve/reject/hold/watch 均记录)。
+    """观点全量落 predictions(委托共享入口,旧 /api/analyze 路径)。
 
-    旁路:任何失败仅 ERROR,不阻断报告。缺 entry_price(quote 与 kline 均不可得)的
-    存档记录标 unresolvable(计入样本不计入胜率),不丢弃。
+    旁路:任何失败仅 ERROR,不阻断报告。ReAct 深模式路径(agent_factory)与
+    本路径共用 finance_agent.outcome.track_record.ingest。
     """
-    try:
-        decision = accumulated.get("final_trade_decision") or {}
-        if not decision.get("action"):
-            return
-        action = decision["action"]
-        direction = "long" if action == "buy" else ("short" if action == "sell" else "neutral")
-        # entry_price 代码回填:quote 优先,kline 收盘兜底
-        entry_price = (accumulated.get("stock_quote") or {}).get("price")
-        if entry_price is None:
-            kline = accumulated.get("kline")
-            if kline is not None and len(kline) > 0:
-                last = kline.iloc[-1] if hasattr(kline, "iloc") else kline[-1]
-                entry_price = float(last["收盘"])
-        status = "open"
-        resolution_rule = None
-        if entry_price is None:
-            status = "unresolvable"
-            resolution_rule = "missing_entry_price"
-        symbol = f"{stock_code}.SH" if str(stock_code).startswith("6") else f"{stock_code}.SZ"
-        insert_prediction(
-            {
-                "source_type": "live",
-                "symbol": symbol,
-                "symbol_name": stock_name,
-                "direction": direction,
-                "entry_price": float(entry_price) if entry_price is not None else None,
-                "target_price": decision.get("target_price"),
-                "confidence": decision.get("confidence"),
-                "rationale_snapshot": {
-                    "action": action,
-                    "fund_manager_decision": accumulated.get("fund_manager_decision"),
-                    "fund_manager_decision_reasoning": accumulated.get(
-                        "fund_manager_decision_reasoning"
-                    ),
-                },
-                "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
-                "timestamp": datetime.now().isoformat(),
-                "resolution_rule": resolution_rule,
-            },
-            status=status,
-        )
-        _logger.info("prediction 已落库: %s %s status=%s", stock_code, action, status)
-    except Exception:
-        _logger.exception("prediction 落库失败(不阻断业务)")
+    persist_prediction_from_accumulated(accumulated, session_id, stock_code, stock_name)
 
 
 def _stream_report_chunks(markdown: str, chunk_size: int = 200) -> list[str]:
@@ -2154,7 +2113,6 @@ _DISCLAIMER = "历史业绩不代表未来表现"
 
 def _track_as_of() -> str:
     """北京时间日期(YYYY-MM-DD),战绩口径 as_of。"""
-    from datetime import datetime
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
@@ -2213,7 +2171,6 @@ async def track_record_predictions(
 
 def _now() -> str:
     """返回北京时间字符串，与 agent_factory._now() 保持一致"""
-    from datetime import datetime
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")

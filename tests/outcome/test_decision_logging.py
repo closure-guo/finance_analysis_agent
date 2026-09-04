@@ -80,11 +80,11 @@ def test_failure_does_not_raise(monkeypatch, tmp_path, caplog):
     from unittest.mock import patch
 
     _db(monkeypatch, tmp_path)
-    # 构造落库失败:insert_prediction 抛错
+    # 构造落库失败:ingest 的 insert_prediction 抛错(api 委托共享入口后 patch 此处)
     acc = _accumulated(final_trade_decision={"action": "buy", "confidence": 0.8, "entry_price": 1})
     with (
         patch(
-            "finance_agent.api.insert_prediction",
+            "finance_agent.outcome.track_record.ingest.insert_prediction",
             side_effect=RuntimeError("db down"),
         ),
         caplog.at_level(logging.ERROR),
