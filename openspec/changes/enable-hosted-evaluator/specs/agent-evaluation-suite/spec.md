@@ -2,6 +2,11 @@
 
 ## ADDED Requirements
 
+> 取证结论（2026-09-04）：自托管 Langfuse 3.205.1 无 evaluator 公共 API
+> （/api/public/eval-configs 返回 SPA HTML），managed evaluator 无法脚本化配置。
+> 按 spec 预设执行降级：轮询 /api/public/scores（UI evaluator 分数带 configId）
+> 实现在线质量监控 + 告警 + 口径对齐；模板以快照归档治理。
+
 ### Requirement: 在线 hosted evaluator
 
 系统 SHALL 对生产 trace 启用 Langfuse managed evaluator（采样率配置化，默认 10%），维度对齐离线评测口径；自托管版本不支持时降级为轮询脚本方案。
