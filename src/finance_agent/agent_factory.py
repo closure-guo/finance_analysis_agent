@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import functools
+import inspect
 import json
 import logging
 import os
@@ -957,6 +959,66 @@ def _build_context_budget(
         return ContextBudget()
 
 
+def _trace_tool(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """工具调用埋点（add-toolcall-evaluation 取证依赖）：Langfuse span。
+
+    纯可观测性：Langfuse 未配置（get_langfuse()=None）时原样直通零开销；
+    span 记录 name=tool_call:<工具名>、入参、执行耗时、异常标记 metadata.tool_error。
+    同步/异步工具双路支持（functools.wraps 保留原签名；行为/异常传播不变）。
+    """
+
+    def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def wrapped(*args: Any, **kwargs: Any) -> Any:
+                from finance_agent.langfuse_tracing import get_langfuse
+
+                client = get_langfuse()
+                if client is None:
+                    return await fn(*args, **kwargs)
+                call_arg = kwargs if kwargs else (args[0] if args else None)
+                try:
+                    with client.start_as_current_observation(
+                        as_type="span", name=f"tool_call:{name}", input={"call": call_arg}
+                    ) as span:
+                        result = await fn(*args, **kwargs)
+                        with contextlib.suppress(Exception):  # 埋点写 output 失败不影响业务
+                            span.update(output=str(result)[:2000])
+                        return result
+                except Exception as e:  # noqa: BLE001 - 业务异常照常传播，埋点标记错误
+                    with contextlib.suppress(Exception):
+                        span.update(output={"error": str(e)}, metadata={"tool_error": str(e)})
+                    raise
+
+            return wrapped
+
+        @functools.wraps(fn)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            from finance_agent.langfuse_tracing import get_langfuse
+
+            client = get_langfuse()
+            if client is None:
+                return fn(*args, **kwargs)
+            call_arg = kwargs if kwargs else (args[0] if args else None)
+            try:
+                with client.start_as_current_observation(
+                    as_type="span", name=f"tool_call:{name}", input={"call": call_arg}
+                ) as span:
+                    result = fn(*args, **kwargs)
+                    with contextlib.suppress(Exception):  # 埋点写 output 失败不影响业务
+                        span.update(output=str(result)[:2000])
+                    return result
+            except Exception as e:  # noqa: BLE001
+                with contextlib.suppress(Exception):
+                    span.update(output={"error": str(e)}, metadata={"tool_error": str(e)})
+                raise
+
+        return wrapped
+
+    return deco
+
+
 def build_agent(
     mode: str = "quick",
     api_key: str | None = None,
@@ -1030,7 +1092,10 @@ def build_agent(
         # 与 StubLLMClient 的 tool_call 场景配合，确定性复现"思考->web search->思考"。
         from finance_agent.api import TESTING
 
-        agent.tools.register(_stub_web_search if TESTING else _web_search, name="web_search")
+        agent.tools.register(
+            _trace_tool("web_search")(_stub_web_search if TESTING else _web_search),
+            name="web_search",
+        )
         session_id = kwargs.get("session_id")
         if session_id:
             _inject_chat_history(agent, session_id)
@@ -1048,16 +1113,20 @@ def build_agent(
             context_budget=context_budget,
         )
         web_sources_collector: list[dict] = []
-        agent.tools.register(_make_search_stock(api_key), name="search_stock")
         agent.tools.register(
-            _make_run_deep_analysis(
-                api_key=api_key,
-                analysis_type=analysis_type,
-                peer_codes=peer_codes,
-                enable_web_search=enable_web_search,
-                session_id=kwargs.get("session_id"),
-                web_sources=web_sources_collector,
-                llm_config=llm_config,
+            _trace_tool("search_stock")(_make_search_stock(api_key)), name="search_stock"
+        )
+        agent.tools.register(
+            _trace_tool("run_deep_analysis")(
+                _make_run_deep_analysis(
+                    api_key=api_key,
+                    analysis_type=analysis_type,
+                    peer_codes=peer_codes,
+                    enable_web_search=enable_web_search,
+                    session_id=kwargs.get("session_id"),
+                    web_sources=web_sources_collector,
+                    llm_config=llm_config,
+                )
             ),
             name="run_deep_analysis",
         )
@@ -1067,10 +1136,17 @@ def build_agent(
         from finance_agent.api import TESTING
 
         agent.tools.register(
-            _stub_web_search if TESTING else _make_web_search_with_collector(web_sources_collector),
+            _trace_tool("web_search")(
+                _stub_web_search
+                if TESTING
+                else _make_web_search_with_collector(web_sources_collector)
+            ),
             name="web_search",
         )
-        agent.tools.register(_make_batch_web_search(web_sources_collector), name="batch_web_search")
+        agent.tools.register(
+            _trace_tool("batch_web_search")(_make_batch_web_search(web_sources_collector)),
+            name="batch_web_search",
+        )
         session_id = kwargs.get("session_id")
         if session_id:
             _inject_chat_history(agent, session_id)
@@ -1095,7 +1171,7 @@ def build_agent(
             llm=llm_client,
             context_budget=context_budget,
         )
-        agent.tools.register(_web_search, name="web_search")
+        agent.tools.register(_trace_tool("web_search")(_web_search), name="web_search")
         return agent
 
     raise ValueError(f"未知模式: {mode}")

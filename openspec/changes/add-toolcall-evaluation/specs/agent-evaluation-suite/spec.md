@@ -2,6 +2,11 @@
 
 ## ADDED Requirements
 
+> 采集前置（2026-09-04 取证）：quick 模式工具执行此前未入 Langfuse。
+> 本 delta 配套生产埋点 agent_factory._trace_tool（tool_call:<工具名> span，
+> 含入参/耗时/异常 metadata.tool_error；纯可观测性，Langfuse 未配置零开销直通）。
+> 提取器以该 span 为数据源。
+
 ### Requirement: 工具调用轨迹提取
 
 评估链路 SHALL 从 Langfuse trace 提取工具调用序列（工具名/参数/耗时/成败/重试次数）作为评估输入。
