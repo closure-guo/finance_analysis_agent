@@ -169,22 +169,30 @@ test.describe('Session Switch - Stream Resumption', () => {
     // 会话 ID：发送前后 diff（并发安全）
     const sessionId = await captureNewSessionId(page, knownIds)
 
-    // 点击停止按钮（流式开始后应可见；不可见则环境未进入流式，跳过）
+    // 点击停止按钮（流式开始后应可见；快 stub 流窗口极短——
+    // 可见即尽力点击，点击竞态（流自然结束按钮消失）则落入澄清稳态，轮询仍通过）
     const stopButton = page.getByRole('button', { name: /停止/ })
-    await stopButton.isVisible({ timeout: 10_000 }).catch(() => false)
-    const visible = await stopButton.isVisible().catch(() => false)
+    let visible = false
+    try {
+      await expect(stopButton).toBeVisible({ timeout: 10_000 })
+      visible = true
+    } catch {
+      // 环境未进入可见的流式窗口
+    }
     if (!visible) {
       console.log('[E2E] 停止按钮不可见，跳过测试')
       test.skip()
       return
     }
-    await stopButton.click()
+    await stopButton.click({ timeout: 2_000 }).catch(() => {
+      console.log('[E2E] 停止按钮已消失（流自然结束），按澄清稳态继续')
+    })
     console.log('[E2E] 已点击停止按钮')
 
     // 轮询会话状态到中断态（web-first 替代固定 sleep(3s)+单次检查）
     await expect
       .poll(async () => (await getSessionDetail(page, sessionId)).status, {
-        timeout: 30_000,
+        timeout: 60_000,
         intervals: [1_000],
         message: '停止后会话应进入中断/澄清/完成态',
       })

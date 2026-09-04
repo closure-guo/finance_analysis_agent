@@ -111,6 +111,9 @@ class TradeDecision(BaseModel):
     entry_price: float | None = None
     stop_loss: float | None = None
     target_price: float | None = None
+    # toolize-price-levels：sanity 校验二次未通过时由工具参考带修正（可观测标注）
+    price_level_corrected: bool = False
+    price_level_correction_reason: str | None = None
     evidence_refs: list[TradeEvidenceRef] = Field(default_factory=list)
 
     @field_validator("evidence_refs", mode="before")

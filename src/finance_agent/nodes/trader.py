@@ -57,6 +57,23 @@ def _build_trader_context(state: dict) -> str:
     if state.get("fund_manager_decision") == "return" and fm_reasoning:
         sections.append(f"基金经理退回意见: {fm_reasoning}")
 
+    # 价位参考（toolize-price-levels）：工具预算的价位带，供解读与偏离对照——
+    # 数值由工具计算，LLM 不做价位心算
+    import json as _json
+
+    levels = state.get("price_levels")
+    if levels and levels.get("available"):
+        sections.append(
+            f"价位参考（工具计算 price_levels，entry_ref=最新收盘；"
+            f"long: stop_band_long 为止损参考带、target_band_long 为目标参考带）：\n"
+            f"{_json.dumps(levels, ensure_ascii=False)}"
+        )
+
+    # 价位校验打回意见（sanity 校验 fail 后重出时携带）
+    price_feedback = state.get("price_check_feedback")
+    if price_feedback:
+        sections.append(f"价位校验打回意见: {price_feedback}")
+
     # 辩论历史
     history = state.get("debate_history") or []
     if history:

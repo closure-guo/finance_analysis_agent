@@ -207,6 +207,24 @@ def _make_batch_web_search(collector: list[dict]):
     return batch_web_search
 
 
+def _fetch_quote_snapshot(stock_code: str) -> dict | None:
+    """拉取现价/涨跌幅快照（工具数据）。失败返回 None（调用方如实标注缺失）。"""
+    try:
+        from finance_agent.data.akshare_client import AKShareClient
+
+        quote = AKShareClient().fetch_stock_quote(stock_code)
+        price = quote.get("price")
+        pct = quote.get("pct_change")
+        if price is None:
+            return None
+        return {
+            "price": float(price),
+            "pct_change": round(float(pct), 2) if pct is not None else 0.0,
+        }
+    except Exception:  # noqa: BLE001 - 快照是增强信息，失败不阻断查股
+        return None
+
+
 def _make_search_stock(api_key: str | None = None):
     """创建 search_stock 工具，注入 api_key 闭包。"""
 
@@ -252,7 +270,16 @@ def _format_stock_result(result: dict) -> str:
         c = candidates[0]
         code = _get(c, "stock_code", "code")
         name = _get(c, "stock_name", "name")
-        return f"找到股票：{name}({code})"
+        text = f"找到股票：{name}({code})"
+        # 行情快照（toolize-price-levels）：现价/涨跌幅由工具提供，LLM 引用不心算；
+        # 快照缺失如实标注（不伪造数字）
+        snapshot = _fetch_quote_snapshot(code)
+        if snapshot:
+            sign = "+" if (snapshot["pct_change"] or 0) >= 0 else ""
+            text += f"\n行情快照：现价 {snapshot['price']} 元（{sign}{snapshot['pct_change']}%）"
+        else:
+            text += "\n行情快照缺失（当前无法获取现价，请勿臆测价格数值）"
+        return text
 
     lines = ["找到多个候选股票，请确认："]
     for i, c in enumerate(candidates, 1):

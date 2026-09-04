@@ -26,12 +26,13 @@ from finance_agent.nodes.risk import (
     risk_judge,
 )
 from finance_agent.nodes.trader import trader
-from finance_agent.nodes.validate import validate_node
+from finance_agent.nodes.validate import validate_node, validate_trade_prices
 from finance_agent.routing import (
     after_check_cache,
     after_citation,
     after_fund_manager,
     after_validate,
+    after_validate_trade_prices,
     route_to_analysts,
     route_to_debate_r1,
     route_to_debate_r2,
@@ -82,6 +83,7 @@ def build_5layer_graph() -> CompiledStateGraph:
 
     # ── Layer III: Trader ──
     graph.add_node("trader", _t("trader")(trader))
+    graph.add_node("validate_trade_prices", _t("validate_trade_prices")(validate_trade_prices))
 
     # ── Layer IV: Risk Management ──
     graph.add_node("risk_r1_entry", _passthrough)
@@ -133,8 +135,9 @@ def build_5layer_graph() -> CompiledStateGraph:
     # ── 边：Layer III ──
     graph.add_edge("research_manager", "trader")
 
-    # ── 边：Layer IV Risk ──
-    graph.add_edge("trader", "risk_r1_entry")
+    # ── 边：Layer III→IV（价位 sanity 校验：fail 打回 trader，pass/corrected 前行）──
+    graph.add_edge("trader", "validate_trade_prices")
+    graph.add_conditional_edges("validate_trade_prices", after_validate_trade_prices)
     graph.add_conditional_edges("risk_r1_entry", route_to_risk_r1)
     graph.add_edge("aggressive_r1", "risk_r2_entry")
     graph.add_edge("conservative_r1", "risk_r2_entry")
