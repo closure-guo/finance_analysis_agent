@@ -4,7 +4,7 @@
 
 ## 前置
 
-- [ ] 人工 ADR 落地：定时任务框架选型（建议 APScheduler in-process）、`decision_log` 表归属、基准与持仓周期默认值（agent 不自建 ADR）
+- [x] 人工 ADR 落地：定时任务框架选型（APScheduler in-process）、落库表归属（predictions 全量观点记录，取代 decision_log 提案）、基准（000300 沪深300）与持仓周期默认值（MAX_HOLD_DAYS=20 / horizon_days=252）——ADR-0018（2026-09-05，维护者授权 agent 代拟，实现事实已核对）
 
 ## 验收项
 

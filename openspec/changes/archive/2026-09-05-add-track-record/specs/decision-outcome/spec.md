@@ -9,6 +9,13 @@
 每个产出的观点 SHALL 写入 `predictions` 表（取代原 `decision_log`）：不再只记 approve，**reject、hold/watch、neutral 方向的观点同样落库**（全量记录）。记录 SHALL 含观点快照（rationale_snapshot，写入后冻结）、direction（action 映射：buy→long、sell→short、hold/watch→neutral）、confidence、entry_price（参考价，注明口径）、source_type（backtest/live）、权威 created_at（服务端生成）。写入 SHALL NOT 阻断业务管线（旁路失败仅日志，不影响报告产出）。
 (Previously: 每个产出的 TradeDecision SHALL 同步落 decision_log 表，仅 approve 记录，初始 status="open"，普通可改写表。)
 
+#### Scenario: 决策产出即落库
+
+- **WHEN** Fund Manager 产出任一观点（`TradeDecision` 并写入 state）
+- **THEN** 系统 SHALL 同步向 `predictions` 插入一条记录
+- **AND** 记录含 langfuse_trace_id / created_at（服务端权威）/ ticker / direction / entry_price / confidence / source_type 等
+- **AND** 观点保持 open 直至判定结算
+
 #### Scenario: 全量观点落库（含 reject）
 
 - **WHEN** Fund Manager 产出任一决策（approve/reject/return）
@@ -54,7 +61,34 @@
 - **THEN** 旧观点 SHALL 立即以当前价格结算
 - **AND** resolution_rule SHALL 记录为 superseded
 
-#### Scenario: 幂等判定
+#### Scenario: 止损触发结算
+
+- **GIVEN** 旧规则下价格触及止损价的 open 观点
+- **WHEN** 判定任务处理
+- **THEN** SHALL NOT 以止损触发提前结算（horizon 判定取代止损/目标/超期路径）
+- **AND** 结算统一以 horizon 到点的区间超额收益为准
+
+#### Scenario: 目标达成结算
+
+- **GIVEN** 旧规则下价格触及目标价的 open 观点
+- **WHEN** 判定任务处理
+- **THEN** SHALL NOT 以目标达成触发提前结算
+- **AND** 判定统一以 horizon 终点区间超额收益为准
+
+#### Scenario: 止损与目标同日触及
+
+- **GIVEN** 同一交易日价格既触及止损价又触及目标价
+- **WHEN** 判定任务处理
+- **THEN** SHALL NOT 适用「同日按止损优先」规则（该规则随旧结算路径一并取代）
+
+#### Scenario: 超期强制结算
+
+- **GIVEN** 某 open 观点持有天数超过旧 `MAX_HOLD_DAYS`（20 交易日）
+- **WHEN** 判定任务处理
+- **THEN** SHALL NOT 按超期强制以结算日收盘结算
+- **AND** 该观点保持 open 至 horizon 到点（或被 superseded）
+
+#### Scenario: 幂等结算
 
 - **GIVEN** 某观点已 resolved 或 unresolvable
 - **WHEN** 判定任务再次处理
@@ -84,6 +118,20 @@
 - **WHEN** 结算
 - **THEN** 结算价 SHALL 用涨跌停打开后首个可成交价
 - **AND** 收益按实际可成交价计算
+
+#### Scenario: 一字跌停止损未成交
+
+- **GIVEN** 旧规则下一字跌停未成交的止损递延场景
+- **WHEN** 新判定任务处理
+- **THEN** SHALL NOT 适用止损递延语义（止损路径已被 horizon 判定取代）
+- **AND** 若 horizon 到点当日为涨跌停一字板，判定 SHALL 顺延至打开后首个可成交交易日
+
+#### Scenario: 停牌持仓期顺延
+
+- **GIVEN** 持有期内标的停牌 N 日
+- **WHEN** 判定任务处理
+- **THEN** 停牌日 SHALL 不计入 horizon 交易日数（horizon 顺延 N 个交易日）
+- **AND** 长期停牌/退市/长期无行情 SHALL 标记 unresolvable（见上）
 
 #### Scenario: 复权处理
 
