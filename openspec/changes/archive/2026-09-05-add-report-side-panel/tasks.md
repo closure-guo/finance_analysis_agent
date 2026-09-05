@@ -15,4 +15,4 @@
 
 ## 4. 验证
 - [x] 4.1 全量测试通过（431/431）；人工验证报告落 tests/validation/（真实鼠标拖拽建议人工抽查）
-- [ ] 4.2 E2E 门禁
+- [x] 4.2 E2E 门禁（2026-09-05 补跑：stub 套件 20 passed / 2 skipped / 0 failed，@live 用例按规范归 nightly 不进门禁）

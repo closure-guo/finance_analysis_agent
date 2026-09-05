@@ -34,18 +34,25 @@
 ### Requirement: Report Card Rendering
 
 系统 SHALL 在报告消息中渲染报告头部、财务图表、Markdown 正文、参考资料和免责声明；报告头部 SHALL NOT 承载任何文件导出按钮或「全部文件」入口。
-(Previously: 系统 SHALL 在报告消息中渲染报告头部、文件导出、财务图表、Markdown 正文、参考资料和免责声明。报告头部若 filePaths 中有 docx 显示 Word 导出按钮、pptx 显示 PPT 导出按钮，导出按钮触发 /api/files/{filename} 下载。)
+(Previously: 系统 SHALL 在报告消息中渲染报告头部、文件导出、财务图表、Markdown 正文、参考资料和免责声明。报告头部显示「全部文件」入口横幅（图标 + "全部文件"文案），点击打开右侧文件导出抽屉，抽屉内依据 filePaths 的 docx/pptx/pdf/md 键列出导出文件。)
 
 #### Scenario: 流式报告显示生成指示器
 
 - **GIVEN** 报告消息 streaming=true
 - **THEN** 顶部显示"正在生成报告 · 流式输出中"指示器（脉冲动画）
 
-#### Scenario: 报告头部展示（无导出入口）
+#### Scenario: 报告头部展示
 
 - **GIVEN** 报告消息 streaming=false
 - **THEN** 显示「股票名称（股票代码）」标题（如「贵州茅台（600519）」；名称缺失或等于代码时仅显示代码）、"深度分析"标签、耗时信息
 - **AND** 报告头部不显示任何文件导出按钮或「全部文件」入口
+
+#### Scenario: 打开导出抽屉
+
+- **GIVEN** 任一会话级导出入口（报告名横幅 / 全部文件横幅 / 顶部栏「查看全部文件」按钮）已渲染（见「会话级文件导出入口」）
+- **WHEN** 用户点击该入口
+- **THEN** 右侧文件导出抽屉滑出打开
+- **AND** 抽屉内仅列出该会话报告已生成的可下载文件（依据 filePaths 各条目，带格式徽标与文件名），不展示缺失格式的现场生成入口
 
 #### Scenario: 财务图表展示
 

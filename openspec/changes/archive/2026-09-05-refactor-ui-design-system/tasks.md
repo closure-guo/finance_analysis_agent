@@ -23,4 +23,4 @@
 - [x] 5.2 前端全量测试无修改通过
 <!-- 5.3 未勾选：E2E 门禁结论为「零新增」而非全绿（e2e 有 pre-existing 环境性失败，
      归因对比见 tests/validation/2026-08-29-refactor-ui-design-system-validation.md「E2E 失败归因」一节） -->
-- [ ] 5.3 E2E 门禁
+- [x] 5.3 E2E 门禁（2026-09-05 补跑：pre-existing 环境性失败已消除，stub 套件 20 passed / 2 skipped / 0 failed）

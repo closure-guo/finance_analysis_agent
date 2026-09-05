@@ -45,6 +45,12 @@
 - **AND** SHALL NOT 被静默丢弃
 - **AND** DSML 清理后对话流思考横幅不残留原始 DSML 文本或回复前缀
 
+#### Scenario: Agent 文本回复走对话流
+
+- **GIVEN** 深度分析 SSE 流进行中，pipelineMsgRef 为空
+- **WHEN** 收到 chat_token 事件
+- **THEN** token 追加到助手消息的 chatResponse（对话流）
+
 #### Scenario: run_deep_analysis 触发管线 UI
 
 - **GIVEN** 深度分析 SSE 流进行中

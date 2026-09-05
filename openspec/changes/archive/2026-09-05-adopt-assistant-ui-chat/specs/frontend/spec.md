@@ -78,10 +78,27 @@ assistant 消息 hover SHALL 显示复制与重新生成操作；管线进度时
 
 ### Requirement: 会话运行中（含工具执行中）禁止发送
 
-（自 fix-analysis-ux-polish 修改）拦截语义不变，实现 SHALL 迁移至 assistant-ui runtime 状态判定，既有场景验收标准不变。
+会话处于运行中（含澄清阶段工具执行中）时，前端 SHALL 拦截发送并提示；追问路径（后端不重发 `session_created`）下拦截同样生效。拦截主层 SHALL 迁移至 assistant-ui runtime 状态判定（运行中发送入口切换为停止按钮、提交通道关闭），App 层守卫（`isSessionRunning` / quick run 单飞守卫）保留为兜底。
+(Previously: 拦截主层为 App 层 `isSessionRunning` 守卫 + streamStore 单读取器登记。)
+
+#### Scenario: 澄清工具执行中发送被拦截
+
+- **GIVEN** 某会话澄清阶段 agent 正在执行工具（SSE 流存活）
+- **WHEN** 用户在该会话输入框发送消息
+- **THEN** 前端 SHALL 判定 `isSessionRunning(sessionId)` 为 true
+- **AND** 运行中发送入口切换为停止按钮（提交通道关闭），App 层守卫命中时显示「该会话正在生成中」toast
+- **AND** 不发出新的分析/对话请求
+
+#### Scenario: 追问路径登记 abort 使拦截生效
+
+- **GIVEN** 一次追问（已有 sessionId，后端不重发 `session_created`）
+- **WHEN** 前端发起 SSE 请求并创建 `AbortController`
+- **THEN** 前端 SHALL 在 fetch 发出前将其登记为该会话的活跃读取器（单读取器保证）
+- **AND** 运行状态判定据此生效
 
 #### Scenario: 运行中拦截（验收基准不变）
 
 - **GIVEN** 某会话正在生成（含工具执行中）
 - **WHEN** 用户发送消息
 - **THEN** 前端 SHALL 拦截发送并显示顶部 toast 提示
+

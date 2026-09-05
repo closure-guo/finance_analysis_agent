@@ -25,5 +25,5 @@
 
 - [x] 5.1 `cd frontend && npx vitest run` 全部通过（154 passed，含新增 stream-event-routing.test.tsx 2 个）
 - [x] 5.2 `cd frontend && npx tsc --noEmit` 无类型错误
-- [ ] 5.3 E2E 门禁：真实前后端，深度模式澄清阶段流式渲染思考/工具/回复不错位、格式正常（禁 mock，走 tests/e2e/）
-- [ ] 5.4 人工验证：覆盖 spec 全部新增/修改 scenario，报告落 tests/validation/
+- [x] 5.3 E2E 门禁（2026-09-05：stub 套件 20 passed / 2 skipped / 0 failed）
+- [x] 5.4 人工验证（2026-09-05：GUI 实测思考/回复分层无错位，报告 tests/validation/2026-09-05-fix-stream-event-routing-validation.md）

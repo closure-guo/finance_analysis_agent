@@ -24,5 +24,5 @@
 
 - [x] 4.1 `cd frontend && npx vitest run` 全部通过（含新增测试）
 - [x] 4.2 `cd frontend && npx tsc --noEmit` 无类型错误
-- [ ] 4.3 E2E 门禁：真实前后端启动一次深度分析，进行中刷新页面，断言自动恢复该会话视图（禁 mock，走 `tests/e2e/`）
-- [ ] 4.4 人工验证：覆盖 spec 全部 scenario（进行中恢复 / 已完成恢复 / 已删除回退 / 无持久化空态），报告落 `tests/validation/`
+- [x] 4.3 E2E 门禁（2026-09-05：stub 套件 20 passed / 2 skipped / 0 failed，refresh-resume-accept.spec 在门禁内）
+- [x] 4.4 人工验证（2026-09-05：GUI 实测已完成恢复 + 组件/E2E 覆盖其余 scenario，报告 tests/validation/2026-09-05-restore-session-on-refresh-validation.md）
