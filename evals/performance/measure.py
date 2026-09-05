@@ -225,6 +225,11 @@ def load_baseline(path: Path | None) -> dict[str, Any]:
     return data
 
 
+def _eval_model() -> str:
+    """基线绑定的模型（与 agent_factory/evals.run 同优先级解析）。"""
+    return os.getenv("LLM_MODEL") or "deepseek/deepseek-chat"
+
+
 def _save_baseline(baseline_path: Path, agg: PerfAggregate) -> None:
     baseline_path.parent.mkdir(parents=True, exist_ok=True)
     baseline_path.write_text(
@@ -234,6 +239,7 @@ def _save_baseline(baseline_path: Path, agg: PerfAggregate) -> None:
                 "p90_latency_s": agg.p90_latency_s,
                 "avg_total_tokens": agg.avg_total_tokens,
                 "avg_cost": agg.avg_cost,
+                "model": _eval_model(),
                 "as_of": datetime.now().isoformat(timespec="seconds"),
             },
             ensure_ascii=False,
@@ -259,6 +265,12 @@ def main() -> None:
         parser.error("未提供 --traces 且 run 模块不可导入")
 
     baseline = load_baseline(args.baseline)
+    baseline_model = baseline.get("model")
+    if baseline_model and baseline_model != _eval_model():
+        print(
+            f"⚠️ 基线模型不匹配：基线由 {baseline_model} 产出，当前为 {_eval_model()}。"
+            "时延/成本跨模型不可比——请用 --save-baseline 重测基线后再对比。"
+        )
     agg, samples = aggregate(traces)
     compares = compare_with_baseline(agg, baseline)
     report = render_report(agg, compares, False, baseline.get("as_of"))
