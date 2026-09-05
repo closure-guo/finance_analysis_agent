@@ -22,4 +22,4 @@
 
 - [x] 4.1 uv run pytest（全套 1833 passed）/ ruff / mypy 全绿
 - [x] 4.2 前端 vitest 474 passed；E2E 门禁 19 passed / 7 skipped（CI 镜像环境）
-- [ ] 4.3 人工验证：真实行情跑通每日盯市并落地净值（下个交易日收盘后查 /track-record 曲线）；日批时序与 settle 的先后关系人工抽查
+- [x] 4.3 人工验证：真实行情跑通每日盯市并落地净值（下个交易日收盘后查 /track-record 曲线）；日批时序与 settle 的先后关系人工抽查（2026-09-05：真实 akshare 行情实测，marked=21/equity_points=10，曲线+风险指标+切片渲染正常；时序 settle 16:00 → marking 16:30 核对 scheduler 注册顺序，报告 tests/validation/2026-09-05-track-record-stage-b-validation-2.md）

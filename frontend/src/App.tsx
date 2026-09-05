@@ -382,7 +382,7 @@ export default function App() {
   }, [messages, scrollToBottom])
 
   // selectSession 引用：mount 自动恢复在 selectSession 定义之前执行，经 ref 取最新引用
-  const selectSessionRef = useRef<((id: string) => Promise<boolean>) | null>(null)
+  const selectSessionRef = useRef<((id: string, forceRebuild?: boolean, opts?: { skipHomeRedirect?: boolean }) => Promise<boolean>) | null>(null)
   // 刷新自动恢复仅执行一次（避免 loadSessions 后续触发时重复恢复覆盖用户已切换视图）
   const restoredRef = useRef(false)
 
@@ -418,7 +418,7 @@ export default function App() {
           if (loaded.some(s => s.session_id === persistedId)) {
             // 会话仍存在：复用 selectSession 恢复（含 running 时 SSE 重连）。
             // 恢复落定后退出「恢复会话中」指示；失败也要退场避免卡死。
-            const p = selectSessionRef.current?.(persistedId)
+            const p = selectSessionRef.current?.(persistedId, false, { skipHomeRedirect: true })
             if (p) {
               p.finally(() => { if (!cancelled) setBootRestoring(false) })
             } else {
@@ -446,7 +446,7 @@ export default function App() {
   // live 在途状态直接展示；pending 状态从后端重建并按需 resume 续传。
   // forceRebuild：轮询发现后台任务 completed 时强制从后端重建（拿报告/终态），
   // 跳过 live 短路——resume 把 origin 标为 live，completed 后需重建才有报告。
-  const selectSession = async (sessionId: string, forceRebuild = false) => {
+  const selectSession = async (sessionId: string, forceRebuild = false, opts?: { skipHomeRedirect?: boolean }) => {
     // AG-UI 通道切换守卫（add-assistant-ui-thread）：quick run 流式中切换会话 →
     // abort 当前 run（HttpAgent.abortRun → 服务端 CancelledError → 中断落库），
     // 并重挂载 Thread 清空本 mount 的新 run 消息；切回走 rebuildSession 快照。
@@ -461,8 +461,10 @@ export default function App() {
     store.switchSession(sessionId)
     setAndPersistSession(sessionId)
     // 全页视图(战绩/下载中心)下点会话也应回聊天首页——否则切了会话但主内容
-    // 仍渲染全页,所选会话不可见
-    if (pathname !== '/') navigate('/')
+    // 仍渲染全页,所选会话不可见。
+    // boot 恢复（刷新后自动恢复会话）例外：用户显式停在 /downloads 等全页路由时
+    // 刷新应保持原路由，恢复会话只更新侧边栏选中态，不抢主区路由（ADR/回归 2026-09-05）
+    if (pathname !== '/' && !opts?.skipHomeRedirect) navigate('/')
 
     const state = store.getSnapshot(sessionId)
     if (!forceRebuild && state.origin === 'live') {

@@ -21,7 +21,7 @@
 ## 4. 验证
 - [x] 4.1 后端 + 前端全量测试通过
 <!-- 4.2 未勾选：属人工验证环节，签字前保持未勾（报告见 tests/validation/2026-08-29-add-download-center-validation.md） -->
-- [ ] 4.2 前后端重建，人工验证（中文文件名下载、删除回滚、空态、动效降级），报告落 tests/validation/
+- [x] 4.2 前后端重建，人工验证（中文文件名下载、删除回滚、空态、动效降级），报告落 tests/validation/（2026-09-05：GUI+API 实测全过；发现并修复持久化会话下刷新 /downloads 被抢路由缺陷，回归测试入 downloadCenter.test.tsx）
 <!-- 4.3 勾选依据：downloads.spec 3/3 绿、全量失败集零新增；pre-existing 失败归因见
      tests/validation/2026-08-29-add-download-center-validation.md 与
      tests/validation/2026-08-29-refactor-ui-design-system-validation.md 两份验证报告 -->

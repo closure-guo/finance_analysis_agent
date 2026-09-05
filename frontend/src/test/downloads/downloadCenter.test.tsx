@@ -77,6 +77,39 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     expect(screen.getByText(`${pad(new Date(files[0].created_at).getHours())}:${pad(new Date(files[0].created_at).getMinutes())}`)).toBeTruthy()
   })
 
+  it('有持久化会话时直达 /downloads 仍保持路由（boot 恢复不抢路由）', async () => {
+    // 回归：boot 恢复复用 selectSession → 「pathname !== '/' 则 navigate('/')」
+    // 把 /downloads 拉回首页（GUI 实测缺陷，2026-09-05）
+    goDownloads()
+    localStorage.setItem('fa_current_session_id', 's1')
+    const detail = {
+      session_id: 's1', stock_code: '600519', stock_name: '贵州茅台', display_name: '贵州茅台分析',
+      status: 'completed', created_at: '2026-09-01T00:00:00Z', duration_ms: 1, session_type: 'analysis',
+      report_markdown: '', chart_data: {}, analyst_reports: {}, agent_process: {}, analyst_summaries: {},
+      chat_history: [], pipeline_snapshot: null,
+    }
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url === '/api/sessions' && (!init || !init.method || init.method === 'GET')) {
+        return Promise.resolve(new Response(JSON.stringify({ sessions: [{ ...detail, duration_ms: 1 }] }), { status: 200 }))
+      }
+      if (url === '/api/sessions/s1') {
+        return Promise.resolve(new Response(JSON.stringify(detail), { status: 200 }))
+      }
+      if (url === '/api/files' && (!init || !init.method || init.method === 'GET')) {
+        return Promise.resolve(new Response(JSON.stringify(files), { status: 200 }))
+      }
+      return Promise.resolve(new Response('', { status: 200 }))
+    }))
+    render(<App />)
+    // boot 恢复进行中/落定后，下载管理页都应保持渲染且路由不变
+    const rows = await screen.findAllByTestId('download-row')
+    expect(rows.length).toBe(2)
+    await waitFor(() => expect(screen.queryByTestId('restoring-state')).toBeNull(), { timeout: 5000 })
+    expect(window.location.pathname).toBe('/downloads')
+    expect(screen.findAllByTestId('download-row')).toBeTruthy()
+  })
+
   it('空列表显示空态，点击「返回聊天」回会话页', async () => {
     goDownloads()
     mockFetch({ files: [] })
