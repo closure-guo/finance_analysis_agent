@@ -1119,7 +1119,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   themeChoice: ThemeChoice
   onCycleTheme: () => void
 }) {
-  const { state, setOpenMobile } = useSidebar()
+  const { state, isMobile, setOpenMobile } = useSidebar()
   const collapsed = state === 'collapsed'
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -1139,8 +1139,8 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
     setOpenMobile(false)
   }
 
-  // ── 收起态图标栏 ──
-  if (collapsed) {
+  // ── 收起态图标栏（仅桌面；移动端抽屉恒渲染展开 rail，否则收起态持久化时抽屉为空）──
+  if (collapsed && !isMobile) {
     return (
       <Sidebar expandedRail={null} collapsedRail={
         <div className="flex flex-col items-start pl-3.5 pt-14 gap-2 h-full">
