@@ -1,26 +1,15 @@
 # frontend delta: fix-analysis-ux-polish
 
-## MODIFIED Requirements
+> Rebase 说明（2026-09-05）：原 delta 将 4 个需求标为 MODIFIED，但其目标需求从未进入主规范库
+> （原链上的 Aug-5 时代 delta 未归档即被整理收编）。其中「管线『已用时』计时源为后端启动时间」
+> 已被 enhance-pipeline-progress 归档进主规范的「节点已用时」需求覆盖（同语义），本 delta 不再重复；
+> 其余 3 个需求主库无对应条目，按 ADDED 归档。
 
-### Requirement: 管线「已用时」计时源为后端启动时间
-
-刷新重建 running 管线时，「已用时」SHALL 以快照 `pipeline_start_ts` 为计时起点；快照缺该字段时 SHALL 回退为前端本地时间（向后兼容）。
-
-#### Scenario: 快照含启动时间戳时用其计时
-
-- GIVEN 后端快照含 `pipeline_start_ts`
-- WHEN `selectSession` 重建 running 管线消息
-- THEN `msg.startedAt` SHALL 取 `pipeline_start_ts` 而非 `Date.now()`
-
-#### Scenario: 快照缺启动时间戳时回退本地
-
-- GIVEN 后端快照不含 `pipeline_start_ts`（旧数据/未升级后端）
-- WHEN `selectSession` 重建 running 管线消息
-- THEN `msg.startedAt` SHALL 回退为本地时间，不报错
+## ADDED Requirements
 
 ### Requirement: 会话运行中（含工具执行中）禁止发送
 
-会话处于运行中（含澄清阶段工具执行中）时，前端 SHALL 拦截发送并提示；追问路径（后端不重发 `session_created`）下拦截同样生效。
+会话处于运行中（含澄清阶段工具执行中）时，前端 SHALL 拦截发送并提示；追问路径（后端不重发 `session_created`）下拦截同样生效。拦截主层为运行状态判定（运行中发送入口切换为停止按钮、提交通道关闭），App 层守卫（`isSessionRunning`）作为兜底。
 
 #### Scenario: 澄清工具执行中发送被拦截
 
@@ -33,8 +22,9 @@
 #### Scenario: 追问路径登记 abort 使拦截生效
 
 - GIVEN 一次追问（已有 sessionId，后端不重发 `session_created`）
-- WHEN 前端发起 SSE 请求并创建 `localAbort`
-- THEN 前端 SHALL 在 fetch 发出前将 `localAbort` 登记进 `streamRegistry.get(sessionId).abort`
+- WHEN 前端发起 SSE 请求并创建 `AbortController`
+- THEN 前端 SHALL 在 fetch 发出前将其登记为该会话的活跃读取器（单读取器保证）
+- AND 运行状态判定据此生效
 
 ### Requirement: 「会话生成中」警告为顶部 toast
 
