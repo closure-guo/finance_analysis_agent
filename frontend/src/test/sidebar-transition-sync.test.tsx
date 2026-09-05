@@ -137,10 +137,14 @@ describe('会话列表展开渐入场动画', () => {
 
   it('减弱动态效果模式：framer-motion 原生跳过位移动画（无 translateX）', async () => {
     // framer-motion 的 useReducedMotion 全局值按首次访问缓存，用 MotionConfig 显式覆盖；
-    // reducedMotion="always" 下 transform 动画被禁用（opacity 保留，对减弱用户安全）
+    // reducedMotion="always" 下 transform 动画被禁用（opacity 保留，对减弱用户安全）。
+    // 「跳到终点」发生在渲染后的下一帧而非同步生效，断言必须轮询等收敛，
+    // 否则断言落在时序窗口上成为 flaky（实测同文件两次运行结果不同）。
     const { MotionConfig } = await import('framer-motion')
     render(<MotionConfig reducedMotion="always"><App /></MotionConfig>)
     const list = await screen.findByTestId('session-list')
-    expect(list.style.transform ?? '').not.toContain('translateX')
+    await waitFor(() =>
+      expect(list.style.transform ?? '').not.toContain('translateX'),
+    )
   })
 })
