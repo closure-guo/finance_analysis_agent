@@ -66,6 +66,8 @@ def test_hallucination_live_report(live_env: bool):
         quote = AKShareClient().fetch_stock_quote(stock_code)
         if quote.get("price") is not None:
             data_map["price"] = float(quote["price"])
+        if quote.get("pct_change") is not None:
+            data_map["pct"] = float(quote["pct_change"])
         if quote.get("market_cap"):
             data_map["cap_billion"] = float(quote["market_cap"]) / 1e8
         pe = quote.get("PE_ttm") or quote.get("PE")
@@ -75,6 +77,37 @@ def test_hallucination_live_report(live_env: bool):
             data_map["pb"] = float(quote["PB"])
     except Exception as e:  # noqa: BLE001 - 行情失败降级为无数据源
         print(f"[HALLUCINATION] 行情拉取失败（数据源缺失，claim 归 unverifiable）: {e}")
+
+    # ROE 数据源：fetch_indicators 最新期净资产收益率（财务比率校验）
+    if stock_code:
+        try:
+            from finance_agent.data.akshare_client import AKShareClient
+
+            ind = AKShareClient().fetch_indicators(stock_code.lstrip("sh").lstrip("sz"))
+            if ind is not None and not ind.empty and "净资产收益率(%)" in ind.columns:
+                latest_roe = ind.iloc[-1]["净资产收益率(%)"]
+                if latest_roe is not None:
+                    data_map["roe"] = float(latest_roe)
+        except Exception as e:  # noqa: BLE001 - 财务源失败维持 unverifiable
+            print(f"[HALLUCINATION] 财务指标拉取失败: {e}")
+
+    # kline 兜底：spot 接口限流/失败时，由日 K 末两根收盘推导 price/pct
+    if "price" not in data_map and stock_code:
+        try:
+            from finance_agent.data.akshare_client import AKShareClient
+
+            kline = AKShareClient().fetch_kline(stock_code.lstrip("sh").lstrip("sz"), days=10)
+            if kline is not None and len(kline) >= 2:
+                closes = kline["收盘"].astype(float)
+                data_map["price"] = float(closes.iloc[-1])
+                prev = float(closes.iloc[-2])
+                if prev:
+                    data_map["pct"] = round((float(closes.iloc[-1]) / prev - 1) * 100, 2)
+                print(
+                    f"[HALLUCINATION] spot 失败，kline 兜底：price={data_map.get('price')} pct={data_map.get('pct')}"
+                )
+        except Exception as e:  # noqa: BLE001 - 兜底也失败则维持无数据源
+            print(f"[HALLUCINATION] kline 兜底失败: {e}")
 
     result = run_offline(report_text, data_map)
     from datetime import datetime

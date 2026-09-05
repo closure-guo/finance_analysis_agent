@@ -95,6 +95,7 @@ _QUOTE_KEY_MAP = {
     "名称": "name",
     "代码": "code",
     "最新价": "price",
+    "涨跌幅": "pct_change",
     "总市值": "market_cap",
     "市盈率-动态": "PE",
     "市盈率-静态": "PE_static",

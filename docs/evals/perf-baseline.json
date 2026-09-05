@@ -1,0 +1,7 @@
+{
+  "avg_latency_s": 3.9805,
+  "p90_latency_s": 2.161,
+  "avg_total_tokens": 0,
+  "avg_cost": 0.0,
+  "as_of": "2026-09-05T10:32:53"
+}

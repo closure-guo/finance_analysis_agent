@@ -26,7 +26,14 @@ from pathlib import Path
 # 数值型 claim 抽取规则（type → 正则；捕获组为数值）
 NUMERIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("price", re.compile(r"(\d+(?:\.\d+)?)\s*元")),
-    ("pct", re.compile(r"([+-]?\d+(?:\.\d+)?)\s*%")),
+    # pct 限定涨跌语境（v1.1）：财务比率百分比（毛利率/ROE 等）不在此列——
+    # 拿当日涨跌幅校验财务比率会制造假矛盾
+    (
+        "pct",
+        re.compile(
+            r"(?:上涨|下跌|涨了|跌了|涨幅|跌幅|涨|跌)\s*[为约:：]?\s*([+-]?\d+(?:\.\d+)?)\s*%"
+        ),
+    ),
     ("cap_billion", re.compile(r"(\d+(?:\.\d+)?)\s*亿")),
     ("pe", re.compile(r"(?:PE|市盈率)\s*[=:]?\s*(\d+(?:\.\d+)?)")),
     ("pb", re.compile(r"(?:PB|市净率)\s*[=:]?\s*(\d+(?:\.\d+)?)")),

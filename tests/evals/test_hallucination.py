@@ -56,12 +56,12 @@ class TestRate:
             {"price": 100.0, "pct": 1.0, "roe": 11.5},
         )
         result = hallucination_rate(verdicts)
-        # pct 两条：5（contradicted vs 1.0）+ ROE 12% 也被 pct 规则命中（contradicted vs 1.0）；
-        # price 支持；roe 支持；pe 不可验证。重叠是规则抽取 v1 的真实行为，接受并如实计量。
-        assert result.contradicted == 2
-        assert result.countable == 4
+        # v1.1：pct 限定涨跌语境——只有「涨 5%」命中（contradicted vs 1.0）；
+        # ROE 12% 不再被当日涨跌幅误校验（财务比率归 roe 维度，此处 supported）
+        assert result.contradicted == 1
+        assert result.countable == 3
         assert result.unverifiable == 1
-        assert result.rate == round(2 / 4, 4)
+        assert result.rate == round(1 / 3, 4)
 
     def test_zero_countable_rate_none(self):
         result = run_offline("无数字文本", {"price": 100.0})
