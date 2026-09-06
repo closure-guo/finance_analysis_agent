@@ -51,6 +51,7 @@ from pydantic.alias_generators import to_camel
 
 from finance_agent import session_store
 from finance_agent.agui.translator import translate_to_agui
+from finance_agent.llm.config import LLMConfig
 from finance_agent.timeline_builder import close_last_thinking, summarize_tool_args
 
 _logger = logging.getLogger("finance_agent.agui.endpoint")
@@ -291,6 +292,7 @@ async def _agui_run_stream(
     user_message: str,
     api_key: str | None,
     encoder: EventEncoder,
+    llm_config: LLMConfig | None = None,
 ) -> AsyncGenerator[str, None]:
     """内联驱动一次 quick run：落库 user → agent.run() → 翻译 → SSE，三路落库。"""
     from finance_agent.agent_factory import build_agent
@@ -303,7 +305,9 @@ async def _agui_run_stream(
         await asyncio.to_thread(session_store.append_chat, thread_id, "user", user_message)
         await asyncio.to_thread(session_store.update_session_status, thread_id, "running")
 
-        agent = build_agent(mode="quick", api_key=api_key, session_id=thread_id)
+        agent = build_agent(
+            mode="quick", api_key=api_key, session_id=thread_id, llm_config=llm_config
+        )
 
         # ADR-0015：Langfuse react_loop span 等价保留（调研 §3.1）
         from finance_agent.langfuse_tracing import get_langfuse
@@ -465,16 +469,27 @@ async def agui_quick(req: _RunAgentInputBody):
         thread_id = await asyncio.to_thread(session_store.create_chat_session, display_name)
 
     api_key: str | None = None
+    llm_config: LLMConfig | None = None
     if isinstance(req.forwarded_props, dict):
         key = req.forwarded_props.get("apiKey")
         # 非空字符串即可透传（审查修复：不限定 sk- 前缀，key 形态由上游决定）
         if isinstance(key, str) and key:
             api_key = key
+        # llm_config 透传（主规范 Quick Chat Entry：api_key 与 llm_config 经
+        # forwardedProps 透传）。仅接受已知字段，畸形载荷静默忽略回退 env。
+        raw_cfg = req.forwarded_props.get("llmConfig")
+        if isinstance(raw_cfg, dict):
+            allowed = {"model", "baseUrl", "apiKey", "thinking", "apiForm", "contextLength"}
+            kwargs = {
+                k: v for k, v in raw_cfg.items() if k in allowed and isinstance(v, (str, int))
+            }
+            if kwargs:
+                llm_config = LLMConfig(**kwargs)
 
     run_id = req.run_id or uuid.uuid4().hex
     encoder = EventEncoder()
     return StreamingResponse(
-        _agui_run_stream(thread_id, run_id, user_message, api_key, encoder),
+        _agui_run_stream(thread_id, run_id, user_message, api_key, encoder, llm_config=llm_config),
         media_type=encoder.get_content_type(),
         headers=_SSE_HEADERS,
     )
