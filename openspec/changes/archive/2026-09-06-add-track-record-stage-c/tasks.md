@@ -24,4 +24,4 @@
 
 - [x] 4.1 uv run pytest（全套 1857 passed）/ ruff / mypy 全绿
 - [x] 4.2 前端 vitest 全绿；E2E 门禁 19 passed / 7 skipped（CI 镜像环境）
-- [ ] 4.3 人工验证：切真实模型版本（register_agent）确认分段统计 + 校准页看真实 hit 率曲线
+- [x] 4.3 人工验证：切真实模型版本（register_agent）确认分段统计 + 校准页看真实 hit 率曲线（2026-09-06：deepseek-v4-flash-0731 / glm-5.3 双版本真实行情判定，分段统计 5胜3负 vs 3胜2负3平，校准页 Brier 0.2449 + 5 真实桶渲染；报告 tests/validation/2026-09-06-track-record-stage-c-validation.md）
