@@ -31,6 +31,7 @@
 | 021  | 2026-08-25 | [深研管线「假卡死」— 事件落库限速终态迟到 + 管线超时空转](021-deep-analysis-session-stuck.md) | 已修复 |
 | 022  | 2026-08-30 | [契约修复冒烟验证 — 第四类契约疾病浮现（技术上下文数组方向未声明）](022-citation-smoke-verify-20260830.md) | 部分修复 |
 | 023  | 2026-09-01 | [quick 通道迁移遗留三大共振 — 旧 spec 确定性全红 + 断连状态泄漏 running + 「flaky」错误归因](023-agui-channel-stale-specs-disconnect-leak.md) | 已修复 |
+| 024  | 2026-09-06 | [App.tsx 流状态所有权分散 — StreamStore 结构性重构根治竞态土壤](024-stream-store-refactor-20260906.md) | 已修复   |
 
 ---
 

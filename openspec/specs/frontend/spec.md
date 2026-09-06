@@ -230,7 +230,7 @@
 
 ### Requirement: Session Selection
 
-系统 SHALL 在用户选择已有会话时加载该会话的完整历史并切换到报告视图。选择会话 SHALL NOT 中断该会话或其他会话的后台生成任务；若目标会话正在运行，前端 SHALL 经恢复端点重连其事件流，使输出内容继续增长。切出当前会话时仅断开本地订阅连接，保留按 sessionId 累积的流状态以便切回时快速恢复。
+系统 SHALL 在用户选择已有会话时加载该会话的完整历史并切换到报告视图。选择会话 SHALL NOT 中断该会话或其他会话的后台生成任务；若目标会话正在运行，前端 SHALL 经恢复端点重连其事件流，使输出内容继续增长。切出当前会话时仅断开本地订阅连接。
 
 #### Scenario: 选择会话加载历史
 
@@ -238,7 +238,7 @@
 - **WHEN** 用户点击该会话
 - **THEN** 断开当前会话的本地 SSE 订阅连接（不调用后端取消，不影响后台任务）
 - **AND** 向 GET /api/sessions/{sessionId} 发起请求获取会话详情
-- **AND** 保留 streamRegistry 中按 sessionId 累积的流状态，仅重置当前视图的消息列表
+- **AND** 非活跃会话的 messages 在切换时丢弃，切回时从后端重建
 - **AND** 设置 currentSessionId 并将 appState 切换为 'report'
 - **AND** 按 session_type 锁定模式
 
@@ -271,8 +271,13 @@
 - **WHEN** 构建消息列表
 - **THEN** 按 chat_history 顺序重建消息：role='user' 的条目渲染为用户消息，其余渲染为助手消息
 - **AND** 助手消息包含 thinking 内容和 tool_calls 记录（若历史中存在）
-- **AND** 非 chat 类型的会话在管线触发锚点（pipeline_anchor，即 chat_history 第 N 条之后）插入报告消息（含 report_markdown、chart_data、stock_name、duration_ms）与管线完成时间轴
-- **AND** pipeline_anchor 缺失（旧会话）时回退为在第一个用户消息后插入报告消息
+- **AND** 非 chat 类型的会话在第一个用户消息后插入报告消息（含 report_markdown、chart_data、stock_name、duration_ms）
+
+#### Scenario: 会话时间格式化兜底
+
+- **GIVEN** 会话的 created_at 字段缺失、非法或为 epoch 占位值（年份 <= 1970）
+- **WHEN** 在侧边栏渲染会话时间
+- **THEN** 显示"未知时间"而非 "Invalid Date"
 
 #### Scenario: 多轮澄清会话的报告插入位置
 
@@ -286,12 +291,6 @@
 - **GIVEN** 非 chat 会话的 chat_history 为 [用户提问, 用户追问, 助手追问回复]，且 pipeline_anchor 指向第一条用户消息之后
 - **WHEN** 构建消息列表
 - **THEN** 消息顺序为：用户提问 → 管线完成时间轴 → 报告消息 → 用户追问 → 助手追问回复
-
-#### Scenario: 会话时间格式化兜底
-
-- **GIVEN** 会话的 created_at 字段缺失、非法或为 epoch 占位值（年份 <= 1970）
-- **WHEN** 在侧边栏渲染会话时间
-- **THEN** 显示"未知时间"而非 "Invalid Date"
 
 ### Requirement: Session Deletion
 
@@ -343,7 +342,7 @@
 - **GIVEN** 应用处于任意状态（analyzing/report/clarifying）
 - **WHEN** 用户点击侧边栏"新建分析"按钮
 - **THEN** 中断进行中的 SSE 流
-- **AND** 重置 currentSessionId 为 null、清空 streamingReportRef 和 pipelineMsgRef
+- **AND** 重置 currentSessionId 为 null
 - **AND** 清空消息列表
 - **AND** appState 切换为 'empty'
 
@@ -888,7 +887,7 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 
 - **GIVEN** 上一轮 SSE 订阅已断开或完成
 - **WHEN** 发起新的 startAnalysis、quickChat 或恢复端点订阅
-- **THEN** 在该会话的 streamRegistry 条目中创建新的 AbortController
+- **THEN** StreamStore 为该会话创建新的 AbortController
 - **AND** 不同会话的 AbortController 互不影响
 
 #### Scenario: 非中断的连接错误显示错误消息
@@ -923,6 +922,12 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 - **WHEN** 先收到 done 终态事件（streaming 置 false），随后 reader 结束触发防御性清理
 - **THEN** 防御性清理再次设置 streaming=false 无副作用
 - **AND** 游标保持消失状态，不闪烁或复活
+
+> **关于原 REMOVED 段（2026-09-06 rebase 说明）**：原 delta 声明移除「前端流状态快照层」「ref 镜像同步机制」「手写守卫函数族」三个需求，但经查（git -S 全历史）三者从未进入主规范库（属 Aug-5 时代未归档链路的产物），故无 REMOVED 操作可言。移除理由仍有存档价值：
+>
+> - **快照层**：后端事件日志（session_events 表 + stream?after_seq= 断点续传）就绪后，前端快照层冗余且双事实源互相打架；改为切换时丢弃非活跃会话 messages、切回时从后端重建。
+> - **ref 镜像**：19 个 ref 镜像的存在理由（闭包防旧值/切换快照）被 StreamStore 单一事实源消除。
+> - **手写守卫族**：saveCurrentStreamState / ensureSingleReader 等 7+ 守卫的功能由 store 内部机制（switchSession 原子协议、applyEvent seq 守门、pump 单读取器）替代，3 处手写 getReader() 循环收敛为 1 处 pump。
 
 ### Requirement: Deep Mode chat_done Event Routing
 
@@ -1900,4 +1905,93 @@ assistant 消息 hover SHALL 显示复制与重新生成操作；管线进度时
 - **WHEN** 深度分析完成
 - **THEN** 消息区 SHALL 正常渲染管线时间线、报告图表与导出按钮
 - **AND** 导出交互与 add-download-center 之前的既有行为一致
+
+### Requirement: 下载管理入口与路由
+
+侧边栏底部区域 SHALL 提供「下载管理」菜单项（下载图标 + 文字），点击跳转 `/downloads` 路由，主区域渲染下载管理页；直接访问/刷新 `/downloads` SHALL 正常渲染，不丢路由状态。
+
+#### Scenario: 从侧边栏进入下载管理
+
+- **GIVEN** 用户位于任意会话页面
+- **WHEN** 点击侧边栏「下载管理」
+- **THEN** 路由切换为 `/downloads`，主区域渲染文件列表
+- **AND** 侧边栏折叠/展开状态保持不变
+
+#### Scenario: 刷新页面路由保持
+
+- **WHEN** 用户在 `/downloads` 页面刷新浏览器
+- **THEN** 页面仍渲染下载管理页而非回退到会话页
+
+### Requirement: 文件列表展示
+
+下载管理页 SHALL 以行列表展示文件：类型图标（docx/pptx/pdf/md 可区分配色）、文件名（超出省略，hover 显示完整名）、格式化大小（KB/MB）、创建时间（当日显示 HH:mm，更早显示 YYYY-MM-DD）、下载按钮与删除按钮（删除按钮 hover 才出现）。列表超屏时内部滚动，标题栏固定。
+
+#### Scenario: 元信息正确渲染
+
+- **GIVEN** 接口返回一个 1.5MB、创建于昨日的 docx 文件
+- **WHEN** 页面渲染列表
+- **THEN** 该行显示 docx 图标、完整文件名、「1.5 MB」、昨日日期（YYYY-MM-DD）
+
+#### Scenario: 删除按钮 hover 显现
+
+- **GIVEN** 列表存在文件行
+- **WHEN** 鼠标未悬停该行
+- **THEN** 删除按钮不可见；悬停后淡入显示，行布局不发生位移
+
+### Requirement: 搜索与类型筛选
+
+页面 SHALL 提供文件名搜索框（模糊匹配，实时过滤）与类型筛选（全部/Word/PPT/PDF/Markdown）；两者 SHALL 可叠加生效，筛选切换不重播列表入场动画。
+
+#### Scenario: 搜索叠加类型筛选
+
+- **GIVEN** 列表含 `茅台分析报告.docx` 与 `宁德分析报告.pptx`
+- **WHEN** 用户选择「Word」tab 并在搜索框输入「茅台」
+- **THEN** 列表仅显示 `茅台分析报告.docx`
+
+### Requirement: 下载与删除交互
+
+点击下载 SHALL 使按钮进入 loading 态（图标转圈 + 禁用），收到响应后恢复并 toast 提示「已开始下载」。删除 SHALL 先弹确认对话框；确认后该行以高度收起 + 淡出动画移除，再调用删除接口；接口失败 SHALL 恢复该行并 toast 报错。
+
+#### Scenario: 删除确认与失败回滚
+
+- **GIVEN** 列表含文件 `a.docx`
+- **WHEN** 用户点击删除并在对话框确认，但接口返回 500
+- **THEN** 行动画移除后恢复显示
+- **AND** toast 提示删除失败，文件仍在列表中
+
+#### Scenario: 取消删除无副作用
+
+- **WHEN** 用户点击删除但在对话框选择取消
+- **THEN** 不发出删除请求，列表不变
+
+### Requirement: 空态、加载态与错误态
+
+接口返回空列表时 SHALL 显示空态（占位图形 + 「暂无导出文件」文案 + 返回聊天的按钮）；加载中 SHALL 显示骨架屏；接口失败 SHALL toast 报错且不以空态冒充。
+
+#### Scenario: 无文件时显示空态
+
+- **GIVEN** `GET /api/files` 返回空数组
+- **WHEN** 页面加载完成
+- **THEN** 显示空态文案与「返回聊天」按钮，点击跳转会话页
+
+#### Scenario: 接口失败不冒充空态
+
+- **GIVEN** `GET /api/files` 返回 500
+- **WHEN** 页面加载失败
+- **THEN** toast 报错，不显示「暂无导出文件」空态
+
+### Requirement: 交互动效规范
+
+下载管理页动效 SHALL 遵守统一规范：时长三档（150ms 微交互 / 200ms 元素级 / 300ms 页面级）；缓动 ease-out（入场）与 ease-in-out（状态切换）；列表首次进入逐行 stagger 淡入上移（行间隔 30ms），筛选切换不重播；系统开启 `prefers-reduced-motion` 时全部动效 SHALL 退化为无动画。
+
+#### Scenario: 首次进入逐行入场
+
+- **WHEN** 用户首次进入 `/downloads`
+- **THEN** 文件行以 30ms 间隔依次淡入并上移归位（fade-in + translateY(8px)→0，200ms ease-out）
+
+#### Scenario: 减弱动效降级
+
+- **GIVEN** 操作系统开启「减弱动态效果」
+- **WHEN** 页面渲染与交互
+- **THEN** 入场、hover、删除收起等动画全部禁用，状态即时切换
 

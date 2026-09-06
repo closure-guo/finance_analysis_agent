@@ -51,6 +51,20 @@
 - **WHEN** 在侧边栏渲染会话时间
 - **THEN** 显示"未知时间"而非 "Invalid Date"
 
+
+#### Scenario: 多轮澄清会话的报告插入位置
+
+- **GIVEN** 非 chat 会话的 chat_history 为 [用户提问, 助手搜索思考, 用户确认股票]，且 pipeline_anchor 指向最后一条用户消息之后
+- **WHEN** 构建消息列表
+- **THEN** 消息顺序为：用户提问 → 助手思考/工具调用 → 用户确认 → 管线完成时间轴 → 报告消息
+- **AND** 报告消息 SHALL NOT 出现在任何用户消息之前
+
+#### Scenario: 报告后追问会话的报告插入位置
+
+- **GIVEN** 非 chat 会话的 chat_history 为 [用户提问, 用户追问, 助手追问回复]，且 pipeline_anchor 指向第一条用户消息之后
+- **WHEN** 构建消息列表
+- **THEN** 消息顺序为：用户提问 → 管线完成时间轴 → 报告消息 → 用户追问 → 助手追问回复
+
 ### Requirement: New Analysis Reset
 
 系统 SHALL 在用户点击"新建分析"时中断进行中的 SSE 流并完全重置应用状态。
@@ -132,22 +146,8 @@
 - **THEN** 防御性清理再次设置 streaming=false 无副作用
 - **AND** 游标保持消失状态，不闪烁或复活
 
-## REMOVED Requirements
-
-### Requirement: 前端流状态快照层
-
-**Reason**: 后端事件日志（`session_events` 表 + `GET /api/sessions/{id}/stream` 断点续传）已就绪，前端快照层从"必要"变成"冗余且有害"。双事实源互相打架是残留 bug 的来源之一。
-
-**Migration**: 前端不再保存消息快照；非活跃会话的 messages 在切换时丢弃，切回时从后端重建（`GET /api/sessions/{id}` 拿历史 + `stream?after_seq=` 补在途事件）。`streamRegistryRef` 及其 StreamState 类型被 StreamStore 的 streams Map 取代（不含 messages 快照）。
-
-### Requirement: ref 镜像同步机制
-
-**Reason**: `messagesRef`、`currentSessionIdRef`、`streamingSessionIdRef` 等 19 个 ref 镜像的存在理由是"闭包防旧值"和"会话切换快照"。StreamStore 作为单一事实源后，组件只读订阅，无闭包旧值问题。
-
-**Migration**: 删除全部 ref 镜像与手工同步代码（`commitMessages`）。消息定位逻辑进 reduce，`abortRef` / `pollStartRef` 进 store 的 `activeReader`。
-
-### Requirement: 手写守卫函数族
-
-**Reason**: `saveCurrentStreamState` / `getStreamState` / `resumeAfterSeqFromSnapshot` / `ensureSingleReader` / `msgIdToClearOnReaderExit` / `isCurrentViewEvent` / `shouldProcessFetchedSession` 等手写守卫的功能被 StreamStore 内部机制取代。
-
-**Migration**: 功能由 StreamStore 的 `switchSession`、`applyEvent` seq 守门、`pump` 单读取器保证等机制替代。3 处手写 `getReader()` 循环收敛为 store 的 1 处 `pump`。
+> **关于原 REMOVED 段（2026-09-06 rebase 说明）**：原 delta 声明移除「前端流状态快照层」「ref 镜像同步机制」「手写守卫函数族」三个需求，但经查（git -S 全历史）三者从未进入主规范库（属 Aug-5 时代未归档链路的产物），故无 REMOVED 操作可言。移除理由仍有存档价值：
+>
+> - **快照层**：后端事件日志（session_events 表 + stream?after_seq= 断点续传）就绪后，前端快照层冗余且双事实源互相打架；改为切换时丢弃非活跃会话 messages、切回时从后端重建。
+> - **ref 镜像**：19 个 ref 镜像的存在理由（闭包防旧值/切换快照）被 StreamStore 单一事实源消除。
+> - **手写守卫族**：saveCurrentStreamState / ensureSingleReader 等 7+ 守卫的功能由 store 内部机制（switchSession 原子协议、applyEvent seq 守门、pump 单读取器）替代，3 处手写 getReader() 循环收敛为 1 处 pump。
