@@ -179,3 +179,106 @@ class TestMinYearCheck:
     def test_exactly_2_years_ok(self, client):
         df = pd.DataFrame({"报告日": ["20241231", "20231231"], "value": [1, 2]})
         client._check_min_years(df, "600519")  # should not raise
+
+
+class TestFetchIndexKlineFallback:
+    """fetch_index_kline 主源失败时回退新浪（TDD: data-source-benchmark-fallback）。"""
+
+    @staticmethod
+    def _em_hist_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "日期": pd.to_datetime(["2026-08-01", "2026-08-02", "2026-08-03"]),
+                "开盘": [4500.0, 4520.0, 4530.0],
+                "收盘": [4510.0, 4530.0, 4540.0],
+                "最高": [4520.0, 4540.0, 4550.0],
+                "最低": [4490.0, 4510.0, 4520.0],
+                "成交量": [100.0, 110.0, 120.0],
+            }
+        )
+
+    @staticmethod
+    def _sina_daily_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "date": ["2026-08-01", "2026-08-02", "2026-08-03"],
+                "open": [4500.0, 4520.0, 4530.0],
+                "high": [4520.0, 4540.0, 4550.0],
+                "low": [4490.0, 4510.0, 4520.0],
+                "close": [4510.0, 4530.0, 4540.0],
+                "volume": [100.0, 110.0, 120.0],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_success_no_sina_call(self, mock_ak, client, monkeypatch):
+        """东财正常时直接返回，不触发新浪回退。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.index_zh_a_hist.return_value = self._em_hist_df()
+        result = client.fetch_index_kline("000300", days=2)
+        assert len(result) == 2
+        assert list(result.columns) == list(self._em_hist_df().columns)
+        mock_ak.stock_zh_index_daily.assert_not_called()
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_exception_falls_back_to_sina(self, mock_ak, client, monkeypatch):
+        """东财抛连接异常时回退新浪，列名归一化为中文。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.index_zh_a_hist.side_effect = ConnectionError("RST")
+        mock_ak.stock_zh_index_daily.return_value = self._sina_daily_df()
+        result = client.fetch_index_kline("000300", days=3)
+        assert len(result) == 3
+        assert "日期" in result.columns and "收盘" in result.columns
+        assert result.iloc[-1]["收盘"] == 4540.0
+        mock_ak.stock_zh_index_daily.assert_called_once_with(symbol="sh000300")
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_empty_falls_back_to_sina(self, mock_ak, client, monkeypatch):
+        """东财返回空 DataFrame 时回退新浪。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.index_zh_a_hist.return_value = pd.DataFrame()
+        mock_ak.stock_zh_index_daily.return_value = self._sina_daily_df()
+        result = client.fetch_index_kline("000300", days=3)
+        assert len(result) == 3
+        assert "收盘" in result.columns
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_both_fail_returns_empty(self, mock_ak, client, monkeypatch):
+        """双源均失败返回空 DataFrame 且不抛异常。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.index_zh_a_hist.side_effect = ConnectionError("RST")
+        mock_ak.stock_zh_index_daily.return_value = pd.DataFrame()
+        result = client.fetch_index_kline("000300", days=3)
+        assert result.empty
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_sina_missing_optional_cols_ok(self, mock_ak, client, monkeypatch):
+        """新浪缺 amount/turnover 列时不报错、只含现有列的重命名。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.index_zh_a_hist.side_effect = ConnectionError("RST")
+        sina = self._sina_daily_df().drop(columns=["volume"])
+        mock_ak.stock_zh_index_daily.return_value = sina
+        result = client.fetch_index_kline("000300", days=3)
+        assert "日期" in result.columns and "收盘" in result.columns
+        assert "成交量" not in result.columns
+
+
+class TestSinaIndexSymbolMapping:
+    """指数代码 → 新浪符号映射。"""
+
+    def test_csi300_is_sh(self):
+        assert AKShareClient._to_sina_index_symbol("000300") == "sh000300"
+
+    def test_shanghai_index_is_sh(self):
+        assert AKShareClient._to_sina_index_symbol("000001") == "sh000001"
+
+    def test_shenzhen_index_is_sz(self):
+        assert AKShareClient._to_sina_index_symbol("399001") == "sz399001"
+
+    def test_chinext_is_sz(self):
+        assert AKShareClient._to_sina_index_symbol("399006") == "sz399006"
