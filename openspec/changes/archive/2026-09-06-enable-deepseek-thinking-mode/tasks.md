@@ -49,6 +49,6 @@
 - [x] 7.2 前端单元测试：21/21 通过（含 extractThinkingTitle 8、ThinkingBanner 5）
 - [x] 7.3 TypeScript 类型检查：`npx tsc --noEmit` 通过
 - [x] 7.4 E2E @live：快速模式 query 后思考横幅展示原生 reasoning_content（SSE 验证：thinking_token 15 个 + chat_token 24 个，无 thinking_to_answer）
-- [ ] 7.5 E2E @live：深度模式澄清阶段工具调用轮次 reasoning_content 正确回传，无 400 错误（归入 nightly @live 长期验证）
-- [ ] 7.6 手动落 ADR（人工维护，agent 不得自动新建）：记录"开启 DeepSeek 原生思考模式"决策
+- [x] 7.5 E2E @live：深度模式澄清阶段工具调用轮次 reasoning_content 正确回传，无 400 错误（归入 nightly @live 长期验证）（2026-09-06：deep-thinking-toolcall.spec.ts 落地并用阿里云 deepseek-v4-flash-0731 实跑通过 41.8s——工具调用横幅 + 无 400 + 管线触发；nightly 工作流已含 @live 套件）
+- [x] 7.6 手动落 ADR（2026-09-06 维护者授权 agent 代拟，design 决策 1–6 与实现事实核对）：docs/adr/0020-deepseek-native-thinking-mode.md
 - [x] 7.7 `openspec validate enable-deepseek-thinking-mode` 通过
