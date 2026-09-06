@@ -82,3 +82,134 @@ class TestRunOffline:
         result = run_offline(report, {"price": 100.0, "pct": 0.5})
         assert result.rate == 0.0
         assert result.unverifiable == 0
+
+
+class TestGate:
+    """3.2 门禁：幻觉率上限阈值（宽松初值 10%，env 可配）。"""
+
+    def test_gate_pass_under_threshold(self):
+        from evals.hallucination.measure import gate
+
+        text = "股价 100 元，涨 5%，PE 15，PB 2，市值 800 亿，ROE 12%"
+        data = {
+            "price": 100.0,
+            "pct": 5.0,
+            "pe": 15.0,
+            "pb": 2.0,
+            "cap_billion": 800.0,
+            "roe": 12.0,
+        }
+        result = hallucination_rate(verify_claims(extract_claims(text), data))
+        g = gate(result)
+        assert g["verdict"] == "pass"
+        assert g["threshold"] == 0.10
+
+    def test_gate_fail_over_threshold(self):
+        from evals.hallucination.measure import gate
+
+        text = "股价 100 元，涨 5%，PE 15，PB 2，市值 800 亿，ROE 12%"
+        data = {
+            "price": 200.0,
+            "pct": 5.0,
+            "pe": 15.0,
+            "pb": 2.0,
+            "cap_billion": 800.0,
+            "roe": 12.0,
+        }
+        result = hallucination_rate(
+            verify_claims(extract_claims(text), data)
+        )  # 价格证伪 → 1/6 > 10%
+        g = gate(result)
+        assert g["verdict"] == "fail"
+
+    def test_gate_insufficient_sample_below_min_n(self):
+        """样本 < 最小可验证数（默认 5）时不判定，避免小样本单点证伪误报。"""
+        from evals.hallucination.measure import gate
+
+        verdicts = verify_claims(extract_claims("股价 100 元"), {"price": 200.0})
+        result = hallucination_rate(verdicts)  # countable=1
+        g = gate(result)
+        assert g["verdict"] == "insufficient_sample"
+
+    def test_gate_threshold_from_env(self, monkeypatch):
+        import importlib
+
+        import evals.hallucination.measure as m
+
+        monkeypatch.setenv("HALLUCINATION_MAX_RATE", "0.05")
+        importlib.reload(m)
+        text = "股价 100 元，涨 5%，PE 15，PB 2，市值 800 亿，ROE 12%"
+        data = {
+            "price": 100.0,
+            "pct": 5.0,
+            "pe": 15.0,
+            "pb": 2.0,
+            "cap_billion": 800.0,
+            "roe": 12.0,
+        }
+        result = m.hallucination_rate(m.verify_claims(m.extract_claims(text), data))
+        g = m.gate(result)
+        assert g["verdict"] == "pass"
+        assert g["threshold"] == 0.05
+        monkeypatch.delenv("HALLUCINATION_MAX_RATE")
+        importlib.reload(m)
+
+    def test_render_report_contains_gate_section(self):
+        from evals.hallucination.measure import render_report
+
+        text = "股价 100 元，涨 5%，PE 15，PB 2，市值 800 亿，ROE 12%"
+        data = {
+            "price": 100.0,
+            "pct": 5.0,
+            "pe": 15.0,
+            "pb": 2.0,
+            "cap_billion": 800.0,
+            "roe": 12.0,
+        }
+        result = run_offline(text, data)
+        report = render_report(result)
+        assert "门禁判定" in report and "10.0%" in report and "pass" in report
+
+
+class TestFactualExtraction:
+    """4.2 事实型 claim LLM 抽取：无 LLM 时优雅回退为空，有 LLM 时并入结果。"""
+
+    def test_extract_factual_claims_no_llm_graceful(self):
+        from evals.hallucination.measure import extract_factual_claims
+
+        claims = extract_factual_claims("公司在合肥新建产能。", llm=None)
+        assert claims == []
+
+    def test_extract_factual_claims_with_llm(self):
+        from evals.hallucination.measure import extract_factual_claims
+
+        class _FakeLLM:
+            def invoke(self, prompt: str) -> str:
+                return '[{"raw": "公司在合肥新建产能", "type": "factual"}]'
+
+        claims = extract_factual_claims("公司在合肥新建产能。", llm=_FakeLLM())
+        assert len(claims) == 1
+        assert claims[0].type == "factual"
+        assert "合肥" in claims[0].raw
+
+    def test_extract_factual_claims_bad_json_graceful(self):
+        from evals.hallucination.measure import extract_factual_claims
+
+        class _BadLLM:
+            def invoke(self, prompt: str) -> str:
+                return "不是 JSON"
+
+        assert extract_factual_claims("文本", llm=_BadLLM()) == []
+
+    def test_factual_verdict_unverifiable_without_evidence(self):
+        """事实型 claim 无证据源时如实标注 unverifiable（不进分子）。"""
+        from evals.hallucination.measure import run_offline
+
+        class _FakeLLM:
+            def invoke(self, prompt: str) -> str:
+                return '[{"raw": "公司在合肥新建产能", "type": "factual"}]'
+
+        result = run_offline("股价 100 元。公司在合肥新建产能。", {"price": 100.0}, llm=_FakeLLM())
+        factual = [v for v in result.verdicts if v.claim.type == "factual"]
+        assert len(factual) == 1
+        assert factual[0].status == "unverifiable"

@@ -29,9 +29,6 @@ from finance_agent.graph import build_5layer_graph  # noqa: E402
 from finance_agent.langfuse_tracing import get_langfuse  # noqa: E402
 from finance_agent.llm import LLMConfig  # noqa: E402
 from finance_agent.pipeline_runner import PipelineRunner, build_layer_tree  # noqa: E402
-from finance_agent.react_agent import (  # noqa: E402
-    _TIME_SENSITIVE_KEYWORDS as _TIME_SENSITIVE_KEYWORDS_REACT,
-)
 from finance_agent.session_store import (  # noqa: E402
     append_chat,
     append_session_event,
@@ -192,30 +189,6 @@ _NODE_MAP = {s["node"]: s for s in LAYER_STEPS}
 _ALL_NODES = [s["node"] for s in LAYER_STEPS]
 
 # Node → thinking description (streamed to frontend during execution)
-_NODE_THINKING: dict[str, str] = {
-    "check_cache": "正在检查缓存数据…",
-    "fetch_data": "正在获取财务数据（行情、财报、技术指标）…",
-    "validate_financials": "正在进行勾稽校验，验证数据一致性…",
-    "compute_metrics": "正在计算关键技术指标（MACD、RSI、KDJ 等）…",
-    "technical_analyst": "Layer I：技术面分析师正在分析价格趋势与技术指标…",
-    "verify_citations": "正在校验分析引用的数据来源…",
-    "bull_r1": "Layer II：看多分析师正在构建看多论点…",
-    "bear_r1": "Layer II：看空分析师正在构建看空论点…",
-    "bull_r2": "Layer II：看多分析师进行第二轮辩论…",
-    "bear_r2": "Layer II：看空分析师进行第二轮辩论…",
-    "research_manager": "Layer II：研究经理正在汇总辩论结论…",
-    "trader": "Layer III：交易员正在制定交易决策…",
-    "aggressive_r1": "Layer IV：激进风控分析师正在评估…",
-    "conservative_r1": "Layer IV：保守风控分析师正在评估…",
-    "neutral_r1": "Layer IV：中性风控分析师正在评估…",
-    "aggressive_r2": "Layer IV：激进风控分析师进行第二轮评估…",
-    "conservative_r2": "Layer IV：保守风控分析师进行第二轮评估…",
-    "neutral_r2": "Layer IV：中性风控分析师进行第二轮评估…",
-    "risk_judge": "Layer IV：风控裁决正在综合评估风险…",
-    "fund_manager": "Layer V：基金经理正在审批最终决策…",
-    "generate_report": "正在生成深度分析报告…",
-    "generate_file": "正在导出报告文件…",
-}
 
 
 # ── Request models ──
@@ -1056,15 +1029,6 @@ def _run_graph_streaming(
                     }
                 )
 
-                node_thinking = _NODE_THINKING.get(node_name, f"正在执行：{step_info['desc']}…")
-                yield _sse(
-                    {
-                        "type": "thinking_token",
-                        "token": f"\n▶ {node_thinking}\n",
-                        "timestamp": _now(),
-                    }
-                )
-
                 _merge_update(accumulated, node_name, update if isinstance(update, dict) else {})
 
                 idx = _ALL_NODES.index(node_name)
@@ -1094,18 +1058,6 @@ def _run_graph_streaming(
                         "timestamp": _now(),
                     }
                 )
-
-                summary_text = ""
-                if isinstance(output, dict):
-                    summary_text = output.get("summary", "")
-                if summary_text:
-                    yield _sse(
-                        {
-                            "type": "thinking_token",
-                            "token": f"  ✓ {summary_text}\n",
-                            "timestamp": _now(),
-                        }
-                    )
 
             if accumulated.get("final_report") and not report_sent:
                 report_sent = True
@@ -1510,76 +1462,7 @@ async def _run_react_analysis(
                 )
             )
 
-        # 对时效性查询，预调 web_search 并将结果注入用户消息
         userQuery = req.query
-        hasStockCode = bool(re.search(r"\d{6}", req.query))
-
-        if not hasStockCode and any(kw in req.query for kw in _TIME_SENSITIVE_KEYWORDS_REACT):
-            from finance_agent.agent_factory import _web_search
-
-            searchQuery = f"{req.query} A股 热点 推荐 最新"
-
-            preThinking = {
-                "type": "thinking_token",
-                "token": "用户询问包含时效性关键词，我先搜索最新市场信息。\n",
-                "timestamp": _now(),
-            }
-            collector.feed(preThinking)
-            await registry.publish(session_id, preThinking)
-            preToolCall = {
-                "type": "tool_call",
-                "name": "web_search",
-                "args": {"query": searchQuery},
-                "timestamp": _now(),
-            }
-            collector.feed(preToolCall)
-            await registry.publish(session_id, preToolCall)
-            # 补发 search_start：前端搜索横幅由 search_start/search_result 驱动
-            # 同步 feed collector：search_start 生成 searching 状态的 search item，
-            # 持久化到 chat_history.agentTimeline，刷新后才能恢复搜索横幅
-            searchStartEvent = {"type": "search_start", "query": searchQuery, "timestamp": _now()}
-            collector.feed(searchStartEvent)
-            await registry.publish(session_id, searchStartEvent)
-
-            searchResult = ""
-            try:
-                searchResult = await _web_search(searchQuery)
-            except Exception as e:
-                searchResult = f"搜索失败: {e}"
-
-            searchSummary = searchResult[:2000] if len(searchResult) > 2000 else searchResult
-            preToolResult = {
-                "type": "tool_result",
-                "name": "web_search",
-                "result": searchSummary,
-                "timestamp": _now(),
-            }
-            collector.feed(preToolResult)
-            await registry.publish(session_id, preToolResult)
-            # 补发 search_result（结构化来源），驱动搜索横幅转"已搜索 N 个网页"
-            # 同步 feed collector：search_result 将 searching item 更新为 done 并写入 results，
-            # 持久化后刷新才能恢复完整的搜索横幅（含结果数量）
-            from finance_agent.web_search import parse_search_output
-
-            preResults = parse_search_output(searchResult)
-            searchResultEvent = {
-                "type": "search_result",
-                "query": searchQuery,
-                "results": [
-                    {"title": r.title, "url": r.url, "content": r.content} for r in preResults
-                ],
-                "count": len(preResults),
-                "timestamp": _now(),
-            }
-            collector.feed(searchResultEvent)
-            await registry.publish(session_id, searchResultEvent)
-            userQuery = (
-                f"{req.query}\n\n"
-                f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
-                f"然后调用 search_stock 获取股票代码，再调用 run_deep_analysis：]\n"
-                f"{searchSummary}"
-            )
-
         # 如果 session 已有 focus，注入用户消息上下文
         if accumulatedFocus:
             userQuery = f"{userQuery}\n\n[已收集的用户关注点/澄清回答：\n{accumulatedFocus}]"

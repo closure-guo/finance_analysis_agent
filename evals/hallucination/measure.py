@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 # 数值型 claim 抽取规则（type → 正则；捕获组为数值）
 NUMERIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -50,11 +51,16 @@ TOLERANCES: dict[str, tuple[str, float]] = {
     "roe": ("absolute", 1.0),  # ±1 个百分点
 }
 
+# 门禁阈值（3.2）：幻觉率上限。宽松初值 10%，env 可配；
+# 可验证样本 < GATE_MIN_N 时不判定（insufficient_sample），避免小样本单点证伪误报。
+GATE_MAX_RATE = float(__import__("os").getenv("HALLUCINATION_MAX_RATE", "0.10"))
+GATE_MIN_N = int(__import__("os").getenv("HALLUCINATION_GATE_MIN_N", "5"))
+
 
 @dataclass
 class Claim:
     type: str
-    value: float
+    value: float | None
     raw: str
     index: int
 
@@ -91,6 +97,34 @@ def _in_tolerance(ctype: str, actual: float, expected: float) -> bool:
     if kind == "relative":
         return abs(actual - expected) <= tol * max(abs(expected), 1e-9)
     return abs(actual - expected) <= tol
+
+
+def extract_factual_claims(report_text: str, llm: Any = None) -> list[Claim]:
+    """事实型 claim LLM 抽取（4.2）：事件/主体/动作类断言。
+
+    llm: 任意具备 ``invoke(prompt) -> str`` 的客户端（evals judges 同款约定）。
+    无 llm / 输出非法 JSON / 抽取异常 → 返回空列表（优雅回退，不阻塞数值型路径）。
+    抽取出的 factual claim 无数值语义，verify_claims 在无证据源时标注 unverifiable。
+    """
+    if llm is None or not report_text.strip():
+        return []
+    prompt = (
+        "从下列研报文本中抽取「事实型断言」（事件/主体/动作/状态，不含纯数字指标），"
+        "每条为一句话原文。最多 10 条。"
+        '只输出 JSON 数组: ["raw": str, ...] 形式为 '
+        '[{"raw": "<断言原文>", "type": "factual"}]。\n\n文本:\n' + report_text[:6000]
+    )
+    try:
+        out = llm.invoke(prompt)
+        data = json.loads(out[out.find("[") : out.rfind("]") + 1])
+        claims: list[Claim] = []
+        for i, item in enumerate(data if isinstance(data, list) else []):
+            raw = str((item or {}).get("raw") or "").strip()
+            if raw:
+                claims.append(Claim(type="factual", value=None, raw=raw, index=i))
+        return claims
+    except Exception:  # noqa: BLE001 — 抽取失败不阻塞数值型主路径
+        return []
 
 
 def verify_claims(
@@ -135,6 +169,29 @@ def hallucination_rate(verdicts: list[Verdict]) -> HallucinationResult:
     return result
 
 
+def gate(result: HallucinationResult) -> dict[str, object]:
+    """3.2 门禁：幻觉率上限阈值（宽松初值 10%，env 可配）。
+
+    rate None（无可验证样本）或可验证样本 < GATE_MIN_N → insufficient_sample
+    （不判定，避免小样本误报）；rate ≤ 阈值 pass；否则 fail。
+    """
+    if result.rate is None or result.countable < GATE_MIN_N:
+        return {
+            "verdict": "insufficient_sample",
+            "threshold": GATE_MAX_RATE,
+            "rate": result.rate,
+            "countable": result.countable,
+            "min_n": GATE_MIN_N,
+        }
+    return {
+        "verdict": "pass" if result.rate <= GATE_MAX_RATE else "fail",
+        "threshold": GATE_MAX_RATE,
+        "rate": result.rate,
+        "countable": result.countable,
+        "min_n": GATE_MIN_N,
+    }
+
+
 def render_report(result: HallucinationResult) -> str:
     lines = [
         "# 幻觉率报告（数值型 claim v1）",
@@ -163,6 +220,19 @@ def render_report(result: HallucinationResult) -> str:
         lines.append("（无）")
     for v in unver[:10]:
         lines.append(f"- {v.claim.type}「{v.claim.raw}」")
+    g = gate(result)
+    lines += [
+        "",
+        "## 门禁判定",
+        "",
+        f"- 阈值: {g['threshold']:.1%}（HALLUCINATION_MAX_RATE，宽松初值 10%）",
+        f"- 判定: **{g['verdict']}**"
+        + (
+            f"（可验证样本 {g['countable']} < 最小样本 {g['min_n']}，暂不判定）"
+            if g["verdict"] == "insufficient_sample"
+            else ""
+        ),
+    ]
     lines += ["", "> v1 仅数值型 claim；事实型 claim（事件/日期/主体）抽取需 LLM，属后续增量。", ""]
     return "\n".join(lines)
 
@@ -170,8 +240,9 @@ def render_report(result: HallucinationResult) -> str:
 def run_offline(
     report_text: str,
     data_map: dict[str, float] | None = None,
+    llm: Any = None,
 ) -> HallucinationResult:
-    claims = extract_claims(report_text)
+    claims = extract_claims(report_text) + extract_factual_claims(report_text, llm=llm)
     verdicts = verify_claims(claims, data_map or {})
     return hallucination_rate(verdicts)
 

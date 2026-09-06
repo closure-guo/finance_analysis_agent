@@ -13,9 +13,9 @@
 ## 3. 门禁
 
 - [x] 3.1 fixtures 零违例为确定性门禁（clean 报告 rate=0）；nightly @live 真实报告+行情监控（tests/evals/test_hallucination_live.py，无 key 跳过、行情失败降级 unverifiable）
-- [ ] 3.2 幻觉率上限阈值接入评测门禁报表（待指标积累形成基线后设阈值）——**待办**
+- [x] 3.2 幻觉率上限阈值接入评测门禁报表（待指标积累形成基线后设阈值）——**待办**（2026-09-06 落地：HALLUCINATION_MAX_RATE 宽松初值 10% + GATE_MIN_N=5 小样本不判定，门禁判定入报表、CI exit code 语义；报告 tests/validation/2026-09-06-add-hallucination-rate-metric-validation.md）
 
 ## 4. 验证
 
 - [x] 4.1 uv run pytest / ruff / mypy 全绿；本机 @live 真跑产出 reports/hallucination-report-20260904.md（10 claims，行情源缺失时全 unverifiable）
-- [ ] 4.2 事实型 claim（LLM 抽取）增量——**待后续（需 LLM 余额）**
+- [x] 4.2 事实型 claim（LLM 抽取）增量——**待后续（需 LLM 余额）**（2026-09-06 落地：extract_factual_claims 经 llm.invoke 抽取、无 LLM/坏 JSON 优雅回退空、无证据源如实 unverifiable 不进分子；LLM 可注入 evals judges 同款客户端）
