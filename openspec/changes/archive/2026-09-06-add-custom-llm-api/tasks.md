@@ -70,8 +70,8 @@
 - [x] 9.3 编写 E2E 测试：不配置任何 LLM 设置（localStorage 为空）时，分析/聊天行为与现有完全一致（回归）
 - [x] 9.4 编写 E2E 测试：选择 Provider 预设后输入框自动填充正确值
 - [x] 9.5 编写 E2E 测试：点击"测试连接"按钮后展示成功或失败状态
-- [ ] 9.6 手动验证：使用真实 LLM（非 TESTING 模式）验证自定义 model + base_url 生效，在 Langfuse trace 中确认模型名
-- [ ] 9.7 落人工验证报告到 `tests/validation/`
+- [x] 9.6 手动验证：使用真实 LLM（非 TESTING 模式）验证自定义 model + base_url 生效，在 Langfuse trace 中确认模型名（2026-09-06：阿里云 MaaS deepseek-v4-flash-0731 实测，Langfuse generation.model 确认；连带修复 quick 通道 llmConfig 不透传缺陷 commit f0e4d29）
+- [x] 9.7 落人工验证报告到 `tests/validation/`（tests/validation/2026-09-06-add-custom-llm-api-validation.md）
 
 ## 10. 前端多配置管理（profiles，方案 A）
 

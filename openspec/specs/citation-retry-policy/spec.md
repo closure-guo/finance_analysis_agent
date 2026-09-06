@@ -42,3 +42,45 @@ TBD - created by archiving change improve-analyst-throughput. Update Purpose aft
 - WHEN FAIL 数 > 1 且失败率 > 5%
 - THEN 系统 SHALL 按既有规则重试（停滞降级 / 轮数上限约束）
 
+### Requirement: 定向重试反馈携带 direction 申报提示
+
+校验失败触发的定向重试反馈（value_mismatch / direction_mismatch 桶）与 coverage 打回（coverage_gap）SHALL 在反馈条目中携带 direction 申报提示：未申报 direction 的覆盖缺口 SHALL 提示「补登记时同步申报 direction」；direction_mismatch 的重试反馈 SHALL 携带校验器解析的真值符号，分析师 SHALL 据此修正 stated_value 与 direction 的组合而非仅改数值。
+
+#### Scenario: direction_mismatch 重试反馈含真值符号
+
+- **WHEN** claim 因 direction_mismatch 判 FAIL 进入定向重试
+- **THEN** 反馈条目 SHALL 包含 ground_truth 数值及其符号，与 direction 申报格式示例
+
+#### Scenario: 覆盖缺口补登记携带 direction 提示
+
+- **WHEN** coverage 打回生成 coverage_gap 反馈条目
+- **THEN** 条目 SHALL 包含 direction 申报提示字段，提示分析师补 claim 时一并申报方向
+
+### Requirement: value_mismatch 单点修复前置分支
+
+value_mismatch 触发定向重试前，系统 SHALL 先评估单点修复适用性：同一分析师同一轮的 value_mismatch FAIL 数 < 3 时，SHALL 采用单点修复——将每处出错句（含所在章节局部上下文，窗口 SHALL 不少于出错句前后各一段）、对应 ground_truth 与申报格式示例，交一次轻量 LLM 调用做叙事一致性改写，改写结果回填正文 markdown。value_mismatch FAIL 数 ≥ 3 或修复调用失败时，SHALL 回退现有目标分析师全量定向重试路径（不重试单点修复失败处）。单点修复 SHALL NOT 改变重试轮数上限 3、停滞降级（本轮失败率 ≥ 上轮 × 80% 提前放行）与轻微失败直判放行的既有语义；单点修复轮次与全量重试轮次共享 iteration_count 计数。
+
+#### Scenario: 稀疏失败走单点修复
+
+- **WHEN** 某分析师本轮 1 条 claim 判 value_mismatch（如 1/46）
+- **THEN** 系统 SHALL 发起单点改写（1 次 LLM 调用）而非重跑该分析师全量报告
+
+#### Scenario: 密集失败回退全量重试
+
+- **WHEN** 同一分析师同一轮 4 条 claim 判 value_mismatch
+- **THEN** 系统 SHALL 不做单点修复，直接走现有目标分析师定向重试
+
+#### Scenario: 单点修复不改变止损语义
+
+- **WHEN** 连续两轮失败率 35% → 31%（≥ 35% × 80%）
+- **THEN** 即使本轮适用单点修复，系统 SHALL 仍按停滞降级提前放行渲染
+
+### Requirement: 修复调用预算记账
+
+每次单点修复 LLM 调用 SHALL 计入管线 LLM 预算记账（与分析师/辩论调用同口径），并 SHALL 在 trace 观测中记录调用模型、输入输出 token 与修复目标 claim 标识。
+
+#### Scenario: 修复调用进预算
+
+- **WHEN** 一轮校验触发 2 处单点修复
+- **THEN** 该 2 次 LLM 调用 SHALL 出现在预算记账与 trace usage 中
+

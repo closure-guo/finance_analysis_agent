@@ -22,4 +22,4 @@
 ## 4. 验证
 
 - [x] 4.1 uv run pytest / ruff / mypy 全绿（埋点守卫测试 tests/nodes/test_trace_tool.py 4 例）
-- [ ] 4.2 真实业务跑一次 quick 分析后核对 Langfuse 出现 tool_call:* span（人工，需真实 LLM）
+- [x] 4.2 真实业务跑一次 quick 分析后核对 Langfuse 出现 tool_call:* span（人工，需真实 LLM）（2026-09-06：真实 quick + web_search，Langfuse 确认 tool_call:web_search ×2，output 非空；报告 tests/validation/2026-09-06-add-toolcall-evaluation-validation.md）
