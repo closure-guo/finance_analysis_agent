@@ -204,17 +204,63 @@ def render_report(
     return "\n".join(lines)
 
 
+def append_history(path: Path, agg: PerfAggregate, model: str) -> None:
+    """3.2 nightly 时序归档：每次运行追加一行聚合记录（JSONL）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "as_of": datetime.now().isoformat(timespec="seconds"),
+        "model": model,
+        "total": agg.total,
+        "p50_latency_s": agg.p50_latency_s,
+        "p90_latency_s": agg.p90_latency_s,
+        "avg_latency_s": agg.avg_latency_s,
+        "avg_total_tokens": agg.avg_total_tokens,
+        "avg_cost": agg.avg_cost,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def load_history_series(
+    path: Path | None, metric: str = "avg_latency_s", model: str | None = None
+) -> list[float]:
+    """读取归档历史中某指标的时序；model 给定时仅取该模型（跨模型不可比）。"""
+    if path is None or not path.exists():
+        return []
+    series: list[float] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # 单条损坏不阻断整批
+        if model is not None and rec.get("model") != model:
+            continue
+        v = rec.get(metric)
+        if isinstance(v, (int, float)) and v > 0:
+            series.append(float(v))
+    return series
+
+
 def run_offline(
-    traces: list[dict[str, Any]], baseline: dict[str, Any] | None = None
+    traces: list[dict[str, Any]],
+    baseline: dict[str, Any] | None = None,
+    history_path: Path | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     agg, samples = aggregate(traces)
     compares = compare_with_baseline(agg, baseline or {})
-    # 趋势告警依赖归档历史（nightly 时序），离线路径仅报告不判趋势
+    # 3.2 趋势告警：归档历史接入后由 detect_trend 判定；
+    # 当前模型无归档序列（首次运行/模型切换）时不判趋势（跨模型不可比）
+    history = load_history_series(history_path, model=model)
     return {
         "aggregate": agg,
         "samples": samples,
         "compares": compares,
-        "trend_alert": False,
+        "trend_alert": detect_trend(history),
+        "history_points": len(history),
     }
 
 
@@ -255,6 +301,13 @@ def main() -> None:
     parser.add_argument("--baseline", type=Path, default=Path("docs/evals/perf-baseline.json"))
     parser.add_argument("--out", type=Path, default=Path("reports/perf-report.md"))
     parser.add_argument("--save-baseline", action="store_true", help="报告后将本次聚合落为基线")
+    parser.add_argument(
+        "--history",
+        type=Path,
+        default=Path("docs/evals/perf-history.jsonl"),
+        help="nightly 时序归档（JSONL）；--traces 离线模式下不写入",
+    )
+    parser.add_argument("--no-archive", action="store_true", help="不追加本次聚合到时序归档")
     args = parser.parse_args()
 
     if args.traces:
@@ -273,7 +326,15 @@ def main() -> None:
         )
     agg, samples = aggregate(traces)
     compares = compare_with_baseline(agg, baseline)
-    report = render_report(agg, compares, False, baseline.get("as_of"))
+
+    # 3.2 趋势告警：Langfuse 拉取（nightly 真实流量）时归档本次聚合，
+    # 并以「归档历史 + 本轮」序列驱动 detect_trend；--traces 离线模式不归档。
+    from_langfuse = not args.traces
+    if from_langfuse and not args.no_archive:
+        append_history(args.history, agg, _eval_model())
+    trend_alert = detect_trend(load_history_series(args.history, model=_eval_model()))
+
+    report = render_report(agg, compares, trend_alert, baseline.get("as_of"))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(report, encoding="utf-8")
     if args.save_baseline and args.baseline is not None:

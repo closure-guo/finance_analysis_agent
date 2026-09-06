@@ -1,5 +1,7 @@
 """add-latency-cost-regression：性能聚合/基线回归/趋势 测试（fixtures 离线）。"""
 
+import json
+
 from evals.performance.measure import (
     aggregate,
     compare_with_baseline,
@@ -116,4 +118,74 @@ class TestRunOffline:
         result = run_offline(traces, baseline={"avg_latency_s": 1.0})
         assert result["aggregate"].total == 2
         assert result["compares"], "应有基线对比行"
+        assert result["trend_alert"] is False
+
+
+class TestHistoryArchive:
+    """3.2 nightly 时序归档：每次运行追加聚合 → 趋势检测消费序列。"""
+
+    def test_append_and_load_history(self, tmp_path):
+        from evals.performance.measure import PerfAggregate, append_history, load_history_series
+
+        path = tmp_path / "perf-history.jsonl"
+        agg = PerfAggregate(
+            total=10,
+            by_mode={"deep": 10},
+            p50_latency_s=1.0,
+            p90_latency_s=2.0,
+            avg_total_tokens=100.0,
+            avg_cost=0.5,
+            avg_latency_s=1.2,
+        )
+        append_history(path, agg, model="openai/deepseek-v4-flash-0731")
+        append_history(path, agg, model="openai/deepseek-v4-flash-0731")
+        lines = path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 2
+        rec = json.loads(lines[0])
+        assert rec["model"] == "openai/deepseek-v4-flash-0731"
+        assert rec["avg_latency_s"] == 1.2
+        assert "as_of" in rec
+        series = load_history_series(
+            path, metric="avg_latency_s", model="openai/deepseek-v4-flash-0731"
+        )
+        assert series == [1.2, 1.2]
+
+    def test_load_history_filters_by_model(self, tmp_path):
+        """跨模型时延不可比：序列按模型过滤（与基线同原则）。"""
+        from evals.performance.measure import PerfAggregate, append_history, load_history_series
+
+        path = tmp_path / "h.jsonl"
+        agg = PerfAggregate(total=1, by_mode={}, avg_latency_s=1.0)
+        append_history(path, agg, model="model-a")
+        append_history(path, agg, model="model-b")
+        assert load_history_series(path, model="model-a") == [1.0]
+        assert load_history_series(path, model="model-c") == []
+
+    def test_run_offline_history_drives_trend_alert(self, tmp_path):
+        """归档历史连续 3 轮每轮 ≥5% 劣化 → trend_alert True。"""
+        from evals.performance.measure import PerfAggregate, append_history, run_offline
+
+        path = tmp_path / "h.jsonl"
+        for lat in (1.0, 1.1, 1.3):  # +10%、+18% 单调劣化
+            agg = PerfAggregate(total=5, by_mode={"deep": 5}, avg_latency_s=lat)
+            append_history(path, agg, model="m")
+        traces = [_trace(latency=1.6)]
+        result = run_offline(traces, history_path=path, model="m")
+        assert result["trend_alert"] is True
+
+    def test_run_offline_no_history_no_trend(self, tmp_path):
+        from evals.performance.measure import run_offline
+
+        result = run_offline([_trace()], history_path=tmp_path / "missing.jsonl", model="m")
+        assert result["trend_alert"] is False
+
+    def test_run_offline_history_model_mismatch_no_trend(self, tmp_path):
+        """当前模型无归档序列时不判趋势（跨模型不可比）。"""
+        from evals.performance.measure import PerfAggregate, append_history, run_offline
+
+        path = tmp_path / "h.jsonl"
+        for lat in (1.0, 1.1, 1.3):
+            agg = PerfAggregate(total=5, by_mode={}, avg_latency_s=lat)
+            append_history(path, agg, model="other-model")
+        result = run_offline([_trace(latency=2.0)], history_path=path, model="m")
         assert result["trend_alert"] is False
