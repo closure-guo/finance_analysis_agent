@@ -60,6 +60,10 @@ def export_row(trace: dict[str, Any], dimension: str) -> LabeledRow:
             judge = float(v)
     if judge is None:
         for o in trace.get("observations") or []:
+            # traces API 的 observations 是 ID 字符串列表；内嵌对象仅
+            # observations 端点返回。字符串条目跳过（调用方负责拉取 enrichment）。
+            if not isinstance(o, dict):
+                continue
             if str(o.get("name") or "") != "judge":
                 continue
             out = o.get("output")

@@ -52,6 +52,18 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
     resp.raise_for_status()
     traces = resp.json().get("data") or []
 
+    # enrichment：traces API 的 observations 只有 ID，逐条拉取观察对象，
+    # 使 judge 观测回退路径可用（只读 GET /api/public/observations）。
+    for t in traces:
+        obs_resp = requests.get(
+            f"{LANGFUSE_HOST}/api/public/observations",
+            params={"traceId": t.get("id"), "limit": 100},
+            headers={"Authorization": f"Basic {auth}"},
+            timeout=40,
+        )
+        obs_resp.raise_for_status()
+        t["observations"] = obs_resp.json().get("data") or []
+
     rows = export_rows(traces, DEFAULT_DIMENSIONS)
     payload = [
         {

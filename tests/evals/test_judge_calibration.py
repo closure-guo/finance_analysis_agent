@@ -30,6 +30,15 @@ class TestExport:
         row = export_row(t, "multi_perspective")
         assert row.judge_score == 5.0
 
+    def test_observations_as_id_strings_do_not_crash(self):
+        """回归（2026-09-06）：Langfuse traces API 的 observations 是 ID 字符串
+        列表（内嵌对象仅 observations 端点返回），export_row 必须容忍不崩。"""
+        t = _trace()
+        t["observations"] = ["obs-id-1", "obs-id-2"]
+        row = export_row(t, "report_relevance")
+        assert row.judge_score is None
+        assert row.trace_id == t["id"]
+
     def test_no_score_stays_none(self):
         assert export_row(_trace(), "report_relevance").judge_score is None
 
