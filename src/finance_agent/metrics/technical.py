@@ -93,3 +93,44 @@ def calc_technical(kline: pd.DataFrame) -> dict[str, dict[str, list[float | None
     }
 
     return result
+
+
+def calc_derived_series(
+    kline: pd.DataFrame,
+    windows: tuple[int, ...] = (5, 20, 60),
+    long_window: int = 250,
+) -> dict:
+    """常用派生值预生成（toolize-price-levels）：区间涨跌幅 + 距高低点回撤/反弹。
+
+    工具算好供 LLM 直接引用（field_ref: derived.*），避免 LLM 对序列心算。
+    数据不足的派生项值为 None（如实标注缺失，不伪造）。kline 缺失时全 None。
+    """
+    if kline is None or len(kline) == 0:
+        keys = [f"chg_{w}d" for w in windows] + [
+            "drawdown_from_high_250d",
+            "rebound_from_low_250d",
+        ]
+        return dict.fromkeys(keys)
+    close = kline["收盘"].astype(float)
+    n = len(close)
+    result: dict = {}
+    for w in windows:
+        if n > w:
+            base = float(close.iloc[-1 - w])
+            result[f"chg_{w}d"] = round(float(close.iloc[-1]) / base - 1, 4) if base else None
+        else:
+            result[f"chg_{w}d"] = None
+
+    tail = close.tail(long_window)
+    high = float(tail.max())
+    low = float(tail.min())
+    last = float(close.iloc[-1])
+    if n >= 2 and high > 0:
+        result["drawdown_from_high_250d"] = round(last / high - 1, 4)
+    else:
+        result["drawdown_from_high_250d"] = None
+    if n >= 2 and low > 0:
+        result["rebound_from_low_250d"] = round(last / low - 1, 4)
+    else:
+        result["rebound_from_low_250d"] = None
+    return result

@@ -18,16 +18,18 @@ RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' \
     echo $TZ > /etc/timezone && \
     rm -rf /var/lib/apt/lists/*
 
-# 国内 PyPI 镜像
-ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 国内 PyPI 镜像（2026-09-03 由清华 tuna 换阿里云：清华对大型 wheel 限流，
+# 实测 17MB 的 litellm 只有 ~47kB/s；阿里云一般更稳）
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 # 先拷依赖清单（利用 Docker 层缓存）
 COPY requirements.txt ./
 COPY README.md ./
 
-# 安装运行时依赖（排除 -e . 行，项目本身稍后安装）
+# 安装运行时依赖（排除 -e . 行，项目本身稍后安装）。
+# --timeout/--retries：镜像限流或瞬时断连时 pip 自动重试，避免无限挂起
 RUN sed '/^-e \./d' requirements.txt > /tmp/reqs.txt && \
-    pip install --no-cache-dir -r /tmp/reqs.txt
+    pip install --no-cache-dir --timeout 60 --retries 5 -r /tmp/reqs.txt
 
 # 拷贝源码
 COPY src ./src

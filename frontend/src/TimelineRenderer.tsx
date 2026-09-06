@@ -92,6 +92,15 @@ export function TimelineRenderer({
             </div>
           )
         }
+        if (item.type === 'answer') {
+          // 正文 item(时序修复):本渲染器服务于管线 nodeTimelines,answer 理论上不出现;
+          // 防御性渲染为纯文本,避免静默丢弃。
+          return (
+            <div key={i} data-timeline-index={i}>
+              <div className="text-sm py-1" style={{ color: 'var(--text-default)' }}>{item.content}</div>
+            </div>
+          )
+        }
         // tool_call：单条目数组传入 ToolCallBanner（组件签名不变）
         const toolStreaming = streaming && isLast && !item.done
         return (

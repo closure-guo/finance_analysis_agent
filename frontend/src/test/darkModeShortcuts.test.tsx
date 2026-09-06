@@ -45,22 +45,22 @@ describe('主题三态（polish-dark-mode-shortcuts）', () => {
   })
 
   it('点击主题切换按钮循环三态并持久化', async () => {
+    // 展开态底部主题按钮已移除；改走折叠态图标栏按钮（theme-toggle-collapsed）
+    localStorage.setItem('fa_sidebar_collapsed', '1')
     stubFetch()
     render(<App />)
-    await waitFor(() => expect(screen.getByTestId('theme-toggle')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('theme-toggle-collapsed')).toBeInTheDocument())
 
     // 循环次序：system → light → dark → system（初值未保存时为 system）
-    fireEvent.click(screen.getByTestId('theme-toggle'))
+    fireEvent.click(screen.getByTestId('theme-toggle-collapsed'))
     expect(localStorage.getItem('fa_theme')).toBe('light')
     expect(document.documentElement.classList.contains('dark')).toBe(false)
-    expect(screen.getByTestId('theme-toggle').textContent).toContain('浅色')
 
-    fireEvent.click(screen.getByTestId('theme-toggle'))
+    fireEvent.click(screen.getByTestId('theme-toggle-collapsed'))
     expect(localStorage.getItem('fa_theme')).toBe('dark')
     expect(document.documentElement.classList.contains('dark')).toBe(true)
-    expect(screen.getByTestId('theme-toggle').textContent).toContain('深色')
 
-    fireEvent.click(screen.getByTestId('theme-toggle'))
+    fireEvent.click(screen.getByTestId('theme-toggle-collapsed'))
     expect(localStorage.getItem('fa_theme')).toBe('system')
   })
 
@@ -143,7 +143,7 @@ describe('快捷键与输入态抑制（polish-dark-mode-shortcuts）', () => {
   it('App 级：Ctrl+K 打开命令面板；输入 `/` 字符不触发面板外动作', async () => {
     stubFetch()
     render(<App />)
-    await waitFor(() => expect(screen.getByTestId('theme-toggle')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('sidebar-new')).toBeInTheDocument())
 
     // 输入框聚焦时输入 / ——字符正常输入（无全局动作冲突，不抛错）
     // Cmd+K 打开面板
@@ -159,11 +159,11 @@ describe('快捷键与输入态抑制（polish-dark-mode-shortcuts）', () => {
   it('App 级：Ctrl+Shift+N 新建会话（回到空态）', async () => {
     stubFetch()
     render(<App />)
-    await waitFor(() => expect(screen.getByTestId('theme-toggle')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('sidebar-new')).toBeInTheDocument())
     // 已在空态：触发快捷键不抛错且状态正常
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, shiftKey: true, bubbles: true }))
     })
-    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-new')).toBeInTheDocument()
   })
 })

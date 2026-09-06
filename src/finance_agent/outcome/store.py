@@ -100,6 +100,85 @@ def insert_decision(record: dict[str, Any], db_path: str | Path | None = None) -
     return decision_id
 
 
+DECISION_STATUSES = ("open", "hit_stop", "hit_target", "expired")
+
+
+def list_decisions(
+    ticker: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """只读:按 ticker/status 过滤的决策列表,按 timestamp 倒序。limit 钳制 1..1000。"""
+    limit = max(1, min(int(limit), 1000))
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT * FROM decision_log"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if ticker:
+            clauses.append("ticker = ?")
+            params.append(ticker)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def decision_stats(db_path: str | Path | None = None) -> dict[str, Any]:
+    """只读:聚合战绩。胜率/均值只基于已结算(status!='open')记录,
+    decision_excess 为 null 剔除出超额均值(不当作 0);无已结算时返回 null。"""
+    conn = _connect(db_path)
+    try:
+        total = int(conn.execute("SELECT COUNT(*) FROM decision_log").fetchone()[0])
+        open_count = int(
+            conn.execute("SELECT COUNT(*) FROM decision_log WHERE status='open'").fetchone()[0]
+        )
+        settled = total - open_count
+        by_status = dict(
+            conn.execute("SELECT status, COUNT(*) FROM decision_log GROUP BY status").fetchall()
+        )
+        win_rate: float | None = None
+        avg_return: float | None = None
+        avg_excess: float | None = None
+        if settled:
+            wins = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM decision_log WHERE status!='open' AND decision_return > 0"
+                ).fetchone()[0]
+            )
+            win_rate = round(wins / settled, 4)
+            avg_ret = conn.execute(
+                "SELECT AVG(decision_return) FROM decision_log WHERE status!='open'"
+            ).fetchone()[0]
+            if avg_ret is not None:
+                avg_return = round(float(avg_ret), 4)
+            avg_exc = conn.execute(
+                "SELECT AVG(decision_excess) FROM decision_log "
+                "WHERE status!='open' AND decision_excess IS NOT NULL"
+            ).fetchone()[0]
+            if avg_exc is not None:
+                avg_excess = round(float(avg_exc), 4)
+        return {
+            "total": total,
+            "open": open_count,
+            "settled": settled,
+            "by_status": by_status,
+            "win_rate": win_rate,
+            "avg_return": avg_return,
+            "avg_excess": avg_excess,
+        }
+    finally:
+        conn.close()
+
+
 def get_open_decisions(db_path: str | Path | None = None) -> list[dict[str, Any]]:
     """所有 status='open' 决策(结算 job 的输入)。"""
     conn = _connect(db_path)

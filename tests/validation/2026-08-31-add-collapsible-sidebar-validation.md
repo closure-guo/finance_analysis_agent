@@ -34,3 +34,27 @@
 [x] 桌面端折叠/持久化/快捷键/会话菜单全部通过
 [ ] 移动端抽屉待真机/窄视口人工补验
 [ ] E2E 门禁待基建落地后补充执行（Task 5.2 未勾选）
+
+---
+
+## 窄视口补验（2026-09-05，E2E 基建落地后回填）
+
+**验证人**: ZCode agent（真实 Chromium 375×667 + TESTING=1 stub 后端）
+**E2E 门禁**: stub 套件 `npx playwright test --grep-invert "@live"` → 20 passed / 2 skipped / 0 failed（@live 按规范归 nightly）
+
+| 验证项 | 预期行为 | 实际结果 | 通过 |
+|---|---|---|---|
+| <768px 抽屉展开 | 汉堡触发，侧边栏滑入为 overlay 抽屉 | aside[data-state=mobile-open] 渲染 + 遮罩出现 | ✅ |
+| 遮罩关闭 | 点击遮罩关闭抽屉 | 点遮罩后 mask display:none、抽屉移除 | ✅ |
+| 选中收起 | 点击会话后抽屉自动收起并进入会话视图 | mask 消失 + 会话视图（报告摘要卡/消息历史/输入栏）呈现 | ✅ |
+
+### 补验中发现并修复的缺陷
+
+- **现象**：收起态持久化（`fa_sidebar_collapsed=1`）时打开移动抽屉，抽屉内容为空（仅遮罩与关闭按钮），无会话列表。
+- **根因**：AppSidebar 以桌面 collapsed 状态分支返回 `expandedRail={null}`，而移动抽屉渲染的正是 expandedRail。
+- **修复**：收起分支加 `!isMobile` 守卫（commit e3677c7，含复现组件测试 sidebarCollapse.test.tsx「收起态持久化时打开抽屉，仍渲染展开内容」）。
+- **修复后复验**：同路径实测抽屉渲染会话列表 ✅；前端全量 487/487 通过。
+
+## 结论
+
+- [x] 全部通过（含 2026-09-05 窄视口补验与缺陷修复回填），可 archive

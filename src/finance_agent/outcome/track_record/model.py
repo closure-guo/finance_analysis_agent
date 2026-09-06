@@ -1,0 +1,768 @@
+"""predictions 数据模型(add-track-record):append-only + 冻结字段守卫 + decision_log 迁移。
+
+与 outcome/store.py 同款 SQLite(WAL + busy_timeout 短连接),db_path 调用期注入。
+冻结铁律:方向/入场价/快照/创建时间写入后不可改;判定结果只经 update_prediction_status
+更新 status/resolved_at/exit_price/raw_return/excess_return/resolution_rule。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import sqlite3
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+PREDICTIONS_DDL = """
+CREATE TABLE IF NOT EXISTS predictions (
+  prediction_id     TEXT PRIMARY KEY,
+  source_type       TEXT NOT NULL CHECK (source_type IN ('backtest','live')),
+  symbol            TEXT NOT NULL,
+  symbol_name       TEXT,
+  direction         TEXT NOT NULL CHECK (direction IN ('long','short','neutral')),
+  entry_price       REAL,
+  target_price      REAL,
+  horizon_days      INTEGER NOT NULL DEFAULT 252,
+  confidence        REAL CHECK (confidence BETWEEN 0 AND 1),
+  benchmark         TEXT NOT NULL DEFAULT '000300.SH',
+  rationale_snapshot TEXT NOT NULL,
+  langfuse_trace_id TEXT,
+  status            TEXT NOT NULL DEFAULT 'open',
+  created_at        TEXT NOT NULL,
+  resolved_at       TEXT,
+  exit_price        REAL,
+  raw_return        REAL,
+  excess_return     REAL,
+  resolution_rule   TEXT,
+  updated_at        TEXT NOT NULL,
+  version_seq       INTEGER,
+  snapshot_hash     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_predictions_status ON predictions(status);
+CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
+"""
+
+PREDICTIONS_STATUSES = ("open", "resolved_win", "resolved_loss", "resolved_neutral", "unresolvable")
+_FROZEN_FIELDS = (
+    "direction",
+    "entry_price",
+    "target_price",
+    "rationale_snapshot",
+    "created_at",
+    "source_type",
+    "symbol",
+)
+_MUTABLE_FIELDS = (
+    "status",
+    "resolved_at",
+    "exit_price",
+    "raw_return",
+    "excess_return",
+    "resolution_rule",
+    "updated_at",
+)
+
+
+class FrozenFieldError(Exception):
+    """尝试修改冻结字段(append-only 铁律)。"""
+
+
+def _default_db_path() -> Path:
+    return Path(os.getenv("SESSIONS_DB_PATH", "data/sessions.db"))
+
+
+def _connect(db_path: str | Path | None) -> sqlite3.Connection:
+    path = Path(db_path) if db_path else _default_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=15.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=15000")
+    return conn
+
+
+def init_predictions(db_path: str | Path | None = None) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.executescript(PREDICTIONS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ── add-track-record-stage-b：盯市/净值/日批指标 三表（幂等 DDL）──
+TRACK_RECORD_EXTRA_DDL = """
+CREATE TABLE IF NOT EXISTS daily_marks (
+  mark_id          TEXT PRIMARY KEY,
+  prediction_id    TEXT NOT NULL,
+  mark_date        TEXT NOT NULL,
+  mark_price       REAL,
+  cum_return       REAL,
+  cum_excess       REAL,
+  benchmark_price  REAL,
+  UNIQUE(prediction_id, mark_date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_marks_pred ON daily_marks(prediction_id);
+CREATE INDEX IF NOT EXISTS idx_daily_marks_date ON daily_marks(mark_date);
+
+CREATE TABLE IF NOT EXISTS equity_curve (
+  curve_date    TEXT PRIMARY KEY,
+  agent_nav     REAL NOT NULL,
+  benchmark_nav REAL,
+  daily_return  REAL,
+  trades_count  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS agent_metrics_daily (
+  metric_date   TEXT PRIMARY KEY,
+  sample_size   INTEGER NOT NULL DEFAULT 0,
+  settled       INTEGER NOT NULL DEFAULT 0,
+  win_rate      REAL,
+  avg_excess    REAL,
+  annual_return REAL,
+  volatility    REAL,
+  sharpe        REAL,
+  max_drawdown  REAL,
+  risk_score    INTEGER,
+  risk_label    TEXT,
+  segment_json  TEXT NOT NULL DEFAULT '{}'
+);
+
+-- ── add-track-record-stage-c ──
+CREATE TABLE IF NOT EXISTS agents (
+  agent_id          TEXT PRIMARY KEY,
+  model_version     TEXT NOT NULL,
+  strategy_version  TEXT,
+  version_seq       INTEGER NOT NULL,
+  retired_at        TEXT,
+  created_at        TEXT NOT NULL,
+  note              TEXT,
+  UNIQUE(version_seq)
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  log_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  prediction_id TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  old_status    TEXT,
+  new_status    TEXT,
+  detail        TEXT,
+  source        TEXT,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_pred ON audit_log(prediction_id);
+"""
+
+
+def init_track_record_tables(db_path: str | Path | None = None) -> None:
+    """建 predictions（若缺）与全部 stage-b/c 表；幂等，可重复调用。"""
+    conn = _connect(db_path)
+    try:
+        conn.executescript(PREDICTIONS_DDL)
+        conn.executescript(TRACK_RECORD_EXTRA_DDL)
+        _migrate_stage_c_columns(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# stages-c 迁移列：旧库 ALTER TABLE 补列（幂等：先查 PRAGMA table_info）
+_STAGE_C_COLUMNS = (
+    ("version_seq", "ALTER TABLE predictions ADD COLUMN version_seq INTEGER"),
+    ("snapshot_hash", "ALTER TABLE predictions ADD COLUMN snapshot_hash TEXT"),
+)
+
+
+def _migrate_stage_c_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+    for col, ddl in _STAGE_C_COLUMNS:
+        if col not in cols:
+            conn.execute(ddl)
+
+
+def compute_snapshot_hash(rationale_snapshot: Any) -> str:
+    """SHA-256(canonical JSON)。dict 递归排序键、ensure_ascii=False，稳定跨运行。"""
+    import hashlib
+
+    def _canon(v: Any) -> Any:
+        if isinstance(v, dict):
+            return {str(k): _canon(x) for k, x in sorted(v.items(), key=lambda kv: str(kv[0]))}
+        if isinstance(v, list):
+            return [_canon(x) for x in v]
+        return v
+
+    canonical = json.dumps(_canon(rationale_snapshot), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# ── agents：模型/策略版本登记与活跃版本（P6 分段封存）──
+def register_agent(
+    model_version: str,
+    strategy_version: str | None = None,
+    note: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """登记新版本 agent：旧活跃版本 retired_at 落时间戳，新版本接任活跃。"""
+    conn = _connect(db_path)
+    try:
+        now = datetime.now().isoformat()
+        active = conn.execute("SELECT * FROM agents WHERE retired_at IS NULL").fetchone()
+        if active is not None:
+            conn.execute(
+                "UPDATE agents SET retired_at=? WHERE agent_id=?", (now, active["agent_id"])
+            )
+        agent_id = f"ag_{uuid.uuid4().hex[:12]}"
+        seq_row = conn.execute(
+            "SELECT COALESCE(MAX(version_seq), 0) + 1 AS n FROM agents"
+        ).fetchone()
+        version_seq = int(seq_row["n"])
+        conn.execute(
+            """INSERT INTO agents (agent_id, model_version, strategy_version, version_seq,
+                 retired_at, created_at, note)
+               VALUES (?, ?, ?, ?, NULL, ?, ?)""",
+            (agent_id, model_version, strategy_version, version_seq, now, note),
+        )
+        conn.commit()
+        return {
+            "agent_id": agent_id,
+            "model_version": model_version,
+            "strategy_version": strategy_version,
+            "version_seq": version_seq,
+            "retired_at": None,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def get_active_agent(db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM agents WHERE retired_at IS NULL").fetchone()  # noqa: S608
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_agents(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute("SELECT * FROM agents ORDER BY version_seq ASC").fetchall()  # noqa: S608
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_agent(version_seq: int, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM agents WHERE version_seq=?", (version_seq,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+# ── audit_log：状态变更留痕（不可变事实流）──
+def append_audit(
+    prediction_id: str,
+    action: str,
+    *,
+    old_status: str | None = None,
+    new_status: str | None = None,
+    detail: str | None = None,
+    source: str = "system",
+    db_path: str | Path | None = None,
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO audit_log (prediction_id, action, old_status, new_status,
+                 detail, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                prediction_id,
+                action,
+                old_status,
+                new_status,
+                detail,
+                source,
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_audit(prediction_id: str, db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE prediction_id=? ORDER BY log_id ASC",
+            (prediction_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def integrity_check(db_path: str | Path | None = None) -> dict[str, Any]:
+    """快照哈希完整性校验：逐条重算 rationale_snapshot 哈希比对 snapshot_hash。
+
+    篡改（hash 不一致）不自动修复，写审计日志（action='integrity_mismatch'）并
+    返回 mismatches 清单供告警。幂等：重复执行仅追加审计，不改数据。
+    """
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT prediction_id, rationale_snapshot, snapshot_hash, status FROM predictions"
+        ).fetchall()  # noqa: S608
+    finally:
+        conn.close()
+
+    mismatches: list[dict[str, Any]] = []
+    for r in rows:
+        expected = r["snapshot_hash"]
+        if not expected:
+            continue  # 旧数据无哈希列，不判篡改
+        try:
+            actual = compute_snapshot_hash(json.loads(r["rationale_snapshot"]))
+        except (json.JSONDecodeError, TypeError):
+            actual = compute_snapshot_hash(r["rationale_snapshot"])
+        if actual != expected:
+            mismatches.append(
+                {"prediction_id": r["prediction_id"], "expected": expected, "actual": actual}
+            )
+            append_audit(
+                r["prediction_id"],
+                "integrity_mismatch",
+                detail=f"期望 {expected[:12]}… 实际 {actual[:12]}…",
+                source="integrity-check",
+                db_path=db_path,
+            )
+    return {"checked": len(rows), "mismatches": mismatches, "mismatch_count": len(mismatches)}
+
+
+# ── daily_marks：盯市（upsert 幂等；同一 (prediction_id, mark_date) 覆盖重写）──
+def insert_daily_mark(
+    prediction_id: str,
+    mark_date: str,
+    mark_price: float | None = None,
+    cum_return: float | None = None,
+    cum_excess: float | None = None,
+    benchmark_price: float | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO daily_marks (mark_id, prediction_id, mark_date, mark_price,
+                 cum_return, cum_excess, benchmark_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(prediction_id, mark_date) DO UPDATE SET
+                 mark_price=excluded.mark_price,
+                 cum_return=excluded.cum_return,
+                 cum_excess=excluded.cum_excess,
+                 benchmark_price=excluded.benchmark_price""",
+            (
+                f"m_{prediction_id}_{mark_date}",
+                prediction_id,
+                mark_date,
+                mark_price,
+                cum_return,
+                cum_excess,
+                benchmark_price,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_daily_marks(
+    db_path: str | Path | None = None,
+    prediction_id: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT * FROM daily_marks"  # noqa: S608 — 无外部拼接
+        if prediction_id:
+            sql += " WHERE prediction_id=?"
+        sql += " ORDER BY mark_date ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+        params: list[Any] = ([prediction_id] if prediction_id else []) + (
+            [limit] if limit is not None else []
+        )
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── equity_curve：组合净值（同日期覆盖；幂等）──
+def upsert_equity_point(
+    curve_date: str,
+    agent_nav: float,
+    benchmark_nav: float | None = None,
+    daily_return: float | None = None,
+    trades_count: int | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO equity_curve (curve_date, agent_nav, benchmark_nav, daily_return, trades_count)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(curve_date) DO UPDATE SET
+                 agent_nav=excluded.agent_nav,
+                 benchmark_nav=excluded.benchmark_nav,
+                 daily_return=excluded.daily_return,
+                 trades_count=excluded.trades_count""",
+            (curve_date, agent_nav, benchmark_nav, daily_return, trades_count),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_equity_curve(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT curve_date, agent_nav, benchmark_nav, daily_return, trades_count FROM equity_curve ORDER BY curve_date ASC"
+        ).fetchall()  # noqa: S608
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── agent_metrics_daily：日批指标快照（同日覆盖）──
+_METRICS_COLUMNS = (
+    "sample_size",
+    "settled",
+    "win_rate",
+    "avg_excess",
+    "annual_return",
+    "volatility",
+    "sharpe",
+    "max_drawdown",
+    "risk_score",
+    "risk_label",
+)
+
+
+def upsert_metrics_daily(
+    metric_date: str,
+    metrics: dict[str, Any],
+    db_path: str | Path | None = None,
+) -> None:
+    """写入/覆盖当日指标快照。metrics 缺省列按默认置空（全列静态 upsert）。"""
+    values = []
+    for c in _METRICS_COLUMNS:
+        v = metrics.get(c)
+        if v is None and c in ("sample_size", "settled"):  # NOT NULL 整数列兜底 0
+            v = 0
+        values.append(v)
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO agent_metrics_daily (metric_date, sample_size, settled,
+                 win_rate, avg_excess, annual_return, volatility, sharpe,
+                 max_drawdown, risk_score, risk_label)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(metric_date) DO UPDATE SET
+                 sample_size=excluded.sample_size,
+                 settled=excluded.settled,
+                 win_rate=excluded.win_rate,
+                 avg_excess=excluded.avg_excess,
+                 annual_return=excluded.annual_return,
+                 volatility=excluded.volatility,
+                 sharpe=excluded.sharpe,
+                 max_drawdown=excluded.max_drawdown,
+                 risk_score=excluded.risk_score,
+                 risk_label=excluded.risk_label""",
+            [metric_date, *values],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_latest_metrics(db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_metrics_daily ORDER BY metric_date DESC LIMIT 1"
+        ).fetchone()  # noqa: S608
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def insert_prediction(
+    record: dict[str, Any], db_path: str | Path | None = None, status: str = "open"
+) -> str:
+    """插入一条观点;created_at 服务端生成;快照 JSON 序列化后冻结。
+
+    status 默认 open;缺可判定要素(如 entry_price)的存档记录由调用方传
+    status='unresolvable' + resolution_rule 说明,计入样本但不计入胜率。
+    """
+    prediction_id = record.get("prediction_id") or f"p_{uuid.uuid4().hex[:12]}"
+    created_at = record.get("created_at") or record.get("timestamp") or datetime.now().isoformat()
+    version_seq = record.get("version_seq")
+    if version_seq is None:
+        # 版本关联为增强字段：老库（未建 agents 表）不阻断落库
+        try:
+            active = get_active_agent(db_path=db_path)
+            version_seq = active["version_seq"] if active else None
+        except sqlite3.OperationalError:
+            version_seq = None
+    snapshot = record.get("rationale_snapshot") or {}
+    snapshot_hash = record.get("snapshot_hash") or compute_snapshot_hash(snapshot)
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO predictions (
+                 prediction_id, source_type, symbol, symbol_name, direction,
+                 entry_price, target_price, horizon_days, confidence, benchmark,
+                 rationale_snapshot, langfuse_trace_id, status, created_at, updated_at,
+                 resolution_rule, version_seq, snapshot_hash
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                prediction_id,
+                record["source_type"],
+                record["symbol"],
+                record.get("symbol_name"),
+                record["direction"],
+                record.get("entry_price"),
+                record.get("target_price"),
+                int(record.get("horizon_days", 252)),
+                record.get("confidence"),
+                record.get("benchmark", "000300.SH"),
+                json.dumps(snapshot, ensure_ascii=False),
+                record.get("langfuse_trace_id"),
+                status,
+                created_at,
+                created_at,
+                record.get("resolution_rule"),
+                version_seq,
+                snapshot_hash,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return prediction_id
+
+
+def update_prediction_status(
+    prediction_id: str,
+    resolved: dict[str, Any],
+    db_path: str | Path | None = None,
+    source: str = "system",
+) -> None:
+    """判定结果更新。尝试改冻结字段抛 FrozenFieldError;幂等由调用方保证。
+
+    stage-c：任何状态变更写审计日志（old/new status + source）。
+    """
+    frozen_hits = [f for f in _FROZEN_FIELDS if f in resolved]
+    if frozen_hits:
+        raise FrozenFieldError(f"attempt to mutate frozen field(s): {frozen_hits}")
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM predictions WHERE prediction_id=?", (prediction_id,)
+        ).fetchone()
+        if row is None:
+            return
+        fields = [f for f in _MUTABLE_FIELDS if f in resolved]
+        if not fields:
+            return
+        sets = ", ".join(f"{f}=?" for f in fields)
+        params = [resolved[f] for f in fields]
+        # 列名来自固定常量元组 _MUTABLE_FIELDS，值已参数化
+        sql = f"UPDATE predictions SET {sets} WHERE prediction_id=?"  # noqa: S608
+        conn.execute(sql, (*params, prediction_id))
+        old_status = row["status"]
+        new_status = resolved.get("status")
+        if new_status is not None and new_status != old_status:
+            # 老库无 audit_log 表：审计为增强字段，缺表不阻断判定
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(
+                    """INSERT INTO audit_log (prediction_id, action, old_status, new_status,
+                         detail, source, created_at)
+                       VALUES (?, 'status_change', ?, ?, ?, ?, ?)""",
+                    (
+                        prediction_id,
+                        old_status,
+                        new_status,
+                        resolved.get("resolution_rule"),
+                        source,
+                        datetime.now().isoformat(),
+                    ),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_predictions(
+    ticker: str | None = None,
+    status: str | None = None,
+    source_type: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 100))
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT * FROM predictions"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if ticker:
+            clauses.append("symbol LIKE ?")
+            params.append(f"%{ticker}%")
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if source_type:
+            clauses.append("source_type = ?")
+            params.append(source_type)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_prediction(prediction_id: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM predictions WHERE prediction_id=?", (prediction_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def prediction_stats(
+    source_type: str | None = None,
+    db_path: str | Path | None = None,
+    version_seq: int | None = None,
+) -> dict[str, Any]:
+    """胜率/超额聚合。胜率只基于 resolved_win/resolved_loss;neutral/unresolvable 不进分母。
+
+    stage-c：version_seq 过滤用于分段封存（P6），缺省统计全部版本。
+    """
+    conn = _connect(db_path)
+    try:
+        cond = ""
+        params: list[Any] = []
+        if source_type:
+            cond += " AND source_type=?"
+            params.append(source_type)
+        if version_seq is not None:
+            cond += " AND version_seq=?"
+            params.append(version_seq)
+        where = " WHERE 1=1" + cond
+        src_cond = cond  # 除 COUNT(*) 无 WHERE 的查询外，条件部分相同
+        # where/src_cond 均为固定字面量拼装 + 值参数化
+        q_total = f"SELECT COUNT(*) FROM predictions{where}"  # noqa: S608
+        q_open = f"SELECT COUNT(*) FROM predictions WHERE status='open'{src_cond}"  # noqa: S608
+        q_win = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_win'{src_cond}"  # noqa: S608
+        q_loss = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_loss'{src_cond}"  # noqa: S608
+        q_avg = f"SELECT AVG(excess_return) FROM predictions WHERE status IN ('resolved_win','resolved_loss'){src_cond}"  # noqa: S608
+        q_counts = f"SELECT status, COUNT(*) FROM predictions{where} GROUP BY status"  # noqa: S608
+        total = int(conn.execute(q_total, params).fetchone()[0])
+        open_count = int(conn.execute(q_open, params).fetchone()[0])
+        wins = int(conn.execute(q_win, params).fetchone()[0])
+        losses = int(conn.execute(q_loss, params).fetchone()[0])
+        settled = wins + losses
+        win_rate = round(wins / settled, 4) if settled else None
+        avg_exc = conn.execute(q_avg, params).fetchone()[0]
+        avg_excess = round(float(avg_exc), 4) if avg_exc is not None else None
+        return {
+            "total": total,
+            "open": open_count,
+            "settled": settled,
+            "win_rate": win_rate,
+            "avg_excess": avg_excess,
+            "status_counts": dict(conn.execute(q_counts, params).fetchall()),
+        }
+    finally:
+        conn.close()
+
+
+def migrate_decision_log(db_path: str | Path | None = None) -> int:
+    """一次性迁移 decision_log → predictions(方向映射 + 最小快照)。幂等:重复执行跳过已迁移。
+
+    首迁时给 decision_log 加 prediction_id_migrated 列作为迁移标记;之后重复执行只迁未迁移行。
+    """
+    conn = _connect(db_path)
+    migrated = 0
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT * FROM decision_log WHERE prediction_id_migrated IS NULL"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE decision_log ADD COLUMN prediction_id_migrated TEXT")
+            conn.commit()
+            rows = conn.execute(
+                "SELECT * FROM decision_log WHERE prediction_id_migrated IS NULL"
+            ).fetchall()
+        for r in rows:
+            action = r["action"]
+            direction = "long" if action == "buy" else ("short" if action == "sell" else "neutral")
+            pid = f"p_{uuid.uuid4().hex[:12]}"
+            snapshot = json.dumps(
+                {
+                    "migrated_from": "decision_log",
+                    "decision_id": r["decision_id"],
+                    "action": action,
+                },
+                ensure_ascii=False,
+            )
+            conn.execute(
+                """INSERT INTO predictions (
+                     prediction_id, source_type, symbol, symbol_name, direction,
+                     entry_price, target_price, confidence, benchmark,
+                     rationale_snapshot, langfuse_trace_id, status, created_at, updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)""",
+                (
+                    pid,
+                    "live",
+                    f"{r['ticker']}.SH"
+                    if str(r["ticker"]).startswith("6")
+                    else f"{r['ticker']}.SZ",
+                    r["name"],
+                    direction,
+                    float(r["entry_price"]),
+                    r["target_price"],
+                    r["confidence"],
+                    "000300.SH",
+                    snapshot,
+                    r["langfuse_trace_id"],
+                    r["timestamp"],
+                    r["timestamp"],
+                ),
+            )
+            conn.execute(
+                "UPDATE decision_log SET prediction_id_migrated=? WHERE decision_id=?",
+                (pid, r["decision_id"]),
+            )
+            migrated += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return migrated

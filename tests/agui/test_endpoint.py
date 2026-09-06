@@ -433,6 +433,64 @@ async def test_incremental_upsert_mid_run(isolated_db, monkeypatch):
     assert session["chat_history"][-1]["content"] == "第一段第二段"
 
 
+def test_llm_config_forwarded_props_passthrough(isolated_db, monkeypatch):
+    """主规范 Quick Chat Entry：「api_key 与 llm_config 经 forwardedProps 透传」。
+
+    回归（2026-09-06）：端点只透传 apiKey，llmConfig 被静默丢弃——
+    quick 模式设置面板的自定义 model/baseUrl 永远不生效（阿里云 key 配
+    glm 代理模型名 → 对端报 key 格式错误）。
+    """
+    sid = session_store.create_chat_session("测试会话")
+    captured: dict[str, Any] = {}
+
+    def _fake_build(**kwargs: Any) -> _StubAgent:
+        captured.update(kwargs)
+        return _StubAgent([StreamEvent.answer("答")])
+
+    monkeypatch.setattr(agent_factory, "build_agent", _fake_build)
+
+    llm_config = {
+        "model": "openai/deepseek-v4-flash-0731",
+        "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "apiKey": "sk-test-aliyun",
+        "thinking": "enabled",
+        "apiForm": "chat_completion",
+    }
+
+    with TestClient(app) as client:
+        events = _post_agui(
+            client,
+            {
+                "threadId": sid,
+                "runId": "run-llmcfg",
+                "messages": [{"id": "m1", "role": "user", "content": "问题"}],
+                "forwardedProps": {"apiKey": "sk-test-aliyun", "llmConfig": llm_config},
+            },
+        )
+        assert _types(events)[-1] == "RUN_FINISHED"
+        got = captured.get("llm_config")
+        assert got is not None, "build_agent 未收到 llm_config"
+        assert got.model == "openai/deepseek-v4-flash-0731"
+        assert got.baseUrl == "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        assert got.apiKey == "sk-test-aliyun"
+        assert got.thinking == "enabled"
+        assert got.apiForm == "chat_completion"
+
+        # 不带 llmConfig 时保持 None（回退环境变量）
+        captured.clear()
+        events = _post_agui(
+            client,
+            {
+                "threadId": sid,
+                "runId": "run-llmcfg-absent",
+                "messages": [{"id": "m2", "role": "user", "content": "问题"}],
+                "forwardedProps": {"apiKey": "k"},
+            },
+        )
+        assert _types(events)[-1] == "RUN_FINISHED"
+        assert captured.get("llm_config") is None
+
+
 def test_api_key_non_sk_prefix_passthrough(isolated_db, monkeypatch):
     """api_key 放宽：非 sk- 前缀的非空字符串也透传；空字符串不透传。"""
     sid = session_store.create_chat_session("测试会话")

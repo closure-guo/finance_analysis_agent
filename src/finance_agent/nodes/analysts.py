@@ -300,6 +300,16 @@ def _build_technical_context(state: dict) -> str:
             f"{json.dumps(trimmed, ensure_ascii=False, default=str)}"
         )
 
+        # 派生值表（toolize-price-levels）：区间涨跌幅/距高低点回撤反弹由工具
+        # 预生成，LLM 直接引用不心算；None 项如实标注数据不足
+        derived = state.get("derived_series")
+        if derived:
+            derived_view = {k: (v if v is not None else "数据不足") for k, v in derived.items()}
+            sections.append(
+                "常用派生值（工具预生成，直接引用；field_ref 前缀 derived.）:\n"
+                f"{json.dumps(derived_view, ensure_ascii=False)}"
+            )
+
     return "\n\n".join(sections)
 
 

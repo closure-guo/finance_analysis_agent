@@ -360,6 +360,7 @@ export interface ToolCallEntry {
 // - tool_call：其他工具调用（每次调用一个独立条目）
 export type TimelineItem =
   | { type: 'thinking'; content: string; title?: string; done?: boolean }
+  | { type: 'answer'; content: string }
   | {
       type: 'search'
       query: string
@@ -414,3 +415,197 @@ export interface ExportFileInfo {
 
 // 下载中心类型筛选（'all' 为全部）
 export type DownloadType = 'docx' | 'pptx' | 'pdf' | 'md'
+
+// 决策结算状态（expose-decision-outcomes：与后端 DECISION_STATUSES 一致）
+export type DecisionStatus = 'open' | 'hit_stop' | 'hit_target' | 'expired'
+
+// 决策记录（GET /api/decisions 返回项）
+export interface DecisionRecord {
+  decision_id: string
+  session_id: string
+  langfuse_trace_id: string | null
+  timestamp: string
+  ticker: string
+  name: string | null
+  action: string
+  entry_price: number
+  stop_loss: number | null
+  target_price: number | null
+  confidence: number
+  position_size: number | null
+  status: DecisionStatus
+  settled_at: string | null
+  settle_price: number | null
+  hold_days: number | null
+  decision_return: number | null
+  benchmark_return: number | null
+  decision_excess: number | null
+  updated_at: string
+}
+
+// 聚合战绩（GET /api/decisions/stats 返回项）
+export interface DecisionStats {
+  total: number
+  open: number
+  settled: number
+  by_status: Record<string, number>
+  win_rate: number | null
+  avg_return: number | null
+  avg_excess: number | null
+}
+
+// 观点判定状态（add-track-record：与后端 PREDICTIONS_STATUSES 一致）
+export type PredictionStatus = 'open' | 'resolved_win' | 'resolved_loss' | 'resolved_neutral' | 'unresolvable'
+export type PredictionDirection = 'long' | 'short' | 'neutral'
+
+// 观点记录（GET /api/v1/track-record/predictions 返回项）
+export interface PredictionRecord {
+  prediction_id: string
+  source_type: 'backtest' | 'live'
+  symbol: string
+  symbol_name: string | null
+  direction: PredictionDirection
+  entry_price: number | null
+  target_price: number | null
+  horizon_days: number
+  confidence: number | null
+  benchmark: string
+  langfuse_trace_id: string | null
+  status: PredictionStatus
+  created_at: string
+  resolved_at: string | null
+  exit_price: number | null
+  raw_return: number | null
+  excess_return: number | null
+  resolution_rule: string | null
+}
+
+// 战绩总览（GET /api/v1/track-record/overview 返回项）
+export interface TrackRecordPortfolio {
+  available: boolean
+  annual_return: number | null
+  volatility: number | null
+  sharpe: number | null
+  max_drawdown: number | null
+  risk_score: number | null
+  risk_label: string | null
+  as_of: string | null
+}
+
+export interface TrackRecordOverview {
+  total: number
+  open: number
+  settled: number
+  win_rate: number | null
+  avg_excess: number | null
+  status_counts: Record<string, number>
+  source_type: string | null
+  insufficient_sample: boolean
+  as_of: string
+  disclaimer: string
+  portfolio: TrackRecordPortfolio
+  version_seq: number | null
+  versions: AgentVersion[]
+}
+
+// 净值曲线点（add-track-record-stage-b）
+export interface EquityCurvePoint {
+  date: string
+  agent_nav: number
+  benchmark_nav: number | null
+}
+
+// 净值曲线响应
+export interface EquityCurveResponse {
+  points: EquityCurvePoint[]
+  as_of: string
+  disclaimer: string
+}
+
+// 校准分桶（add-track-record-stage-c）
+export interface CalibrationBucket {
+  bucket: string
+  mid: number
+  n: number
+  hit_rate: number | null
+}
+
+// 校准响应
+export interface CalibrationResponse {
+  buckets: CalibrationBucket[]
+  brier: number | null
+  sample_size: number
+  as_of: string
+  disclaimer: string
+}
+
+// 切片桶（add-track-record-stage-c）
+export interface SegmentBucket {
+  name: string
+  sample_size: number
+  win_rate: number | null
+  avg_excess: number | null
+  insufficient: boolean
+}
+
+// 切片维度
+export interface SegmentDimension {
+  dimension: string
+  total: number
+  settled: number
+  buckets: SegmentBucket[]
+}
+
+// 切片响应
+export interface SegmentsResponse {
+  dimensions: SegmentDimension[]
+  as_of: string
+  disclaimer: string
+}
+
+// 版本信息（P6 分段封存）
+export interface AgentVersion {
+  agent_id: string
+  model_version: string
+  strategy_version: string | null
+  version_seq: number
+  retired_at: string | null
+  created_at: string
+  note: string | null
+}
+
+// 观点详情（add-track-record-stage-c）
+export interface PredictionDetail {
+  prediction: PredictionRecord
+  audit: Array<{
+    log_id: number
+    prediction_id: string
+    action: string
+    old_status: string | null
+    new_status: string | null
+    detail: string | null
+    source: string | null
+    created_at: string
+  }>
+  marks: Array<{
+    mark_id: string
+    prediction_id: string
+    mark_date: string
+    mark_price: number | null
+    cum_return: number | null
+    cum_excess: number | null
+    benchmark_price: number | null
+  }>
+  as_of: string
+  disclaimer: string
+}
+
+// 观点日志列表响应
+export interface PredictionsResponse {
+  predictions: PredictionRecord[]
+  page: number
+  page_size: number
+  total: number
+  as_of: string
+  disclaimer: string
+}

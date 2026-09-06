@@ -230,7 +230,7 @@
 
 ### Requirement: Session Selection
 
-系统 SHALL 在用户选择已有会话时加载该会话的完整历史并切换到报告视图。选择会话 SHALL NOT 中断该会话或其他会话的后台生成任务；若目标会话正在运行，前端 SHALL 经恢复端点重连其事件流，使输出内容继续增长。切出当前会话时仅断开本地订阅连接，保留按 sessionId 累积的流状态以便切回时快速恢复。
+系统 SHALL 在用户选择已有会话时加载该会话的完整历史并切换到报告视图。选择会话 SHALL NOT 中断该会话或其他会话的后台生成任务；若目标会话正在运行，前端 SHALL 经恢复端点重连其事件流，使输出内容继续增长。切出当前会话时仅断开本地订阅连接。
 
 #### Scenario: 选择会话加载历史
 
@@ -238,7 +238,7 @@
 - **WHEN** 用户点击该会话
 - **THEN** 断开当前会话的本地 SSE 订阅连接（不调用后端取消，不影响后台任务）
 - **AND** 向 GET /api/sessions/{sessionId} 发起请求获取会话详情
-- **AND** 保留 streamRegistry 中按 sessionId 累积的流状态，仅重置当前视图的消息列表
+- **AND** 非活跃会话的 messages 在切换时丢弃，切回时从后端重建
 - **AND** 设置 currentSessionId 并将 appState 切换为 'report'
 - **AND** 按 session_type 锁定模式
 
@@ -271,8 +271,13 @@
 - **WHEN** 构建消息列表
 - **THEN** 按 chat_history 顺序重建消息：role='user' 的条目渲染为用户消息，其余渲染为助手消息
 - **AND** 助手消息包含 thinking 内容和 tool_calls 记录（若历史中存在）
-- **AND** 非 chat 类型的会话在管线触发锚点（pipeline_anchor，即 chat_history 第 N 条之后）插入报告消息（含 report_markdown、chart_data、stock_name、duration_ms）与管线完成时间轴
-- **AND** pipeline_anchor 缺失（旧会话）时回退为在第一个用户消息后插入报告消息
+- **AND** 非 chat 类型的会话在第一个用户消息后插入报告消息（含 report_markdown、chart_data、stock_name、duration_ms）
+
+#### Scenario: 会话时间格式化兜底
+
+- **GIVEN** 会话的 created_at 字段缺失、非法或为 epoch 占位值（年份 <= 1970）
+- **WHEN** 在侧边栏渲染会话时间
+- **THEN** 显示"未知时间"而非 "Invalid Date"
 
 #### Scenario: 多轮澄清会话的报告插入位置
 
@@ -286,12 +291,6 @@
 - **GIVEN** 非 chat 会话的 chat_history 为 [用户提问, 用户追问, 助手追问回复]，且 pipeline_anchor 指向第一条用户消息之后
 - **WHEN** 构建消息列表
 - **THEN** 消息顺序为：用户提问 → 管线完成时间轴 → 报告消息 → 用户追问 → 助手追问回复
-
-#### Scenario: 会话时间格式化兜底
-
-- **GIVEN** 会话的 created_at 字段缺失、非法或为 epoch 占位值（年份 <= 1970）
-- **WHEN** 在侧边栏渲染会话时间
-- **THEN** 显示"未知时间"而非 "Invalid Date"
 
 ### Requirement: Session Deletion
 
@@ -343,7 +342,7 @@
 - **GIVEN** 应用处于任意状态（analyzing/report/clarifying）
 - **WHEN** 用户点击侧边栏"新建分析"按钮
 - **THEN** 中断进行中的 SSE 流
-- **AND** 重置 currentSessionId 为 null、清空 streamingReportRef 和 pipelineMsgRef
+- **AND** 重置 currentSessionId 为 null
 - **AND** 清空消息列表
 - **AND** appState 切换为 'empty'
 
@@ -415,6 +414,8 @@
 
 深度模式下，系统 SHALL 将意图澄清阶段的交互（search_stock、web_search、thinking）走对话消息流，不触发管线 UI。仅当 Agent 调用 run_deep_analysis 工具时才进入管线 UI。澄清阶段的思考/工具调用按时间序列写入对话流消息的 `agentTimeline`。
 
+澄清/对话流事件（thinking_token、thinking_replace、thinking_to_answer、search_*、tool_call、chat_token）的路由 SHALL 按**事件自身归属**判定，而非「管线消息是否已创建」这一全局状态：`thinking_token` 仅当事件携带管线节点标识（`node` 字段）时才写入管线消息的节点时序，否则一律写入对话流消息的 `agentTimeline`——即使管线消息已存在（如多轮会话中上一轮已触发管线）。`thinking_replace` / `thinking_to_answer` 作用于对话流消息末尾 thinking item，SHALL 始终路由到对话流，SHALL NOT 因管线消息存在而被丢弃。
+
 > 来源：ADR-0017 D1 - 深度模式入口统一走 ReAct Agent 对话流
 
 #### Scenario: 澄清阶段走对话流
@@ -427,21 +428,36 @@
 #### Scenario: 思考过程在澄清阶段走对话流
 
 - **GIVEN** 深度分析 SSE 流进行中，pipelineMsgRef 为空（未进入管线模式）
-- **WHEN** 收到 thinking_token 事件（来源为 LLM 原生 reasoning_content）
+- **WHEN** 收到 thinking_token / thinking_replace / thinking_to_answer 事件
 - **THEN** 思考 token 追加到对话流消息 `agentTimeline` 末尾的 thinking item（若末尾非 thinking item 则新建），不写入管线消息
+
+#### Scenario: 管线消息存在时不携带 node 的思考仍走对话流
+
+- **GIVEN** 深度分析 SSE 流进行中，管线消息已创建（pipelineMsgRef 非空，如多轮会话上一轮已触发管线，或本轮 run_deep_analysis 已发出后 Agent 继续澄清）
+- **WHEN** 收到不携带 `node` 字段的 thinking_token 事件
+- **THEN** 该思考 token SHALL 写入当前对话流消息的 `agentTimeline`，SHALL NOT 写入管线消息的节点时序
+- **AND** 对话流消息的思考横幅正常显示，不错位到管线卡片
+
+#### Scenario: 管线节点思考按 node 归属进管线 UI
+
+- **GIVEN** 管线运行中（pipelineMsgRef 非空）
+- **WHEN** 收到携带 `node` 字段的 thinking_token 事件（管线节点的思考）
+- **THEN** 该 token SHALL 写入管线消息对应节点的时序（nodeTimelines[node]）
+- **AND** 不写入对话流消息
+
+#### Scenario: thinking_replace / thinking_to_answer 不被管线状态丢弃
+
+- **GIVEN** 深度分析 SSE 流进行中，管线消息已创建（pipelineMsgRef 非空）
+- **WHEN** 收到 thinking_replace 事件（DSML 清理）或 thinking_to_answer 事件
+- **THEN** 事件 SHALL 路由到对话流处理（替换/切割对话流消息末尾 thinking item）
+- **AND** SHALL NOT 被静默丢弃
+- **AND** DSML 清理后对话流思考横幅不残留原始 DSML 文本或回复前缀
 
 #### Scenario: Agent 文本回复走对话流
 
 - **GIVEN** 深度分析 SSE 流进行中，pipelineMsgRef 为空
 - **WHEN** 收到 chat_token 事件
 - **THEN** token 追加到助手消息的 chatResponse（对话流）
-
-#### Scenario: awaiting_input 切换到澄清等待
-
-- **GIVEN** 深度分析 SSE 流进行中
-- **WHEN** 收到 awaiting_input 事件
-- **THEN** appState 切换为 'clarifying'
-- **AND** 助手消息停止流式状态（streaming = false）
 
 #### Scenario: run_deep_analysis 触发管线 UI
 
@@ -450,6 +466,20 @@
 - **THEN** 创建管线消息（pipelineMsg），内容为"开始深度分析..."
 - **AND** appState 切换为 'analyzing'
 - **AND** 后续的 parsing/resolved/node_start/node_complete/report_chunk/report_ready 事件写入管线消息
+
+#### Scenario: awaiting_input 切换到澄清等待
+
+- **GIVEN** 深度分析 SSE 流进行中
+- **WHEN** 收到 awaiting_input 事件
+- **THEN** appState 切换为 'clarifying'
+- **AND** 助手消息停止流式状态（streaming = false）
+
+#### Scenario: 管线完成后 pipelineMsgRef 收口
+
+- **GIVEN** 管线消息已创建，深度分析管线运行中
+- **WHEN** 收到 report_ready 事件（管线完成）或 done 终态事件
+- **THEN** 前端 SHALL 将 pipelineMsgRef 置 null
+- **AND** 后续轮次的澄清思考不再被路由到已完成的管线消息
 
 ### Requirement: SSE Event: session_created
 
@@ -661,7 +691,8 @@
 
 ### Requirement: Report Streaming Render
 
-系统 SHALL 在深度分析管线完成后，通过 report_chunk 事件渐进渲染报告，最终由 report_ready 事件完成。
+系统 SHALL 在深度分析管线完成后，通过 report_chunk 事件渐进渲染报告，最终由 report_ready 事件完成；报告消息 SHALL 同时记录股票名称与股票代码，供报告名等展示使用。
+(Previously: 系统 SHALL 在深度分析管线完成后，通过 report_chunk 事件渐进渲染报告，最终由 report_ready 事件完成。报告消息仅记录 stockName，不含股票代码。)
 
 #### Scenario: 报告流式分块累积
 
@@ -675,7 +706,7 @@
 
 - **GIVEN** 报告消息正在流式生成
 - **WHEN** 收到 report_ready 事件
-- **THEN** 更新报告消息：reportMarkdown 替换为最终完整版、chartData、filePaths、stockName、durationMs、sessionId、webSources，streaming=false
+- **THEN** 更新报告消息：reportMarkdown 替换为最终完整版、chartData、filePaths、stockName、stockCode、durationMs、sessionId、webSources，streaming=false
 - **AND** appState 切换为 'report'
 - **AND** 设置 currentSessionId 为事件中的 session_id
 - **AND** 刷新侧边栏会话列表
@@ -685,11 +716,7 @@
 
 - **GIVEN** 管线 UI 已渲染，尚未收到任何 report_chunk
 - **WHEN** 直接收到 report_ready 事件
-- **THEN** 创建一条完整的报告消息（streaming=false），包含所有最终数据
-
----
-
-<!-- D. 快速对话流：快速模式的入口和搜索结果展示 -->
+- **THEN** 创建一条完整的报告消息（streaming=false），包含所有最终数据（含 stockName 与 stockCode）
 
 ### Requirement: Quick Chat Entry
 
@@ -860,7 +887,7 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 
 - **GIVEN** 上一轮 SSE 订阅已断开或完成
 - **WHEN** 发起新的 startAnalysis、quickChat 或恢复端点订阅
-- **THEN** 在该会话的 streamRegistry 条目中创建新的 AbortController
+- **THEN** StreamStore 为该会话创建新的 AbortController
 - **AND** 不同会话的 AbortController 互不影响
 
 #### Scenario: 非中断的连接错误显示错误消息
@@ -895,6 +922,12 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 - **WHEN** 先收到 done 终态事件（streaming 置 false），随后 reader 结束触发防御性清理
 - **THEN** 防御性清理再次设置 streaming=false 无副作用
 - **AND** 游标保持消失状态，不闪烁或复活
+
+> **关于原 REMOVED 段（2026-09-06 rebase 说明）**：原 delta 声明移除「前端流状态快照层」「ref 镜像同步机制」「手写守卫函数族」三个需求，但经查（git -S 全历史）三者从未进入主规范库（属 Aug-5 时代未归档链路的产物），故无 REMOVED 操作可言。移除理由仍有存档价值：
+>
+> - **快照层**：后端事件日志（session_events 表 + stream?after_seq= 断点续传）就绪后，前端快照层冗余且双事实源互相打架；改为切换时丢弃非活跃会话 messages、切回时从后端重建。
+> - **ref 镜像**：19 个 ref 镜像的存在理由（闭包防旧值/切换快照）被 StreamStore 单一事实源消除。
+> - **手写守卫族**：saveCurrentStreamState / ensureSingleReader 等 7+ 守卫的功能由 store 内部机制（switchSession 原子协议、applyEvent seq 守门、pump 单读取器）替代，3 处手写 getReader() 循环收敛为 1 处 pump。
 
 ### Requirement: Deep Mode chat_done Event Routing
 
@@ -937,7 +970,8 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 
 ### Requirement: Report Card Rendering
 
-系统 SHALL 在报告消息中渲染报告头部、文件导出入口、财务图表、Markdown 正文、参考资料和免责声明。
+系统 SHALL 在报告消息中渲染报告头部、财务图表、Markdown 正文、参考资料和免责声明；报告头部 SHALL NOT 承载任何文件导出按钮或「全部文件」入口。
+(Previously: 系统 SHALL 在报告消息中渲染报告头部、文件导出、财务图表、Markdown 正文、参考资料和免责声明。报告头部显示「全部文件」入口横幅（图标 + "全部文件"文案），点击打开右侧文件导出抽屉，抽屉内依据 filePaths 的 docx/pptx/pdf/md 键列出导出文件。)
 
 #### Scenario: 流式报告显示生成指示器
 
@@ -947,15 +981,15 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 #### Scenario: 报告头部展示
 
 - **GIVEN** 报告消息 streaming=false
-- **THEN** 显示股票名称（stockName）、"深度分析"标签、耗时信息
-- **AND** 报告头部显示「全部文件」入口横幅（图标 + "全部文件"文案），点击可打开文件导出抽屉
+- **THEN** 显示「股票名称（股票代码）」标题（如「贵州茅台（600519）」；名称缺失或等于代码时仅显示代码）、"深度分析"标签、耗时信息
+- **AND** 报告头部不显示任何文件导出按钮或「全部文件」入口
 
 #### Scenario: 打开导出抽屉
 
-- **GIVEN** 报告头部已渲染，展示「全部文件」入口横幅
-- **WHEN** 用户点击「全部文件」横幅
+- **GIVEN** 任一会话级导出入口（报告名横幅 / 全部文件横幅 / 顶部栏「查看全部文件」按钮）已渲染（见「会话级文件导出入口」）
+- **WHEN** 用户点击该入口
 - **THEN** 右侧文件导出抽屉滑出打开
-- **AND** 抽屉内列出该报告当前可用的导出文件（依据 filePaths 的 docx/pptx/pdf/md 键，带格式徽标与文件名）
+- **AND** 抽屉内仅列出该会话报告已生成的可下载文件（依据 filePaths 各条目，带格式徽标与文件名），不展示缺失格式的现场生成入口
 
 #### Scenario: 财务图表展示
 
@@ -1331,4 +1365,633 @@ quick 模式下搜索类工具（web_search 等）SHALL 经 AG-UI `TOOL_CALL_STA
 
 - **GIVEN** 浏览器环境 localStorage 不可用（隐私模式等）
 - **THEN** 预估使用默认值 240 秒，ETA 显示功能不阻塞、不报错
+
+### Requirement: 内容区居中收窄
+
+主内容区 SHALL 以约 `max-w-3xl` 宽度水平居中，消息流、输入区与报告摘要均在居中栏内；视口收窄时 SHALL 自适应为全宽并保留合理内边距。
+
+#### Scenario: 桌面端居中
+
+- **GIVEN** 桌面端视口（≥1280px）
+- **WHEN** 打开任意会话
+- **THEN** 消息流与输入框 SHALL 居中显示，两侧留白对称
+
+### Requirement: 空态首页
+
+会话无消息时 SHALL 显示空态：居中大号问候语、说明可输入股票名称/代码/自然语言指令的副标题，以及 2–4 张建议卡片；卡片点击 SHALL 将示例文本填入输入框而不直接发送。
+
+#### Scenario: 卡片填入不发送
+
+- **GIVEN** 新会话显示空态
+- **WHEN** 用户点击建议卡片
+- **THEN** 示例文本 SHALL 填入输入框
+- **AND** 不发出分析请求
+
+#### Scenario: 历史会话不显示空态
+
+- **GIVEN** 含消息的会话
+- **WHEN** 切换到该会话
+- **THEN** SHALL NOT 显示空态，直接显示消息流
+
+### Requirement: 空态退场
+
+首条消息发送后空态 SHALL 以约 200ms 淡出切换为消息流，无布局跳动。
+
+#### Scenario: 发送后空态淡出
+
+- **WHEN** 用户在空态会话发送首条消息
+- **THEN** 空态 SHALL 淡出，消息流就位，内容区无跳动
+
+### Requirement: 暗色模式
+
+系统 SHALL 提供浅色/深色/跟随系统三种主题选择，入口位于侧边栏底部；选择 SHALL 持久化；暗色下所有页面（含 ECharts 图表与报告）SHALL 保持可读。
+
+#### Scenario: 主题持久化与跟随系统
+
+- **GIVEN** 用户选择深色
+- **WHEN** 刷新页面
+- **THEN** 深色主题 SHALL 保持；选择「跟随系统」时 SHALL 随系统主题变化
+
+#### Scenario: 暗色下图表可读
+
+- **WHEN** 暗色模式下查看含 ECharts 的报告
+- **THEN** 图表文字、坐标轴、网格线 SHALL 清晰可辨
+
+### Requirement: 命令面板
+
+Cmd/Ctrl+K SHALL 打开命令面板：可按标题搜索会话并跳转；SHALL 提供快捷动作（新建会话、打开下载管理、切换主题）；面板底部 SHALL 列出可用快捷键。
+
+#### Scenario: 搜索并跳转会话
+
+- **GIVEN** 存在多个历史会话
+- **WHEN** 用户在命令面板输入关键词并选择结果
+- **THEN** 应用 SHALL 切换到对应会话
+
+### Requirement: 快捷键与输入态抑制
+
+Ctrl/Cmd+Shift+N SHALL 新建会话；`/` 在输入框未聚焦时 SHALL 聚焦输入框；输入框聚焦时单键快捷键 SHALL NOT 触发。
+
+#### Scenario: 输入中不误触
+
+- **GIVEN** 输入框处于聚焦状态
+- **WHEN** 用户输入 `/`
+- **THEN** 字符 SHALL 正常输入，不触发快捷键
+
+### Requirement: 管线步骤时间线
+
+管线进度 SHALL 以步骤时间线渲染，节点含四态：等待、运行中（高亮 + 呼吸动画）、完成（勾选标记）、失败（红色标记）；时间线 SHALL 随 SSE 管线节点事件实时推进。
+
+#### Scenario: 事件驱动状态推进
+
+- **GIVEN** 深度分析管线运行中
+- **WHEN** 某节点完成事件到达
+- **THEN** 该节点 SHALL 变为完成态，下一节点变为运行中
+- **AND** 无需刷新页面
+
+### Requirement: 节点已用时
+
+当前运行节点 SHALL 显示已用时，计时源 SHALL 为快照 `pipeline_start_ts`；快照缺该字段时回退本地时间。
+
+#### Scenario: 刷新后已用时不归零
+
+- **GIVEN** 管线已运行若干分钟后刷新页面
+- **WHEN** 时间线重建
+- **THEN** 已用时 SHALL 以快照时间戳计算，不归零
+
+### Requirement: 节点展开与完成折叠
+
+运行中/完成节点 SHALL 可展开查看阶段摘要；管线完成后时间线 SHALL 整体折叠为单行摘要条（阶段数 + 总用时），点击可再展开。
+
+#### Scenario: 完成后折叠
+
+- **WHEN** 管线完成并发出 report_ready
+- **THEN** 时间线 SHALL 折叠为摘要条
+- **AND** 点击摘要条可展开查看全部节点
+
+### Requirement: 行内引用上标
+
+报告正文中的引用标记 SHALL 渲染为行内上标编号；编号锚定后端下发的稳定 id；旧报告无引用数据时 SHALL 不渲染任何标记。
+
+#### Scenario: 上标渲染
+
+- **GIVEN** 报告含引用数组且正文有对应标记
+- **WHEN** 渲染报告
+- **THEN** 引用处 SHALL 显示上标编号，编号与后端 id 一一对应
+
+### Requirement: 引用预览卡
+
+hover 行内上标 SHALL 显示预览卡：claim 摘要、来源、校验状态标识（verified 绿 / failed 红 / unchecked 灰）；预览卡 SHALL 懒渲染。
+
+#### Scenario: hover 显示状态
+
+- **WHEN** 用户 hover 某上标
+- **THEN** 预览卡 SHALL 显示该引用的 claim、来源与对应颜色的校验状态
+
+### Requirement: 引用与校验列表
+
+报告末尾 SHALL 提供「引用与校验」列表，按编号列出来源与校验状态；failed 项 SHALL 在视觉上可一眼区分。
+
+#### Scenario: 列表状态可辨
+
+- **GIVEN** 报告含 verified 与 failed 混合引用
+- **WHEN** 查看列表
+- **THEN** failed 项 SHALL 以红色标识，与 verified 项明显区分
+
+### Requirement: 会话级文件导出入口
+
+系统 SHALL 在会话存在可导出报告（已完成 streaming=false 的报告消息且其 filePaths 含至少一个已生成文件）时，在对话区内渲染「报告名横幅」与「全部文件横幅」两个入口：报告名横幅位于产出该报告的对话轮次底部，位次先于「全部文件」横幅；「全部文件」横幅位于对话尾部（最后一条消息之后）。二者与全局顶部栏「查看全部文件」按钮均可打开右侧文件列表抽屉。抽屉 SHALL 自上而下仅列出该会话报告已生成的可下载文件（filePaths 各条目），不展示 pdf/docx/markdown 固定格式行，也不提供缺失格式的现场生成入口；预览与关闭行为沿用现有实现。
+
+#### Scenario: 报告名横幅在报告产出轮次底部显示
+
+- **GIVEN** 对话中存在一条已完成（streaming=false）且 filePaths 含至少一个已生成文件的报告消息
+- **WHEN** 渲染对话消息列表
+- **THEN** 在该报告产出轮次的底部（紧随该报告消息及其后的「分析完成」系统消息）渲染「报告名横幅」
+- **AND** 横幅标题为该报告的「股票名称（股票代码）」（如「贵州茅台（600519）」）
+- **AND** 该横幅位次先于「全部文件」横幅
+
+#### Scenario: 股票名称缺失时报告名横幅回退显示
+
+- **GIVEN** 报告消息 stockName 缺失或等于 stockCode（名称未解析到）
+- **WHEN** 渲染报告名横幅
+- **THEN** 横幅标题仅显示股票代码，不重复组合（不显示「600519（600519）」）
+
+#### Scenario: 历史会话恢复后报告名横幅用会话元数据兜底
+
+- **GIVEN** 从 chat_history / 会话详情恢复的报告消息无 stockCode 字段（旧会话）
+- **WHEN** 渲染报告名横幅
+- **THEN** 标题中的股票代码从会话元数据（stock_code）兜底获取
+- **AND** 会话元数据亦缺失时，仅显示报告消息的 stockName
+- **AND** 恢复的报告消息 SHALL 携带会话持久化的 filePaths（file_paths 非空时报告名横幅与全部文件横幅照常显示）
+
+#### Scenario: 报告名横幅仅在报告产出轮次出现
+
+- **GIVEN** 对话中某轮次未产出报告（澄清对话、快速对话、或分析进行中 streaming=true）
+- **WHEN** 渲染对话消息列表
+- **THEN** 该轮次底部不渲染报告名横幅
+- **AND** 快速对话会话与空状态首页不渲染任何报告名横幅
+
+#### Scenario: 全部文件横幅位于对话尾部
+
+- **GIVEN** 当前会话存在可导出报告（已完成且 filePaths 含已生成文件）
+- **WHEN** 渲染对话消息列表
+- **THEN** 在最后一条消息之后渲染「全部文件」横幅
+- **AND** 该横幅位次于所有报告名横幅之后
+
+#### Scenario: 无可导出文件时不显示全部文件横幅
+
+- **GIVEN** 当前会话无可导出报告（报告无已生成文件、空状态首页、快速对话会话、或深度分析进行中 streaming=true）
+- **WHEN** 渲染对话消息列表
+- **THEN** 对话尾部不显示「全部文件」横幅
+
+#### Scenario: 点击报告名横幅打开该报告的文件列表
+
+- **GIVEN** 报告名横幅已显示
+- **WHEN** 用户点击该横幅
+- **THEN** 右侧文件列表抽屉滑出打开
+- **AND** 抽屉列出该报告消息 filePaths 对应的可下载文件
+
+#### Scenario: 点击全部文件横幅打开右侧文件列表
+
+- **GIVEN** 「全部文件」横幅已显示
+- **WHEN** 用户点击该横幅
+- **THEN** 右侧文件列表抽屉滑出打开
+
+#### Scenario: 全局顶部栏按钮显示
+
+- **GIVEN** 当前会话存在可导出报告（已完成且 filePaths 含已生成文件）
+- **WHEN** 渲染全局顶部栏
+- **THEN** 顶部栏右侧（设置按钮旁）显示「查看全部文件」按钮
+
+#### Scenario: 无可导出文件时顶部栏按钮隐藏
+
+- **GIVEN** 当前会话无可导出文件，或处于空状态首页（无 currentSessionId）
+- **WHEN** 渲染全局顶部栏
+- **THEN** 顶部栏不显示「查看全部文件」按钮
+
+#### Scenario: 点击顶部栏按钮打开右侧文件列表
+
+- **GIVEN** 全局顶部栏「查看全部文件」按钮已显示
+- **WHEN** 用户点击该按钮
+- **THEN** 右侧文件列表抽屉滑出打开
+
+#### Scenario: 抽屉仅列出已生成的可下载文件
+
+- **GIVEN** 抽屉已打开，报告消息 filePaths 含若干条目（如 docx/pdf 已生成，md 缺失）
+- **WHEN** 渲染文件列表
+- **THEN** 自上而下仅排列已存在的可下载文件条目（每项显示文件名与下载动作，图标按文件扩展名区分）
+- **AND** 可下载文件名形如「{股票名称}_{股票代码}_{时间戳}_report.{扩展名}」（股票名称缺失时回退仅代码）
+- **AND** 不显示 pdf/docx/markdown 固定三类格式行
+- **AND** 不显示缺失格式的下载按钮（无现场生成入口）
+
+#### Scenario: 无可下载文件时展示空态
+
+- **GIVEN** 抽屉已打开，报告消息无 filePaths（或所有条目为空）
+- **THEN** 文件列表显示空态提示（如「暂无已生成文件」）
+- **AND** 预览功能仍可用
+
+#### Scenario: 抽屉关闭与下载行为
+
+- **GIVEN** 文件列表抽屉已由任一入口（报告名横幅 / 全部文件横幅 / 顶部栏按钮）打开
+- **WHEN** 用户点击关闭按钮、点击遮罩、或按 Esc
+- **THEN** 抽屉关闭
+- **WHEN** 用户点击某文件的下载动作
+- **THEN** 触发该文件下载，URL 为 /api/files/{basename}
+
+#### Scenario: 会话切换后入口按新会话刷新
+
+- **GIVEN** 用户从有可导出文件的会话切换到无可导出文件的会话（或反向）
+- **WHEN** 渲染新会话的消息列表
+- **THEN** 报告名横幅、全部文件横幅与顶部栏按钮按新会话的报告状态刷新显示或隐藏
+- **AND** 若文件抽屉处于打开状态，随会话切换自动关闭（沿用现有行为）
+
+### Requirement: 报告右侧面板
+
+报告就绪后 SHALL 可从右侧滑出面板展示完整报告（Markdown + ECharts + 引用标记）；面板宽度 SHALL 可拖拽调节；开合状态在同一会话内 SHALL 保持。
+
+#### Scenario: 面板打开与宽度调节
+
+- **GIVEN** 报告已生成
+- **WHEN** 用户点击「打开报告」
+- **THEN** 面板 SHALL 从右侧滑出（约 300ms）
+- **AND** 拖拽边缘可调节宽度
+
+### Requirement: 消息流摘要卡片
+
+消息流中报告 SHALL 收敛为摘要卡片：结论要点 + 「打开报告」按钮；点击 SHALL 打开右侧面板定位到完整报告。
+
+#### Scenario: 摘要卡跳转面板
+
+- **WHEN** 用户点击摘要卡片「打开报告」
+- **THEN** 右侧面板 SHALL 打开并显示该会话完整报告
+
+### Requirement: 面板操作栏
+
+面板顶部 SHALL 固定操作栏：导出（docx/pptx/pdf/md）与关闭；导出行为与既有契约一致。
+
+#### Scenario: 面板内导出
+
+- **WHEN** 用户在面板操作栏选择导出 Word
+- **THEN** 系统 SHALL 触发既有导出流程，行为与消息流内导出一致
+
+### Requirement: 移动端回退
+
+视口小于 768px 时 SHALL NOT 显示右侧面板，报告在消息流内全宽展示。
+
+#### Scenario: 移动端无面板
+
+- **GIVEN** 移动端视口
+- **WHEN** 报告生成
+- **THEN** 报告 SHALL 在消息流内全宽展示，不出现面板
+
+### Requirement: 设计令牌为样式唯一来源
+
+所有颜色、圆角、阴影 SHALL 引用 shadcn 主题 CSS 变量（`--background/--foreground/--muted/--primary/--border/--radius` 等）；组件内 SHALL NOT 出现硬编码色值（ECharts option 除外，其 SHALL 从变量取值后注入）。
+
+#### Scenario: 重构后组件无硬编码色值
+
+- **GIVEN** 任意完成重构的组件
+- **WHEN** 检查其样式定义
+- **THEN** 颜色与圆角 SHALL 来自主题变量或 Tailwind 语义类（bg-background、text-muted-foreground 等）
+- **AND** 不存在十六进制色值硬编码
+
+### Requirement: 通用控件统一为 shadcn 原语
+
+按钮、输入框、多行输入、对话框、toast、tooltip、下拉菜单 SHALL 使用 `components/ui/` 下的 shadcn 原语；替换 SHALL 保持既有交互行为（提交、校验、快捷键、禁用态、加载态）不变。
+
+#### Scenario: 控件替换后行为一致
+
+- **GIVEN** 某手写控件已替换为 shadcn 原语
+- **WHEN** 用户执行点击/输入/禁用/hover 交互
+- **THEN** 行为与原实现一致，包括加载态与禁用态表现
+
+#### Scenario: 现有测试无修改通过
+
+- **GIVEN** 重构完成
+- **WHEN** 运行前端全量测试
+- **THEN** 所有既有测试 SHALL 在不修改断言语义的前提下通过
+
+### Requirement: 全局视觉打底
+
+全局 SHALL 应用主题变量定义的背景色、前景色与统一字体栈；header、输入区、内容区底色 SHALL 取自 `--background/--muted` 语义层级。
+
+#### Scenario: 全局底色与字体生效
+
+- **WHEN** 打开任意页面
+- **THEN** 背景与文字颜色来自主题变量
+- **AND** 字体栈全局统一，无页面级字体覆盖
+
+### Requirement: 图表配色对齐主题
+
+报告区 ECharts SHALL 保留且交互不变；其 option 中的主色、坐标轴色、网格线色 SHALL 从主题 CSS 变量取值注入，与页面视觉一致。
+
+#### Scenario: 图表色随主题变量变化
+
+- **GIVEN** 主题变量被调整（如切换配色方案）
+- **WHEN** 渲染报告图表
+- **THEN** 图表主色与新主题一致，无需修改图表代码
+
+### Requirement: 视觉回归基线
+
+重构前 SHALL 对主要页面（会话页、报告渲染态、空态）截图存档至 `tests/validation/`；重构后 SHALL 逐页对比，确认无布局破损。
+
+#### Scenario: 重构后无布局破损
+
+- **GIVEN** 重构完成且基线截图已存档
+- **WHEN** 逐页对比基线与新截图
+- **THEN** 仅视觉风格变化，无元素错位、遮挡或溢出
+
+### Requirement: 侧边栏可折叠
+
+侧边栏 SHALL 支持展开态（约 260px）与收起态（约 52px 图标栏）切换；触发方式 SHALL 包括折叠按钮与 Ctrl/Cmd + B 快捷键；宽度变化 SHALL 带约 200ms 过渡；折叠状态 SHALL 持久化，刷新与重开后保持。
+
+#### Scenario: 按钮与快捷键均可切换
+
+- **WHEN** 用户点击折叠按钮或按下 Ctrl/Cmd + B
+- **THEN** 侧边栏 SHALL 在展开/收起间切换，过渡平滑无抖动
+
+#### Scenario: 折叠状态持久化
+
+- **GIVEN** 用户已收起侧边栏
+- **WHEN** 刷新页面
+- **THEN** 侧边栏 SHALL 保持收起态
+
+### Requirement: 收起态图标栏
+
+收起态下 SHALL 仅保留图标：Logo 缩小、「新建会话」显示为图标按钮；所有图标 hover SHALL 显示 tooltip 文字；新建会话功能在收起态 SHALL 可用。
+
+#### Scenario: 收起态新建会话可用
+
+- **GIVEN** 侧边栏处于收起态
+- **WHEN** 用户点击新建会话图标
+- **THEN** 系统 SHALL 创建新会话，行为与展开态一致
+
+### Requirement: 会话项操作形态
+
+会话项 hover 时 SHALL 在右侧出现「···」菜单，含重命名与删除；重命名 SHALL 为原地输入框；删除 SHALL 二次确认；操作的后端语义与现状一致。
+
+#### Scenario: hover 菜单操作
+
+- **GIVEN** 会话列表存在会话
+- **WHEN** 用户 hover 某会话并打开「···」菜单选择重命名
+- **THEN** 标题 SHALL 变为原地输入框，确认后生效
+- **AND** 选择删除时 SHALL 先弹确认，确认后从列表移除
+
+### Requirement: 移动端抽屉
+
+视口宽度小于 768px 时侧边栏 SHALL 变为抽屉：默认隐藏，从左侧滑入；点击遮罩或选中会话后 SHALL 自动关闭。
+
+#### Scenario: 移动端选中后收起
+
+- **GIVEN** 移动端视口且抽屉已打开
+- **WHEN** 用户点击某会话
+- **THEN** 抽屉 SHALL 自动关闭并切换到该会话
+
+### Requirement: Restore Current Session On Refresh
+
+系统 SHALL 在浏览器刷新/重新加载后自动恢复用户此前正在查看的会话，无需用户手动点击侧边栏。前端 SHALL 将 `currentSessionId` 持久化到 localStorage（key：`fa_current_session_id`），并在会话选中、创建、删除、新建分析时同步维护该值。应用初始化时，若持久化的 `currentSessionId` 存在且对应会话仍存在于后端，前端 SHALL 自动执行与「手动点击会话」等价的恢复逻辑（加载会话详情、重建消息列表、若会话 running 则重连事件流），直接恢复到该会话视图而非停留在空状态首页。
+
+#### Scenario: 刷新后自动恢复进行中的会话
+
+- **GIVEN** 用户在某会话（深度分析或快速对话）进行中刷新了页面，localStorage 已持久化该会话的 `currentSessionId`
+- **WHEN** 应用初始化并完成会话列表加载
+- **THEN** 前端 SHALL 自动选中该会话，向 GET /api/sessions/{sessionId} 请求详情
+- **AND** 从 chat_history（含 agentTimeline）重建消息列表（工具调用、思考、assistant 文本）
+- **AND** 若会话 status 为 running，经 GET /api/sessions/{id}/stream 重连事件流，输出从断点继续增长
+- **AND** 全程无需用户手动点击侧边栏
+
+#### Scenario: 刷新后自动恢复已完成的会话
+
+- **GIVEN** 用户在某已完成（completed）会话视图刷新了页面
+- **WHEN** 应用初始化
+- **THEN** 前端 SHALL 自动恢复该会话的报告/对话视图
+- **AND** 按 session_type 锁定模式，appState 切换为对应视图（report / 对话）
+
+#### Scenario: 持久化会话已删除时回退空态
+
+- **GIVEN** localStorage 存在持久化的 `currentSessionId`，但该会话在后端已被删除
+- **WHEN** 应用初始化并尝试恢复
+- **THEN** 前端 SHALL 清除该 localStorage 项
+- **AND** 回退到空状态首页，不报错、不显示无效会话
+
+#### Scenario: 无持久化会话时保持空态首页
+
+- **GIVEN** localStorage 不存在 `fa_current_session_id`（首次访问或已清空）
+- **WHEN** 应用初始化
+- **THEN** 前端 SHALL 显示空状态首页（维持现有 Empty State Landing Page 行为）
+
+#### Scenario: currentSessionId 生命周期同步
+
+- **GIVEN** 应用运行中
+- **WHEN** 用户选中会话、创建新会话（session_created）、删除当前会话、或点击「新建分析」
+- **THEN** 前端 SHALL 同步更新或清除 localStorage 的 `fa_current_session_id`
+- **AND** 删除当前会话、新建分析时清除该项（对应 currentSessionId 置 null）
+
+### Requirement: 会话运行中（含工具执行中）禁止发送
+
+会话处于运行中（含澄清阶段工具执行中）时，前端 SHALL 拦截发送并提示；追问路径（后端不重发 `session_created`）下拦截同样生效。拦截主层 SHALL 迁移至 assistant-ui runtime 状态判定（运行中发送入口切换为停止按钮、提交通道关闭），App 层守卫（`isSessionRunning` / quick run 单飞守卫）保留为兜底。
+(Previously: 拦截主层为 App 层 `isSessionRunning` 守卫 + streamStore 单读取器登记。)
+
+#### Scenario: 澄清工具执行中发送被拦截
+
+- **GIVEN** 某会话澄清阶段 agent 正在执行工具（SSE 流存活）
+- **WHEN** 用户在该会话输入框发送消息
+- **THEN** 前端 SHALL 判定 `isSessionRunning(sessionId)` 为 true
+- **AND** 运行中发送入口切换为停止按钮（提交通道关闭），App 层守卫命中时显示「该会话正在生成中」toast
+- **AND** 不发出新的分析/对话请求
+
+#### Scenario: 追问路径登记 abort 使拦截生效
+
+- **GIVEN** 一次追问（已有 sessionId，后端不重发 `session_created`）
+- **WHEN** 前端发起 SSE 请求并创建 `AbortController`
+- **THEN** 前端 SHALL 在 fetch 发出前将其登记为该会话的活跃读取器（单读取器保证）
+- **AND** 运行状态判定据此生效
+
+#### Scenario: 运行中拦截（验收基准不变）
+
+- **GIVEN** 某会话正在生成（含工具执行中）
+- **WHEN** 用户发送消息
+- **THEN** 前端 SHALL 拦截发送并显示顶部 toast 提示
+
+### Requirement: 「会话生成中」警告为顶部 toast
+
+「该会话正在生成中」警告 SHALL 以 fixed 顶部 toast 呈现（浮于 header 与输入框之上、水平居中），3 秒自动消失；不再锚定在底部停止按钮容器内。
+
+#### Scenario: 警告置顶显示
+
+- GIVEN 触发「该会话正在生成中」拦截
+- WHEN 警告渲染
+- THEN 其 SHALL 为 `position: fixed`、位于视口顶部、z-index 高于 header（z-50）与输入框（z-40）
+- AND 3 秒后自动消失
+
+### Requirement: 澄清回复实时流式与落库格式一致
+
+澄清阶段回复的实时流式渲染 SHALL 保留落库文本的换行/列表结构，不丢失单 `\n`；刷新后重建显示与实时流式显示一致。
+
+#### Scenario: 流式渲染保留列表换行
+
+- GIVEN 澄清回复为多行 markdown 列表（每项独立一行，单 `\n` 分隔）
+- WHEN 前端实时流式渲染该回复
+- THEN 渲染结果 SHALL 与落库文本一致（列表项分行，不粘连）
+- AND 刷新后重建显示与流式显示一致
+
+### Requirement: 消息流由 assistant-ui 渲染
+
+聊天消息区 SHALL 使用 assistant-ui Thread 组件渲染：token 级流式输出、生成中自动跟随滚动（用户上翻时暂停跟随）、中断后保留已生成内容。
+
+#### Scenario: 流式渲染与滚动跟随
+
+- **GIVEN** 一次分析请求正在流式返回
+- **WHEN** token 持续到达
+- **THEN** 正文 SHALL 渐进渲染且视图自动跟随最新内容
+- **AND** 用户主动上翻后 SHALL 暂停跟随，回到底部后恢复
+
+#### Scenario: 中断保留已生成内容
+
+- **WHEN** 用户在生成中点击停止
+- **THEN** 已生成内容 SHALL 完整保留，不消失、不回退
+
+### Requirement: SSE 事件适配层
+
+前端 SHALL 提供单一 adapter 翻译层，将后端全部 SSE 事件类型映射为 assistant-ui 消息部件；每类事件 SHALL 有对应单测；未知事件类型 SHALL 安全忽略且不崩溃。
+
+#### Scenario: 事件类型全覆盖
+
+- **GIVEN** 后端 SSE 事件类型枚举（chat_token、thinking、工具调用、管线节点、report_ready 等）
+- **WHEN** 检查 adapter 实现与单测
+- **THEN** 每个事件类型 SHALL 存在映射逻辑与对应测试
+
+#### Scenario: 未知事件安全忽略
+
+- **WHEN** adapter 收到未定义的事件类型
+- **THEN** 前端 SHALL 忽略该事件并继续处理后续事件，不抛错、不中断流
+
+### Requirement: 思考过程折叠卡片
+
+思考内容 SHALL 渲染为可折叠卡片：流式中显示进行态（如"思考中…"），完成后默认收起、可展开查看完整推理内容。
+
+#### Scenario: 思考卡流式与收起
+
+- **GIVEN** 模型输出含 thinking 流
+- **WHEN** 流式进行中
+- **THEN** 显示思考卡片进行态
+- **AND** 流结束后卡片默认收起，点击展开完整内容
+
+### Requirement: 工具调用卡片
+
+工具调用 SHALL 渲染为卡片：调用中显示 loading 态，完成后可展开查看参数与结果；澄清阶段的工具执行中 SHALL 沿用运行中拦截语义（禁止发送）。
+
+#### Scenario: 工具调用状态展示
+
+- **WHEN** agent 调用工具（如股票识别）
+- **THEN** 卡片 SHALL 先显示 loading 态，完成后显示结果摘要
+- **AND** 调用期间发送消息 SHALL 被拦截并提示
+
+### Requirement: 输入区 Composer
+
+输入区 SHALL 使用 assistant-ui Composer：Enter 发送、Shift+Enter 换行、输入为空时发送键禁用、会话运行中发送键变为停止按钮。
+
+#### Scenario: 发送与停止切换
+
+- **WHEN** 会话进入运行中
+- **THEN** 发送按钮 SHALL 切换为停止按钮
+- **AND** 点击停止 SHALL 中断当前流
+
+### Requirement: 消息操作与独有部件
+
+assistant 消息 hover SHALL 显示复制与重新生成操作；管线进度时间线、ECharts 图表、报告导出入口 SHALL 以自定义消息部件挂载，能力与现状一致。
+
+#### Scenario: 独有部件能力不丢
+
+- **WHEN** 深度分析完成
+- **THEN** 消息区 SHALL 正常渲染管线时间线、报告图表与导出按钮
+- **AND** 导出交互与 add-download-center 之前的既有行为一致
+
+### Requirement: 下载管理入口与路由
+
+侧边栏底部区域 SHALL 提供「下载管理」菜单项（下载图标 + 文字），点击跳转 `/downloads` 路由，主区域渲染下载管理页；直接访问/刷新 `/downloads` SHALL 正常渲染，不丢路由状态。
+
+#### Scenario: 从侧边栏进入下载管理
+
+- **GIVEN** 用户位于任意会话页面
+- **WHEN** 点击侧边栏「下载管理」
+- **THEN** 路由切换为 `/downloads`，主区域渲染文件列表
+- **AND** 侧边栏折叠/展开状态保持不变
+
+#### Scenario: 刷新页面路由保持
+
+- **WHEN** 用户在 `/downloads` 页面刷新浏览器
+- **THEN** 页面仍渲染下载管理页而非回退到会话页
+
+### Requirement: 文件列表展示
+
+下载管理页 SHALL 以行列表展示文件：类型图标（docx/pptx/pdf/md 可区分配色）、文件名（超出省略，hover 显示完整名）、格式化大小（KB/MB）、创建时间（当日显示 HH:mm，更早显示 YYYY-MM-DD）、下载按钮与删除按钮（删除按钮 hover 才出现）。列表超屏时内部滚动，标题栏固定。
+
+#### Scenario: 元信息正确渲染
+
+- **GIVEN** 接口返回一个 1.5MB、创建于昨日的 docx 文件
+- **WHEN** 页面渲染列表
+- **THEN** 该行显示 docx 图标、完整文件名、「1.5 MB」、昨日日期（YYYY-MM-DD）
+
+#### Scenario: 删除按钮 hover 显现
+
+- **GIVEN** 列表存在文件行
+- **WHEN** 鼠标未悬停该行
+- **THEN** 删除按钮不可见；悬停后淡入显示，行布局不发生位移
+
+### Requirement: 搜索与类型筛选
+
+页面 SHALL 提供文件名搜索框（模糊匹配，实时过滤）与类型筛选（全部/Word/PPT/PDF/Markdown）；两者 SHALL 可叠加生效，筛选切换不重播列表入场动画。
+
+#### Scenario: 搜索叠加类型筛选
+
+- **GIVEN** 列表含 `茅台分析报告.docx` 与 `宁德分析报告.pptx`
+- **WHEN** 用户选择「Word」tab 并在搜索框输入「茅台」
+- **THEN** 列表仅显示 `茅台分析报告.docx`
+
+### Requirement: 下载与删除交互
+
+点击下载 SHALL 使按钮进入 loading 态（图标转圈 + 禁用），收到响应后恢复并 toast 提示「已开始下载」。删除 SHALL 先弹确认对话框；确认后该行以高度收起 + 淡出动画移除，再调用删除接口；接口失败 SHALL 恢复该行并 toast 报错。
+
+#### Scenario: 删除确认与失败回滚
+
+- **GIVEN** 列表含文件 `a.docx`
+- **WHEN** 用户点击删除并在对话框确认，但接口返回 500
+- **THEN** 行动画移除后恢复显示
+- **AND** toast 提示删除失败，文件仍在列表中
+
+#### Scenario: 取消删除无副作用
+
+- **WHEN** 用户点击删除但在对话框选择取消
+- **THEN** 不发出删除请求，列表不变
+
+### Requirement: 空态、加载态与错误态
+
+接口返回空列表时 SHALL 显示空态（占位图形 + 「暂无导出文件」文案 + 返回聊天的按钮）；加载中 SHALL 显示骨架屏；接口失败 SHALL toast 报错且不以空态冒充。
+
+#### Scenario: 无文件时显示空态
+
+- **GIVEN** `GET /api/files` 返回空数组
+- **WHEN** 页面加载完成
+- **THEN** 显示空态文案与「返回聊天」按钮，点击跳转会话页
+
+#### Scenario: 接口失败不冒充空态
+
+- **GIVEN** `GET /api/files` 返回 500
+- **WHEN** 页面加载失败
+- **THEN** toast 报错，不显示「暂无导出文件」空态
+
+### Requirement: 交互动效规范
+
+下载管理页动效 SHALL 遵守统一规范：时长三档（150ms 微交互 / 200ms 元素级 / 300ms 页面级）；缓动 ease-out（入场）与 ease-in-out（状态切换）；列表首次进入逐行 stagger 淡入上移（行间隔 30ms），筛选切换不重播；系统开启 `prefers-reduced-motion` 时全部动效 SHALL 退化为无动画。
+
+#### Scenario: 首次进入逐行入场
+
+- **WHEN** 用户首次进入 `/downloads`
+- **THEN** 文件行以 30ms 间隔依次淡入并上移归位（fade-in + translateY(8px)→0，200ms ease-out）
+
+#### Scenario: 减弱动效降级
+
+- **GIVEN** 操作系统开启「减弱动态效果」
+- **WHEN** 页面渲染与交互
+- **THEN** 入场、hover、删除收起等动画全部禁用，状态即时切换
 

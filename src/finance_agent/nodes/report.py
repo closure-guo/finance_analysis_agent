@@ -423,12 +423,22 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         action = decision.action
         confidence = decision.confidence
         reasoning = decision.reasoning
+        corrected = getattr(decision, "price_level_corrected", False)
+        correction_reason = getattr(decision, "price_level_correction_reason", "") or ""
     else:
         action = decision.get("action", "N/A")
         confidence = decision.get("confidence", 0)
         reasoning = decision.get("reasoning", "")
+        corrected = decision.get("price_level_corrected", False)
+        correction_reason = decision.get("price_level_correction_reason", "") or ""
 
-    return f"- **方向**: {action}\n- **置信度**: {confidence:.0%}\n- **理由**: {reasoning}"
+    lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}", f"- **理由**: {reasoning}"]
+    if corrected:
+        # toolize-price-levels：价位经工具参考带修正（可观测，不静默）
+        lines.append(
+            f"- **价位修正**: sanity 校验未通过，已按工具参考带修正（{correction_reason}）"
+        )
+    return "\n".join(lines)
 
 
 def _format_debate_message(msg: DebateMessage | dict) -> str:

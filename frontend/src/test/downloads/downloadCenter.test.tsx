@@ -77,6 +77,39 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     expect(screen.getByText(`${pad(new Date(files[0].created_at).getHours())}:${pad(new Date(files[0].created_at).getMinutes())}`)).toBeTruthy()
   })
 
+  it('有持久化会话时直达 /downloads 仍保持路由（boot 恢复不抢路由）', async () => {
+    // 回归：boot 恢复复用 selectSession → 「pathname !== '/' 则 navigate('/')」
+    // 把 /downloads 拉回首页（GUI 实测缺陷，2026-09-05）
+    goDownloads()
+    localStorage.setItem('fa_current_session_id', 's1')
+    const detail = {
+      session_id: 's1', stock_code: '600519', stock_name: '贵州茅台', display_name: '贵州茅台分析',
+      status: 'completed', created_at: '2026-09-01T00:00:00Z', duration_ms: 1, session_type: 'analysis',
+      report_markdown: '', chart_data: {}, analyst_reports: {}, agent_process: {}, analyst_summaries: {},
+      chat_history: [], pipeline_snapshot: null,
+    }
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url === '/api/sessions' && (!init || !init.method || init.method === 'GET')) {
+        return Promise.resolve(new Response(JSON.stringify({ sessions: [{ ...detail, duration_ms: 1 }] }), { status: 200 }))
+      }
+      if (url === '/api/sessions/s1') {
+        return Promise.resolve(new Response(JSON.stringify(detail), { status: 200 }))
+      }
+      if (url === '/api/files' && (!init || !init.method || init.method === 'GET')) {
+        return Promise.resolve(new Response(JSON.stringify(files), { status: 200 }))
+      }
+      return Promise.resolve(new Response('', { status: 200 }))
+    }))
+    render(<App />)
+    // boot 恢复进行中/落定后，下载管理页都应保持渲染且路由不变
+    const rows = await screen.findAllByTestId('download-row')
+    expect(rows.length).toBe(2)
+    await waitFor(() => expect(screen.queryByTestId('restoring-state')).toBeNull(), { timeout: 5000 })
+    expect(window.location.pathname).toBe('/downloads')
+    expect(screen.findAllByTestId('download-row')).toBeTruthy()
+  })
+
   it('空列表显示空态，点击「返回聊天」回会话页', async () => {
     goDownloads()
     mockFetch({ files: [] })
@@ -86,6 +119,17 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     fireEvent.click(screen.getByText('返回聊天'))
     await waitFor(() => expect(window.location.pathname).toBe('/'))
     // 回到会话页（空态首屏）
+    expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
+  })
+
+  it('全页视图下点击「新建分析」应回聊天首页（bug 复现）', async () => {
+    goDownloads()
+    mockFetch({ files: [] })
+    render(<App />)
+    await screen.findByTestId('downloads-empty')
+    // 侧边栏「新建分析」按钮:任何页面都应收敛回首页聊天
+    fireEvent.click(screen.getByTestId('sidebar-new'))
+    await waitFor(() => expect(window.location.pathname).toBe('/'))
     expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
   })
 
@@ -144,10 +188,11 @@ describe('下载中心页面（add-download-center Task 2）', () => {
     expect(await screen.findByText('今天想研究什么？')).toBeTruthy()
   })
 
-  it('侧边栏底部「下载管理」入口跳转 /downloads', async () => {
+  it('侧边栏「下载管理」入口跳转 /downloads（展开态底部入口已移除，走折叠态图标栏）', async () => {
+    localStorage.setItem('fa_sidebar_collapsed', '1')
     mockFetch({ files })
     render(<App />)
-    const entry = await screen.findByTestId('sidebar-downloads')
+    const entry = await screen.findByTestId('sidebar-downloads-collapsed')
     fireEvent.click(entry)
     await waitFor(() => expect(window.location.pathname).toBe('/downloads'))
     expect(await screen.findAllByTestId('download-row')).toHaveLength(2)

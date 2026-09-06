@@ -342,7 +342,7 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
     case 'chat_token': {
       const chatMsg = findLastChatMessage(messages)
       if (!chatMsg) {
-        // 创建新的助手消息
+        // 创建新的助手消息:正文作为首个 answer 时间轴 item(时序修复)
         return {
           ...state,
           messages: [
@@ -353,6 +353,7 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
               content: '',
               chatResponse: event.token,
               streaming: true,
+              agentTimeline: [{ type: 'answer', content: event.token }],
             },
           ],
         }
