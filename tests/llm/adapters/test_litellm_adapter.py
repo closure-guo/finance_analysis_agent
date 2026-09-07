@@ -50,3 +50,27 @@ class TestEnsureLitellmRuntime:
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
         assert LangFuseLogger.__init__ is not None
+
+
+def test_raw_stream_sets_include_usage(monkeypatch):
+    """流式调用必须传 stream_options.include_usage，否则 OpenAI 兼容端点(glm 等)
+    流式响应不含 usage → Langfuse generation 无 token 用量 → cost 无法计算。"""
+    import litellm
+
+    from finance_agent.llm.adapters import litellm_adapter
+
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        from unittest.mock import MagicMock
+
+        return MagicMock()
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    litellm_adapter.raw_stream(
+        model="openai/glm-5.3",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured.get("stream") is True
+    assert captured.get("stream_options") == {"include_usage": True}

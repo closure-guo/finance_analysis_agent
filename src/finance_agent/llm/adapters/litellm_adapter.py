@@ -535,6 +535,7 @@ def raw_stream(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
+    kwargs.setdefault("stream_options", {"include_usage": True})
     return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))), stream=True)
 
 
@@ -543,4 +544,8 @@ async def raw_acompletion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
+    if kwargs.get("stream"):
+        # OpenAI 兼容端点（glm 等）流式默认不带 usage：必须显式 include_usage，
+        # 否则 generation 无 token 用量 → Langfuse cost 无法计算
+        kwargs.setdefault("stream_options", {"include_usage": True})
     return await litellm.acompletion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))
