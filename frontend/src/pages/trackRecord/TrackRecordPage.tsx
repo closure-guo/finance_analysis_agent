@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
-import type { EquityCurvePoint, PredictionRecord, PredictionStatus, SegmentDimension, TrackRecordOverview } from '../../types'
+import type { EquityCurvePoint, PredictionRecord, PredictionStatus, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
 
@@ -27,6 +27,20 @@ const DIRECTION_LABEL: Record<string, string> = {
   short: '看空',
   neutral: '中性',
 }
+
+// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐
+const COLUMNS: Array<{ key: string; label: string; numeric?: boolean }> = [
+  { key: 'created_at', label: '建立日期' },
+  { key: 'symbol', label: '标的' },
+  { key: 'direction', label: '方向' },
+  { key: 'status', label: '状态' },
+  { key: 'entry_price', label: '入场价', numeric: true },
+  { key: 'exit_price', label: '结算价', numeric: true },
+  { key: 'raw_return', label: '区间收益', numeric: true },
+  { key: 'excess_return', label: '基准超额', numeric: true },
+]
+
+const PAGE_SIZE = 50
 
 function Delta({ value }: { value: number | null }) {
   if (value === null) return <span className="text-txt-tertiary">—</span>
@@ -58,20 +72,25 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [segments, setSegments] = useState<SegmentDimension[] | null>(null)
   const [version, setVersion] = useState<number | null>(null)
   const [error, setError] = useState(false)
+  const [sortBy, setSortBy] = useState<string>('created_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [keywordInput, setKeywordInput] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [applied, setApplied] = useState({ keyword: '', dateFrom: '', dateTo: '' })
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
 
   const load = useCallback(async (ver: number | null) => {
     setError(false)
     try {
-      const [ovResp, prResp, cvResp, sgResp] = await Promise.all([
+      const [ovResp, cvResp, sgResp] = await Promise.all([
         fetch(`/api/v1/track-record/overview${ver !== null ? `?version=${ver}` : ''}`),
-        fetch('/api/v1/track-record/predictions'),
         fetch('/api/v1/track-record/equity-curve'),
         fetch('/api/v1/track-record/segments'),
       ])
-      if (!ovResp.ok || !prResp.ok || !cvResp.ok || !sgResp.ok) throw new Error(String(ovResp.status))
+      if (!ovResp.ok || !cvResp.ok || !sgResp.ok) throw new Error(String(ovResp.status))
       setOverview((await ovResp.json()) as TrackRecordOverview)
-      const pr = (await prResp.json()) as { predictions: PredictionRecord[] }
-      setRecords(pr.predictions)
       const cv = (await cvResp.json()) as { points: EquityCurvePoint[] }
       setCurve(cv.points)
       const sg = (await sgResp.json()) as { dimensions: SegmentDimension[] }
@@ -83,6 +102,58 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   }, [])
 
   useEffect(() => { void load(version) }, [load, version])
+
+  // 观点日志按服务端排序/过滤/分页重新拉取（add-track-record-sort-filter）
+  const predictionsUrl = useCallback(() => {
+    const p = new URLSearchParams()
+    if (sortBy !== 'created_at') p.set('sort_by', sortBy)
+    if (sortDir !== 'desc') p.set('sort_dir', sortDir)
+    if (applied.keyword) p.set('keyword', applied.keyword)
+    if (applied.dateFrom) p.set('date_from', applied.dateFrom)
+    if (applied.dateTo) p.set('date_to', applied.dateTo)
+    if (page > 1) p.set('page', String(page))
+    p.set('page_size', String(PAGE_SIZE))
+    const q = p.toString()
+    return `/api/v1/track-record/predictions${q ? `?${q}` : ''}`
+  }, [sortBy, sortDir, applied, page])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const resp = await fetch(predictionsUrl())
+        if (!resp.ok) throw new Error(String(resp.status))
+        const data = (await resp.json()) as PredictionsResponse
+        if (cancelled) return
+        setRecords(data.predictions)
+        setTotal(data.total)
+      } catch {
+        if (!cancelled) setError(true)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [predictionsUrl])
+
+  const onSort = (col: string) => {
+    if (sortBy === col) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortBy(col)
+      setSortDir(col === 'created_at' ? 'desc' : 'asc')
+    }
+    setPage(1)
+  }
+  const applyFilters = () => {
+    setApplied({ keyword: keywordInput.trim(), dateFrom, dateTo })
+    setPage(1)
+  }
+  const resetFilters = () => {
+    setKeywordInput(''); setDateFrom(''); setDateTo('')
+    setApplied({ keyword: '', dateFrom: '', dateTo: '' })
+    setSortBy('created_at'); setSortDir('desc'); setPage(1)
+  }
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const arrow = (col: string) => (sortBy === col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')
 
   const disclaimer = overview?.disclaimer ?? '历史业绩不代表未来表现'
   const rows = records ?? []
@@ -254,53 +325,84 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           )}
 
           {/* 观点日志 */}
+          {/* 过滤工具栏（add-track-record-sort-filter） */}
+          <div className="flex flex-wrap items-center gap-2 mb-3" data-testid="track-record-filters">
+            <input
+              data-testid="track-record-keyword"
+              value={keywordInput}
+              onChange={e => setKeywordInput(e.target.value)}
+              placeholder="输入代码/名称/方向/状态"
+              className="text-xs rounded-lg px-2 py-1 border"
+              style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }}
+            />
+            <input type="date" data-testid="track-record-date-from" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="text-xs rounded-lg px-2 py-1 border" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }} />
+            <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>至</span>
+            <input type="date" data-testid="track-record-date-to" value={dateTo} onChange={e => setDateTo(e.target.value)} className="text-xs rounded-lg px-2 py-1 border" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l1)' }} />
+            <Button size="sm" onClick={applyFilters} data-testid="track-record-apply">查询</Button>
+            <Button size="sm" variant="ghost" onClick={resetFilters} data-testid="track-record-reset">重置</Button>
+          </div>
+
           {rows.length === 0 ? (
             <div className="py-16 text-center" data-testid="track-record-empty">
               <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>暂无观点记录。完成深度分析产生交易建议后，判定结果会出现在这里。</p>
             </div>
           ) : (
-            <div className="rounded-xl overflow-hidden border" style={{ borderColor: 'var(--border-neutral-l1)' }}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    <th className="px-4 py-2 font-normal">标的</th>
-                    <th className="px-4 py-2 font-normal">方向</th>
-                    <th className="px-4 py-2 font-normal">状态</th>
-                    <th className="px-4 py-2 font-normal text-right">入场价</th>
-                    <th className="px-4 py-2 font-normal text-right">结算价</th>
-                    <th className="px-4 py-2 font-normal text-right">区间收益</th>
-                    <th className="px-4 py-2 font-normal text-right">基准超额</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(r => (
-                    <tr
-                      key={r.prediction_id}
-                      className="border-t cursor-pointer hover:opacity-80"
-                      style={{ borderColor: 'var(--border-neutral-l1)' }}
-                      onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
-                      data-testid={`prediction-row-${r.prediction_id}`}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
-                        <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
-                      </td>
-                      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
-                      <td className="px-4 py-3">
-                        <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
-                        {r.status === 'open' && (
-                          <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
-                      <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
-                      <td className="px-4 py-3 text-right"><Delta value={r.raw_return} /></td>
-                      <td className="px-4 py-3 text-right"><Delta value={r.excess_return} /></td>
+            <>
+              <div className="rounded-xl overflow-hidden border" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                      {COLUMNS.map(c => (
+                        <th key={c.key} className={`px-4 py-2 font-normal ${c.numeric ? 'text-right' : ''}`}>
+                          <button
+                            type="button"
+                            data-testid={`sort-${c.key}`}
+                            onClick={() => onSort(c.key)}
+                            className="inline-flex items-center gap-0.5 hover:opacity-80"
+                            style={{ color: 'var(--text-tertiary)' }}
+                          >
+                            {c.label}{arrow(c.key)}
+                          </button>
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr
+                        key={r.prediction_id}
+                        className="border-t cursor-pointer hover:opacity-80"
+                        style={{ borderColor: 'var(--border-neutral-l1)' }}
+                        onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
+                        data-testid={`prediction-row-${r.prediction_id}`}
+                      >
+                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{r.created_at.slice(0, 10)}</td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
+                          <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
+                        </td>
+                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
+                        <td className="px-4 py-3">
+                          <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
+                          {r.status === 'open' && (
+                            <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
+                        <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
+                        <td className="px-4 py-3 text-right"><Delta value={r.raw_return} /></td>
+                        <td className="px-4 py-3 text-right"><Delta value={r.excess_return} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex items-center justify-end gap-3 mt-3 text-xs" data-testid="track-record-pagination">
+                <Button size="sm" variant="ghost" disabled={page <= 1} onClick={() => setPage(p => p - 1)} data-testid="track-record-prev">上一页</Button>
+                <span style={{ color: 'var(--text-tertiary)' }}>第 {page} / {pageCount} 页 · 共 {total} 条</span>
+                <Button size="sm" variant="ghost" disabled={page >= pageCount} onClick={() => setPage(p => p + 1)} data-testid="track-record-next">下一页</Button>
+              </div>
+            </>
           )}
         </>
       )}
