@@ -69,23 +69,31 @@ def _cross_judge(
     if missing:
         return {"score": None, "reason": f"input_missing:{','.join(missing)}"}
     prompt = _render(dimension, variables)
+    base_url = os.environ.get("CROSS_BASE_URL") or os.environ["JUDGE_BASE_URL"]
+    api_key = os.environ.get("CROSS_API_KEY") or os.environ["JUDGE_API_KEY"]
+    headers = {"x-opencode-session": session} if "opencode.ai" in base_url else {}
+    # 温度策略：多数端点收 temperature=0（复现优先）；k3-256k 等只允许 temperature=1，
+    # 第一轮带温度被拒后第二轮不带温度重试（解析失败同样落到第二轮）。
     for _attempt in range(2):
         try:
-            resp = completion(
-                model=cross_model,
-                messages=[{"role": "user", "content": prompt}],
-                api_base=os.environ["JUDGE_BASE_URL"],
-                api_key=os.environ["JUDGE_API_KEY"],
-                temperature=0.0,
-                extra_headers={"x-opencode-session": session},
-            )
+            call_kwargs: dict[str, Any] = {
+                "model": cross_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "api_base": base_url,
+                "api_key": api_key,
+            }
+            if _attempt == 0:
+                call_kwargs["temperature"] = 0.0
+            if headers:
+                call_kwargs["extra_headers"] = headers
+            resp = completion(**call_kwargs)
             text = str(resp.choices[0].message.content or "")
             data = parse_json_response(text)
             score = int(data["score"])
             if not 1 <= score <= 5:
                 raise ValueError(f"score 越界: {score}")
             return {"score": score, "reason": str(data.get("reason", ""))}
-        except Exception:  # noqa: S112 — 单条失败重试一次后按 parse_failed 处理
+        except Exception:  # noqa: S112 — 温度拒绝/解析失败均落到下一轮或 parse_failed
             continue
     return {"score": None, "reason": "judge_parse_failed"}
 
@@ -119,6 +127,7 @@ def main() -> None:
     parser.add_argument(
         "--batch", type=int, default=0, help="本批最多处理条数（0=不限；配合续跑分批）"
     )
+    parser.add_argument("--dim", action="append", help="只处理指定维度（可多次；缺省=全部维度）")
     parser.add_argument(
         "--out",
         type=Path,
@@ -137,6 +146,8 @@ def main() -> None:
         (r["trace_id"], r["dimension"]): float(r["judge_score"]) for r in rows
     }
     pairs = sorted({(r["trace_id"], r["dimension"]) for r in rows})
+    if args.dim:
+        pairs = [p for p in pairs if p[1] in args.dim]
 
     # 续跑语义：读已有输出，跳过已评 (trace, dim)；batch 限本批量（分多批跑完，避免
     # 单命令超时；重定向时 stdout 块缓冲，print 显式 flush 便于观察进度）。
