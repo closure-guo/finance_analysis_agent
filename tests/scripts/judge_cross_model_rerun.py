@@ -180,6 +180,13 @@ def main() -> None:
             "cross_reason": res.get("cross_reason", ""),
             "human_score": None,
         }
+        # 每条完成即落盘（超时/中断不丢进度；结尾再全量重写一次收敛）
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w", encoding="utf-8") as fh:
+            for tid2, dim2 in pairs:
+                row2 = done.get((tid2, dim2))
+                if row2:
+                    fh.write(json.dumps(row2, ensure_ascii=False) + "\n")
         if i % 10 == 0:
             print(f" 已重评 {i}/{len(pending)}", flush=True)
 
