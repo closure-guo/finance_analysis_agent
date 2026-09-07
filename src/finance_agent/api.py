@@ -963,7 +963,11 @@ def _run_graph_streaming(
     # ADR-0015：手动 root span + session 聚合(仿 quick react_loop / _stream_graph)。
     # v4 CallbackHandler 在 LangGraph graph.stream 不建主 trace,必须手动建 root,
     # 否则内部 generation/数据源 span 各自成孤立 trace。
-    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+    from finance_agent.langfuse_tracing import (
+        eval_analysis_query,
+        get_callback_handler,
+        get_langfuse,
+    )
 
     _handler = get_callback_handler()
     _lf = get_langfuse()
@@ -974,7 +978,10 @@ def _run_graph_streaming(
             _root_cm = _lf.start_as_current_observation(
                 as_type="span",
                 name=f"deep_analysis:{stock_name_display}",
-                input={"stock_code": stock_code},
+                input={
+                    "stock_code": stock_code,
+                    "query": eval_analysis_query(req.query, stock_name_display, stock_code),
+                },
             )
         try:
             from langfuse import propagate_attributes
@@ -984,7 +991,7 @@ def _run_graph_streaming(
             )
         except Exception:  # noqa: S110
             pass
-    _root_cm.__enter__()
+    _root_obs = _root_cm.__enter__()
     _propagate_cm.__enter__()
 
     _config: dict = {"recursion_limit": 100}
@@ -1126,6 +1133,11 @@ def _run_graph_streaming(
             }
         )
     finally:
+        # 根 span 退出前写入 metadata.report_markdown（供 hosted evaluator 取完整报告，
+        # 与 _stream_graph 对齐；content-fidelity:post-exit update 会被丢弃）
+        if _root_obs is not None:
+            with contextlib.suppress(Exception):
+                _root_obs.update(metadata={"report_markdown": accumulated.get("final_report", "")})
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):

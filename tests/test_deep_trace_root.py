@@ -79,3 +79,134 @@ class TestRunGraphStreamingRootSpan:
         # 通过检查 api 模块的 graph 调用边界是否包了 start_as_current_observation
         # 这里间接验证:模块级应有 root span 建立逻辑(实现后补直接测试)
         pass
+
+
+def _fake_graph_with_report(report_text: str = "# 贵州茅台分析报告\n完整正文……"):
+    """yield 一个带 final_report 的 update chunk（模拟管线产物）。"""
+    g = MagicMock()
+    g.stream.return_value = iter([("updates", {"after_citation": {"final_report": report_text}})])
+    return g
+
+
+class TestStreamGraphEvalData:
+    """deep-trace-eval-data：根 span 携带 query + metadata.report_markdown。"""
+
+    def test_input_has_query_fallback(self):
+        """无 query 时 input 含兜底「深度分析 {stock_name}({stock_code})」。"""
+        from finance_agent.agent_factory import _stream_graph
+
+        mock_lf = MagicMock()
+        mock_lf.start_as_current_observation.return_value = MagicMock()
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.graph.build_5layer_graph", _fake_graph),
+        ):
+            list(
+                _stream_graph(
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    session_id="sess-1",
+                )
+            )
+        kwargs = mock_lf.start_as_current_observation.call_args.kwargs
+        assert kwargs["input"]["stock_code"] == "600519"
+        assert kwargs["input"]["query"] == "深度分析 贵州茅台(600519)"
+
+    def test_metadata_has_report_markdown(self):
+        """退出时 metadata.report_markdown 写入完整报告。"""
+        from finance_agent.agent_factory import _stream_graph
+
+        mock_lf = MagicMock()
+        mock_root = MagicMock()
+        mock_lf.start_as_current_observation.return_value = mock_root
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.graph.build_5layer_graph", _fake_graph_with_report),
+        ):
+            list(
+                _stream_graph(
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    session_id="sess-1",
+                )
+            )
+        obs = mock_root.__enter__.return_value
+        obs.update.assert_called()
+        meta = obs.update.call_args.kwargs["metadata"]
+        assert meta["report_markdown"] == "# 贵州茅台分析报告\n完整正文……"
+
+    def test_no_langfuse_no_crash(self):
+        from finance_agent.agent_factory import _stream_graph
+
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=None),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.graph.build_5layer_graph", _fake_graph_with_report),
+        ):
+            list(
+                _stream_graph(
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    session_id="sess-1",
+                )
+            )  # 不抛
+
+
+class TestRunGraphStreamingEvalData:
+    """deep-trace-eval-data：api 快路径根 span 携带 query + metadata.report_markdown。"""
+
+    def test_input_has_query(self):
+        from finance_agent.api import AnalyzeRequest, _run_graph_streaming
+
+        mock_lf = MagicMock()
+        mock_lf.start_as_current_observation.return_value = MagicMock()
+        req = AnalyzeRequest(query="深度分析600519", stock_code="600519")
+        fake = MagicMock()
+        fake.stream.return_value = iter([])
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.api.graph", fake),
+            patch("langfuse.propagate_attributes") as mock_prop,
+        ):
+            mock_prop.return_value = MagicMock()
+            list(_run_graph_streaming("600519", "贵州茅台", req, "aid-1", 0.0, session_id="sess-1"))
+        kwargs = mock_lf.start_as_current_observation.call_args.kwargs
+        assert kwargs["input"]["stock_code"] == "600519"
+        assert kwargs["input"]["query"] == "深度分析600519"
+
+    def test_metadata_has_report_markdown(self):
+        from finance_agent.api import AnalyzeRequest, _run_graph_streaming
+
+        mock_lf = MagicMock()
+        mock_root = MagicMock()
+        mock_lf.start_as_current_observation.return_value = mock_root
+        req = AnalyzeRequest(query="深度分析600519", stock_code="600519")
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.api.graph", _fake_graph_with_report()),
+            patch("langfuse.propagate_attributes") as mock_prop,
+        ):
+            mock_prop.return_value = MagicMock()
+            list(_run_graph_streaming("600519", "贵州茅台", req, "aid-1", 0.0, session_id="sess-1"))
+        obs = mock_root.__enter__.return_value
+        obs.update.assert_called()
+        meta = obs.update.call_args.kwargs["metadata"]
+        assert meta["report_markdown"] == "# 贵州茅台分析报告\n完整正文……"
+
+    def test_no_langfuse_no_crash(self):
+        from finance_agent.api import AnalyzeRequest, _run_graph_streaming
+
+        req = AnalyzeRequest(query="深度分析600519", stock_code="600519")
+        fake = MagicMock()
+        fake.stream.return_value = iter([])
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=None),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.api.graph", fake),
+            patch("langfuse.propagate_attributes") as mock_prop,
+        ):
+            mock_prop.return_value = MagicMock()
+            list(
+                _run_graph_streaming("600519", "贵州茅台", req, "aid-1", 0.0, session_id="sess-1")
+            )  # 不抛

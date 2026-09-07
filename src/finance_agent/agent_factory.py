@@ -884,7 +884,11 @@ def _stream_graph(
     if config is None:
         config = {"recursion_limit": 100}
 
-    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+    from finance_agent.langfuse_tracing import (
+        eval_analysis_query,
+        get_callback_handler,
+        get_langfuse,
+    )
 
     _handler = get_callback_handler()
     _lf = get_langfuse()
@@ -899,7 +903,14 @@ def _stream_graph(
         _root_cm = _lf.start_as_current_observation(
             as_type="span",
             name=f"deep_analysis:{_stock}",
-            input={"stock_code": initial_state.get("stock_code")},
+            input={
+                "stock_code": initial_state.get("stock_code"),
+                "query": eval_analysis_query(
+                    initial_state.get("query"),
+                    initial_state.get("stock_name") or "",
+                    initial_state.get("stock_code") or "",
+                ),
+            },
         )
         if session_id:
             try:
@@ -947,10 +958,14 @@ def _stream_graph(
                                 _local_acc[_key] = _update[_key]
             yield _mode, _chunk
     finally:
-        # 在 root span 退出前写入 output（保证不被 Langfuse 丢弃）
+        # 在 root span 退出前写入 output + metadata.report_markdown
+        # （保证不被 Langfuse 丢弃；report_markdown 供 hosted evaluator 取完整报告）
         if _root_obs is not None:
             with contextlib.suppress(Exception):
-                _root_obs.update(output=_build_trace_output(_local_acc))
+                _root_obs.update(
+                    output=_build_trace_output(_local_acc),
+                    metadata={"report_markdown": _local_acc.get("final_report", "")},
+                )
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):

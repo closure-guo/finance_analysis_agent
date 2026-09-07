@@ -176,3 +176,21 @@ def truncate_for_trace(text: str, max_bytes: int = 8192) -> str:
     tail = encoded[-_quarter:].decode("utf-8", errors="ignore")
     omitted = len(encoded) - len(head.encode("utf-8")) - len(tail.encode("utf-8"))
     return f"{head}\n...[truncated {omitted} bytes]...\n{tail}"
+
+
+def eval_analysis_query(
+    query: str | None,
+    stock_name: str = "",
+    stock_code: str = "",
+) -> str:
+    """deep_analysis 根 span input 的 query 文本。
+
+    优先使用调用方提供的真实用户查询；缺失时以「深度分析 {stock_name}({stock_code})」
+    兜底，保证 input 恒含查询语义（deep-trace-eval-data：hosted evaluator 的
+    report_relevance 以 input.query 绑定 {{query}}）。
+    """
+    if query and query.strip():
+        return query.strip()
+    if stock_name and stock_code:
+        return f"深度分析 {stock_name}({stock_code})"
+    return f"深度分析 {stock_name or stock_code or 'unknown'}"
