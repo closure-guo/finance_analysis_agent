@@ -7,19 +7,22 @@ function actionLabels(container: HTMLElement): string[] {
 }
 
 describe('MessageActions 操作条（bug 复现 + 设计要求）', () => {
-  it('固定高度行恒渲染(未 hover 也占位)——按钮出现不引起布局位移', () => {
-    const { container, rerender } = render(
+  it('未 hover（visible=false）不渲染任何占位行——横幅间不出现间隙/按钮行', () => {
+    const { container } = render(
       <MessageActions text="t" onRegenerate={vi.fn()} visible={false} showRetry={false} />,
     )
-    // 未 hover:操作行仍在 DOM(固定高度),但无按钮
+    // 修复前：固定 h-7 行恒渲染，在动作横幅间形成 28px 间隙（hover 时浮现按钮行）
+    expect(container.querySelector('[data-testid="message-actions"]')).toBeNull()
+  })
+
+  it('hover（visible=true）挂载悬浮按钮行：absolute 定位不占布局高度（无位移、无空洞）', () => {
+    const { container } = render(
+      <MessageActions text="t" onRegenerate={vi.fn()} visible showRetry={false} />,
+    )
     const row = screen.getByTestId('message-actions')
-    expect(row.className).toContain('h-7')
-    expect(row.querySelectorAll('button')).toHaveLength(0)
-    // hover 后:同一行元素存在,按钮挂载(行高不变 → 文本块不位移)
-    rerender(<MessageActions text="t" onRegenerate={vi.fn()} visible showRetry={false} />)
-    const row2 = screen.getByTestId('message-actions')
-    expect(row2.className).toContain('h-7')
-    expect(row2.querySelectorAll('button').length).toBeGreaterThan(0)
+    expect(row.className).toContain('absolute')
+    expect(row.className).toContain('h-6')
+    expect(row.querySelectorAll('button').length).toBeGreaterThan(0)
   })
 
   it('按钮顺序:复制 → 重试 → 点赞 → 点踩,图标化(aria-label,无文字)', () => {
