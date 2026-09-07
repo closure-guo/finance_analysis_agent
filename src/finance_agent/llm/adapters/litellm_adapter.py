@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import uuid
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -519,6 +520,27 @@ def _with_default_timeout(kwargs: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+# incident 021：opencode zen/go 网关自 2026-09 起对缺 x-opencode-session 头的请求
+# 直接 400（"cannot be routed efficiently"），离线 judge 链路全体失败。该头是路由/
+# 提示缓存的优化信号（非凭据），文档要求每会话稳定。本项目请求为一次性调用，取
+# 进程级稳定 id 即可满足存在性与稳定性。
+_OPCODE_SESSION_ID = uuid.uuid4().hex
+
+
+def _maybe_opencode_session(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """api_base 指向 opencode.ai 时注入 x-opencode-session（见 incident 021）。
+
+    仅 opencode zen/go 网关需要该头；其余端点（方舟 glm 等）不注入，避免行为漂移。
+    """
+    base = str(kwargs.get("api_base") or "")
+    if "opencode.ai" not in base:
+        return kwargs
+    headers = dict(kwargs.get("extra_headers") or {})
+    headers.setdefault("x-opencode-session", _OPCODE_SESSION_ID)
+    kwargs["extra_headers"] = headers
+    return kwargs
+
+
 def raw_completion(**kwargs: Any) -> Any:
     """adapter 内暴露 litellm.completion（gateway/probes 唯一入口）。
 
@@ -528,7 +550,9 @@ def raw_completion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))
+    return litellm.completion(
+        **_with_default_timeout(_drop_unsupported(_maybe_opencode_session(dict(kwargs))))
+    )
 
 
 def raw_stream(**kwargs: Any) -> Any:
@@ -536,7 +560,8 @@ def raw_stream(**kwargs: Any) -> Any:
 
     ensure_litellm_runtime()
     kwargs.setdefault("stream_options", {"include_usage": True})
-    return litellm.completion(**_with_default_timeout(_drop_unsupported(dict(kwargs))), stream=True)
+    kwargs = _maybe_opencode_session(dict(kwargs))
+    return litellm.completion(**_with_default_timeout(_drop_unsupported(kwargs)), stream=True)
 
 
 async def raw_acompletion(**kwargs: Any) -> Any:
@@ -548,4 +573,5 @@ async def raw_acompletion(**kwargs: Any) -> Any:
         # OpenAI 兼容端点（glm 等）流式默认不带 usage：必须显式 include_usage，
         # 否则 generation 无 token 用量 → Langfuse cost 无法计算
         kwargs.setdefault("stream_options", {"include_usage": True})
-    return await litellm.acompletion(**_with_default_timeout(_drop_unsupported(dict(kwargs))))
+    kwargs = _maybe_opencode_session(dict(kwargs))
+    return await litellm.acompletion(**_with_default_timeout(_drop_unsupported(kwargs)))
