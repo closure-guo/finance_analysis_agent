@@ -49,6 +49,20 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
 
     auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
 
+    # Langfuse v3 的 trace 直链是 /project/{projectId}/traces/{traceId}（/trace/<id>
+    # 会报 "not have access"）。projectId 从 /api/public/projects 取（该 key 的首个项目）。
+    projects = (
+        requests.get(
+            f"{LANGFUSE_HOST}/api/public/projects",
+            headers={"Authorization": f"Basic {auth}"},
+            timeout=30,
+        )
+        .json()
+        .get("data")
+        or []
+    )
+    project_id = str(projects[0]["id"]) if projects else ""
+
     # 从 scores 端点按维度名聚合（离线 judge 的 make_evaluation 落点：name 精确等于
     # 维度名，comment 为该轮 reason）。不走 traces+observations 逐条 enrichment——
     # 全库 727 条 score 只 ~140 行命中 4 维度，按 trace 翻页会超时（实测 240s 未完成）。
@@ -88,7 +102,7 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
     payload = [
         {
             "trace_id": tid,
-            "trace_url": f"{LANGFUSE_HOST}/trace/{tid}",
+            "trace_url": f"{LANGFUSE_HOST}/project/{project_id}/traces/{tid}",
             "dimension": dim,
             "judge_score": score,
             "judge_reason": reasons.get((tid, dim), ""),
