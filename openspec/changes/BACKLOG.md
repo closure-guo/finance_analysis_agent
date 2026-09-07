@@ -22,13 +22,10 @@
 > 前版「已实施」8 条 delta 全部归档；四类实时验证（FM 回路/数据排序/harden/langfuse-trace）
 > 已随 ehr-style/surgical 同步归档；prompt direction 纪律已发布。以下为当前真实遗留。
 
-1. **ADR-0018 落地**（tmp/adr-0018-draft.md → docs/adr/）——**人工维护**（agent 不得新建 ADR）；
-   其原先解锁的 archive 链（decision-outcome-tracking → expose-decision-outcomes → add-track-record）
-   已于 09-05 全部归档，本项仅剩文档落地。
-2. **judge 人工校准标注**：首轮跨模型代理门禁已归档（deepseek/qwen/k3 90 对），spec 要求的人工
+1. **judge 人工校准标注**：首轮跨模型代理门禁已归档（deepseek/qwen/k3 90 对），spec 要求的人工
    ≥80% 一致性校验仍开放——标注工具链就绪（exporter 抽样直链可用），回填 human_score 重跑
    measure.py 即闭合。
-3. **nightly @live 门禁 secrets**：CI workflow 已透传 LANGFUSE_*/JUDGE_*，需仓库管理员在
+2. **nightly @live 门禁 secrets**：CI workflow 已透传 LANGFUSE_*/JUDGE_*，需仓库管理员在
    GitHub Settings 配置 secrets 后 @live 套件（FM 门禁/性能回归/校准抽样）才真正生效。
-4. **docker 后端重建**：8000 端口 docker 镜像基于修复前代码（FM state 修复/根 span output/
+3. **docker 后端重建**：8000 端口 docker 镜像基于修复前代码（FM state 修复/根 span output/
    session 头等未入镜像）——`docker compose up -d --build` 刷新。
