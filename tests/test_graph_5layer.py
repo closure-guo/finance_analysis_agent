@@ -58,3 +58,23 @@ class TestBuild5LayerGraph:
         graph = build_5layer_graph()
         nodes = set(graph.nodes.keys())
         assert "verify_citations" in nodes
+
+
+class TestFmReturnReasoningContract:
+    """calibrate-fm-approval 回路契约（线上 4.3 复现修复）：
+
+    FM return 的 reasoning 必须被 state schema 声明——未声明键会被 LangGraph
+    节点输出合并时丢弃，trader 重跑上下文拿不到退回意见（实测重跑输入与首跑
+    逐字节相同，注入条件 ``and fm_reasoning`` 恒为假）。
+    """
+
+    def test_state_schema_declares_reasoning_key(self):
+        from finance_agent.state import AnalysisState
+
+        assert "fund_manager_decision_reasoning" in AnalysisState.__annotations__
+
+    def test_compiled_graph_channel_keeps_reasoning(self):
+        from finance_agent.graph import build_5layer_graph
+
+        graph = build_5layer_graph()
+        assert "fund_manager_decision_reasoning" in graph.channels

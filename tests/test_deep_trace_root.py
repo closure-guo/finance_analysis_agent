@@ -24,6 +24,7 @@ class TestStreamGraphRootSpan:
 
         mock_lf = MagicMock()
         mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
         mock_lf.start_as_current_observation.return_value = mock_root
         with (
             patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
@@ -118,6 +119,7 @@ class TestStreamGraphEvalData:
 
         mock_lf = MagicMock()
         mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
         mock_lf.start_as_current_observation.return_value = mock_root
         with (
             patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
@@ -179,6 +181,7 @@ class TestRunGraphStreamingEvalData:
 
         mock_lf = MagicMock()
         mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
         mock_lf.start_as_current_observation.return_value = mock_root
         req = AnalyzeRequest(query="深度分析600519", stock_code="600519")
         with (
@@ -268,6 +271,7 @@ class TestStreamGraphEvalFullData:
 
         mock_lf = MagicMock()
         mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
         mock_lf.start_as_current_observation.return_value = mock_root
         with (
             patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
@@ -306,6 +310,7 @@ class TestStreamGraphEvalFullData:
         g.stream.return_value = iter([("updates", {"after_report": {"final_report": "# 报告"}})])
         mock_lf = MagicMock()
         mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
         mock_lf.start_as_current_observation.return_value = mock_root
         with (
             patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
@@ -330,6 +335,7 @@ class TestRunGraphStreamingEvalFullData:
 
         mock_lf = MagicMock()
         mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
         mock_lf.start_as_current_observation.return_value = mock_root
         req = AnalyzeRequest(query="深度分析600519", stock_code="600519")
         with (
@@ -348,3 +354,43 @@ class TestRunGraphStreamingEvalFullData:
         assert "debate_history" in meta
         assert meta["research_manager_decision"] == "RM 结论：谨慎看多"
         assert meta["risk_judgment"] == {"action": "buy", "confidence": 0.7}
+
+
+class TestRunGraphStreamingRootOutput:
+    """api._run_graph_streaming 根 span 必须写 output（agent_factory 已写，api 漏写
+    ——langfuse-trace-agent-attribution 4.5/4.6「不再 output=null」；线上复现：
+    deep_analysis 根 span output 为 null）。"""
+
+    def test_root_span_update_carries_output_summary(self):
+        from unittest.mock import MagicMock, patch
+
+        from finance_agent import api
+
+        mock_lf = MagicMock()
+        mock_root = MagicMock()
+        mock_root.__enter__.return_value = mock_root
+        mock_lf.start_as_current_observation.return_value = mock_root
+
+        def _fake_graph():
+            g = MagicMock()
+            g.stream.return_value = iter([])
+            return g
+
+        req = api.AnalyzeRequest(
+            stock_code="600519", query="全面分析", analysis_type="comprehensive"
+        )
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.graph.build_5layer_graph", _fake_graph),
+            patch("langfuse.propagate_attributes") as mock_prop,
+        ):
+            mock_prop.return_value = MagicMock()
+            list(
+                api._run_graph_streaming(
+                    "600519", "贵州茅台", req, analysis_id="a1", start_time=0.0, session_id="s1"
+                )
+            )
+        calls = [c for c in mock_root.update.call_args_list if "output" in (c.kwargs or {})]
+        outs = [c.kwargs["output"] for c in calls if "stock_code" in (c.kwargs.get("output") or {})]
+        assert outs, "根 span update 应携带 output 摘要（当前 api 路径漏写）"

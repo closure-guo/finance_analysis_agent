@@ -1135,11 +1135,20 @@ def _run_graph_streaming(
             }
         )
     finally:
-        # 根 span 退出前写入评估数据 metadata（供 hosted evaluator 取完整报告/分析师/
-        # 辩论/裁决数据，与 _stream_graph 对齐；post-exit update 会被 Langfuse 丢弃）
+        # 根 span 退出前写入评估数据 metadata + 摘要 output（与 _stream_graph 对齐；
+        # post-exit update 会被 Langfuse 丢弃，必须在 __exit__ 前写；
+        # metadata/output 各自独立容错——任一段失败不连带另一段）
         if _root_obs is not None:
+            _meta: dict = {}
+            _out: dict = {}
             with contextlib.suppress(Exception):
-                _root_obs.update(metadata=build_eval_metadata(accumulated))
+                _meta = build_eval_metadata(accumulated)
+            with contextlib.suppress(Exception):
+                from finance_agent.agent_factory import _build_trace_output
+
+                _out = _build_trace_output(accumulated)
+            with contextlib.suppress(Exception):
+                _root_obs.update(metadata=_meta, output=_out)
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):
