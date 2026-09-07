@@ -3,8 +3,9 @@
 
 v1 范围（2026-09-04 决策）：数值型事实 claim（价格/涨跌幅/财务指标/市值）用
 规则抽取、对行情与财务数据进行离线校验（supported/contradicted/unverifiable）——
-无需 LLM 余额。事实型 claim（事件/日期/主体）抽取需 LLM，标记后续增量，v1 不
-纳入（避免无样本校验的猜测性指标）。
+无需 LLM 余额。事实型 claim（事件/日期/主体）由 extract_factual_claims 经 LLM
+抽取（2026-09-06 落地）：无 LLM 凭据/坏 JSON 时优雅回退为空，不阻塞数值型路径；
+抽取出的 factual claim 无证据源时如实归 unverifiable，不进幻觉率分子。
 
 幻觉率 = contradicted / 可验证 claim 总数（supported+contradicted）；
 unverifiable 单列不进分子（合理推断/数据源缺失不惩罚）。
@@ -194,7 +195,7 @@ def gate(result: HallucinationResult) -> dict[str, object]:
 
 def render_report(result: HallucinationResult) -> str:
     lines = [
-        "# 幻觉率报告（数值型 claim v1）",
+        "# 幻觉率报告（数值型 + 事实型 claim）",
         "",
         f"- 生成时间: {datetime.now().isoformat(timespec='seconds')}",
         f"- claim 总数: {len(result.claims)}（可验证 {result.countable} / 不可验证 {result.unverifiable}）",
@@ -233,7 +234,11 @@ def render_report(result: HallucinationResult) -> str:
             else ""
         ),
     ]
-    lines += ["", "> v1 仅数值型 claim；事实型 claim（事件/日期/主体）抽取需 LLM，属后续增量。", ""]
+    lines += [
+        "",
+        "> 事实型 claim（事件/日期/主体）经 LLM 抽取；无 LLM 凭据时该部分自动降级为空。",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -248,7 +253,7 @@ def run_offline(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="幻觉率度量（数值型 claim v1）")
+    parser = argparse.ArgumentParser(description="幻觉率度量（数值型规则 + 事实型 LLM 抽取）")
     parser.add_argument("--report", type=Path, required=True, help="报告 markdown 路径")
     parser.add_argument("--data", type=Path, default=None, help="校验数据 JSON（{type: value}）")
     parser.add_argument("--out", type=Path, default=Path("reports/hallucination-report.md"))

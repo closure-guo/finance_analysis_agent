@@ -15,7 +15,10 @@
 - [x] `run_experiment` 一键执行全 Dataset，关联 `langfuse.get_prompt(label="production")` 版本，产出含均值的结果表
 - [x] Judge 裁判调用标 `langfuse-llm-as-a-judge` 环境，成本 Dashboard 可独立核算
 - [ ] Judge 校准：首轮实验抽 20-30 条进 Annotation Queue 人工打分，一致性 ≥ 80% 才定稿 rubric（校准报告落 `tests/validation/`）
-- [ ] 线上托管 Evaluator 配置（第二阶段：同 rubric 采样 10-20%，Monitors 告警）
+- [x] 线上托管 Evaluator 配置（第二阶段：同 rubric 采样 10-20%，Monitors 告警）——由子 delta
+      `enable-hosted-evaluator` 完成（2026-09-07 归档）：4 个 evaluator 上线 + configId 快照回填
+      docs/evals/hosted-evaluator-template.md + 实证打分=4（见 tests/validation/2026-09-07-hosted-evaluator-e2e-validation.md）；
+      降级路径 poll.py + 阈值告警 + 口径比对齐备
 - [x] `uv run pytest` 全过（`@live` 评估用例 nightly 跑）、`uv run ruff check` 无错误、`uv run mypy`（基线对比）无新增错误
 - [x] `openspec validate agent-evaluation-suite --strict` 通过
 - [x] 人工验证报告落 `tests/validation/`（基线实验结果 + 校准一致性 + 成本核算 < 5%）

@@ -114,3 +114,10 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          # nightly @live 门禁（FM 决策/性能基线/Judge 校准导出）依赖 Langfuse；
+          # 未配置对应 secrets 时为空 → live 用例按「无 key 跳过」纪律自动跳过（见
+          # calibrate-fm-approval 4.2 / add-latency-cost-regression 4.2）。管理员配置：
+          # 仓库 Settings → Secrets → LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST || 'http://localhost:3000' }}

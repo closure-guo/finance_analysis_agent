@@ -28,6 +28,29 @@ def live_env() -> bool:
     return True
 
 
+def _factual_llm():
+    """事实型 claim 抽取用 LLM 客户端（invoke(prompt) -> str，judges 同款约定）。
+
+    LLM 凭据缺失返回 None → run_offline 内 extract_factual_claims 优雅回退为空，
+    数值型路径不受影响（nightly 无 key 时报告内容与 v1 一致）。
+    """
+    if not (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")):
+        return None
+
+    from finance_agent.llm.gateway import complete_text
+
+    class _Client:
+        def invoke(self, prompt: str) -> str:
+            text, _ = complete_text(
+                [{"role": "user", "content": prompt}],
+                purpose="main",
+                temperature=0.0,
+            )
+            return text
+
+    return _Client()
+
+
 def _latest_deep_report(db_path: Path) -> tuple[str, str] | None:
     """取最近一条深度会话的 assistant 最终报告文本 + 股票代码。"""
     conn = sqlite3.connect(db_path)
@@ -109,7 +132,7 @@ def test_hallucination_live_report(live_env: bool):
         except Exception as e:  # noqa: BLE001 - 兜底也失败则维持无数据源
             print(f"[HALLUCINATION] kline 兜底失败: {e}")
 
-    result = run_offline(report_text, data_map)
+    result = run_offline(report_text, data_map, llm=_factual_llm())
     from datetime import datetime
 
     out = Path("reports") / f"hallucination-report-{datetime.now():%Y%m%d}.md"
