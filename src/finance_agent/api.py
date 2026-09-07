@@ -137,6 +137,7 @@ from finance_agent.outcome.track_record.ingest import (  # noqa: E402
     persist_prediction_from_accumulated,
 )
 from finance_agent.outcome.track_record.model import (  # noqa: E402
+    count_predictions,
     get_active_agent,
     get_latest_metrics,
     get_prediction,
@@ -2186,8 +2187,15 @@ async def track_record_predictions(
     source: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
-    """add-track-record:观点日志列表(默认全部状态,含 loss)。分页上限 50。"""
+    """add-track-record:观点日志列表(默认全部状态,含 loss)。
+    add-track-record-sort-filter:可选 sort_by/sort_dir/keyword/date_from/date_to,
+    缺省回退 created_at DESC;total 反映过滤后子集。分页上限 50。"""
     page = max(1, page)
     limit = max(1, min(page_size, 50))
     offset = (page - 1) * limit
@@ -2198,8 +2206,21 @@ async def track_record_predictions(
         source_type=source,
         limit=limit,
         offset=offset,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        keyword=keyword,
+        date_from=date_from,
+        date_to=date_to,
     )
-    total = (await asyncio.to_thread(prediction_stats, source_type=source))["total"]
+    total = await asyncio.to_thread(
+        count_predictions,
+        ticker=symbol,
+        status=status,
+        source_type=source,
+        keyword=keyword,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return {
         "predictions": items,
         "page": page,
