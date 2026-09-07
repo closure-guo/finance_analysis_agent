@@ -56,6 +56,7 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
     # 精确匹配天然排除——校准对象是离线 rubric。采样凑够 limit 条 trace 或翻完为止。
     dims = set(DEFAULT_DIMENSIONS)
     per_trace: dict[str, dict[str, float]] = {}
+    reasons: dict[tuple[str, str], str] = {}
     page = 1
     while len(per_trace) < limit and page <= 30:
         resp = requests.get(
@@ -79,10 +80,20 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
             if not trace_id:
                 continue
             per_trace.setdefault(trace_id, {})[name] = float(value)
+            reason = str(s.get("comment") or "")
+            if reason:
+                reasons[(trace_id, name)] = reason
         page += 1
 
     payload = [
-        {"trace_id": tid, "dimension": dim, "judge_score": score, "human_score": None}
+        {
+            "trace_id": tid,
+            "trace_url": f"{LANGFUSE_HOST}/trace/{tid}",
+            "dimension": dim,
+            "judge_score": score,
+            "judge_reason": reasons.get((tid, dim), ""),
+            "human_score": None,
+        }
         for tid, scores in sorted(per_trace.items())[:limit]
         for dim, score in sorted(scores.items())
     ]
@@ -104,7 +115,12 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="judge-人工校准标注抽样导出")
     parser.add_argument("--limit", type=int, default=30, help="抽样 trace 数（默认 30）")
-    parser.add_argument("--out", type=Path, default=Path("tmp/judge-sample.jsonl"))
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("evals/judge_calibration/data/judge-sample-round1.jsonl"),
+        help="标注 JSONL 输出路径（每行含 trace_url 直达 Langfuse；人工回填 human_score 后跑 measure.py）",
+    )
     args = parser.parse_args()
     export_to_jsonl(args.out, args.limit)
 
