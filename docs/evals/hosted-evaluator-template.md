@@ -111,6 +111,22 @@
   采样率: 10%
   模型: <judge 使用的模型>
   模板: <与上方一致则注「同模板 N」；有改动则粘贴 UI 实际内容>
+
+### 已上线配置快照（2026-09-07，端到端验证通过）
+
+四个 evaluator 已配置并真实打分（report_relevance 实证 score=4，见 tests/validation/2026-09-07-hosted-evaluator-e2e-validation.md）。
+
+| name | configId（job_configuration id） | 采样率 | 模型 | 模板 |
+|---|---|---|---|---|
+| report_relevance（报告切题度） | `5fb71fa3-207f-4af2-a4d7-20938e4f6d80` | 10% | deepseek-v4-flash (Ark) | 模板 1 |
+| debate_quality（辩论质量） | `76793e8a-5c7f-4801-937f-4cae95b30ac5` | 10% | deepseek-v4-flash (Ark) | 模板 2 |
+| decision_grounding（决策接地） | `ab3686d2-83c8-43dc-9abd-1687fec6cae5` | 10% | deepseek-v4-flash (Ark) | 模板 3 |
+| consistency（各层结论一致性） | `db65a5a2-b017-4fea-8f10-2e1868ad7550` | 10% | deepseek-v4-flash (Ark) | 模板 4 |
+
+- **Target**: Observations；**Filter**: `metadata.report_markdown starts with #` + `environment none of [langfuse-*]`
+- **输出键名**: 模板/Score output prompt 均用 `reasoning`（Langfuse output_schema 只认 `score`+`reasoning`）
+- **模型参数**: Additional options = `{"providerOptions": {"thinking": {"type": "disabled"}}}`（注：字段存为单层，勿再包一层）
+- 变量映射见上文各模板「映射」说明；数据源为 deep_analysis 根 span 的 `input.query` + `metadata.report_markdown`/`analyst_reports`/`debate_history`/`research_manager_decision`/`risk_judgment` + `output.final_trade_decision`/`fund_manager_decision`
 ```
 
 ## 口径对齐
