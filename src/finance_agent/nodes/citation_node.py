@@ -17,6 +17,7 @@ from finance_agent.citation_coverage import (
 )
 from finance_agent.langfuse_tracing import get_langfuse, update_current_span
 from finance_agent.models import AnalystReport
+from finance_agent.nodes.citation_repair import repair_claims
 from finance_agent.routing import citation_retry_stagnated
 
 logger = logging.getLogger("finance_agent.citation")
@@ -152,20 +153,106 @@ def verify_citations(state: dict) -> dict:
             if r.status != "FAIL" or r.bucket is None:
                 continue
             fail_buckets[r.bucket] = fail_buckets.get(r.bucket, 0) + 1
-            if r.bucket != "value_mismatch":
+            # 定向重试桶：value_mismatch + direction_mismatch（ehr-style-claim-direction，
+            # 与值级同级——符号冲突同样需要分析师重写申报组合）
+            if r.bucket not in ("value_mismatch", "direction_mismatch"):
                 continue
             if agent not in retry_targets:
                 retry_targets.append(agent)
-            retry_feedback.setdefault(agent, []).append(
-                {
-                    "field_ref": r.claim.field_ref,
-                    "stated_value": r.claim.stated_value,
-                    "ground_truth": r.ground_truth,
-                    "delta": r.delta,
-                    "interpretation": r.claim.interpretation,
+            item: dict = {
+                "field_ref": r.claim.field_ref,
+                "stated_value": r.claim.stated_value,
+                "ground_truth": r.ground_truth,
+                "delta": r.delta,
+                "interpretation": r.claim.interpretation,
+            }
+            if r.bucket == "direction_mismatch":
+                # ehr-style-claim-direction：方向冲突反馈携带真值符号 + 申报示例，
+                # 引导修正 stated_value 与 direction 的组合而非仅改数值。
+                sign = "负" if float(r.ground_truth or 0) < 0 else "正"
+                item["bucket"] = "direction_mismatch"
+                item["direction_hint"] = (
+                    f"ground_truth 符号为{sign}（{r.ground_truth}）；"
+                    "若正文以正向数值表述负向事实，请登记 stated_value=绝对值 + "
+                    "direction=negative（示例：下滑 10.05% → stated_value=10.05, "
+                    "direction=negative）；若正文直接写 signed 值，登记 stated_value=真值, "
+                    "direction=positive"
+                )
+            retry_feedback.setdefault(agent, []).append(item)
+    retry_targets.sort()
+
+    # surgical-citation-repair：value_mismatch 稀疏失败（该分析师同轮 <3 处）→
+    # 单点修复分流（出错句叙事改写 + 回填 + 强制重校验）；≥3 或修复调用失败回退
+    # 全量定向重试。原 value_mismatch 分桶计数保留（prompt 归因信号不吞），追加
+    # value_mismatch_repaired 遥测；同处重校验仍 FAIL 不二次修复；修复轮与全量
+    # 重试共享 iteration_count/停滞降级语义（成功率按重校验后 0.0 记入 fail_rates）。
+    value_mismatch_repaired = 0
+    _repair_records: list[dict] = []
+    if fail_buckets.get("value_mismatch", 0):
+        for agent, rs in per_agent.items():
+            vm = [r for r in rs if r.bucket == "value_mismatch"]
+            if agent == "anomaly_supplement" or not vm or len(vm) >= 3:
+                continue
+            rpt = reports.get(agent)
+            if rpt is None:
+                continue
+            md = _markdown_of(rpt)
+            if not md:
+                continue
+            try:
+                failures = [
+                    {"agent": agent, "claim": r.claim, "ground_truth": r.ground_truth} for r in vm
+                ]
+                new_md, records = repair_claims(md, failures, llm_config=state.get("llm_config"))
+            except Exception:
+                logger.warning(
+                    "单点修复调用失败，回退目标分析师全量重试：agent=%s", agent, exc_info=True
+                )
+                continue
+            reports[agent] = _with_markdown(reports[agent], new_md)
+            # repair records 按序对应 vm 失败（每个失败一条 updated_claim）——按
+            # 对象身份写回，field_ref 可能为占位值（测试/fixture 用 "x"）。
+            replaced: dict[int, Claim] = {}
+            for rec, r in zip(records, vm, strict=False):
+                if rec.get("updated_claim"):
+                    replaced[id(r.claim)] = rec["updated_claim"]
+            claims_by_agent[agent] = [replaced.get(id(c), c) for c in claims_by_agent[agent]]
+            reports[agent] = _with_claims(reports[agent], claims_by_agent[agent])
+            re_results = verify_claims(_extract_claims(reports[agent]), state)
+            re_report = CitationReport.from_results(re_results)
+            if re_report.all_passed:
+                value_mismatch_repaired += len(records)
+                _repair_records.extend(rec for rec in records if isinstance(rec, dict))
+                if agent in retry_targets:
+                    retry_targets.remove(agent)
+                retry_feedback.pop(agent, None)
+                per_agent[agent] = re_results
+
+    # 修复成功时：aggregate report / fail_rate 以重校验后的结果为准
+    # （markdown 已回填 reports，下方覆盖率普查自动用修复后文本）；遥测留痕
+    # （surgical-citation-repair 3.1/3.3：修前句/修后句/真值/重校验结果上 trace）。
+    if value_mismatch_repaired:
+        results = [r for rs in per_agent.values() for r in rs]
+        report = CitationReport.from_results(results)
+        try:
+            update_current_span(
+                metadata={
+                    "surgical_repairs": [
+                        {
+                            "agent": rec.get("agent"),
+                            "before": rec.get("before"),
+                            "after": rec.get("after") or rec.get("repaired_sentence"),
+                            "ground_truth": rec.get("ground_truth"),
+                            "repaired": rec.get("repaired"),
+                        }
+                        for rec in _repair_records
+                        if isinstance(rec, dict)
+                    ][:10],
+                    "value_mismatch_repaired": value_mismatch_repaired,
                 }
             )
-    retry_targets.sort()
+        except Exception:
+            logger.warning("surgical repair 遥测上报失败（不阻断）", exc_info=True)
 
     # 正文覆盖率：合并四分析师 markdown 普查，claim stated_value 全集为认领池
     # （含 anomaly_supplement 补登记 claim，认领池同步扩充）
@@ -218,7 +305,14 @@ def verify_citations(state: dict) -> dict:
             for agent, rpt in reports.items():
                 if raw in _markdown_of(rpt):
                     coverage_gap_feedback.setdefault(agent, []).append(
-                        {"kind": "coverage_gap", "raw": raw, "value": val}
+                        {
+                            "kind": "coverage_gap",
+                            "raw": raw,
+                            "value": val,
+                            # ehr-style-claim-direction：D6 打回提示补登记时同步申报方向
+                            "direction_hint": "补登记 claim 时请一并申报 direction"
+                            "（positive/negative/flat；None 旧格式会计覆盖缺口）",
+                        }
                     )
                     break
     gap_targets = sorted(coverage_gap_feedback)
@@ -246,6 +340,9 @@ def verify_citations(state: dict) -> dict:
         "citation_fail_buckets": fail_buckets,
         "citation_coverage": coverage.coverage,
         "citation_coverage_gap": citation_coverage_gap,
+        # surgical-citation-repair：单点修复遥测 + 修复后正文回填（供渲染/下游）
+        "value_mismatch_repaired": value_mismatch_repaired,
+        "analyst_reports": reports,
     }
 
 
@@ -263,6 +360,24 @@ def _markdown_of(report: AnalystReport | dict) -> str:
     if isinstance(report, dict):
         return str(report.get("markdown") or "")
     return ""
+
+
+def _with_markdown(report: AnalystReport | dict, new_markdown: str) -> AnalystReport | dict:
+    """返回带修复后 markdown 的报告副本（AnalystReport model_copy / dict 浅拷贝）。"""
+    if isinstance(report, AnalystReport):
+        return report.model_copy(update={"markdown": new_markdown})
+    if isinstance(report, dict):
+        return {**report, "markdown": new_markdown}
+    return report
+
+
+def _with_claims(report: AnalystReport | dict, claims: list[Claim]) -> AnalystReport | dict:
+    """返回带更新后 claim 列表的报告副本（修复 records 的 updated_claim 写回）。"""
+    if isinstance(report, AnalystReport):
+        return report.model_copy(update={"claims": claims})
+    if isinstance(report, dict):
+        return {**report, "claims": claims}
+    return report
 
 
 def _report_to_langfuse(

@@ -9,6 +9,7 @@
 
 import logging
 
+import finance_agent.nodes.citation_node as citation_node
 from finance_agent.citation import Claim
 from finance_agent.models import AnalystReport
 from finance_agent.nodes.citation_node import verify_citations
@@ -823,3 +824,256 @@ class TestAfterCitationCoverageGap:
             )
             == "render"
         )
+
+
+class TestDirectionFeedback:
+    """ehr-style-claim-direction：direction_mismatch 定向重试反馈 + 打回 direction 提示。"""
+
+    def test_direction_mismatch_retry_feedback_carries_truth_sign_and_example(self):
+        good = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=40.0,
+            interpretation="资产负债率 40%",
+            direction="positive",
+        )
+        bad = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="growth_rates.profitability.roe.yoy.2024",
+            stated_value=12.0,
+            interpretation="ROE 同比表现",
+            metric_name="ROE",
+            period="2024",
+            direction="positive",
+        )
+        state = {
+            "analyst_reports": {
+                "fundamental": _report("fundamental", [good, bad], "资产负债率 40%"),
+            },
+            "solvency_metrics": {"资产负债率": {"2024": 40.0}},
+            "growth_rates": {"profitability": {"roe": {"yoy": {"2024": -5.0}}}},
+        }
+        result = verify_citations(state)
+        assert "fundamental" in result["citation_retry_targets"]
+        fb = result["citation_retry_feedback"]["fundamental"]
+        d = [i for i in fb if i.get("bucket") == "direction_mismatch"]
+        assert len(d) == 1
+        assert d[0]["ground_truth"] == -5.0
+        assert "负" in d[0]["direction_hint"]
+        assert "direction=negative" in d[0]["direction_hint"]
+
+    def test_coverage_gap_feedback_carries_direction_hint(self):
+        md = "账上货币资金合计超过1400亿元，财务稳健。"
+        state = {
+            "analyst_reports": {
+                "fundamental": _report("fundamental", [], md),
+            },
+            "income_statement": {"20251231": {"营业总收入": 172.05e8}},
+        }
+        out = verify_citations(state)
+        assert out["citation_coverage_gap"] is True
+        fb = (out["citation_retry_feedback"] or {}).get("fundamental") or []
+        gaps = [i for i in fb if i.get("kind") == "coverage_gap"]
+        assert gaps, "coverage_gap 条目应存在"
+        assert all("direction" in i.get("direction_hint", "") for i in gaps)
+
+
+class TestSurgicalRepair:
+    """surgical-citation-repair：value_mismatch 稀疏失败的单点修复分流。"""
+
+    def _state(self, claims, md):
+        return {
+            "analyst_reports": {"fundamental": _report("fundamental", claims, md)},
+            "solvency_metrics": {"资产负债率": {"2024": 40.0, "2023": 38.0}},
+        }
+
+    def _bad(self, stated=99.0):
+        return Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2023",
+            stated_value=stated,
+            interpretation="2023 年资产负债率 99.0%",
+        )
+
+    def test_sparse_fail_repairs_and_reverifies(self, monkeypatch):
+        md = "2023 年资产负债率为 99.0%，杠杆水平异常偏高。"
+        calls = []
+
+        def fake_repair(markdown, failures, llm_config=None):
+            calls.append(failures)
+            return markdown.replace("99.0%", "38.0%"), [
+                {
+                    "agent": "fundamental",
+                    "field_ref": "x",
+                    "ground_truth": 38.0,
+                    "repaired": True,
+                    "updated_claim": self._bad(stated=38.0).model_copy(
+                        update={"interpretation": "2023 年资产负债率为 38.0%，杠杆水平异常偏高。"}
+                    ),
+                }
+            ]
+
+        monkeypatch.setattr(citation_node, "repair_claims", fake_repair)
+        out = verify_citations(self._state([self._bad()], md))
+        assert len(calls) == 1
+        assert out["citation_pass"] is True
+        assert out["citation_retry_targets"] == []
+        assert out["value_mismatch_repaired"] == 1
+        # 原桶保留（prompt 归因信号不吞）
+        assert out["citation_fail_buckets"] == {"value_mismatch": 1}
+        # 修复后 markdown 回填 state 供渲染/下游
+        rpt = out["analyst_reports"]["fundamental"]
+        md2 = rpt.markdown if hasattr(rpt, "markdown") else rpt["markdown"]
+        assert "38.0%" in md2 and "99.0%" not in md2
+
+    def test_dense_fail_falls_back_to_full_retry(self, monkeypatch):
+        claims = [self._bad(99.0 + i) for i in range(4)]
+        md = "资产负债率 99.0%、99.1%、99.2%、99.3% 均异常。"
+
+        def no_repair(markdown, failures, llm_config=None):
+            raise AssertionError("≥3 处不应触发单点修复")
+
+        monkeypatch.setattr(citation_node, "repair_claims", no_repair)
+        out = verify_citations(self._state(claims, md))
+        assert out["citation_retry_targets"] == ["fundamental"]
+        assert out["citation_pass"] is False
+
+    def test_repaired_still_failing_falls_back_not_repaired_twice(self, monkeypatch):
+        md = "2023 年资产负债率为 99.0%，杠杆水平异常偏高。"
+        calls = []
+
+        def bad_repair(markdown, failures, llm_config=None):
+            calls.append(1)
+            # 修复了但没修对（数字原样）：重校验仍 value_mismatch
+            return markdown, [
+                {
+                    "agent": "fundamental",
+                    "field_ref": "x",
+                    "ground_truth": 38.0,
+                    "repaired": True,
+                    "updated_claim": self._bad(stated=99.0),
+                }
+            ]
+
+        monkeypatch.setattr(citation_node, "repair_claims", bad_repair)
+        out = verify_citations(self._state([self._bad()], md))
+        assert len(calls) == 1, "同处不得二次单点修复"
+        assert out["citation_pass"] is False
+        assert out["citation_retry_targets"] == ["fundamental"]
+
+    def test_repair_module_crash_does_not_break_verification(self, monkeypatch):
+        md = "2023 年资产负债率为 99.0%，杠杆水平异常偏高。"
+
+        def boom(markdown, failures, llm_config=None):
+            raise RuntimeError("repair down")
+
+        monkeypatch.setattr(citation_node, "repair_claims", boom)
+        out = verify_citations(self._state([self._bad()], md))
+        assert out["citation_pass"] is False
+        assert out["citation_retry_targets"] == ["fundamental"]
+        assert out["citation_fail_buckets"] == {"value_mismatch": 1}
+
+
+class TestSurgicalRepairStagnation:
+    """surgical-citation-repair 2.5：停滞降级对单点修复轮同样生效。"""
+
+    def test_stagnation_renders_even_when_repair_applicable(self, monkeypatch):
+        import finance_agent.nodes.citation_node as citation_node
+
+        md = "2023 年资产负债率为 99.0%，杠杆水平异常偏高。"
+        state = {
+            "analyst_reports": {
+                "fundamental": _report(
+                    "fundamental",
+                    [
+                        Claim(
+                            claim_type="numerical",
+                            source_type="data",
+                            field_ref="solvency_metrics.资产负债率.2023",
+                            stated_value=99.0,
+                            interpretation="2023 年资产负债率 99.0%",
+                        )
+                    ],
+                    md,
+                )
+            },
+            "solvency_metrics": {"资产负债率": {"2024": 40.0, "2023": 38.0}},
+            "citation_fail_rates": [0.35, 0.31],
+            "iteration_count": 1,
+        }
+
+        def fake_repair(markdown, failures, llm_config=None):
+            return markdown.replace("99.0%", "38.0%"), [
+                {
+                    "agent": "fundamental",
+                    "field_ref": "x",
+                    "ground_truth": 38.0,
+                    "repaired": True,
+                    "updated_claim": Claim(
+                        claim_type="numerical",
+                        source_type="data",
+                        field_ref="solvency_metrics.资产负债率.2023",
+                        stated_value=38.0,
+                        interpretation="2023 年资产负债率为 38.0%，杠杆水平异常偏高。",
+                    ),
+                }
+            ]
+
+        monkeypatch.setattr(citation_node, "repair_claims", fake_repair)
+        out = verify_citations(state)
+        from finance_agent.routing import after_citation
+
+        # 修复成功（citation_pass=True）→ render；若未修复，停滞判定同样 render
+        route = after_citation(out)
+        assert route == "render"
+        # 停滞序列透传（未被修复轮清空或改写）
+        assert out["citation_fail_rates"] == [0.35, 0.31, 0.0]
+
+
+class TestSurgicalRepairIntegration:
+    """surgical-citation-repair 4.2 全链路（真实 repair_claims + mock LLM 契约）：
+    修复调用 → 回填 → 重校验 PASS → value_mismatch_repaired 遥测。"""
+
+    def test_real_repair_chain_reverify_and_telemetry(self, monkeypatch):
+        from finance_agent.nodes import citation_node, citation_repair
+
+        md = "2023 年资产负债率为 99.0%，杠杆水平异常偏高。"
+        claims = [
+            Claim(
+                claim_type="numerical",
+                source_type="data",
+                field_ref="solvency_metrics.资产负债率.2023",
+                stated_value=99.0,
+                interpretation="2023 年资产负债率 99.0%",
+            )
+        ]
+        state = {
+            "analyst_reports": {"fundamental": _report("fundamental", claims, md)},
+            "solvency_metrics": {"资产负债率": {"2023": 38.0}},
+        }
+
+        # 真实 repair_claims 的 LLM 输出契约：report 修正值 + 整句回填
+        seen = {}
+
+        def fake_llm(prompt, system, **kw):
+            seen["system"] = system
+            seen["llm_config"] = kw.get("llm_config")
+            return {
+                "repaired_sentence": "2023 年资产负债率为 38.0%，杠杆水平异常偏高。",
+                "stated_value": 38.0,
+            }
+
+        monkeypatch.setattr(citation_repair, "call_llm_for_json", fake_llm)
+        out = citation_node.verify_citations(state)
+
+        assert seen["llm_config"] is None
+        assert "单点修复器" in seen["system"]  # 走真实单点修复系统模板
+        assert out["value_mismatch_repaired"] == 1
+        assert out["citation_pass"] is True
+        assert out["citation_retry_targets"] == []
+        rpt = out["analyst_reports"]["fundamental"]
+        md2 = rpt.markdown if hasattr(rpt, "markdown") else rpt["markdown"]
+        assert "38.0%" in md2 and "99.0%" not in md2

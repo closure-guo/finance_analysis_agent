@@ -504,7 +504,9 @@ class TestComputationalRegistryCoverage:
         state = self._state(balance_sheet, income_statement, cash_flow, indicators)
         truth = _COMPUTATIONAL_RECALC["dupont_tree"](state)
         # harden-citation-semantic-coverage D5：未申报 metric_name/period 也计覆盖缺口，
-        # 故本用例全申报（与 field_ref 一致），仅钉「已注册根键 → 不计缺口」语义。
+        # ehr-style-claim-direction：数值/计算型缺 direction 同样计缺口——
+        # 故本用例全申报（direction=flat，ROE 符号随标的而异不做符号断言），
+        # 仅钉「已注册根键 → 不计缺口」语义。
         claim = Claim(
             claim_type="computational",
             source_type="data",
@@ -513,6 +515,7 @@ class TestComputationalRegistryCoverage:
             interpretation="",
             metric_name="ROE",
             period="2024",
+            direction="flat",
         )
         results = verify_claims([claim], state)
         report = CitationReport.from_results(results)
@@ -526,7 +529,7 @@ class TestComparativeBaseDeclaration:
     _STATE = {"profitability_metrics": {"净利率": {"2025": 19.07, "2024": 21.93}}}
 
     def _claim(self, **kw):
-        base = {
+        params = {
             "claim_type": "comparative",
             "source_type": "data",
             "field_ref": "profitability_metrics.净利率.2025",
@@ -534,8 +537,8 @@ class TestComparativeBaseDeclaration:
             "interpretation": "2025 净利率较 2024 下滑",
             "field_ref_b": "profitability_metrics.净利率.2024",
         }
-        base.update(kw)
-        return Claim(**base)
+        params.update(kw)
+        return Claim(**params)  # type: ignore[arg-type]
 
     def test_base_value_correct_passes(self):
         (r,) = verify_claims([self._claim(stated_value_b=21.93)], self._STATE)
@@ -552,3 +555,107 @@ class TestComparativeBaseDeclaration:
         (r,) = verify_claims([self._claim()], self._STATE)
         assert r.status == "FAIL"
         assert r.bucket == "path_unresolvable"
+
+
+class TestClaimDirectionField:
+    """ehr-style-claim-direction：Claim.direction 字段模型测试。"""
+
+    def test_direction_accepts_enum_values(self):
+        for d in ("positive", "negative", "flat"):
+            claim = Claim(
+                claim_type="numerical",
+                source_type="data",
+                field_ref="solvency_metrics.资产负债率.2024",
+                stated_value=40.0,
+                interpretation="资产负债率 40%",
+                direction=d,
+            )
+            assert claim.direction == d
+
+    def test_direction_defaults_to_none(self):
+        claim = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="solvency_metrics.资产负债率.2024",
+            stated_value=40.0,
+            interpretation="资产负债率 40%",
+        )
+        assert claim.direction is None
+
+    def test_direction_rejects_invalid_value(self):
+        from pydantic import ValidationError
+
+        # model_validate 走 dict 路径，绕过 mypy 字面量静态检查（运行时拒绝是本测试靶点）
+        with pytest.raises(ValidationError):
+            Claim.model_validate(
+                {
+                    "claim_type": "numerical",
+                    "source_type": "data",
+                    "field_ref": "solvency_metrics.资产负债率.2024",
+                    "stated_value": 40.0,
+                    "interpretation": "资产负债率 40%",
+                    "direction": "down",
+                }
+            )
+
+
+class TestDirectionVerification:
+    """direction 申报与方向一致性校验（ehr-style-claim-direction）。
+
+    语义：negative = 正文以正向数值表述负向事实（「下滑 10.05%」↔ gt=-10.05），
+    判定用 sign(stated)×dir_sign 对齐 gt 后再走既有容差。
+    """
+
+    _STATE = {"growth_rates": {"profitability": {"net_profit_growth": {"yoy": {"2024": -10.05}}}}}
+
+    def _claim(self, direction, stated=10.05):
+        return Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="growth_rates.profitability.net_profit_growth.yoy.2024",
+            stated_value=stated,
+            interpretation="净利润同比变化表现",
+            metric_name="净利润同比增速",
+            period="2024",
+            direction=direction,
+        )
+
+    def test_negative_modifier_matches_negative_truth(self):
+        # 「下滑 10.05%」→ stated=10.05 + direction=negative ↔ gt=-10.05 → PASS
+        (r,) = verify_claims([self._claim("negative")], self._STATE)
+        assert r.status == "PASS"
+        assert r.coverage_gap is False
+
+    def test_positive_modifier_against_negative_truth_fails(self):
+        # 申报 positive 但真值为负 → FAIL，新桶 direction_mismatch
+        (r,) = verify_claims([self._claim("positive")], self._STATE)
+        assert r.status == "FAIL"
+        assert r.bucket == "direction_mismatch"
+
+    def test_undeclared_direction_value_fail_counts_gap(self):
+        # direction=None（旧格式）：跳过方向检查，值级照常判，且计覆盖缺口
+        (r,) = verify_claims([self._claim(None)], self._STATE)
+        assert r.status == "FAIL"
+        assert r.bucket == "value_mismatch"
+        assert r.coverage_gap is True
+
+    def test_undeclared_direction_value_pass_still_counts_gap(self):
+        # 旧格式 signed 表述值级可过，但缺 direction 申报 → 显式降级计缺口
+        (r,) = verify_claims([self._claim(None, stated=-10.05)], self._STATE)
+        assert r.status == "PASS"
+        assert r.coverage_gap is True
+
+    def test_flat_declared_skips_sign_check_and_gap(self):
+        # flat = 申报了但断言无方向语义：跳过符号检查，不算缺口
+        (r,) = verify_claims([self._claim("flat", stated=-10.05)], self._STATE)
+        assert r.status == "PASS"
+        assert r.coverage_gap is False
+
+    def test_declared_direction_skips_text_direction_words(self):
+        # 双路径二义消除：已申报 direction 的 claim 不再走正文方向词核对
+        # （旧路径会因「下滑」+ stated>0 判 internal_inconsistency）
+        claim = self._claim("negative")
+        claim.interpretation = "净利润下滑10.05%，盈利承压"
+        (r,) = verify_claims([claim], self._STATE)
+        assert r.status == "PASS"
+        assert r.bucket != "internal_inconsistency"
