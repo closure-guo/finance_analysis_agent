@@ -210,3 +210,141 @@ class TestRunGraphStreamingEvalData:
             list(
                 _run_graph_streaming("600519", "贵州茅台", req, "aid-1", 0.0, session_id="sess-1")
             )  # 不抛
+
+
+def _analyst_report_obj(name: str):
+    from finance_agent.models import AnalystReport
+
+    return AnalystReport(
+        agent_name=name,
+        summary=f"{name} 摘要",
+        key_findings=[f"{name} 关键发现"],
+        claims=[],
+        markdown=f"## {name} 完整报告\n全文正文……",
+    )
+
+
+def _debate_msg_obj(role: str, round_: int):
+    from finance_agent.models import DebateMessage
+
+    return DebateMessage(
+        role=role, round=round_, content=f"{role} r{round_} 论点", key_arguments=[]
+    )
+
+
+def _fake_graph_full_eval():
+    """yield 全量评估字段（analyst_reports/debate_history/RM 结论/risk 裁决）。"""
+    g = MagicMock()
+    g.stream.return_value = iter(
+        [
+            (
+                "updates",
+                {
+                    "after_citation": {
+                        "analyst_reports": {"technical": _analyst_report_obj("technical")},
+                        "debate_history": [_debate_msg_obj("bull", 1)],
+                    }
+                },
+            ),
+            (
+                "updates",
+                {"research_manager": {"research_manager_conclusion": "RM 结论：谨慎看多"}},
+            ),
+            (
+                "updates",
+                {"risk_judge": {"final_trade_decision": {"action": "buy", "confidence": 0.7}}},
+            ),
+            ("updates", {"after_report": {"final_report": "# 报告\n全文"}}),
+        ]
+    )
+    return g
+
+
+class TestStreamGraphEvalFullData:
+    """deep-trace-eval-full-data：根 span metadata 含全量评估段。"""
+
+    def test_metadata_has_full_eval_fields(self):
+        from finance_agent.agent_factory import _stream_graph
+
+        mock_lf = MagicMock()
+        mock_root = MagicMock()
+        mock_lf.start_as_current_observation.return_value = mock_root
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.graph.build_5layer_graph", _fake_graph_full_eval),
+        ):
+            list(
+                _stream_graph(
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    session_id="sess-1",
+                )
+            )
+        obs = mock_root.__enter__.return_value
+        obs.update.assert_called()
+        meta = obs.update.call_args.kwargs["metadata"]
+        # 全量分析师报告（含 markdown 全文，非摘要）
+        assert "analyst_reports" in meta
+        assert meta["analyst_reports"]["technical"]["markdown"] == (
+            "## technical 完整报告\n全文正文……"
+        )
+        assert meta["analyst_reports"]["technical"]["summary"] == "technical 摘要"
+        # 辩论记录
+        assert "debate_history" in meta
+        assert meta["debate_history"][0]["role"] == "bull"
+        assert meta["debate_history"][0]["content"] == "bull r1 论点"
+        # RM 结论与风险裁决
+        assert meta["research_manager_decision"] == "RM 结论：谨慎看多"
+        assert meta["risk_judgment"] == {"action": "buy", "confidence": 0.7}
+        # 既有 report_markdown 不回归
+        assert meta["report_markdown"] == "# 报告\n全文"
+
+    def test_missing_fields_omitted(self):
+        from finance_agent.agent_factory import _stream_graph
+
+        g = MagicMock()
+        g.stream.return_value = iter([("updates", {"after_report": {"final_report": "# 报告"}})])
+        mock_lf = MagicMock()
+        mock_root = MagicMock()
+        mock_lf.start_as_current_observation.return_value = mock_root
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.graph.build_5layer_graph", g),
+        ):
+            list(_stream_graph({"stock_code": "600519"}, session_id="sess-1"))
+        obs = mock_root.__enter__.return_value
+        obs.update.assert_called()
+        meta = obs.update.call_args.kwargs["metadata"]
+        assert "debate_history" not in meta
+        assert "research_manager_decision" not in meta
+        assert "risk_judgment" not in meta
+        assert "report_markdown" in meta  # 仍写（可为空串）
+
+
+class TestRunGraphStreamingEvalFullData:
+    """deep-trace-eval-full-data：api 快路径 metadata 含全量评估段。"""
+
+    def test_metadata_has_full_eval_fields(self):
+        from finance_agent.api import AnalyzeRequest, _run_graph_streaming
+
+        mock_lf = MagicMock()
+        mock_root = MagicMock()
+        mock_lf.start_as_current_observation.return_value = mock_root
+        req = AnalyzeRequest(query="深度分析600519", stock_code="600519")
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mock_lf),
+            patch("finance_agent.langfuse_tracing.get_callback_handler", return_value=None),
+            patch("finance_agent.api.graph", _fake_graph_full_eval()),
+            patch("langfuse.propagate_attributes") as mock_prop,
+        ):
+            mock_prop.return_value = MagicMock()
+            list(_run_graph_streaming("600519", "贵州茅台", req, "aid-1", 0.0, session_id="sess-1"))
+        obs = mock_root.__enter__.return_value
+        obs.update.assert_called()
+        meta = obs.update.call_args.kwargs["metadata"]
+        assert "analyst_reports" in meta
+        assert meta["analyst_reports"]["technical"]["markdown"].startswith("## technical")
+        assert "debate_history" in meta
+        assert meta["research_manager_decision"] == "RM 结论：谨慎看多"
+        assert meta["risk_judgment"] == {"action": "buy", "confidence": 0.7}

@@ -964,6 +964,7 @@ def _run_graph_streaming(
     # v4 CallbackHandler 在 LangGraph graph.stream 不建主 trace,必须手动建 root,
     # 否则内部 generation/数据源 span 各自成孤立 trace。
     from finance_agent.langfuse_tracing import (
+        build_eval_metadata,
         eval_analysis_query,
         get_callback_handler,
         get_langfuse,
@@ -1133,11 +1134,11 @@ def _run_graph_streaming(
             }
         )
     finally:
-        # 根 span 退出前写入 metadata.report_markdown（供 hosted evaluator 取完整报告，
-        # 与 _stream_graph 对齐；content-fidelity:post-exit update 会被丢弃）
+        # 根 span 退出前写入评估数据 metadata（供 hosted evaluator 取完整报告/分析师/
+        # 辩论/裁决数据，与 _stream_graph 对齐；post-exit update 会被 Langfuse 丢弃）
         if _root_obs is not None:
             with contextlib.suppress(Exception):
-                _root_obs.update(metadata={"report_markdown": accumulated.get("final_report", "")})
+                _root_obs.update(metadata=build_eval_metadata(accumulated))
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):
