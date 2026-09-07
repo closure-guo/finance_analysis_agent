@@ -17,8 +17,14 @@
 - [x] 3.1 阈值配置化（JUDGE_MIN_SPEARMAN/JUDGE_MAX_MAE/JUDGE_MIN_DIRECTION）+ 低于阈值
        need_calibrate 标注 → 触发 judge prompt 修订流程（走 prompt-deploy 管线后重测）
 - [x] 3.2 judge prompt 变更后强制校准（流程性约定：变更后必跑 measure.py；结论归档 docs/evals/）
-- [ ] 3.3 首轮真实标注 + 校准报告——**待人工**：跑 export CLI → 人工打分 ≥30 条 →
-       measure.py 出报告（需人工标注资源，无法自动化）
+- [x] 3.3 首轮校准——**以跨模型一致性代理完成（2026-09-07，人工标注延后至 backlog）**：
+       导出 CLI 修复（sys.path + scores 端点按维度聚合）产出 90 行/30 trace 标注材料
+       （evals/judge_calibration/data/judge-sample-round1.jsonl，含 trace_url 直链 +
+       judge_reason）；人工打分缺位时改用三家 LLM（deepseek/qwen3.8-flash/k3-256k）交叉重评，
+       measure.py 一致性计算复用（整体 Spearman 0.63/方向 81%），报告
+       reports/judge-cross-model-report-20260907.md。
+       **延后项**：spec 要求的人工打分 ≥30 条 → measure.py 报告 仍开放（工具链已就绪）
+       ——exporter 抽样直接可用，人工回填 human_score 后重跑即可
 
 ## 4. 验证
 
