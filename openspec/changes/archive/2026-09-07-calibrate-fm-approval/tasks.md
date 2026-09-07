@@ -22,4 +22,4 @@
 
 - [x] 4.1 uv run pytest（全套 1811 passed）/ ruff / mypy 全绿
 - [x] 4.2 nightly @live 注册：tests/evals/test_fm_decision_live.py（pytest -m live，无 key 跳过；nightly CI 需加 LANGFUSE secrets 才能全量生效——仓库管理员跟进）
-- [ ] 4.3 真实链路人工验证：deep 分析走通 return→trader 重跑→报告反映改进方案（Langfuse trace 佐证）
+- [x] 4.3 真实链路人工验证（2026-09-07，session 794fc89e trace ab6d1fd2）：FM#0 return → trader#1 重跑输入含「基金经理退回意见」（state schema 缺键致丢弃，已修 68d58bf）→ FM#1 approve 见 tests/validation/2026-09-07-real-run-four-deltas-validation.md

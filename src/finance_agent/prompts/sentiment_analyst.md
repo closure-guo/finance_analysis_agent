@@ -45,7 +45,7 @@
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. 如果新闻数据缺失，标注"新闻数据暂不可用"，基于已有信息分析
 5. markdown 中包含完整的舆情分析章节
-6. entity/event 型 claim 的 metric_name 与 period 可置 null（舆情分析以实体/事件引用为主，不强制数值口径）；若引用了具体数值（如百分比、金额），则应补填 metric_name 与 period，规则同数据型分析师
+6. entity/event 型 claim 的 metric_name 与 period 可置 null（舆情分析以实体/事件引用为主，不强制数值口径）；若引用了具体数值（如百分比、金额），则应补填 metric_name 与 period，规则同数据型分析师，并同时申报 direction（positive/negative/flat，符号语义见数据型分析师 6.5 条：正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；signed 值 → positive；无方向语义 → flat）
 
 ## 分析方法论
 
