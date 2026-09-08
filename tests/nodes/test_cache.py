@@ -9,8 +9,17 @@ check_cache 职责：
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
+from finance_agent.data.monitoring import get_monitor, reset_monitor_for_tests
 from finance_agent.nodes.cache import check_cache
+
+
+@pytest.fixture(autouse=True)
+def reset_mon():
+    reset_monitor_for_tests()
+    yield
+    reset_monitor_for_tests()
 
 
 class TestCheckCacheMiss:
@@ -103,3 +112,35 @@ class TestCheckCachePartial:
         state = {"stock_code": "600519"}
         result = check_cache(state, cache=mock_cache)
         assert result["cache_result"] == "MISS"
+
+
+class TestCheckCacheMonitoring:
+    """数据源监控埋点（非侵入）：MISS/HIT 出口计数，不改判定与返回结构。"""
+
+    def test_check_cache_miss_records_miss(self):
+        """MISS 出口应使未命中计数 +1。"""
+        cache = MagicMock()
+        cache.get.return_value = None
+        result = check_cache({"stock_code": "600519"}, cache=cache)
+        assert result["cache_result"] == "MISS"
+        assert get_monitor().snapshot()["misses"] == 1
+
+    def test_check_cache_hit_records_hit(self):
+        """HIT 出口应使命中计数 +1。"""
+        hit_data = {
+            "600519:balance_sheet": pd.DataFrame({"报告日": ["20241231"]}),
+            "600519:income_statement": pd.DataFrame({"报告日": ["20241231"]}),
+            "600519:cash_flow_statement": pd.DataFrame({"报告日": ["20241231"]}),
+            "600519:industry_info": {"industry": "白酒"},
+            "600519:stock_quote": {"price": 1800.0},
+            "600519:kline": pd.DataFrame({"收盘": [1800.0]}),
+            "benchmark_kline": pd.DataFrame({"收盘": [4000.0]}),
+            "macro_indicators": {"pmi": []},
+            "600519:news": [{"title": "x"}],
+        }
+        cache = MagicMock()
+        cache.get.side_effect = hit_data.get
+        result = check_cache({"stock_code": "600519"}, cache=cache)
+        assert result["cache_result"] == "HIT"
+        assert "kline" in result
+        assert get_monitor().snapshot()["hits"] == 1

@@ -24,6 +24,7 @@ import pandas as pd
 
 from finance_agent.data.akshare_client import AKShareClient
 from finance_agent.data.cache import DataCache
+from finance_agent.data.monitoring import get_monitor
 from finance_agent.langfuse_tracing import open_span
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,8 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                     if obs:
                         obs.update(output=_summarize_success_output(value))
                 except Exception as e:
+                    # 数据源监控：失败计数（非侵入，不改重试/降级/回退/终态发布逻辑）
+                    get_monitor().record_fail(label)
                     if obs:
                         obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
                     if label in ("balance_sheet", "income_statement", "cash_flow_statement"):

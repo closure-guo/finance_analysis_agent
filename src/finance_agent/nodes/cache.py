@@ -23,6 +23,7 @@ TTL 策略（ADR-0004 + 收窄）：
 from __future__ import annotations
 
 from finance_agent.data.cache import DataCache, get_shared_cache
+from finance_agent.data.monitoring import get_monitor
 
 
 def _get_cache(cache: DataCache | None = None) -> DataCache:
@@ -55,6 +56,8 @@ def check_cache(state: dict, cache=None) -> dict:
     for key in keys:
         val = c.get(key)
         if val is None:
+            # 数据源监控：未命中计数（非侵入，不改 MISS 判定）
+            get_monitor().record_miss()
             return {"cache_result": "MISS"}
         cached[key] = val
 
@@ -90,4 +93,6 @@ def check_cache(state: dict, cache=None) -> dict:
     if quarterly_income is not None:
         result["quarterly_income"] = quarterly_income
 
+    # 数据源监控：命中计数（非侵入，不改 HIT 判定与返回结构）
+    get_monitor().record_hit()
     return result
