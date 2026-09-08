@@ -402,3 +402,75 @@ class TestDataGapLogging:
             "降级" in r.message or "fallback" in r.message or "cninfo" in r.message
             for r in caplog.records
         ), "行业 fallback 无 WARNING 日志"
+
+
+class TestFetchStockQuoteBaiduFallback:
+    """add-quote-baidu-fallback：东财行情失败时回退百度估值+腾讯日线。"""
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_baidu_market_cap_pb_and_tencent_price(self, mock_ak, client):
+        """东财失败 → 百度总市值/PB + 腾讯最新收盘价并入 result。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None  # 东财主源失败
+        # 百度估值：总市值 + 市净率（各返回 df，末行最新）
+        mock_ak.stock_zh_valuation_baidu.side_effect = [
+            __import__("pandas").DataFrame(
+                {"date": [__import__("datetime").date(2026, 9, 7)], "value": [1846.54]}
+            ),
+            __import__("pandas").DataFrame(
+                {"date": [__import__("datetime").date(2026, 9, 7)], "value": [14.52]}
+            ),
+        ]
+        # 腾讯日线：最新收盘 632.0
+        mock_ak.stock_zh_a_hist_tx.return_value = __import__("pandas").DataFrame(
+            {"date": [__import__("datetime").date(2026, 9, 8)], "close": [632.0]}
+        )
+        mock_ak.stock_info_a_code_name.return_value = __import__("pandas").DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+
+        result = client.fetch_stock_quote("688072")
+
+        assert result.get("market_cap") == 1846.54
+        assert result.get("PB") == 14.52
+        assert result.get("price") == 632.0
+        assert result.get("name") == "拓荆科技"
+        # PE 不推导（留给下游），不出现
+        assert "PE" not in result or result["PE"] is None
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_baidu_pb_failure_keeps_market_cap(self, mock_ak, client):
+        """百度市净率失败不影响总市值（部分成功，不抛异常）。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None
+        mock_ak.stock_zh_valuation_baidu.side_effect = [
+            __import__("pandas").DataFrame(
+                {"date": [__import__("datetime").date(2026, 9, 7)], "value": [1846.54]}
+            ),
+            ConnectionError("baidu pb refused"),
+        ]
+        mock_ak.stock_zh_a_hist_tx.return_value = __import__("pandas").DataFrame(
+            {"date": [__import__("datetime").date(2026, 9, 8)], "close": [632.0]}
+        )
+        mock_ak.stock_info_a_code_name.return_value = __import__("pandas").DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+
+        result = client.fetch_stock_quote("688072")
+
+        assert result.get("market_cap") == 1846.54  # 总市值保留
+        assert "PB" not in result or result["PB"] is None  # PB 缺失不抛
+        assert result.get("price") == 632.0
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_all_fallback_fail_returns_name_only(self, mock_ak, client, caplog):
+        """百度腾讯全失败 → 仅名称 + ERROR 日志。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None
+        mock_ak.stock_zh_valuation_baidu.side_effect = ConnectionError("baidu refused")
+        mock_ak.stock_zh_a_hist_tx.side_effect = ConnectionError("tencent refused")
+        mock_ak.stock_info_a_code_name.return_value = __import__("pandas").DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_stock_quote("688072")
+        assert result.get("name") == "拓荆科技"
+        assert "PE" not in result or result["PE"] is None
+        assert any("行情" in r.message for r in caplog.records), "全部回退失败无 ERROR 日志"

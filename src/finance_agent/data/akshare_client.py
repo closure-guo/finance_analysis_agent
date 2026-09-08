@@ -270,15 +270,43 @@ class AKShareClient:
             if not row.empty:
                 raw = row.iloc[0].to_dict()
                 return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
-        # 降级：仅获取名称+代码
-        # 可观测性（2026-09-08 审计）：东财行情被 TLS 风控封锁时此处静默降级，
-        # PE/PB/市值/价格全部丢失且无日志——下游估值维度（GARP/相对估值）会静默
-        # 跳过，人工无从察觉。降级 MUST 留 ERROR（数据维度缺失，非预期降级）。
-        logger.error("东财行情接口不可用，降级为仅名称（PE/PB/市值/价格缺失）: %s", stock_code)
-        fallback = self._fetch_name_fallback(stock_code)
-        if fallback:
-            fallback["code"] = stock_code
-        return fallback
+
+        # ── 二级回退（add-quote-baidu-fallback）：东财被 TLS 风控封锁时，
+        # 用百度估值补 market_cap/PB、腾讯日线补 price——恢复估值与价格维度
+        # （此前静默降级为仅名称，GARP/相对估值/图表全部丢失且无日志）。
+        # PE 不在 quote 内推导（口径依赖财务数据，留给下游 compute/charts），
+        # 各源独立 try/except：任一失败不影响其余，缺失字段由下游守卫跳过。
+        logger.warning("东财行情不可用，尝试百度估值+腾讯日线回退: %s", stock_code)
+        result = self._fetch_name_fallback(stock_code)
+        if result:
+            result["code"] = stock_code
+
+        # 百度估值：总市值 → market_cap；市净率 → PB（各指标末行最新）
+        for indicator, key in (("总市值", "market_cap"), ("市净率", "PB")):
+            try:
+                df_val = _call_ak(
+                    ak.stock_zh_valuation_baidu, symbol=stock_code, indicator=indicator
+                )
+                if df_val is not None and not df_val.empty and "value" in df_val.columns:
+                    result[key] = float(df_val.iloc[-1]["value"])
+            except Exception:
+                logger.warning("百度估值 %s 拉取失败: %s", indicator, stock_code)
+
+        # 腾讯日线最新收盘 → price
+        try:
+            df_tx = _call_ak(
+                ak.stock_zh_a_hist_tx, symbol=self._to_sina_symbol(stock_code), adjust="qfq"
+            )
+            if df_tx is not None and not df_tx.empty and "close" in df_tx.columns:
+                result["price"] = float(df_tx.iloc[-1]["close"])
+        except Exception:
+            logger.warning("腾讯日线价格拉取失败: %s", stock_code)
+
+        # 可观测性：估值/价格维度全部缺失时留 ERROR（数据维度缺失，非预期降级）
+        has_valuation = any(result.get(k) is not None for k in ("market_cap", "PB", "price"))
+        if not has_valuation:
+            logger.error("行情回退后仍缺估值/价格（PE/PB/市值/价格缺失）: %s", stock_code)
+        return result
 
     def fetch_quarterly_income(self, stock_code: str, quarters: int = 4) -> pd.DataFrame:
         """拉取单季度利润表，计算同比/环比变化率。
