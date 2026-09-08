@@ -17,4 +17,4 @@
 ## 3. 验证与收尾
 
 - [x] 3.1 `uv run pytest tests/ --ignore=tests/e2e -m "not live"` + `ruff check` + `mypy`（基线对比）全绿
-- [ ] 3.2 实跑一次深度分析，对账：宏观/基本面引用最新数据（非 2008）、citation 无因索引错位误报、重试环不再空转；人工验证报告落 `tests/validation/`
+- [x] 3.2 实跑对账（2026-09-07）：基本面引用最新期（ROE 15.77% 等）、无 2008 旧期误引、管线正常无重试风暴；宏观数据源本次不可用如实报告（排序修复由 9 例单测覆盖）；验证报告 tests/validation/2026-09-07-real-run-four-deltas-validation.md

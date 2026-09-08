@@ -95,6 +95,7 @@ class AnalysisState(TypedDict, total=False):
 
     # Layer V: Fund Manager
     fund_manager_decision: Literal["approve", "reject", "return"]
+    fund_manager_decision_reasoning: str  # FM 退回/批准理由（回路契约：未声明则被图合并丢弃）
     return_count: int  # 退回次数（上限 1）
     langfuse_trace_id: str  # fund_manager approve 时捕获,decision_log 反向上报用
 

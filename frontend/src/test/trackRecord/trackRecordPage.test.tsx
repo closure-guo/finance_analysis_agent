@@ -298,3 +298,105 @@ describe('切片面板/版本切换/详情跳转（add-track-record-stage-c）',
     await waitFor(() => expect(window.location.pathname).toBe('/track-record/predictions/p1'))
   })
 })
+
+describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-filter）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('渲染建立日期列（created_at 日期部分）', async () => {
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    expect(screen.getByText('2026-09-01')).toBeInTheDocument()
+    expect(screen.getByText('2026-09-02')).toBeInTheDocument()
+  })
+
+  it('点击「区间收益」表头请求 sort_by=raw_return 并显示排序指示', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          predictions: PREDICTIONS, page: 1, page_size: 50, total: 2,
+          as_of: 'x', disclaimer: 'x',
+        }), { status: 200 }))
+      }
+      if (url.includes('/overview')) {
+        return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByText('贵州茅台')
+    fireEvent.click(screen.getByTestId('sort-raw_return'))
+    await waitFor(() => expect(calls.some(u => u.includes('sort_by=raw_return'))).toBe(true))
+    // 再次点击切换为 desc（服务端默认，URL 省略 sort_dir）
+    fireEvent.click(screen.getByTestId('sort-raw_return'))
+    await waitFor(() => expect(calls.some(u => u.includes('sort_by=raw_return') && !u.includes('sort_dir=asc'))).toBe(true))
+  })
+
+  it('关键字 + 查询按钮请求 keyword 参数', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          predictions: [PREDICTIONS[0]], page: 1, page_size: 50, total: 1, as_of: 'x', disclaimer: 'x',
+        }), { status: 200 }))
+      }
+      if (url.includes('/overview')) {
+        return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByText('贵州茅台')
+    fireEvent.change(screen.getByTestId('track-record-keyword'), { target: { value: '茅台' } })
+    fireEvent.click(screen.getByTestId('track-record-apply'))
+    await waitFor(() => expect(calls.some(u => u.includes('keyword=%E8%8C%85%E5%8F%B0'))).toBe(true))
+  })
+
+  it('起止日期 + 查询请求 date_from/date_to', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({ predictions: [], page: 1, page_size: 50, total: 0, as_of: 'x', disclaimer: 'x' }), { status: 200 }))
+      }
+      if (url.includes('/overview')) {
+        return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByTestId('track-record')
+    fireEvent.change(screen.getByTestId('track-record-date-from'), { target: { value: '2026-09-01' } })
+    fireEvent.change(screen.getByTestId('track-record-date-to'), { target: { value: '2026-09-30' } })
+    fireEvent.click(screen.getByTestId('track-record-apply'))
+    await waitFor(() => expect(calls.some(u => u.includes('date_from=2026-09-01') && u.includes('date_to=2026-09-30'))).toBe(true))
+  })
+
+  it('total 超过单页时渲染分页，下一页请求 page=2', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({ predictions: PREDICTIONS, page: 1, page_size: 50, total: 120, as_of: 'x', disclaimer: 'x' }), { status: 200 }))
+      }
+      if (url.includes('/overview')) {
+        return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const next = screen.getByTestId('track-record-next')
+    expect(next).toBeInTheDocument()
+    fireEvent.click(next)
+    await waitFor(() => expect(calls.some(u => u.includes('page=2'))).toBe(true))
+  })
+})

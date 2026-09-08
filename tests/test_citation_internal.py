@@ -224,7 +224,7 @@ class TestCoverageGapOnEarlyFail:
         assert r.coverage_gap is True
 
     def test_echo_fail_with_declared_fields_no_gap(self):
-        """对照组：字段申报齐全时回声 FAIL 不计缺口。"""
+        """对照组：字段申报齐全（含 direction，ehr-style-claim-direction）时回声 FAIL 不计缺口。"""
         state = {"profitability_metrics": {"毛利率": {"2024": 45.2}}}
         claim = Claim(
             claim_type="numerical",
@@ -234,6 +234,7 @@ class TestCoverageGapOnEarlyFail:
             interpretation="毛利率约 30%",
             metric_name="毛利率",
             period="2024",
+            direction="flat",
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "FAIL"

@@ -611,6 +611,72 @@ def update_prediction_status(
         conn.close()
 
 
+# 排序白名单：仅允许这些列参与 ORDER BY（防注入）
+_SORT_WHITELIST = {
+    "created_at": "created_at",
+    "symbol": "symbol",
+    "direction": "direction",
+    "status": "status",
+    "entry_price": "entry_price",
+    "exit_price": "exit_price",
+    "raw_return": "raw_return",
+    "excess_return": "excess_return",
+}
+
+# 关键字 → 方向/状态映射（与前端 DIRECTION_LABEL/STATUS_LABEL 一致）
+_DIRECTION_LABELS = {"看多": "long", "看空": "short", "中性": "neutral"}
+_STATUS_LABELS = {
+    "进行中": "open",
+    "命中": "resolved_win",
+    "未中": "resolved_loss",
+    "中性": "resolved_neutral",
+    "不可判定": "unresolvable",
+}
+
+
+def _prediction_filters(
+    ticker: str | None = None,
+    status: str | None = None,
+    source_type: str | None = None,
+    keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[list[str], list[Any]]:
+    """构造 predictions 查询的 WHERE 子句与参数（list/count 共用）。"""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if ticker:
+        clauses.append("symbol LIKE ?")
+        params.append(f"%{ticker}%")
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if source_type:
+        clauses.append("source_type = ?")
+        params.append(source_type)
+    if keyword:
+        kw = f"%{keyword}%"
+        label_parts = ["(symbol LIKE ? OR symbol_name LIKE ?)"]
+        params += [kw, kw]
+        if keyword in _DIRECTION_LABELS:
+            label_parts.append("direction = ?")
+            params.append(_DIRECTION_LABELS[keyword])
+        if keyword in _STATUS_LABELS:
+            label_parts.append("status = ?")
+            params.append(_STATUS_LABELS[keyword])
+        clauses.append("(" + " OR ".join(label_parts) + ")")
+    if date_from or date_to:
+        date_parts: list[str] = []
+        if date_from:
+            date_parts.append("date(created_at) >= ?")
+            params.append(date_from)
+        if date_to:
+            date_parts.append("date(created_at) <= ?")
+            params.append(date_to)
+        clauses.append("(" + " AND ".join(date_parts) + ")")
+    return clauses, params
+
+
 def list_predictions(
     ticker: str | None = None,
     status: str | None = None,
@@ -618,28 +684,50 @@ def list_predictions(
     limit: int = 50,
     offset: int = 0,
     db_path: str | Path | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit), 100))
     conn = _connect(db_path)
     try:
+        clauses, params = _prediction_filters(
+            ticker, status, source_type, keyword, date_from, date_to
+        )
         sql = "SELECT * FROM predictions"
-        clauses: list[str] = []
-        params: list[Any] = []
-        if ticker:
-            clauses.append("symbol LIKE ?")
-            params.append(f"%{ticker}%")
-        if status:
-            clauses.append("status = ?")
-            params.append(status)
-        if source_type:
-            clauses.append("source_type = ?")
-            params.append(source_type)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        col = _SORT_WHITELIST.get(sort_by or "created_at", "created_at")
+        direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
+        sql += f" ORDER BY {col} {direction} LIMIT ? OFFSET ?"
         params += [limit, offset]
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_predictions(
+    ticker: str | None = None,
+    status: str | None = None,
+    source_type: str | None = None,
+    keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db_path: str | Path | None = None,
+) -> int:
+    """返回过滤后观点总数（供 API 分页 total 使用）。"""
+    conn = _connect(db_path)
+    try:
+        clauses, params = _prediction_filters(
+            ticker, status, source_type, keyword, date_from, date_to
+        )
+        sql = "SELECT COUNT(*) FROM predictions"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        return int(conn.execute(sql, params).fetchone()[0])
     finally:
         conn.close()
 

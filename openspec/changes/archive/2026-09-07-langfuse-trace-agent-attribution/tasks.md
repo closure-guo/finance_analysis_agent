@@ -19,7 +19,7 @@
 ## 3. 验证与收尾
 
 - [x] 3.1 `uv run pytest`、`uv run ruff check`、`uv run mypy`（基线对比）无新增错误；现有 `call_llm*` 测试不回归
-- [ ] 3.2 实跑一次深度分析，Langfuse 对账：generation 以子 agent 命名、可按 agent/session/stock 过滤；人工验证报告落 `tests/validation/`
+- [x] 3.2 实跑对账（2026-09-07）：generation 20/20 按 agent 命名、metadata 含 agent/stock_code、trace.sessionId 会话过滤可用（generation 级 session_id 键开放项，见验证报告）
 
 ## 4. trace 级输出（根 span output = agent 产出）
 
@@ -28,4 +28,4 @@
 - [x] 4.3 失败测试：`react_loop` span 退出时 output 含 agent 最终回复/总结
 - [x] 4.4 实现：`_stream_graph` 捕获 `_root_obs`；管线完成后按 4.1 结论写 output（数据源 `accumulated`，摘要级）
 - [x] 4.5 实现：`react_loop` 捕获 `_react_obs`，循环中追踪最终回复（TEXT/ANSWER 事件），退出前 `update(output=...)`
-- [ ] 4.6 验证：pytest/ruff/mypy 全绿 + 实跑 Langfuse 对账（session/trace 级可见 agent 输出，不再 output=null）
+- [x] 4.6 验证（2026-09-07）：根 span output 不再 null（api 补 output 摘要，8 键含 final_report_summary，68d58bf）+ pytest/ruff/mypy 全绿；见 tests/validation/2026-09-07-real-run-four-deltas-validation.md

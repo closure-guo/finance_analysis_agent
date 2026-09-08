@@ -1,3 +1,5 @@
+> **状态：superseded（2026-09-06，维护者决策）**——本 delta 的诉求「系统事件不冒充 LLM」由 remove-fake-stream-events 以更彻底且更低成本的方式达成：直接删除预搜索与节点伪 thinking 旁路（模型自主搜索已由 ADR-0020 思考模式根治，节点进度由管线时间轴承载）。原设计（rules/ 层 + system_note 事件）不再实施，留档备查。
+
 ## 1. rules/ 模块基础设施
 
 - [ ] 1.1 编写 `rules/base.py` 的失败单元测试：验证 RuleEvent 数据结构（to_sse 转换、字段映射）覆盖 rule_triggered / rule_pre_search_start / rule_pre_search_complete / system_note 四类

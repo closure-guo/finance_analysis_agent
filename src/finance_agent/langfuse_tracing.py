@@ -176,3 +176,48 @@ def truncate_for_trace(text: str, max_bytes: int = 8192) -> str:
     tail = encoded[-_quarter:].decode("utf-8", errors="ignore")
     omitted = len(encoded) - len(head.encode("utf-8")) - len(tail.encode("utf-8"))
     return f"{head}\n...[truncated {omitted} bytes]...\n{tail}"
+
+
+def eval_analysis_query(
+    query: str | None,
+    stock_name: str = "",
+    stock_code: str = "",
+) -> str:
+    """deep_analysis 根 span input 的 query 文本。
+
+    优先使用调用方提供的真实用户查询；缺失时以「深度分析 {stock_name}({stock_code})」
+    兜底，保证 input 恒含查询语义（deep-trace-eval-data：hosted evaluator 的
+    report_relevance 以 input.query 绑定 {{query}}）。
+    """
+    if query and query.strip():
+        return query.strip()
+    if stock_name and stock_code:
+        return f"深度分析 {stock_name}({stock_code})"
+    return f"深度分析 {stock_name or stock_code or 'unknown'}"
+
+
+def build_eval_metadata(accumulated: dict) -> dict:
+    """从管线累积状态构造根 span metadata 的评估数据段（deep-trace-eval-full-data）。
+
+    供 hosted evaluator 模板变量绑定（metadata + jsonSelector）：
+    - report_markdown：完整报告（deep-trace-eval-data 既有）
+    - analyst_reports：全量分析师报告（summary/key_findings/claims/markdown）
+    - debate_history：多空辩论消息全量
+    - research_manager_decision：RM 结论（源键 research_manager_conclusion）
+    - risk_judgment：Risk Judge 裁决（源键 final_trade_decision）
+    缺字段省略不造（spec「缺字段不造」）；Pydantic 对象 model_dump() 序列化。
+    """
+    md = {"report_markdown": accumulated.get("final_report", "")}
+    reports = accumulated.get("analyst_reports") or {}
+    if reports:
+        md["analyst_reports"] = {
+            k: v.model_dump() if hasattr(v, "model_dump") else v for k, v in reports.items()
+        }
+    history = accumulated.get("debate_history") or []
+    if history:
+        md["debate_history"] = [m.model_dump() if hasattr(m, "model_dump") else m for m in history]
+    if accumulated.get("research_manager_conclusion"):
+        md["research_manager_decision"] = accumulated["research_manager_conclusion"]
+    if accumulated.get("final_trade_decision"):
+        md["risk_judgment"] = accumulated["final_trade_decision"]
+    return md

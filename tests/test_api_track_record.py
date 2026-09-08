@@ -172,3 +172,79 @@ def test_equity_curve_returns_points(monkeypatch, tmp_path):
     data = TestClient(app).get("/api/v1/track-record/equity-curve").json()
     assert [p["date"] for p in data["points"]] == ["2026-09-01", "2026-09-02"]
     assert data["points"][-1]["agent_nav"] == 1.01
+
+
+# ── add-track-record-sort-filter：排序/关键字/时间段/过滤后 total ──
+
+
+def test_predictions_sort_api(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    _insert(db, symbol="a.SH", entry_price=100.0, created_at="2026-09-01T10:00:00")
+    _insert(db, symbol="b.SH", entry_price=100.0, created_at="2026-09-02T10:00:00")
+    c = TestClient(app)
+    items = c.get(
+        "/api/v1/track-record/predictions", params={"sort_by": "created_at", "sort_dir": "asc"}
+    ).json()["predictions"]
+    assert [r["symbol"] for r in items] == ["a.SH", "b.SH"]
+    # 非法 sort_by 回退默认 created_at DESC
+    items2 = c.get("/api/v1/track-record/predictions", params={"sort_by": "bogus"}).json()[
+        "predictions"
+    ]
+    assert items2[0]["symbol"] == "b.SH"
+
+
+def test_predictions_keyword_api(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    _insert(db, symbol="600519.SH", symbol_name="贵州茅台", direction="long")
+    _insert(db, symbol="300308.SZ", symbol_name="中际旭创", direction="short")
+    c = TestClient(app)
+    assert (
+        len(
+            c.get("/api/v1/track-record/predictions", params={"keyword": "茅台"}).json()[
+                "predictions"
+            ]
+        )
+        == 1
+    )
+    assert (
+        len(
+            c.get("/api/v1/track-record/predictions", params={"keyword": "看空"}).json()[
+                "predictions"
+            ]
+        )
+        == 1
+    )
+
+
+def test_predictions_date_range_api(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    _insert(db, symbol="a.SH", created_at="2026-09-01T10:00:00")
+    _insert(db, symbol="b.SH", created_at="2026-09-30T10:00:00")
+    _insert(db, symbol="c.SH", created_at="2026-10-02T10:00:00")
+    data = (
+        TestClient(app)
+        .get(
+            "/api/v1/track-record/predictions",
+            params={"date_from": "2026-09-01", "date_to": "2026-09-30"},
+        )
+        .json()
+    )
+    assert sorted(r["symbol"] for r in data["predictions"]) == ["a.SH", "b.SH"]
+    assert data["total"] == 2  # total 反映过滤后子集
+
+
+def test_predictions_filtered_total(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    for i in range(6):
+        _insert(
+            db,
+            symbol=f"{i}.SH",
+            symbol_name="茅台" if i < 2 else "平安",
+            created_at=f"2026-09-0{i + 1}T10:00:00",
+        )
+    data = (
+        TestClient(app)
+        .get("/api/v1/track-record/predictions", params={"keyword": "茅台", "page_size": 1})
+        .json()
+    )
+    assert len(data["predictions"]) == 1 and data["total"] == 2

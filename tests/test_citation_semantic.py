@@ -47,6 +47,7 @@ class TestSemanticTermCheck:
             interpretation="毛利率为 45.2%",
             metric_name="毛利率",
             period="2024",
+            direction="flat",
         )
         (r,) = verify_claims([claim], _state())
         assert r.status == "PASS"
@@ -166,6 +167,7 @@ class TestSemanticPeriodCheck:
             interpretation="2026 年 7 月 CPI 同比 0.4%",
             metric_name="CPI",
             period="2026-07",
+            direction="flat",
         )
         (r,) = verify_claims([claim], _state())
         assert r.status == "PASS"
@@ -181,6 +183,7 @@ class TestSemanticPeriodCheck:
             interpretation="2026 年 7 月 CPI 同比 0.4%",
             metric_name="CPI",
             period="2026-07",
+            direction="flat",
         )
         (r,) = verify_claims([claim], _state())
         assert r.status == "PASS"
@@ -214,6 +217,7 @@ class TestSemanticPeriodCheck:
             "field_ref": "quarterly_trend.yoy[1]",
             "stated_value": 2.0,
             "metric_name": "yoy",
+            "direction": "positive",
         }
         ok = Claim(**base, interpretation="2025Q3 同比 2.0%", period="2025Q3")
         bad = Claim(**base, interpretation="2025Q4 同比 2.0%", period="2025Q4")
@@ -319,6 +323,7 @@ class TestTermCheckOutOfVocab:
             interpretation="2026Q2归母净利润172.74亿元",
             metric_name="归母净利润",
             period="2026Q2",
+            direction="flat",
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "PASS"
@@ -335,6 +340,7 @@ class TestTermCheckOutOfVocab:
             interpretation="2026Q2归母净利润同比-6.9%",
             metric_name="净利润同比增速",
             period="2026Q2",
+            direction="positive",
         )
         (r,) = verify_claims([claim], state)
         assert r.status == "PASS"

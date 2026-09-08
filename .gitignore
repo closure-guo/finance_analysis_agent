@@ -275,3 +275,8 @@ data/repro-stub.db
 
 # 简历素材（本地个人用，不入库）
 resume/
+
+# GUI 测试会话库 / e2e 临时产物（2026-09-08 清理）
+**/gui-test-sessions.db
+frontend/data/
+tests/e2e/playwright/tmp_body.json

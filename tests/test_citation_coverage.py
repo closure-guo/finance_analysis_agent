@@ -3,6 +3,8 @@
 ≥15 条例化 fixture 钉死归一化与豁免口径（design D1 口径风险对策）。
 """
 
+import pytest
+
 from finance_agent.citation_coverage import compute_coverage, extract_census_numbers
 
 
@@ -146,3 +148,33 @@ class TestV3EventCovered:
         md = "账上资金超过1400亿元"
         rep = compute_coverage(md, [172054200000.0], event_values=[969.0])
         assert rep.unmatched == ["1400亿"]
+
+
+class TestDirectionWordlistExtension:
+    """ehr-style-claim-direction：兜底词表补词（负增长/跌幅/收窄）+ 冻结后语义。
+
+    语料实证（280 份报告）：正数百分比表述中仅靠词表外负向词表达方向占 2.22%，
+    补这 3 个高频翻转词后词表冻结，长尾由 D6 打回兜底。
+    """
+
+    @pytest.mark.parametrize("ctx", ["营收负增长 5.2%", "日跌幅达 3.8%", "差距收窄至 2.1%"])
+    def test_new_negative_words_trigger_sign_insensitive(self, ctx):
+        from finance_agent.citation_coverage import extract_census_numbers
+
+        (n,) = extract_census_numbers(ctx)
+        assert n.direction_neg is True
+
+    def test_extended_words_match_signed_claim_pool(self):
+        from finance_agent.citation_coverage import compute_coverage
+
+        # 正文写正数、真值为负：新词触发符号不敏感匹配 → 认领成功
+        rep = compute_coverage("净利润负增长 4.2%，成长承压", [-4.2])
+        assert rep.unmatched == []
+
+    def test_declared_direction_claim_claimed_without_prose_direction_word(self):
+        from finance_agent.citation_coverage import compute_coverage
+
+        # 已申报 direction 的 claim（stated=5.2, direction=negative）：普查池里
+        # 就是正文面值 5.2，正文无词表内方向词也能等值认领（direction 优先语义）
+        rep = compute_coverage("营收 5.2%，同比转负", [5.2])
+        assert rep.unmatched == []

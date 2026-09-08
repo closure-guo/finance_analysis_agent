@@ -137,6 +137,7 @@ from finance_agent.outcome.track_record.ingest import (  # noqa: E402
     persist_prediction_from_accumulated,
 )
 from finance_agent.outcome.track_record.model import (  # noqa: E402
+    count_predictions,
     get_active_agent,
     get_latest_metrics,
     get_prediction,
@@ -963,7 +964,12 @@ def _run_graph_streaming(
     # ADR-0015：手动 root span + session 聚合(仿 quick react_loop / _stream_graph)。
     # v4 CallbackHandler 在 LangGraph graph.stream 不建主 trace,必须手动建 root,
     # 否则内部 generation/数据源 span 各自成孤立 trace。
-    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+    from finance_agent.langfuse_tracing import (
+        build_eval_metadata,
+        eval_analysis_query,
+        get_callback_handler,
+        get_langfuse,
+    )
 
     _handler = get_callback_handler()
     _lf = get_langfuse()
@@ -974,7 +980,10 @@ def _run_graph_streaming(
             _root_cm = _lf.start_as_current_observation(
                 as_type="span",
                 name=f"deep_analysis:{stock_name_display}",
-                input={"stock_code": stock_code},
+                input={
+                    "stock_code": stock_code,
+                    "query": eval_analysis_query(req.query, stock_name_display, stock_code),
+                },
             )
         try:
             from langfuse import propagate_attributes
@@ -984,7 +993,7 @@ def _run_graph_streaming(
             )
         except Exception:  # noqa: S110
             pass
-    _root_cm.__enter__()
+    _root_obs = _root_cm.__enter__()
     _propagate_cm.__enter__()
 
     _config: dict = {"recursion_limit": 100}
@@ -1126,6 +1135,20 @@ def _run_graph_streaming(
             }
         )
     finally:
+        # 根 span 退出前写入评估数据 metadata + 摘要 output（与 _stream_graph 对齐；
+        # post-exit update 会被 Langfuse 丢弃，必须在 __exit__ 前写；
+        # metadata/output 各自独立容错——任一段失败不连带另一段）
+        if _root_obs is not None:
+            _meta: dict = {}
+            _out: dict = {}
+            with contextlib.suppress(Exception):
+                _meta = build_eval_metadata(accumulated)
+            with contextlib.suppress(Exception):
+                from finance_agent.agent_factory import _build_trace_output
+
+                _out = _build_trace_output(accumulated)
+            with contextlib.suppress(Exception):
+                _root_obs.update(metadata=_meta, output=_out)
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):
@@ -2173,8 +2196,15 @@ async def track_record_predictions(
     source: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
-    """add-track-record:观点日志列表(默认全部状态,含 loss)。分页上限 50。"""
+    """add-track-record:观点日志列表(默认全部状态,含 loss)。
+    add-track-record-sort-filter:可选 sort_by/sort_dir/keyword/date_from/date_to,
+    缺省回退 created_at DESC;total 反映过滤后子集。分页上限 50。"""
     page = max(1, page)
     limit = max(1, min(page_size, 50))
     offset = (page - 1) * limit
@@ -2185,8 +2215,21 @@ async def track_record_predictions(
         source_type=source,
         limit=limit,
         offset=offset,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        keyword=keyword,
+        date_from=date_from,
+        date_to=date_to,
     )
-    total = (await asyncio.to_thread(prediction_stats, source_type=source))["total"]
+    total = await asyncio.to_thread(
+        count_predictions,
+        ticker=symbol,
+        status=status,
+        source_type=source,
+        keyword=keyword,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return {
         "predictions": items,
         "page": page,

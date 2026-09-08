@@ -57,7 +57,7 @@
 - [x] 6.2 `ruff check` 与 `ruff format --check`（改动文件范围）全部通过。`tests/scripts/` 下 4 个既有 lint 错误属预存，未触碰。
 - [x] 6.3 `uv run mypy src/finance_agent`：改动的 5 个源文件零错误。全量 75 errors 为 pre-existing——已用 `git stash` 隔离验证改动前后同为 75 errors。
 - [x] 6.4 `uv run pytest tests/test_pipeline_stub.py` -> 17 passed，stub 输出在新校验下全部合法。
-- [ ] 6.5 人工验证（真实 LLM）：启动全栈执行完整深度分析，确认 Layer V 正常审批出报告、报告显示中文标注、Langfuse 上无枚举校验异常。
+- [x] 6.5 真实 LLM 验证（2026-09-07）：FM approve 出报告（13813 字）、含审批中文标注、后端日志 0 枚举异常；见 tests/validation/2026-09-07-real-run-four-deltas-validation.md
 - [x] 6.6 负向验证（BREAKING 行为）：直接验证非法值中断而非静默放行。实测 `revise`/`拒绝` -> ValidationError；`REJECT` -> 归一化为 `reject` 通过；并对比展示加固前这两个值会被 `after_fund_manager` 路由到 `generate_report`（等同 approve 放行）。结果见 `tests/validation/harden-llm-output-validation-validation.md`。
 
 ## 7. 可选（不阻塞归档）

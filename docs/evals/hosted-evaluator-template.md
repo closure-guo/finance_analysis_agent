@@ -27,7 +27,7 @@
 3 = 部分切题,有显著偏离或答非所需的段落
 2 = 大部分答非所问,仅边缘相关
 1 = 完全答非所问
-只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}
+只输出 JSON: {"score": <1-5>, "reasoning": "<一句话理由>"}
 不以篇幅长短论优劣。
 ```
 
@@ -44,7 +44,7 @@
 3 = 有交锋但多为立场声明,证据引用不足
 2 = 交锋形式化,双方自说自话
 1 = 单方输出或内容空洞,无实质辩论
-只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}
+只输出 JSON: {"score": <1-5>, "reasoning": "<一句话理由>"}
 不以篇幅长短论优劣。
 ```
 
@@ -74,7 +74,7 @@
 3 = 部分论据有出处,存在未论证的跳跃
 2 = 论据与前文关联薄弱,或与前文结论有张力未解释
 1 = 决策与前文矛盾,或论据无中生有
-只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}
+只输出 JSON: {"score": <1-5>, "reasoning": "<一句话理由>"}
 不以篇幅长短论优劣。
 ```
 
@@ -98,7 +98,7 @@
 2 = 存在未说明的结论冲突
 1 = 明显自相矛盾(如 Fund Manager 批准与 Risk Judge 否决相悖)
 特别关注:Fund Manager 结论是否与 Risk Judge 裁决一致;报告结论章节是否与分析师章节一致。
-只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}
+只输出 JSON: {"score": <1-5>, "reasoning": "<一句话理由>"}
 不以篇幅长短论优劣。
 ```
 
@@ -111,6 +111,22 @@
   采样率: 10%
   模型: <judge 使用的模型>
   模板: <与上方一致则注「同模板 N」；有改动则粘贴 UI 实际内容>
+
+### 已上线配置快照（2026-09-07，端到端验证通过）
+
+四个 evaluator 已配置并真实打分（report_relevance 实证 score=4，见 tests/validation/2026-09-07-hosted-evaluator-e2e-validation.md）。
+
+| name | configId（job_configuration id） | 采样率 | 模型 | 模板 |
+|---|---|---|---|---|
+| report_relevance（报告切题度） | `5fb71fa3-207f-4af2-a4d7-20938e4f6d80` | 10% | deepseek-v4-flash (Ark) | 模板 1 |
+| debate_quality（辩论质量） | `76793e8a-5c7f-4801-937f-4cae95b30ac5` | 10% | deepseek-v4-flash (Ark) | 模板 2 |
+| decision_grounding（决策接地） | `ab3686d2-83c8-43dc-9abd-1687fec6cae5` | 10% | deepseek-v4-flash (Ark) | 模板 3 |
+| consistency（各层结论一致性） | `db65a5a2-b017-4fea-8f10-2e1868ad7550` | 10% | deepseek-v4-flash (Ark) | 模板 4 |
+
+- **Target**: Observations；**Filter**: `metadata.report_markdown starts with #` + `environment none of [langfuse-*]`
+- **输出键名**: 模板/Score output prompt 均用 `reasoning`（Langfuse output_schema 只认 `score`+`reasoning`）
+- **模型参数**: Additional options = `{"providerOptions": {"thinking": {"type": "disabled"}}}`（注：字段存为单层，勿再包一层）
+- 变量映射见上文各模板「映射」说明；数据源为 deep_analysis 根 span 的 `input.query` + `metadata.report_markdown`/`analyst_reports`/`debate_history`/`research_manager_decision`/`risk_judgment` + `output.final_trade_decision`/`fund_manager_decision`
 ```
 
 ## 口径对齐

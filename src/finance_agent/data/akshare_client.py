@@ -451,16 +451,25 @@ class AKShareClient:
             return f"bj{stock_code}"
         return f"sh{stock_code}"
 
+    @staticmethod
+    def _to_sina_index_symbol(index_code: str) -> str:
+        """指数代码转新浪格式：000300 → sh000300, 399001 → sz399001。"""
+        if index_code.startswith("399"):
+            return f"sz{index_code}"
+        return f"sh{index_code}"
+
     def fetch_index_kline(self, index_code: str, days: int = 250) -> pd.DataFrame:
         """拉取指数日 K 线，返回最近 N 个交易日。
 
-        使用 index_zh_a_hist（东方财富，无 adjust），返回列含 日期, 收盘 等。
+        优先使用 index_zh_a_hist（东方财富），失败时回退 stock_zh_index_daily（新浪）。
+        返回统一中文列名：日期, 开盘, 收盘, 最高, 最低, 成交量。
         """
         from datetime import datetime, timedelta
 
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
 
+        # ── 方案1: 东方财富 index_zh_a_hist ──
         df = _call_ak(
             ak.index_zh_a_hist,
             symbol=index_code,
@@ -468,12 +477,29 @@ class AKShareClient:
             start_date=start_date,
             end_date=end_date,
         )
-        if df is None or df.empty:
-            logger.warning("指数 K线拉取失败或为空: %s", index_code)
-            return pd.DataFrame()
+        if df is not None and not df.empty:
+            df = df.sort_values("日期").reset_index(drop=True)
+            return df.tail(days).reset_index(drop=True)
 
-        df = df.sort_values("日期").reset_index(drop=True)
-        return df.tail(days).reset_index(drop=True)
+        # ── 方案2: 新浪 stock_zh_index_daily（回退） ──
+        logger.info("东财指数K线拉取失败，尝试新浪源: %s", index_code)
+        sina_symbol = self._to_sina_index_symbol(index_code)
+        df = _call_ak(ak.stock_zh_index_daily, symbol=sina_symbol)
+        if df is not None and not df.empty:
+            rename_map = {
+                "date": "日期",
+                "open": "开盘",
+                "close": "收盘",
+                "high": "最高",
+                "low": "最低",
+                "volume": "成交量",
+            }
+            df = df.rename(columns=rename_map)
+            df = df.sort_values("日期").reset_index(drop=True)
+            return df.tail(days).reset_index(drop=True)
+
+        logger.error("指数 K线拉取均失败: %s", index_code)
+        return pd.DataFrame()
 
     def fetch_benchmark_kline(self, days: int = 250) -> pd.DataFrame:
         """沪深 300 日 K(fetch_index_kline 的 000300 特化,行为与原来一致)。"""

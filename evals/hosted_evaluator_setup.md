@@ -25,8 +25,8 @@
 | `consistency` | `RUBRICS["consistency"]` | `deepseek-chat` |
 
 注意:
-- 裁判输出格式要求与线下一致: `{"score": <1-5>, "reason": "<一句话理由>"}`(rubric 尾部已含此约束,勿删改)。
-- 修改线上 rubric 时必须同步改 `evals/judges.py: RUBRICS` 并重新跑线下校准,禁止只改一边。
+- 裁判输出键名**线上(hosted)用 `reasoning`、线下(offline)用 `reason`**：hosted evaluator 的 Langfuse output_schema 只认 `{"score": <1-5>, "reasoning": "<一句话理由>"}`（rubric 尾部已按此写死,勿删改）；离线 `evals/judges.py: RUBRICS/parser` 读 `reason`（解析器配套）。仅键名差异，评分口径一致，不影响线上线下 MAE 对齐。
+- 评分标准（rubric 内容）仍须双端一致：修改线上 rubric 内容时必须同步改 `evals/judges.py: RUBRICS` 并重新跑线下校准,禁止只改一边。
 
 ## 2. 变量映射表(变量名 → trace span 路径)
 

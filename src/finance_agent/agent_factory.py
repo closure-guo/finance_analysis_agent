@@ -884,7 +884,12 @@ def _stream_graph(
     if config is None:
         config = {"recursion_limit": 100}
 
-    from finance_agent.langfuse_tracing import get_callback_handler, get_langfuse
+    from finance_agent.langfuse_tracing import (
+        build_eval_metadata,
+        eval_analysis_query,
+        get_callback_handler,
+        get_langfuse,
+    )
 
     _handler = get_callback_handler()
     _lf = get_langfuse()
@@ -899,7 +904,14 @@ def _stream_graph(
         _root_cm = _lf.start_as_current_observation(
             as_type="span",
             name=f"deep_analysis:{_stock}",
-            input={"stock_code": initial_state.get("stock_code")},
+            input={
+                "stock_code": initial_state.get("stock_code"),
+                "query": eval_analysis_query(
+                    initial_state.get("query"),
+                    initial_state.get("stock_name") or "",
+                    initial_state.get("stock_code") or "",
+                ),
+            },
         )
         if session_id:
             try:
@@ -935,6 +947,8 @@ def _stream_graph(
                             "trader_plan",
                             "final_trade_decision",
                             "fund_manager_decision",
+                            "debate_history",
+                            "research_manager_conclusion",
                         ):
                             if _key not in _update:
                                 continue
@@ -943,14 +957,21 @@ def _stream_graph(
                             if _key == "analyst_reports" and isinstance(_update[_key], dict):
                                 _local_acc.setdefault("analyst_reports", {})
                                 _local_acc["analyst_reports"].update(_update[_key])
+                            # debate_history 每次 update 是单条消息（reducer 追加语义）
+                            elif _key == "debate_history" and isinstance(_update[_key], list):
+                                _local_acc.setdefault("debate_history", []).extend(_update[_key])
                             else:
                                 _local_acc[_key] = _update[_key]
             yield _mode, _chunk
     finally:
-        # 在 root span 退出前写入 output（保证不被 Langfuse 丢弃）
+        # 在 root span 退出前写入 output + 评估数据 metadata（保证不被 Langfuse 丢弃；
+        # build_eval_metadata 供 hosted evaluator 取完整报告/分析师/辩论/裁决数据）
         if _root_obs is not None:
             with contextlib.suppress(Exception):
-                _root_obs.update(output=_build_trace_output(_local_acc))
+                _root_obs.update(
+                    output=_build_trace_output(_local_acc),
+                    metadata=build_eval_metadata(_local_acc),
+                )
         with contextlib.suppress(Exception):
             _propagate_cm.__exit__(None, None, None)
         with contextlib.suppress(Exception):

@@ -61,6 +61,12 @@ class Claim(BaseModel):
     # 校验器跳过对应检查并计覆盖缺口（显式降级，不静默 PASS）。
     metric_name: str | None = None  # 指标枚举（中文规范键或别名，见 metric_vocab）
     period: str | None = None  # 期次（2024 / 2025Q2 / 2026-08-28 / 2026-07）
+    # ehr-style-claim-direction：数值型 claim 显式申报方向语义。negative =
+    # 正文以正向数值表述负向事实（「下滑 10.05%」↔ gt=-10.05）；positive =
+    # 正文直接写 signed 值（-10.05% 写 stated=-10.05）；flat = 存量水平类无数值
+    # 方向语义（ROE/资产负债率等）。None = 旧格式未申报 → 校验器跳过方向检查并
+    # 计覆盖缺口（与 metric_name/period 未申报的既有降级先例一致）。
+    direction: Literal["positive", "negative", "flat"] | None = None
 
 
 class CitationResult(BaseModel):
@@ -73,7 +79,8 @@ class CitationResult(BaseModel):
     coverage_gap: bool = False  # 覆盖缺口（未注册根键 / 未申报术语期次）
     # FAIL 分桶（harden-citation-semantic-coverage）：value_mismatch=值级（gt 存在且
     # 超容差，定向重试）；path_unresolvable=路径/事件不可解析；semantic_*=术语/期次
-    # 张冠李戴；internal_inconsistency=stated 与 interpretation 两张皮/方向矛盾。
+    # 张冠李戴；internal_inconsistency=stated 与 interpretation 两张皮/方向矛盾；
+    # direction_mismatch=已申报方向与真值符号冲突（ehr-style-claim-direction）。
     bucket: (
         Literal[
             "value_mismatch",
@@ -81,6 +88,7 @@ class CitationResult(BaseModel):
             "semantic_term_mismatch",
             "semantic_period_mismatch",
             "internal_inconsistency",
+            "direction_mismatch",
         ]
         | None
     ) = None
@@ -310,6 +318,28 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     # fix-citation-contract-diseases 修 C：|delta|<0.01 或相对误差<0.5%
     # （与计算型容差对齐；绝对 0.01 对亿元级数值是假阴性——LLM 须精确到分才过）
     tol = max(ABS_TOL, abs(gt_float) * REL_TOL)
+
+    # ehr-style-claim-direction：已申报方向 → 先按 sign(stated)×direction 与
+    # 真值符号对齐（「下滑 10.05%」↔ gt=-10.05 用 eff=-10.05 比对），符号冲突
+    # 直接 FAIL + direction_mismatch 桶；符号一致后走既有容差（值级偏差仍归
+    # value_mismatch）。flat/None 无数值方向语义 → 原值比对。
+    declared_sign: int | None = None
+    if claim.direction == "negative":
+        declared_sign = -1
+    elif claim.direction == "positive":
+        declared_sign = 1
+    eff = sv_float * declared_sign if declared_sign is not None else sv_float
+    eff_sign = 1 if eff > 0 else (-1 if eff < 0 else 0)
+    gt_sign = 1 if gt_float > 0 else (-1 if gt_float < 0 else 0)
+    if declared_sign is not None and eff_sign != 0 and gt_sign != 0 and eff_sign != gt_sign:
+        return CitationResult(
+            status="FAIL",
+            claim=claim,
+            ground_truth=gt_float,
+            delta=abs(gt_float - eff),
+            bucket="direction_mismatch",
+        )
+    delta = abs(gt_float - eff)
     status: Literal["PASS", "FAIL"] = "PASS" if delta < tol else "FAIL"
     return CitationResult(
         status=status,
@@ -317,6 +347,7 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
         ground_truth=gt_float,
         delta=delta,
         bucket=None if status == "PASS" else "value_mismatch",
+        coverage_gap=claim.direction is None,
     )
 
 
@@ -639,6 +670,10 @@ def _check_direction_words(claim: Claim) -> CitationResult | None:
     growth_rates 根键或 quarterly_trend 的 yoy/qoq 系列增长类 claim。
     正负向词同时出现或均不出现 → 跳过（不赌复杂句语义）。
     """
+    # ehr-style-claim-direction：已申报 direction 的 claim 不再走正文方向词核对
+    # （双路径二义消除——申报方向是权威语义，正文词仅作未申报时的兜底）。
+    if claim.direction is not None:
+        return None
     text = claim.interpretation or ""
     pos = bool(_direction_hits(text, _POSITIVE_WORDS))
     neg = bool(_direction_hits(text, _NEGATIVE_WORDS))
@@ -706,6 +741,8 @@ def _verify_data_claim(
         or period_gap
         or not (claim.metric_name or "").strip()
         or not (claim.period or "").strip()
+        # ehr-style-claim-direction：数值/计算型 claim 未申报 direction 亦计缺口
+        or (claim.claim_type in ("numerical", "computational") and claim.direction is None)
     )
     echo_fail = _check_internal_echo(claim)
     if echo_fail is not None:

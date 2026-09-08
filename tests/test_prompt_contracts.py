@@ -192,3 +192,19 @@ class TestOutOfVocabNullRule:
         """growth_rates.* 引用填基指标名（勿带 增长率/同比 后缀）。"""
         text = (_PROMPTS_DIR / "fundamental_analyst.md").read_text(encoding="utf-8")
         assert "基指标名" in text
+
+
+@pytest.mark.parametrize("name", ANALYSTS)
+class TestClaimDirectionDiscipline:
+    """ehr-style-claim-direction：分析师 claim 申报纪律含 direction 必填。"""
+
+    def test_mentions_direction_declaration(self, name):
+        text = _load(f"{name}.md")
+        assert "direction" in text
+        assert "direction=negative" in text
+
+    def test_has_negative_modifier_example(self, name):
+        # 「下滑 X%」→ stated_value=X、direction=negative 的申报示例
+        text = _load(f"{name}.md")
+        assert "下滑 X%" in text
+        assert "direction=negative" in text

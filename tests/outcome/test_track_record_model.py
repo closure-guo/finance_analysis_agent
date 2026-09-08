@@ -5,6 +5,7 @@ import pytest
 from finance_agent.outcome.track_record.model import (
     PREDICTIONS_STATUSES,
     FrozenFieldError,
+    count_predictions,
     init_predictions,
     insert_prediction,
     list_predictions,
@@ -123,3 +124,66 @@ def test_migrate_decision_log(db, tmp_path):
     rows = list_predictions(db_path=db)
     assert rows[0]["symbol"] == "600519.SH"
     assert rows[0]["direction"] == "long"
+
+
+# ── add-track-record-sort-filter：排序白名单 / 关键字 / 时间段 / count ──
+
+
+def test_list_sort_by_return_desc(db):
+    _insert(db, symbol="a.SH", entry_price=100.0)
+    _insert(db, symbol="b.SH", entry_price=100.0)
+    rows = list_predictions(db_path=db)
+    update_prediction_status(
+        rows[0]["prediction_id"],
+        {"status": "resolved_win", "raw_return": 0.05, "excess_return": 0.02},
+        db_path=db,
+    )
+    update_prediction_status(
+        rows[1]["prediction_id"],
+        {"status": "resolved_win", "raw_return": 0.2, "excess_return": 0.1},
+        db_path=db,
+    )
+    desc = list_predictions(sort_by="raw_return", sort_dir="desc", db_path=db)
+    assert [r["raw_return"] for r in desc] == [0.2, 0.05]
+    asc = list_predictions(sort_by="raw_return", sort_dir="asc", db_path=db)
+    assert [r["raw_return"] for r in asc] == [0.05, 0.2]
+
+
+def test_list_invalid_sort_falls_back_default(db):
+    _insert(db, symbol="a.SH", created_at="2026-09-01T10:00:00")
+    _insert(db, symbol="b.SH", created_at="2026-09-02T10:00:00")
+    rows = list_predictions(sort_by="unknown_column", db_path=db)
+    # 默认 created_at DESC → 后插入的 09-02 在前
+    assert rows[0]["symbol"] == "b.SH"
+
+
+def test_list_keyword_matches_symbol_name_and_labels(db):
+    _insert(db, symbol="600519.SH", symbol_name="贵州茅台", direction="long")
+    _insert(db, symbol="300308.SZ", symbol_name="中际旭创", direction="short")
+    _insert(db, symbol="000001.SZ", symbol_name="平安银行", direction="long")
+    assert len(list_predictions(keyword="茅台", db_path=db)) == 1
+    assert len(list_predictions(keyword="看空", db_path=db)) == 1  # 方向标签
+    assert len(list_predictions(keyword="平安", db_path=db)) == 1
+    # 状态标签「命中」→ resolved_win
+    rows = list_predictions(db_path=db)
+    update_prediction_status(rows[0]["prediction_id"], {"status": "resolved_win"}, db_path=db)
+    assert len(list_predictions(keyword="命中", db_path=db)) == 1
+
+
+def test_list_date_range_inclusive(db):
+    _insert(db, symbol="a.SH", created_at="2026-09-01T08:00:00")
+    _insert(db, symbol="b.SH", created_at="2026-09-15T08:00:00")
+    _insert(db, symbol="c.SH", created_at="2026-10-01T08:00:00")
+    rows = list_predictions(date_from="2026-09-01", date_to="2026-09-30", db_path=db)
+    assert sorted(r["symbol"] for r in rows) == ["a.SH", "b.SH"]  # 含两端
+
+
+def test_count_predictions_reflects_filters(db):
+    _insert(db, symbol="a.SH", symbol_name="茅台", created_at="2026-09-01T08:00:00")
+    _insert(db, symbol="b.SH", symbol_name="茅台", created_at="2026-09-15T08:00:00")
+    _insert(db, symbol="c.SH", symbol_name="平安", created_at="2026-10-01T08:00:00")
+    assert count_predictions(keyword="茅台", db_path=db) == 2
+    assert (
+        count_predictions(keyword="茅台", date_from="2026-09-01", date_to="2026-09-30", db_path=db)
+        == 2
+    )

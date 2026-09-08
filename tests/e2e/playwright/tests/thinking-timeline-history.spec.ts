@@ -70,8 +70,8 @@ test.describe('历史会话恢复 agentTimeline 重建', () => {
     const thinkingBanner = page.getByRole('button', { name: /思考已完成/ })
     await expect(thinkingBanner).toBeVisible({ timeout: 10_000 })
 
-    // 工具调用横幅（历史恢复 done=true，文案为"工具调用"）
-    const toolCallBanner = page.getByRole('button', { name: /工具调用/ })
+    // 工具调用横幅（search_stock → label「识别股票」；历史恢复 done=true）
+    const toolCallBanner = page.getByRole('button', { name: '工具调用· 1 次' })
     await expect(toolCallBanner).toBeVisible({ timeout: 10_000 })
 
     // 4. 时序断言：思考横幅在工具调用横幅上方（boundingBox.y 比较）

@@ -164,8 +164,9 @@ const UserMessage = () => (
 )
 
 // 消息操作条（复制/重试/点赞/点踩）——小图标 + aria-label（项目图标库 FontAwesome）。
-// 固定高度行恒渲染(消除 hover 挂载导致的文本块布局位移);按钮仅在 hover 且非流式
-// 时挂载。重试只出现在最后一段 agent 输出下(showRetry);点赞/点踩经 feedbackHandler
+// 只在 hover 且非流式时存在：悬浮（absolute）于消息底部间隙内，不占用布局高度——
+// 既消除此前「固定 h-7 恒渲染占位在横幅间形成间隙」的缺陷，又不引入 hover 布局位移。
+// 重试只出现在最后一段 agent 输出下(showRetry);点赞/点踩经 feedbackHandler
 // 桥上报(add-user-feedback),本地 toggle 语义保留。
 export function MessageActions({
   text,
@@ -190,11 +191,11 @@ export function MessageActions({
   }
   const activeCls = (k: 'like' | 'dislike') =>
     feedback === k ? { color: 'var(--bg-brand)', background: 'var(--bg-brand-popup)' } : undefined
+  if (!visible) return null
   return (
-    <div className="flex items-center gap-1 h-7" data-testid="message-actions">
-      {visible && (
-        <>
-          <button
+    <div className="absolute left-0 top-full z-10 flex items-center gap-1 h-6" data-testid="message-actions">
+      <>
+        <button
             aria-label={copied ? '已复制' : '复制'}
             title="复制"
             onClick={() => {
@@ -237,8 +238,7 @@ export function MessageActions({
           >
             <i className="fas fa-thumbs-down text-[10px]"></i>
           </button>
-        </>
-      )}
+      </>
     </div>
   )
 }
@@ -292,9 +292,9 @@ const AssistantMessage = () => {
         <div className="max-w-[95%] md:max-w-[90%] w-full">
           <div className="flex items-start gap-3">
             <AssistantAvatar />
-            <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            <div className="flex-1 min-w-0 text-sm relative" style={{ color: 'var(--text-secondary)' }}>
               <MessagePrimitive.Parts components={chatPartsComponents} />
-              {/* 操作条：固定高度行恒渲染(消除布局位移);按钮 hover 且非流式时挂载 */}
+              {/* 操作条：仅 hover 且非流式时悬浮挂载（absolute 于底部间隙内，不占布局高度） */}
               <MessageActions
                 text={messageText}
                 onRegenerate={() => regenerateHandler?.(messageId)}
@@ -309,11 +309,14 @@ const AssistantMessage = () => {
   }
   // pipeline/report/system/error：整卡由 data 部件组件承载
   const errorKind = kind === 'error'
+  // pipeline/report 卡片自带头像行（PipelineCard/ReportCard 内部渲染头像），
+  // 外层不再重复渲染，避免整行并列两个机器人头像。
+  const selfAvatarCarrier = kind === 'pipeline' || kind === 'report'
   return (
     <div className="flex justify-start animate-slide-in" data-testid={errorKind ? 'stream-error' : undefined}>
       <div className="max-w-[95%] md:max-w-[90%] w-full">
         <div className="flex items-start gap-3">
-          <AssistantAvatar bg={errorKind ? 'var(--status-error-default)' : undefined} />
+          {!selfAvatarCarrier && <AssistantAvatar bg={errorKind ? 'var(--status-error-default)' : undefined} />}
           <MessagePrimitive.Parts components={dataPartsComponents} />
         </div>
       </div>

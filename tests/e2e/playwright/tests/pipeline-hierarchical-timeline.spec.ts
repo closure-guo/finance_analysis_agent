@@ -67,10 +67,7 @@ test.describe('管线分层时间轴（redesign-pipeline-hierarchical-timeline�
   test('4. 管线运行期间存在当前高亮节点（data-current）', async ({ page }) => {
     const timeline = page.getByTestId('pipeline-timeline')
     await expect(timeline).toBeVisible({ timeout: 60_000 })
-    // 管线推进过程中任一时刻应有 running 节点被 data-current 高亮
-    // （stub 管线较快，轮询捕获；若管线已完成则可能无 current，故用轮询 + 早退）
-    const current = timeline.locator('[data-current="true"]')
-    // 轮询等待出现 current（最多 60s；stub 节点 0.25s，Layer II 期间必有 running）
-    await expect(current.first()).toBeVisible({ timeout: 60_000 })
+    // 迁移后当前节点高亮由活动层的 animate-ping 动画承载（legacy data-current 已移除）
+    await expect(timeline.locator('.animate-ping').first()).toBeVisible({ timeout: 60_000 })
   })
 })
