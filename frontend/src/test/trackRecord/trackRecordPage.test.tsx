@@ -218,7 +218,7 @@ describe('组合风险指标与净值曲线（add-track-record-stage-b）', () =
     renderPage()
     await screen.findByText('贵州茅台')
     const score = screen.getByText('10')
-    expect(score.className).toContain('text-red-500')
+    expect(score.className).toContain('status-error-default')
   })
 })
 

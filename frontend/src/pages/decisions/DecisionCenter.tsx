@@ -31,7 +31,7 @@ function DeltaValue({ value }: { value: number | null }) {
   if (value === null) return <span className="text-txt-tertiary">—</span>
   const pct = value * 100
   const up = value >= 0
-  const cls = up ? 'text-red-500' : 'text-green-600'
+  const cls = up ? 'text-[color:var(--status-error-default)]' : 'text-[color:var(--status-success-default)]'
   return <span className={`${cls} font-medium`}>{up ? '+' : ''}{pct.toFixed(2)}%</span>
 }
 

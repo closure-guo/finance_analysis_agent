@@ -4,6 +4,7 @@ import ReactECharts from 'echarts-for-react'
 import type { EquityCurvePoint, PredictionRecord, PredictionStatus, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
+import { cssVar } from '../../Charts'
 
 const STATUS_LABEL: Record<PredictionStatus, string> = {
   open: '进行中',
@@ -13,13 +14,13 @@ const STATUS_LABEL: Record<PredictionStatus, string> = {
   unresolvable: '不可判定',
 }
 
-// 状态标签色：命中=绿、未中=红、中性=灰、进行中=蓝、不可判定=灰斜杠
+// 状态标签色（语义令牌）：命中=成功绿、未中=错误红、中性=次要灰、进行中=主色蓝、不可判定=三级灰斜杠
 const STATUS_CLS: Record<PredictionStatus, string> = {
-  open: 'text-blue-600',
-  resolved_win: 'text-green-600',
-  resolved_loss: 'text-red-500',
-  resolved_neutral: 'text-gray-500',
-  unresolvable: 'text-gray-400 line-through',
+  open: 'text-[color:var(--status-primary-default)]',
+  resolved_win: 'text-[color:var(--status-success-default)]',
+  resolved_loss: 'text-[color:var(--status-error-default)]',
+  resolved_neutral: 'text-[color:var(--text-secondary)]',
+  unresolvable: 'text-[color:var(--text-tertiary)] line-through',
 }
 
 const DIRECTION_LABEL: Record<string, string> = {
@@ -46,7 +47,7 @@ function Delta({ value }: { value: number | null }) {
   if (value === null) return <span className="text-txt-tertiary">—</span>
   const pct = value * 100
   const up = value >= 0
-  return <span className={`${up ? 'text-red-500' : 'text-green-600'} font-medium`}>{up ? '+' : ''}{pct.toFixed(2)}%</span>
+  return <span className={`${up ? 'text-[color:var(--status-error-default)]' : 'text-[color:var(--status-success-default)]'} font-medium`}>{up ? '+' : ''}{pct.toFixed(2)}%</span>
 }
 
 function fmt(value: number | null, digits = 2) {
@@ -60,9 +61,9 @@ function pct(value: number | null, digits = 1) {
 // 风险分 → 展示色（stage-b：分数越高风险越高）
 function riskColor(score: number | null) {
   if (score === null) return ''
-  if (score >= 8) return 'text-red-500'
-  if (score >= 5) return 'text-orange-500'
-  return 'text-green-600'
+  if (score >= 8) return 'text-[color:var(--status-error-default)]'
+  if (score >= 5) return 'text-[color:var(--status-warning-default)]'
+  return 'text-[color:var(--status-success-default)]'
 }
 
 export function TrackRecordPage({ onBack }: { onBack: () => void }) {
@@ -163,7 +164,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const versions = overview?.versions ?? []
 
   const chartOption = {
-    color: ['#1677ff', '#fa8c16'],
+    color: [cssVar('--chart-sky', '#228EBF'), cssVar('--chart-amber', '#CBB54C')],
     tooltip: { trigger: 'axis' as const, valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)) },
     grid: { left: 48, right: 16, top: 24, bottom: 28 },
     xAxis: { type: 'category' as const, data: (curve ?? []).map(p => p.date), axisLabel: { fontSize: 10 } },
@@ -265,7 +266,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 </div>
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>最大回撤</div>
-                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= 0.2 ? 'text-red-500' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
+                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= 0.2 ? 'var(--status-error-default)' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
                 </div>
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>风险分（{portfolio.risk_label ?? '—'}）</div>

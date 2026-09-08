@@ -15,9 +15,9 @@ export default {
           3: 'var(--bg-overlay-l3)',
         },
         brand: {
-          DEFAULT: '#4B3FE3',
-          hover: '#3D32C7',
-          popup: 'rgba(75, 63, 227, 0.08)',
+          DEFAULT: 'var(--bg-brand)',
+          hover: 'var(--bg-brand-hover)',
+          popup: 'var(--bg-brand-popup)',
         },
         'txt': {
           DEFAULT: 'var(--text-default)',

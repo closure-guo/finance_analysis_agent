@@ -1277,7 +1277,7 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
                     }}
                   >
                     {runningSessionIds.has(s.session_id) && (
-                      <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
+                      <span className="inline-block w-2 h-2 rounded-full bg-[color:var(--status-success-default)] animate-pulse flex-shrink-0" />
                     )}
                     {s.display_name}
                   </div>
@@ -2143,7 +2143,7 @@ export function ReportCard({ msg, variant = 'inline', onOpenPanel }: {
                     components={{
                       img: () => null,
                       a: ({href, children}) => (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline inline-flex items-center gap-0.5" style={{ color: 'var(--bg-brand)' }}>
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline inline-flex items-center gap-0.5" style={{ color: 'var(--bg-brand)' }}>
                           {children}
                           <i className="fas fa-external-link-alt text-[8px]"></i>
                         </a>

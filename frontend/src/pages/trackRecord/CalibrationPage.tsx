@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
 import type { CalibrationResponse } from '../../types'
 import { Button } from '../../components/ui/button'
+import { cssVar } from '../../Charts'
 
 function fmtPct(v: number | null, digits = 1) {
   return v === null ? '—' : `${(v * 100).toFixed(digits)}%`
@@ -30,7 +31,7 @@ export function CalibrationPage({ onBack }: { onBack: () => void }) {
   const hasSamples = (data?.sample_size ?? 0) > 0
 
   const chartOption = {
-    color: ['#1677ff', '#b0b0b0'],
+    color: [cssVar('--chart-sky', '#228EBF'), cssVar('--text-tertiary', '#888A8C')],
     tooltip: { trigger: 'axis' as const },
     legend: { data: ['实际命中率', '完美校准'], bottom: 0, textStyle: { fontSize: 10 } },
     grid: { left: 48, right: 16, top: 24, bottom: 40 },
