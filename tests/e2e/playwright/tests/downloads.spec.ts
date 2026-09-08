@@ -21,8 +21,10 @@ test.describe('add-download-center: 下载管理页', () => {
   test.describe.configure({ retries: 2 })
 
   test('侧边栏「下载管理」入口跳转 /downloads 并渲染下载管理页', async ({ page }) => {
+    // 下载管理入口现仅在折叠态图标栏(add-collapsible-sidebar 移除展开态底部导航)
+    await page.addInitScript(() => localStorage.setItem('fa_sidebar_collapsed', '1'))
     await page.goto('/')
-    const entry = page.getByTestId('sidebar-downloads')
+    const entry = page.getByTestId('sidebar-downloads-collapsed')
     await expect(entry).toBeVisible()
     await entry.click()
     await expect(page).toHaveURL(/\/downloads$/)

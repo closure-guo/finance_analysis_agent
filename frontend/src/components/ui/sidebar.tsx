@@ -140,7 +140,10 @@ export function Sidebar({
         background: 'var(--bg-base-secondary)',
       }}
     >
-      {collapsed ? collapsedRail : expandedRail}
+      {/* 固定 256px 内层：aside 宽度动画期间内容只被 overflow 裁剪，不逐帧重排（否则列表文字抖动） */}
+      <div data-testid="sidebar-content-inner" className="h-full w-64 min-w-64 flex flex-col">
+        {collapsed ? collapsedRail : expandedRail}
+      </div>
     </aside>
   )
 }

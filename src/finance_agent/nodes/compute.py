@@ -10,11 +10,12 @@ from finance_agent.metrics.cashflow import calc_cashflow
 from finance_agent.metrics.dupont import calc_dupont
 from finance_agent.metrics.efficiency import calc_efficiency
 from finance_agent.metrics.garp import calc_garp
+from finance_agent.metrics.levels import calc_price_levels
 from finance_agent.metrics.profitability import calc_profitability
 from finance_agent.metrics.relative import calc_relative_valuation
 from finance_agent.metrics.risk import calc_risk
 from finance_agent.metrics.solvency import calc_solvency
-from finance_agent.metrics.technical import calc_technical
+from finance_agent.metrics.technical import calc_derived_series, calc_technical
 from finance_agent.metrics.traffic_light import assess_traffic_lights, compute_health_score
 from finance_agent.state import AnalysisState
 
@@ -54,6 +55,10 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     industry = (state.get("industry_info") or {}).get("industry")
     traffic_lights = assess_traffic_lights(all_metrics, industry=industry)
     result["traffic_lights"] = traffic_lights
+
+    # ── 价位参考 + 派生值（toolize-price-levels）：工具预生成，LLM 引用不心算 ──
+    result["price_levels"] = calc_price_levels(state.get("kline"))
+    result["derived_series"] = calc_derived_series(state.get("kline"))
 
     years = sorted(
         {y for dim in all_metrics.values() for v in dim.values() for y in v},

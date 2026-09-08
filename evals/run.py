@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -187,6 +188,15 @@ def _print_table(rows: list[dict], means: dict) -> None:
     print("均值:", json.dumps(means, ensure_ascii=False))
 
 
+def _resolve_eval_model() -> str:
+    """评测模型解析（与 agent_factory 同优先级）：LLM_MODEL env → 默认值。
+
+    归档必须记录模型——跨批对比（防退化门禁）的前提是模型可比；
+    模型变更属于事件，须重跑基线并在归档中可见。
+    """
+    return os.getenv("LLM_MODEL") or "deepseek/deepseek-chat"
+
+
 def _write_report(
     rows: list[dict], means: dict, name: str, prompt_versions: dict, citation_ci: dict
 ) -> Path:
@@ -199,6 +209,7 @@ def _write_report(
             {
                 "experiment": name,
                 "timestamp": ts,
+                "model": _resolve_eval_model(),
                 "prompt_versions": prompt_versions,
                 "means": means,
                 "citation_ci": citation_ci,

@@ -141,13 +141,21 @@ class ToolManager:
         return list(self.tools.keys())
 
     def is_streaming(self, name: str) -> bool:
-        """检查工具是否为流式工具（async generator）。"""
+        """检查工具是否为流式工具（async generator）。
+
+        经 functools.unwrap 透传 __wrapped__：add-toolcall-evaluation 的工具调用
+        埋点（agent_factory._trace_tool）用 wraps 包装异步生成器后，裸
+        inspect.isasyncgenfunction 会误判为非流式（执行路径退化、THINK 丢弃），
+        必须穿透包装器判定。未包装的注册行为不变。
+        """
         import inspect
 
         func = self.tools.get(name)
         if func is None:
             return False
-        return inspect.isasyncgenfunction(func)
+        # functools.wraps 包装器以 __wrapped__ 指向原函数（Py3.14 stdlib 无
+        # functools.unwrap，直接用属性穿透）；未包装时取自身
+        return inspect.isasyncgenfunction(getattr(func, "__wrapped__", func))
 
     # ── 执行 ──
 

@@ -16,7 +16,10 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import functools
+import inspect
 import json
+import logging
 import os
 import threading
 from collections.abc import Callable
@@ -25,7 +28,10 @@ from typing import Any
 from finance_agent.harness import Agent, PermissionMode
 from finance_agent.harness.context import ContextBudget
 from finance_agent.llm import LLMConfig
+from finance_agent.outcome.track_record.ingest import persist_prediction_from_accumulated
 from finance_agent.prompts.loader import PromptInfo, load_prompt_with_meta
+
+logger = logging.getLogger("finance_agent.agent_factory")
 
 # ───────────────────────────────────────────────
 # System Prompts（ADR-0016：从 prompts/*.md 加载，Langfuse 优先 + 本地兜底）
@@ -201,6 +207,24 @@ def _make_batch_web_search(collector: list[dict]):
     return batch_web_search
 
 
+def _fetch_quote_snapshot(stock_code: str) -> dict | None:
+    """拉取现价/涨跌幅快照（工具数据）。失败返回 None（调用方如实标注缺失）。"""
+    try:
+        from finance_agent.data.akshare_client import AKShareClient
+
+        quote = AKShareClient().fetch_stock_quote(stock_code)
+        price = quote.get("price")
+        pct = quote.get("pct_change")
+        if price is None:
+            return None
+        return {
+            "price": float(price),
+            "pct_change": round(float(pct), 2) if pct is not None else 0.0,
+        }
+    except Exception:  # noqa: BLE001 - 快照是增强信息，失败不阻断查股
+        return None
+
+
 def _make_search_stock(api_key: str | None = None):
     """创建 search_stock 工具，注入 api_key 闭包。"""
 
@@ -246,7 +270,16 @@ def _format_stock_result(result: dict) -> str:
         c = candidates[0]
         code = _get(c, "stock_code", "code")
         name = _get(c, "stock_name", "name")
-        return f"找到股票：{name}({code})"
+        text = f"找到股票：{name}({code})"
+        # 行情快照（toolize-price-levels）：现价/涨跌幅由工具提供，LLM 引用不心算；
+        # 快照缺失如实标注（不伪造数字）
+        snapshot = _fetch_quote_snapshot(code)
+        if snapshot:
+            sign = "+" if (snapshot["pct_change"] or 0) >= 0 else ""
+            text += f"\n行情快照：现价 {snapshot['price']} 元（{sign}{snapshot['pct_change']}%）"
+        else:
+            text += "\n行情快照缺失（当前无法获取现价，请勿臆测价格数值）"
+        return text
 
     lines = ["找到多个候选股票，请确认："]
     for i, c in enumerate(candidates, 1):
@@ -284,6 +317,20 @@ _pipeline_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=max(4, min(32, (os.cpu_count() or 4) + 4)),
     thread_name_prefix="pipeline",
 )
+
+
+def _persist_decision_from_tool(
+    accumulated: dict, session_id: str, stock_code: str, stock_name: str
+) -> None:
+    """ReAct 深模式完成时落库观点(旁路:函数内部已吞异常,此处仅兜底日志)。
+
+    经共享入口(ingest.persist_prediction_from_accumulated)与旧 /api/analyze
+    路径同语义;同步 SQLite 写,由调用方 to_thread 移出事件循环。
+    """
+    try:
+        persist_prediction_from_accumulated(accumulated, session_id, stock_code, stock_name)
+    except Exception as e:  # noqa: BLE001 - 旁路铁律
+        logger.warning("ReAct 深模式落库兜底失败(不阻断): %s", e)
 
 
 def _make_run_deep_analysis(
@@ -717,6 +764,32 @@ def _make_run_deep_analysis(
                         file_paths=accumulated.get("file_paths") or {},
                         status="completed",
                     )
+                    # add-track-record:ReAct 深模式完成即落库观点(全量记录,含 reject)。
+                    # 挂点曾只存在于旧 /api/analyze 路径,深模式经工具路径无挂点 →
+                    # predictions 恒为 0(真实事故);现经共享入口与旧路径同语义。
+                    await asyncio.to_thread(
+                        _persist_decision_from_tool,
+                        accumulated,
+                        session_id,
+                        stock_code,
+                        stock_name,
+                    )
+                    # add-user-feedback:把本次深分析运行的 Langfuse trace 关联到
+                    # session(反馈端点按 session 解析最近一次运行落 score)
+                    _tid = accumulated.get("langfuse_trace_id")
+                    if not _tid:
+                        try:
+                            from finance_agent.langfuse_tracing import get_langfuse as _lf_get
+
+                            _lfc = _lf_get()
+                            if _lfc is not None:
+                                _tid = _lfc.get_current_trace_id()
+                        except Exception:  # noqa: BLE001 - 取不到则降级(前端本地 toggle)
+                            _tid = None
+                    if _tid:
+                        await asyncio.to_thread(
+                            _session_store.set_session_trace_id, session_id, _tid
+                        )
 
                 metadata = {
                     "chart_data": accumulated.get("chart_data") or {},
@@ -913,6 +986,66 @@ def _build_context_budget(
         return ContextBudget()
 
 
+def _trace_tool(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """工具调用埋点（add-toolcall-evaluation 取证依赖）：Langfuse span。
+
+    纯可观测性：Langfuse 未配置（get_langfuse()=None）时原样直通零开销；
+    span 记录 name=tool_call:<工具名>、入参、执行耗时、异常标记 metadata.tool_error。
+    同步/异步工具双路支持（functools.wraps 保留原签名；行为/异常传播不变）。
+    """
+
+    def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def wrapped(*args: Any, **kwargs: Any) -> Any:
+                from finance_agent.langfuse_tracing import get_langfuse
+
+                client = get_langfuse()
+                if client is None:
+                    return await fn(*args, **kwargs)
+                call_arg = kwargs if kwargs else (args[0] if args else None)
+                try:
+                    with client.start_as_current_observation(
+                        as_type="span", name=f"tool_call:{name}", input={"call": call_arg}
+                    ) as span:
+                        result = await fn(*args, **kwargs)
+                        with contextlib.suppress(Exception):  # 埋点写 output 失败不影响业务
+                            span.update(output=str(result)[:2000])
+                        return result
+                except Exception as e:  # noqa: BLE001 - 业务异常照常传播，埋点标记错误
+                    with contextlib.suppress(Exception):
+                        span.update(output={"error": str(e)}, metadata={"tool_error": str(e)})
+                    raise
+
+            return wrapped
+
+        @functools.wraps(fn)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            from finance_agent.langfuse_tracing import get_langfuse
+
+            client = get_langfuse()
+            if client is None:
+                return fn(*args, **kwargs)
+            call_arg = kwargs if kwargs else (args[0] if args else None)
+            try:
+                with client.start_as_current_observation(
+                    as_type="span", name=f"tool_call:{name}", input={"call": call_arg}
+                ) as span:
+                    result = fn(*args, **kwargs)
+                    with contextlib.suppress(Exception):  # 埋点写 output 失败不影响业务
+                        span.update(output=str(result)[:2000])
+                    return result
+            except Exception as e:  # noqa: BLE001
+                with contextlib.suppress(Exception):
+                    span.update(output={"error": str(e)}, metadata={"tool_error": str(e)})
+                raise
+
+        return wrapped
+
+    return deco
+
+
 def build_agent(
     mode: str = "quick",
     api_key: str | None = None,
@@ -986,7 +1119,10 @@ def build_agent(
         # 与 StubLLMClient 的 tool_call 场景配合，确定性复现"思考->web search->思考"。
         from finance_agent.api import TESTING
 
-        agent.tools.register(_stub_web_search if TESTING else _web_search, name="web_search")
+        agent.tools.register(
+            _trace_tool("web_search")(_stub_web_search if TESTING else _web_search),
+            name="web_search",
+        )
         session_id = kwargs.get("session_id")
         if session_id:
             _inject_chat_history(agent, session_id)
@@ -1004,16 +1140,20 @@ def build_agent(
             context_budget=context_budget,
         )
         web_sources_collector: list[dict] = []
-        agent.tools.register(_make_search_stock(api_key), name="search_stock")
         agent.tools.register(
-            _make_run_deep_analysis(
-                api_key=api_key,
-                analysis_type=analysis_type,
-                peer_codes=peer_codes,
-                enable_web_search=enable_web_search,
-                session_id=kwargs.get("session_id"),
-                web_sources=web_sources_collector,
-                llm_config=llm_config,
+            _trace_tool("search_stock")(_make_search_stock(api_key)), name="search_stock"
+        )
+        agent.tools.register(
+            _trace_tool("run_deep_analysis")(
+                _make_run_deep_analysis(
+                    api_key=api_key,
+                    analysis_type=analysis_type,
+                    peer_codes=peer_codes,
+                    enable_web_search=enable_web_search,
+                    session_id=kwargs.get("session_id"),
+                    web_sources=web_sources_collector,
+                    llm_config=llm_config,
+                )
             ),
             name="run_deep_analysis",
         )
@@ -1023,10 +1163,17 @@ def build_agent(
         from finance_agent.api import TESTING
 
         agent.tools.register(
-            _stub_web_search if TESTING else _make_web_search_with_collector(web_sources_collector),
+            _trace_tool("web_search")(
+                _stub_web_search
+                if TESTING
+                else _make_web_search_with_collector(web_sources_collector)
+            ),
             name="web_search",
         )
-        agent.tools.register(_make_batch_web_search(web_sources_collector), name="batch_web_search")
+        agent.tools.register(
+            _trace_tool("batch_web_search")(_make_batch_web_search(web_sources_collector)),
+            name="batch_web_search",
+        )
         session_id = kwargs.get("session_id")
         if session_id:
             _inject_chat_history(agent, session_id)
@@ -1051,7 +1198,7 @@ def build_agent(
             llm=llm_client,
             context_budget=context_budget,
         )
-        agent.tools.register(_web_search, name="web_search")
+        agent.tools.register(_trace_tool("web_search")(_web_search), name="web_search")
         return agent
 
     raise ValueError(f"未知模式: {mode}")

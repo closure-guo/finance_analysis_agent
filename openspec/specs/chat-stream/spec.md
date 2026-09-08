@@ -3,9 +3,7 @@
 ## Purpose
 
 定义 AG-UI 协议 quick 模式对话通道（POST /api/agui/quick）的事件流契约与 assistant-ui 渲染语义。
-
 ## Requirements
-
 ### Requirement: AG-UI 协议端点
 
 系统 SHALL 提供 `POST /api/agui/quick` 端点：接受 AG-UI `RunAgentInput`，以 SSE 返回标准 AG-UI 事件流（至少包含 `RUN_STARTED`、`TEXT_MESSAGE_START`、`TEXT_MESSAGE_CONTENT`、`TEXT_MESSAGE_END`、`RUN_FINISHED`/`RUN_ERROR`）。事件 SHALL 符合 AG-UI 协议的类型定义；每个 run SHALL 以且仅以一个终止事件（`RUN_FINISHED` 或 `RUN_ERROR`）结束。对话内容 SHALL 沿用现有 session_store 持久化，落库结果与事件流内容一致。
@@ -66,3 +64,28 @@ AG-UI 通道 SHALL 仅承载 quick 模式对话；深度模式分析、管线时
 - **WHEN** 移除/停用 `/api/agui/quick` 路由
 - **THEN** 深度模式分析与管线时间线功能不受任何影响
 - **AND** quick 模式历史会话仍可查看（仅新对话流暂不可用）
+
+### Requirement: 流式事件真实性（禁系统冒充）
+
+LLM 事件通道（thinking_token / tool_call / tool_result）SHALL 仅承载模型真实推理与真实工具调用：系统 SHALL NOT 生成伪造的 thinking_token（如预搜索说明、节点执行/完成文案）、伪造的 tool_call，SHALL NOT 在用户消息中预注入搜索结果替代模型自主决策。时效性查询的搜索 SHALL 由模型基于 reasoning 自行决定并发起。管线节点进度 SHALL 经管线事件（node_start / node_complete / 节点时序）呈现，SHALL NOT 经 thinking_token 旁路下发。
+
+#### Scenario: 时效性查询由模型自主搜索
+
+- GIVEN 深度/快速通道收到不含股票代码、含时效性关键词的查询
+- WHEN 流式输出
+- THEN 系统 SHALL NOT 发出预生成的 thinking_token / tool_call / search_start（预搜索旁路）
+- AND 模型若判定需要搜索，SHALL 经 ReAct 工具调用真实发起 web_search（真实思考 + 真实工具事件）
+
+#### Scenario: 管线进度不经思考旁路
+
+- GIVEN 深度分析管线运行中
+- WHEN 节点开始或完成
+- THEN 系统 SHALL NOT 生成 `▶ …` / `✓ …` 形式的 thinking_token
+- AND 节点进度 SHALL 由 node_start / node_complete 及管线时间轴承载
+
+#### Scenario: 节点真实思考不受影响
+
+- GIVEN 深度分析管线运行中
+- WHEN 节点 LLM 产生真实 thinking 输出
+- THEN 该 thinking SHALL 照常经 thinking_token 转发（custom mode 转发路径保留）
+

@@ -107,6 +107,8 @@ def init_db() -> None:
         ("file_paths", "ALTER TABLE sessions ADD COLUMN file_paths TEXT"),
         # 结构化引用数组（add-citation-display）：JSON 文本，NULL = 旧会话/未校验
         ("citations", "ALTER TABLE sessions ADD COLUMN citations TEXT"),
+        # 最近一次运行关联的 Langfuse trace（add-user-feedback）：反馈端点按 session 解析
+        ("langfuse_trace_id", "ALTER TABLE sessions ADD COLUMN langfuse_trace_id TEXT"),
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(ddl)
@@ -532,6 +534,38 @@ def update_session_status(session_id: str, status: str, failure_reason: str | No
     conn.commit()
     conn.close()
     return cur.rowcount > 0
+
+
+def set_session_trace_id(session_id: str, trace_id: str | None) -> bool:
+    """持久化 session 最近一次运行关联的 Langfuse trace（add-user-feedback）。
+
+    反馈端点按 session 解析该 trace 落 score;trace_id 为 None 时不覆盖旧值,
+    返回是否写入。
+    """
+    if not trace_id:
+        return False
+    conn = _get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE sessions SET langfuse_trace_id = ? WHERE session_id = ?",
+            (trace_id, session_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_session_trace_id(session_id: str) -> str | None:
+    """读取 session 最近一次运行关联的 Langfuse trace_id；无则返回 None。"""
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT langfuse_trace_id FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row[0] if row and row[0] else None
+    finally:
+        conn.close()
 
 
 def create_chat_session(display_name: str) -> str:

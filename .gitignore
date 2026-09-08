@@ -272,3 +272,6 @@ tests/e2e/playwright/test-results/
 # ZCode 会话工具目录
 data/repro-stub.db
 .zcode/
+
+# 简历素材（本地个人用，不入库）
+resume/

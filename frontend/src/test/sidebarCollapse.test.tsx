@@ -61,6 +61,40 @@ function stubFetch() {
   return fetchMock
 }
 
+describe('移动端抽屉（add-collapsible-sidebar 窄视口补验）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('fa_api_key', 'test-key')
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    // 模拟 <768px 移动视口（组件读 window.matchMedia('(max-width: 767px)').matches）
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: (q: string) => ({
+        matches: q.includes('max-width: 767px'), media: q, onchange: null,
+        addListener: () => {}, removeListener: () => {},
+        addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false,
+      }),
+    })
+  })
+
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia
+  })
+
+  it('收起态持久化时打开抽屉，仍渲染展开内容（会话列表可见）', async () => {
+    // 收起态持久化 → AppSidebar 走收起分支传 expandedRail={null}，
+    // 移动端抽屉渲染 expandedRail → 空抽屉（GUI 实测缺陷）
+    localStorage.setItem('fa_sidebar_collapsed', '1')
+    stubFetch()
+    render(<App />)
+    // 移动端抽屉关闭时不渲染侧边栏，先开抽屉
+    fireEvent.click(screen.getByTestId('sidebar-trigger'))
+    await waitFor(() => expect(screen.getByTestId('sidebar-overlay')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('session-list')).toBeInTheDocument())
+    expect(screen.getAllByText('宁夏建材').length).toBeGreaterThan(0)
+  })
+})
+
 describe('侧边栏折叠（add-collapsible-sidebar）', () => {
   beforeEach(() => {
     localStorage.clear()

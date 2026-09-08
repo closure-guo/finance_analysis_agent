@@ -26,11 +26,9 @@ _logger = logging.getLogger("finance_agent.api")
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
 from finance_agent.graph import build_5layer_graph  # noqa: E402
+from finance_agent.langfuse_tracing import get_langfuse  # noqa: E402
 from finance_agent.llm import LLMConfig  # noqa: E402
 from finance_agent.pipeline_runner import PipelineRunner, build_layer_tree  # noqa: E402
-from finance_agent.react_agent import (  # noqa: E402
-    _TIME_SENSITIVE_KEYWORDS as _TIME_SENSITIVE_KEYWORDS_REACT,
-)
 from finance_agent.session_store import (  # noqa: E402
     append_chat,
     append_session_event,
@@ -39,6 +37,7 @@ from finance_agent.session_store import (  # noqa: E402
     delete_session,
     get_max_event_seq,
     get_session,
+    get_session_trace_id,
     get_terminal_event,
     init_db,
     list_session_events,
@@ -125,9 +124,36 @@ def resolve_reports_path(file_name: str) -> Path:
 init_db()
 
 # 决策日志表(幂等建表,decision_log 与 sessions 同库;decision-outcome-tracking)
-from finance_agent.outcome.store import init_decision_log, insert_decision  # noqa: E402
+from finance_agent.outcome.store import (  # noqa: E402
+    DECISION_STATUSES,
+    decision_stats,
+    init_decision_log,
+    list_decisions,
+)
+from finance_agent.outcome.track_record.calibration import calibration_table  # noqa: E402
+
+# predictions 战绩体系(add-track-record):全量观点记录取代 decision_log 写入
+from finance_agent.outcome.track_record.ingest import (  # noqa: E402
+    persist_prediction_from_accumulated,
+)
+from finance_agent.outcome.track_record.model import (  # noqa: E402
+    get_active_agent,
+    get_latest_metrics,
+    get_prediction,
+    init_predictions,
+    init_track_record_tables,
+    list_agents,
+    list_audit,
+    list_daily_marks,
+    list_equity_curve,
+    list_predictions,
+    prediction_stats,
+)
+from finance_agent.outcome.track_record.segments import segment_all  # noqa: E402
 
 init_decision_log()
+init_predictions()
+init_track_record_tables()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -163,30 +189,6 @@ _NODE_MAP = {s["node"]: s for s in LAYER_STEPS}
 _ALL_NODES = [s["node"] for s in LAYER_STEPS]
 
 # Node → thinking description (streamed to frontend during execution)
-_NODE_THINKING: dict[str, str] = {
-    "check_cache": "正在检查缓存数据…",
-    "fetch_data": "正在获取财务数据（行情、财报、技术指标）…",
-    "validate_financials": "正在进行勾稽校验，验证数据一致性…",
-    "compute_metrics": "正在计算关键技术指标（MACD、RSI、KDJ 等）…",
-    "technical_analyst": "Layer I：技术面分析师正在分析价格趋势与技术指标…",
-    "verify_citations": "正在校验分析引用的数据来源…",
-    "bull_r1": "Layer II：看多分析师正在构建看多论点…",
-    "bear_r1": "Layer II：看空分析师正在构建看空论点…",
-    "bull_r2": "Layer II：看多分析师进行第二轮辩论…",
-    "bear_r2": "Layer II：看空分析师进行第二轮辩论…",
-    "research_manager": "Layer II：研究经理正在汇总辩论结论…",
-    "trader": "Layer III：交易员正在制定交易决策…",
-    "aggressive_r1": "Layer IV：激进风控分析师正在评估…",
-    "conservative_r1": "Layer IV：保守风控分析师正在评估…",
-    "neutral_r1": "Layer IV：中性风控分析师正在评估…",
-    "aggressive_r2": "Layer IV：激进风控分析师进行第二轮评估…",
-    "conservative_r2": "Layer IV：保守风控分析师进行第二轮评估…",
-    "neutral_r2": "Layer IV：中性风控分析师进行第二轮评估…",
-    "risk_judge": "Layer IV：风控裁决正在综合评估风险…",
-    "fund_manager": "Layer V：基金经理正在审批最终决策…",
-    "generate_report": "正在生成深度分析报告…",
-    "generate_file": "正在导出报告文件…",
-}
 
 
 # ── Request models ──
@@ -247,6 +249,13 @@ class ChatRequest(BaseModel):
 
 class RenameRequest(BaseModel):
     display_name: str
+
+
+class FeedbackRequest(BaseModel):
+    """用户点赞/点踩反馈请求体（add-user-feedback）。"""
+
+    session_id: str
+    value: str  # like | dislike
 
 
 class ModelsRequest(BaseModel):
@@ -600,45 +609,12 @@ def _safe_dump(obj: Any) -> Any:
 def _persist_decision_log(
     accumulated: dict, session_id: str, stock_code: str, stock_name: str
 ) -> None:
-    """批准的 TradeDecision 落 decision_log(旁路:任何失败仅 ERROR,不阻断报告)。"""
-    try:
-        if accumulated.get("fund_manager_decision") != "approve":
-            return
-        decision = accumulated.get("final_trade_decision") or {}
-        if not decision.get("action"):
-            return
-        # entry_price 代码回填:quote 优先,kline 收盘兜底
-        entry_price = (accumulated.get("stock_quote") or {}).get("price")
-        if entry_price is None:
-            kline = accumulated.get("kline")
-            if kline is not None and len(kline) > 0:
-                last = kline.iloc[-1] if hasattr(kline, "iloc") else kline[-1]
-                entry_price = float(last["收盘"])
-        if entry_price is None:
-            _logger.warning("decision_log 跳过: %s 无可靠 entry_price", stock_code)
-            return
-        position_size = decision.get("position_size")
-        insert_decision(
-            {
-                "decision_id": None,  # store 生成
-                "session_id": session_id,
-                "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
-                "timestamp": datetime.now().isoformat(),
-                "ticker": stock_code,
-                "name": stock_name,
-                "action": decision["action"],
-                "entry_price": float(entry_price),
-                "stop_loss": decision.get("stop_loss"),
-                "target_price": decision.get("target_price"),
-                "confidence": decision.get("confidence"),
-                "position_size": float(position_size)
-                if isinstance(position_size, (int, float))
-                else None,
-            }
-        )
-        _logger.info("decision_log 已落库: %s %s", stock_code, decision["action"])
-    except Exception:
-        _logger.exception("decision_log 落库失败(不阻断业务)")
+    """观点全量落 predictions(委托共享入口,旧 /api/analyze 路径)。
+
+    旁路:任何失败仅 ERROR,不阻断报告。ReAct 深模式路径(agent_factory)与
+    本路径共用 finance_agent.outcome.track_record.ingest。
+    """
+    persist_prediction_from_accumulated(accumulated, session_id, stock_code, stock_name)
 
 
 def _stream_report_chunks(markdown: str, chunk_size: int = 200) -> list[str]:
@@ -1053,15 +1029,6 @@ def _run_graph_streaming(
                     }
                 )
 
-                node_thinking = _NODE_THINKING.get(node_name, f"正在执行：{step_info['desc']}…")
-                yield _sse(
-                    {
-                        "type": "thinking_token",
-                        "token": f"\n▶ {node_thinking}\n",
-                        "timestamp": _now(),
-                    }
-                )
-
                 _merge_update(accumulated, node_name, update if isinstance(update, dict) else {})
 
                 idx = _ALL_NODES.index(node_name)
@@ -1091,18 +1058,6 @@ def _run_graph_streaming(
                         "timestamp": _now(),
                     }
                 )
-
-                summary_text = ""
-                if isinstance(output, dict):
-                    summary_text = output.get("summary", "")
-                if summary_text:
-                    yield _sse(
-                        {
-                            "type": "thinking_token",
-                            "token": f"  ✓ {summary_text}\n",
-                            "timestamp": _now(),
-                        }
-                    )
 
             if accumulated.get("final_report") and not report_sent:
                 report_sent = True
@@ -1507,76 +1462,7 @@ async def _run_react_analysis(
                 )
             )
 
-        # 对时效性查询，预调 web_search 并将结果注入用户消息
         userQuery = req.query
-        hasStockCode = bool(re.search(r"\d{6}", req.query))
-
-        if not hasStockCode and any(kw in req.query for kw in _TIME_SENSITIVE_KEYWORDS_REACT):
-            from finance_agent.agent_factory import _web_search
-
-            searchQuery = f"{req.query} A股 热点 推荐 最新"
-
-            preThinking = {
-                "type": "thinking_token",
-                "token": "用户询问包含时效性关键词，我先搜索最新市场信息。\n",
-                "timestamp": _now(),
-            }
-            collector.feed(preThinking)
-            await registry.publish(session_id, preThinking)
-            preToolCall = {
-                "type": "tool_call",
-                "name": "web_search",
-                "args": {"query": searchQuery},
-                "timestamp": _now(),
-            }
-            collector.feed(preToolCall)
-            await registry.publish(session_id, preToolCall)
-            # 补发 search_start：前端搜索横幅由 search_start/search_result 驱动
-            # 同步 feed collector：search_start 生成 searching 状态的 search item，
-            # 持久化到 chat_history.agentTimeline，刷新后才能恢复搜索横幅
-            searchStartEvent = {"type": "search_start", "query": searchQuery, "timestamp": _now()}
-            collector.feed(searchStartEvent)
-            await registry.publish(session_id, searchStartEvent)
-
-            searchResult = ""
-            try:
-                searchResult = await _web_search(searchQuery)
-            except Exception as e:
-                searchResult = f"搜索失败: {e}"
-
-            searchSummary = searchResult[:2000] if len(searchResult) > 2000 else searchResult
-            preToolResult = {
-                "type": "tool_result",
-                "name": "web_search",
-                "result": searchSummary,
-                "timestamp": _now(),
-            }
-            collector.feed(preToolResult)
-            await registry.publish(session_id, preToolResult)
-            # 补发 search_result（结构化来源），驱动搜索横幅转"已搜索 N 个网页"
-            # 同步 feed collector：search_result 将 searching item 更新为 done 并写入 results，
-            # 持久化后刷新才能恢复完整的搜索横幅（含结果数量）
-            from finance_agent.web_search import parse_search_output
-
-            preResults = parse_search_output(searchResult)
-            searchResultEvent = {
-                "type": "search_result",
-                "query": searchQuery,
-                "results": [
-                    {"title": r.title, "url": r.url, "content": r.content} for r in preResults
-                ],
-                "count": len(preResults),
-                "timestamp": _now(),
-            }
-            collector.feed(searchResultEvent)
-            await registry.publish(session_id, searchResultEvent)
-            userQuery = (
-                f"{req.query}\n\n"
-                f"[以下是 web_search 的搜索结果，请基于这些信息提取具体股票名称，"
-                f"然后调用 search_stock 获取股票代码，再调用 run_deep_analysis：]\n"
-                f"{searchSummary}"
-            )
-
         # 如果 session 已有 focus，注入用户消息上下文
         if accumulatedFocus:
             userQuery = f"{userQuery}\n\n[已收集的用户关注点/澄清回答：\n{accumulatedFocus}]"
@@ -1662,6 +1548,12 @@ async def _run_react_analysis(
                         "timestamp": _now(),
                     },
                 )
+            # 澄清轮显式刷出 trace：root observation 随流关闭才闭合，不主动 flush 的话
+            # 澄清 trace 要等 SDK 批处理周期(~5s)才可见——用户此刻正在 Langfuse 里找它
+            _lf_clarify = get_langfuse()
+            if _lf_clarify is not None:
+                with contextlib.suppress(Exception):
+                    _lf_clarify.flush()
         # 分析已执行：session 状态已被 _run_graph_streaming 更新为 completed
 
         # done 终态（完整展示字段；registry._run_task 的自动 done 被终态 CAS 拒绝）
@@ -2106,9 +1998,238 @@ async def delete_export_file(filename: str):
     return {"deleted": file_path.name}
 
 
+@app.get("/api/decisions")
+async def get_decisions(
+    ticker: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """expose-decision-outcomes:只读决策列表(决策战绩页数据源)。非法 status 返回 422。"""
+    if status is not None and status not in DECISION_STATUSES:
+        raise HTTPException(status_code=422, detail=f"invalid status: {status}")
+    return await asyncio.to_thread(list_decisions, ticker=ticker, status=status, limit=limit)
+
+
+@app.get("/api/decisions/stats")
+async def get_decision_stats() -> dict[str, Any]:
+    """expose-decision-outcomes:聚合战绩统计(胜率/均值只基于已结算记录)。"""
+    return await asyncio.to_thread(decision_stats)
+
+
+# ── track-record 战绩体系(add-track-record):predictions 只读接口 ──
+_DISCLAIMER = "历史业绩不代表未来表现"
+
+
+def _track_as_of() -> str:
+    """北京时间日期(YYYY-MM-DD),战绩口径 as_of。"""
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+
+
+@app.get("/api/v1/track-record/overview")
+async def track_record_overview(
+    source: str | None = None, version: int | None = None
+) -> dict[str, Any]:
+    """add-track-record:战绩总览(胜率/超额/样本量 + as_of + 免责声明)。
+
+    显著性门槛:已结算 < 10 时 win_rate 置 null 并带 insufficient_sample 标注
+    (前端显示「样本积累中」)。回测/实盘经 source 参数分离,不合并不展示。
+    stage-b:总览追加组合指标块(年化/波动/夏普/回撤/风险分,来自 agent_metrics_daily
+    最新快照;无快照时 portfolio.available=false)。
+    stage-c(P6):统计按版本分段——version 缺省取当前活跃 agent 版本
+    (无登记 agent 时统计全部);响应带 version_seq 与可用版本列表。
+    """
+    if version is None:
+        active = await asyncio.to_thread(get_active_agent)
+        version = active["version_seq"] if active else None
+    stats = await asyncio.to_thread(prediction_stats, source_type=source, version_seq=version)
+    settled = stats["settled"]
+    insufficient = settled < 10
+    metrics = await asyncio.to_thread(get_latest_metrics)
+    portfolio = {
+        "available": metrics is not None,
+        "annual_return": metrics.get("annual_return") if metrics else None,
+        "volatility": metrics.get("volatility") if metrics else None,
+        "sharpe": metrics.get("sharpe") if metrics else None,
+        "max_drawdown": metrics.get("max_drawdown") if metrics else None,
+        "risk_score": metrics.get("risk_score") if metrics else None,
+        "risk_label": metrics.get("risk_label") if metrics else None,
+        "as_of": metrics.get("metric_date") if metrics else None,
+    }
+    return {
+        **stats,
+        "source_type": source,
+        "insufficient_sample": insufficient,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+        "win_rate": None if insufficient else stats["win_rate"],
+        "portfolio": portfolio,
+        "version_seq": version,
+        "versions": await asyncio.to_thread(list_agents),
+    }
+
+
+@app.get("/api/v1/track-record/equity-curve")
+async def track_record_equity_curve() -> dict[str, Any]:
+    """add-track-record-stage-b:净值曲线(agent 组合 vs 基准,首个盯市日归一 1.0)。
+
+    数据来自 equity_curve 表(daily-marking 日批落库);无净值点时返回空数组。
+    输出字段统一 {date, agent_nav, benchmark_nav} 与指标引擎 nav_points 对齐。
+    """
+    rows = await asyncio.to_thread(list_equity_curve)
+    points = [
+        {
+            "date": row["curve_date"],
+            "agent_nav": row["agent_nav"],
+            "benchmark_nav": row["benchmark_nav"],
+        }
+        for row in rows
+    ]
+    return {
+        "points": points,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/calibration")
+async def track_record_calibration() -> dict[str, Any]:
+    """add-track-record-stage-c:置信度校准（分桶 + Brier Score）。
+
+    桶含中值/样本数/实际命中率；Brier 越低校准越好。neutral 按 0.5 计，
+    unresolvable 与 open 不进桶。
+    """
+    preds = await asyncio.to_thread(list_predictions, limit=10000)
+    result = await asyncio.to_thread(calibration_table, preds)
+    return {
+        "buckets": result.buckets,
+        "brier": result.brier,
+        "sample_size": result.sample_size,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/segments")
+async def track_record_segments() -> dict[str, Any]:
+    """add-track-record-stage-c:四维切片指标（持有期/行业/市值/市场环境）。
+
+    市值与市场环境需外部数据（市值快照/基准均线），当前无数据时对应桶归
+    「未知」并如实标注——不伪造数据。
+    """
+    preds = await asyncio.to_thread(list_predictions, limit=10000)
+
+    def _run() -> list[dict[str, Any]]:
+        dims = segment_all(preds)
+        return [
+            {
+                "dimension": d.dimension,
+                "total": d.total,
+                "settled": d.settled,
+                "buckets": [
+                    {
+                        "name": b.name,
+                        "sample_size": b.sample_size,
+                        "win_rate": b.win_rate,
+                        "avg_excess": b.avg_excess,
+                        "insufficient": b.insufficient,
+                    }
+                    for b in d.buckets
+                ],
+            }
+            for d in dims
+        ]
+
+    dimensions = await asyncio.to_thread(_run)
+    return {
+        "dimensions": dimensions,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/predictions/{prediction_id}")
+async def track_record_prediction_detail(prediction_id: str) -> dict[str, Any]:
+    """add-track-record-stage-c:观点详情（快照只读 + 判定信息 + 审计轨迹 + 盯市叠加）。"""
+    prediction = await asyncio.to_thread(get_prediction, prediction_id)
+    if prediction is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
+    audit = await asyncio.to_thread(list_audit, prediction_id)
+    marks = await asyncio.to_thread(list_daily_marks, prediction_id=prediction_id)
+    return {
+        "prediction": prediction,
+        "audit": audit,
+        "marks": marks,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/predictions")
+async def track_record_predictions(
+    status: str | None = None,
+    symbol: str | None = None,
+    source: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """add-track-record:观点日志列表(默认全部状态,含 loss)。分页上限 50。"""
+    page = max(1, page)
+    limit = max(1, min(page_size, 50))
+    offset = (page - 1) * limit
+    items = await asyncio.to_thread(
+        list_predictions,
+        ticker=symbol,
+        status=status,
+        source_type=source,
+        limit=limit,
+        offset=offset,
+    )
+    total = (await asyncio.to_thread(prediction_stats, source_type=source))["total"]
+    return {
+        "predictions": items,
+        "page": page,
+        "page_size": limit,
+        "total": total,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.post("/api/feedback")
+async def submit_feedback(req: FeedbackRequest) -> dict[str, Any]:
+    """add-user-feedback:用户点赞/点踩落 Langfuse trace(按 session 解析最近一次运行)。
+
+    旁路铁律:Langfuse 不可达/trace 不存在/session 无关联 trace 时仅 WARN,不报 5xx;
+    前端不因后端失败报错(本地 toggle 语义保留)。value 非法经 Pydantic 校验 422。
+    """
+    if req.value not in ("like", "dislike"):
+        raise HTTPException(status_code=422, detail="value must be like|dislike")
+    trace_id = await asyncio.to_thread(get_session_trace_id, req.session_id)
+    if not trace_id:
+        _logger.warning("feedback 跳过: session %s 无关联 trace", req.session_id)
+        return {"ok": True, "submitted": False}
+    lf = get_langfuse()
+    if lf is None:
+        _logger.warning("feedback 跳过: Langfuse 未配置")
+        return {"ok": True, "submitted": False}
+    try:
+        lf.create_score(
+            name="user_feedback",
+            value=1 if req.value == "like" else 0,
+            trace_id=trace_id,
+            data_type="BOOLEAN",
+        )
+        lf.flush()
+        return {"ok": True, "submitted": True}
+    except Exception:  # noqa: BLE001 - 旁路铁律
+        _logger.warning("feedback 上报失败(trace 不可查?): %s", trace_id, exc_info=True)
+        return {"ok": True, "submitted": False}
+
+
 def _now() -> str:
     """返回北京时间字符串，与 agent_factory._now() 保持一致"""
-    from datetime import datetime
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")

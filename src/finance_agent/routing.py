@@ -119,3 +119,11 @@ def route_to_risk_r2(state: dict) -> list[Send]:
         Send("conservative_r2", state),
         Send("neutral_r2", state),
     ]
+
+
+def after_validate_trade_prices(state: dict) -> str:
+    """toolize-price-levels：价位 sanity 校验路由。pass/corrected 前行，fail 打回 trader。"""
+    check = state.get("price_check") or {}
+    if check.get("result") == "fail":
+        return "trader"
+    return "risk_r1_entry"

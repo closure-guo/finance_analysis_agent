@@ -3,9 +3,7 @@
 ## Purpose
 
 定义各角色 LLM 提示词模板（`src/finance_agent/prompts/*.md` 及散落硬编码 system prompt）的行为契约：反幻觉硬规则、对抗性辩论指令、决策语义契约、摘要数据接地，以及提示词可测试性与股票解析单一实现。提示词是行为契约的一部分——本轮从 TradingAgents / ai-hedge-fund 对标总结出缺口后沉淀为硬性要求，防止 LLM 输出编造数据、辩论各说各话、置信度无语义。
-
 ## Requirements
-
 ### Requirement: 分析师反幻觉硬规则
 
 每个分析师提示词（fundamental、macro、technical、sentiment）MUST 包含反幻觉硬规则段，要求 LLM 仅基于输入数据推理，以数据最新日期为"现在"，不得编造数据；各分析师方法论 MUST 体现周期感知与数据时效意识。
@@ -119,3 +117,18 @@ research_manager 提示词 MUST 要求 LLM 给出明确的看多/看空/中性�
 - **AND** 每个辩论者提示词包含对抗性指令（断言通过）
 - **AND** trader / risk_judge / fund_manager 提示词包含决策语义段（断言通过）
 - **AND** research_manager 提示词包含评级表态指令（断言通过）
+
+### Requirement: 分析师 claim 方向申报纪律
+
+数值型与计算型 claim 的分析师 prompt（fundamental/technical/sentiment 及辩论者）SHALL 要求：登记 claim 时必填 `direction` 字段（`positive`/`negative`/`flat`），方向语义为「正文表述方向对应真值符号的修饰」——正文写「下滑 10.05%」而真值为 -10.05 时 SHALL 申报 `stated_value=10.05, direction="negative"`。prompt SHALL 提供与 field_ref ↔ metric_name 同级的 direction 申报示例。prompt 变更后 SHALL 经 `scripts/deploy_prompts.py` 发布方可进入 eval 门禁（prompt-deploy-consistency 契约不变）。
+
+#### Scenario: prompt 含方向申报示例
+
+- **WHEN** 审查任一分析师 prompt 的 claim 登记章节
+- **THEN** SHALL 存在 direction 必填说明与「下滑 X% → stated_value=X, direction=negative」样例
+
+#### Scenario: prompt 发布一致性
+
+- **WHEN** prompt 修改合入后未执行 deploy_prompts.py
+- **THEN** eval 门禁 SHALL 拒绝运行（沿用现有 prompt-deploy-consistency 门禁行为）
+

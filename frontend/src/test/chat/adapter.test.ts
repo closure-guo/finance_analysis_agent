@@ -153,6 +153,31 @@ describe('工具调用事件 → tool-call 部件', () => {
   })
 })
 
+describe('时序排列（bug 复现）：正文/思考/工具调用按到达顺序渲染', () => {
+  // 真实 SSE 到达序（ReAct 单轮可先吐文字再调工具）：
+  //   thinking → 正文「我先查一下」 → tool_call → 正文「结果如下」
+  // 渲染部件顺序 MUST 与到达序一致；当前 adapter 把 text 一律排到 timeline 之后 → 复现失败。
+  it('正文先于工具调用时,text 部件应插在 tool-call 之前', () => {
+    const { state } = applyEvents([
+      { type: 'thinking_token', token: '思考一' },
+      { type: 'chat_token', token: '我先查一下' },
+      { type: 'tool_call', name: 'get_stock_data', args: { stock_code: '600519' }, iteration: 1 },
+      { type: 'chat_token', token: '结果如下' },
+      { type: 'chat_done' },
+    ])
+    const translated = translateMessage(state.messages[state.messages.length - 1])
+    const parts = partsOf(translated)
+    const types = parts.map((p) => p.type)
+    // 到达序:reasoning, text(我先查一下), tool-call, text(结果如下)
+    const textIdx = types.findIndex((t) => t === 'text')
+    const toolIdx = types.findIndex((t) => t === 'tool-call')
+    expect(textIdx).toBeGreaterThanOrEqual(0)
+    expect(toolIdx).toBeGreaterThanOrEqual(0)
+    // 关键断言:第一段正文必须先于 tool-call 渲染(时间序)
+    expect(textIdx).toBeLessThan(toolIdx)
+  })
+})
+
 describe('搜索事件 → data-search 部件', () => {
   it('search_start：searching 状态', () => {
     const { state } = applyEvents([{ type: 'search_start', query: '茅台 股价' }])

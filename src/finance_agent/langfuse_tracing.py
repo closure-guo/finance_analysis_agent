@@ -20,11 +20,34 @@ _langfuse_client = None
 _langfuse_checked = False
 
 
+def _silence_benign_detach_errors() -> None:
+    """静音 OTel detach 的已知无害错误日志（add-user-feedback 排查引入）。
+
+    背景：langfuse 的 start_as_current_observation / propagate_attributes 在
+    async/executor 线程边界下，detach 的 contextvars token 可能已因内层
+    attach/detach 失配而失效——langfuse 自身的 _detach_context_token_safely
+    文档明确「observation 已完成，mismatch 可安全忽略」并为此内置了安全助手；
+    但 OTel 公开 detach 路径仍会 logger.exception("Failed to detach context")
+    刷出完整堆栈，污染运行日志。
+    处理：按消息内容过滤该已知无害记录（opentelemetry.context logger 下的
+    其他错误照常暴露），不改变任何行为——仅去日志噪音。
+    """
+
+    class _BenignDetachFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "Failed to detach context" not in (record.getMessage() or "")
+
+    # 注意:logger 级 filter 只作用于经该 logger 发出的记录(传播记录不经过
+    # 父 logger 的 filter),而本记录恰由 opentelemetry.context logger 发出
+    logging.getLogger("opentelemetry.context").addFilter(_BenignDetachFilter())
+
+
 def get_langfuse():
     """返回 Langfuse 客户端单例；未配置或初始化失败返回 None。
 
     初始化失败时不缓存结果，允许下次调用重试（Langfuse 可能短暂不可用后恢复）。
-    成功后缓存客户端单例。
+    成功后缓存客户端单例，并静音 OTel detach 的已知无害错误日志（见
+    _silence_benign_detach_errors）。
     """
     global _langfuse_client, _langfuse_checked
     if _langfuse_checked:
@@ -42,6 +65,7 @@ def get_langfuse():
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
             host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
         )
+        _silence_benign_detach_errors()
         _langfuse_checked = True
     except Exception:
         logging.getLogger("finance_agent.langfuse").warning(

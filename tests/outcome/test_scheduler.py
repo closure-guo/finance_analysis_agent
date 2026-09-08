@@ -6,6 +6,14 @@ from unittest.mock import MagicMock, patch
 from finance_agent.outcome.scheduler import start_scheduler, stop_scheduler
 
 
+def _settle_job_fn(sched):
+    """从注册的 3 个日批 job 中取 decision_settle_daily 的任务函数。"""
+    for call in sched.add_job.call_args_list:
+        if call.kwargs.get("id") == "decision_settle_daily":
+            return call.args[0]
+    raise AssertionError("decision_settle_daily job 未注册")
+
+
 class TestStartGating:
     @patch.dict(os.environ, {"TESTING": "1"})
     def test_testing_disables(self):
@@ -64,9 +72,9 @@ class TestJobIsolation:
         sched = MagicMock()
         mock_sched_cls.return_value = sched
         start_scheduler()
-        job_fn = sched.add_job.call_args.args[0]
+        job_fn = _settle_job_fn(sched)
         with patch(
-            "finance_agent.outcome.scheduler.settle_open_decisions",
+            "finance_agent.outcome.scheduler.settle_open_predictions",
             side_effect=RuntimeError("boom"),
         ):
             job_fn()  # 不抛异常
@@ -81,9 +89,9 @@ class TestJobRetry:
         sched = MagicMock()
         mock_sched_cls.return_value = sched
         start_scheduler()
-        job_fn = sched.add_job.call_args.args[0]
+        job_fn = _settle_job_fn(sched)
         with patch(
-            "finance_agent.outcome.scheduler.settle_open_decisions",
+            "finance_agent.outcome.scheduler.settle_open_predictions",
             side_effect=RuntimeError("boom"),
         ) as mock_settle:
             job_fn()  # 不抛异常
@@ -97,9 +105,9 @@ class TestJobRetry:
         sched = MagicMock()
         mock_sched_cls.return_value = sched
         start_scheduler()
-        job_fn = sched.add_job.call_args.args[0]
+        job_fn = _settle_job_fn(sched)
         with patch(
-            "finance_agent.outcome.scheduler.settle_open_decisions",
+            "finance_agent.outcome.scheduler.settle_open_predictions",
             side_effect=[RuntimeError("boom"), {"settled": 1}],
         ) as mock_settle:
             job_fn()

@@ -15,8 +15,9 @@ prompt_name + prompt_version，供 Langfuse generation metadata 挂载，兑现
 from __future__ import annotations
 
 import logging
+import os
+import time
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger("finance_agent.prompts")
@@ -50,51 +51,43 @@ def _get_client():
     return get_langfuse()
 
 
-def _langfuse_prompt_text(name: str) -> str | None:
-    """从 Langfuse 拉取 production label 的原始模板文本；不可用返回 None。"""
+def _cache_ttl() -> float:
+    """TTL 秒数(读取模块常量 _CACHE_TTL;PROMPT_CACHE_TTL 环境变量可覆盖,默认 30)。"""
+    return _CACHE_TTL
+
+
+def _load_ttl_from_env() -> float:
     try:
-        client = _get_client()
-        if client is None:
-            return None
-        prompt = client.get_prompt(name)
-        if prompt is None:
-            return None
-        return getattr(prompt, "prompt", None)
-    except Exception as e:
-        logger.debug("Langfuse prompt %s 拉取失败，将回退本地: %s", name, e)
-        return None
+        return float(os.getenv("PROMPT_CACHE_TTL", "30"))
+    except (TypeError, ValueError):
+        return 30.0
 
 
-@lru_cache(maxsize=32)
-def load_prompt(name: str) -> str:
-    """加载 prompt：Langfuse production 优先，失败回退本地 prompts/*.md。
+_CACHE_TTL: float = _load_ttl_from_env()
 
-    回退时打 WARN 提示可能版本漂移（本地文件可能滞后于 Langfuse）。
-    返回未 compile 的原始模板文本，调用方自行 .replace("{{key}}", ...)。
-
-    向后兼容入口（11+ caller + @lru_cache）。需要 prompt 元数据时改用
-    load_prompt_with_meta。
-    """
-    text = _langfuse_prompt_text(name)
-    if text is not None:
-        return text
-    logger.warning("prompt %s 回退本地，可能版本漂移", name)
-    p = _PROMPTS_DIR / f"{name}.md"
-    return p.read_text(encoding="utf-8")
+# TTL 进程内缓存:add-prompt-hot-reload。production 标签/版本变更最迟 TTL 后
+# 对后续请求生效,无需重启进程;兜底(本地)结果同样缓存,TTL 过期后仍重试 Langfuse。
+_CACHE: dict[str, tuple[float, PromptInfo]] = {}
 
 
-def load_prompt_with_meta(name: str) -> PromptInfo:
-    """加载 prompt 并附带元数据（name + version），供 Langfuse generation metadata 使用。
+def _clear_cache() -> None:
+    """清空 TTL 缓存(测试隔离用)。"""
+    _CACHE.clear()
 
-    Langfuse production label 优先（含 version）；失败/未配置时回退本地
-    （version="local"）。返回 PromptInfo，调用方用 .template 渲染、用
-    .prompt_name/.prompt_version 透传给 call_llm* / chat_stream 的 metadata。
 
-    不使用 @lru_cache：与 load_prompt 共享缓存会破坏「PromptInfo 与 version
-    绑定」的语义边界（旧 str 接口的调用方不期望拿到 PromptInfo）；另开缓存
-    又易与 load_prompt 的缓存出现版本漂移。每次直接读取（已读的本地文件
-    IO 成本可忽略，Langfuse client 内部也有缓存）。
-    """
+def _cached_info(name: str) -> PromptInfo:
+    """TTL 缓存包装:窗口内直接命中,过期后重拉 Langfuse production(兜底本地)。"""
+    hit = _CACHE.get(name)
+    now = time.monotonic()
+    if hit is not None and now - hit[0] < _cache_ttl():
+        return hit[1]
+    info = _fetch_info(name)
+    _CACHE[name] = (now, info)
+    return info
+
+
+def _fetch_info(name: str) -> PromptInfo:
+    """实际加载:Langfuse production 优先(含 version),失败/未配置回退本地。"""
     client = _get_client()
     if client is not None:
         try:
@@ -117,3 +110,28 @@ def load_prompt_with_meta(name: str) -> PromptInfo:
         prompt_name=name,
         prompt_version="local",
     )
+
+
+def load_prompt(name: str) -> str:
+    """加载 prompt：Langfuse production 优先，失败回退本地 prompts/*.md。
+
+    回退时打 WARN 提示可能版本漂移（本地文件可能滞后于 Langfuse）。
+    返回未 compile 的原始模板文本，调用方自行 .replace("{{key}}", ...)。
+
+    向后兼容入口（11+ caller）。需要 prompt 元数据时改用 load_prompt_with_meta。
+    TTL 缓存（add-prompt-hot-reload）：production 变更最迟 PROMPT_CACHE_TTL 秒后生效。
+    """
+    return _cached_info(name).template
+
+
+def load_prompt_with_meta(name: str) -> PromptInfo:
+    """加载 prompt 并附带元数据（name + version），供 Langfuse generation metadata 使用。
+
+    Langfuse production label 优先（含 version）；失败/未配置时回退本地
+    （version="local"）。返回 PromptInfo，调用方用 .template 渲染、用
+    .prompt_name/.prompt_version 透传给 call_llm* / chat_stream 的 metadata。
+
+    TTL 缓存（add-prompt-hot-reload）：与 load_prompt 共享同一缓存条目
+    （一次拉取两接口一致），production 变更最迟 PROMPT_CACHE_TTL 秒后生效。
+    """
+    return _cached_info(name)

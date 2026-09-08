@@ -4,7 +4,7 @@
 产出: reports/citation_smoke_verify_<ts>.json（运行产物，不入库；供 incident 记录引证）
 
 验收标准（fix-citation-contract-diseases 修复后的冒烟口径，见 docs/incidents/020）：
-  1. citation FAIL 率 < 10%（历史值 65-75%）
+  1. citation FAIL 率 < 10%（历史值 61%，incident 020：002412 round-2 41/67 FAIL）
   2. 重试未触发：以 trace score citation_pass=true 且 citation_report.failed==0 为证
      （等价于 iteration_count 停滞在首轮；state 不落 Langfuse / sessions 表）
   3. 技术类 claim 的 field_ref 采用负索引语义（-N）且解析成功（status != FAIL）
