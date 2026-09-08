@@ -1142,10 +1142,9 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   }
 
   // ── 收起态图标栏（仅桌面；移动端抽屉恒渲染展开 rail，否则收起态持久化时抽屉为空）──
-  if (collapsed && !isMobile) {
-    return (
-      <Sidebar expandedRail={null} collapsedRail={
-        <div className="flex flex-col items-start pl-3.5 pt-14 gap-2 h-full">
+  // 与展开态列表同挂载于 Sidebar 内层（display 切换显隐），避免每次展开重挂载会话列表
+  const collapsedRail = collapsed && !isMobile ? (
+    <div className="flex flex-col items-start pl-3.5 pt-14 gap-2 h-full">
           <SidebarIcon label="新建分析">
             <Button variant="ghost" size="icon" onClick={onNew} aria-label="新建分析" data-testid="sidebar-new-collapsed">
               <i className="fas fa-plus text-xs"></i>
@@ -1181,13 +1180,11 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
             </Button>
           </SidebarIcon>
         </div>
-      } />
-    )
-  }
+  ) : null
 
   // ── 展开态（桌面）与移动端抽屉共用 ──
   return (
-    <Sidebar collapsedRail={null} expandedRail={
+    <Sidebar collapsedRail={collapsedRail} expandedRail={
       <div className="flex flex-col h-full">
       {/* 顶部占位：撑起高度使下方「新建分析」按钮避开悬浮折叠按钮（fixed top-3 left-3，h-10） */}
       <div className="h-11 shrink-0" />
