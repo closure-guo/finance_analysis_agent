@@ -32,38 +32,52 @@ class TestCheckCacheMiss:
 
 
 class TestCheckCacheHit:
+    """HIT 语义（2026-09-08 修复）：分析所需核心数据完整命中，含时效数据。"""
+
+    def _hit_data(self):
+        """HIT 所需的完整 key 集（慢数据 + 时效数据）。"""
+        return {
+            "600519:balance_sheet": pd.DataFrame({"报告日": ["20241231"]}),
+            "600519:income_statement": pd.DataFrame({"报告日": ["20241231"]}),
+            "600519:cash_flow_statement": pd.DataFrame({"报告日": ["20241231"]}),
+            "600519:industry_info": {"industry": "白酒"},
+            "600519:stock_quote": {"price": 1800.0},
+            "600519:kline": pd.DataFrame({"收盘": [1800.0]}),
+            "benchmark_kline": pd.DataFrame({"收盘": [4000.0]}),
+            "macro_indicators": {"pmi": []},
+            "600519:news": [{"title": "x"}],
+        }
+
     def test_returns_hit_when_all_cached(self):
         mock_cache = MagicMock()
-
-        def fake_get(key):
-            data = {
-                "600519:balance_sheet": pd.DataFrame({"报告日": ["20241231"]}),
-                "600519:income_statement": pd.DataFrame({"报告日": ["20241231"]}),
-                "600519:cash_flow_statement": pd.DataFrame({"报告日": ["20241231"]}),
-                "600519:industry_info": {"industry": "白酒"},
-                "600519:stock_quote": {"price": 1800.0},
-            }
-            return data.get(key)
-
-        mock_cache.get.side_effect = fake_get
+        mock_cache.get.side_effect = self._hit_data().get
         state = {"stock_code": "600519"}
         result = check_cache(state, cache=mock_cache)
         assert result["cache_result"] == "HIT"
+        # 时效数据随 HIT 附带（修复后契约）
+        assert "kline" in result
+        assert "benchmark_kline" in result
+        assert "macro_indicators" in result
+        assert "news_list" in result
 
     def test_hit_fills_data(self):
         mock_cache = MagicMock()
         bs = pd.DataFrame({"报告日": ["20241231"], "资产总计": [1000.0]})
         is_df = pd.DataFrame({"报告日": ["20241231"], "营业收入": [100.0]})
         cf = pd.DataFrame({"报告日": ["20241231"], "OCF": [50.0]})
+        kline_df = pd.DataFrame({"日期": ["2024-12-31"], "收盘": [1800.0]})
 
         def fake_get(key):
-            return {
-                "600519:balance_sheet": bs,
-                "600519:income_statement": is_df,
-                "600519:cash_flow_statement": cf,
-                "600519:industry_info": {"industry": "白酒"},
-                "600519:stock_quote": {"price": 1800.0},
-            }.get(key)
+            data = self._hit_data()
+            data.update(
+                {
+                    "600519:balance_sheet": bs,
+                    "600519:income_statement": is_df,
+                    "600519:cash_flow_statement": cf,
+                    "600519:kline": kline_df,
+                }
+            )
+            return data.get(key)
 
         mock_cache.get.side_effect = fake_get
         state = {"stock_code": "600519"}
@@ -72,6 +86,7 @@ class TestCheckCacheHit:
         assert result["balance_sheet"].equals(bs)
         assert result["income_statement"].equals(is_df)
         assert result["cash_flow_statement"].equals(cf)
+        assert result["kline"].equals(kline_df)
 
 
 class TestCheckCachePartial:

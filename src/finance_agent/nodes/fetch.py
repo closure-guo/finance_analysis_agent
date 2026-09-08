@@ -203,18 +203,21 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                     _set_optional_fallback(result, label)
                     continue
 
-            # 按类型处理成功结果
+            # 按类型处理成功结果。
+            # 报表缓存 TTL 30 天（2026-09-08 收窄：此前永久，财报季 staleness 理论
+            # 窗口依赖 quote 1 天 TTL 间接触发刷新；收窄后显式覆盖财报季间隔，
+            # 新财报发布后至多 30 天必刷新。行业归属同 30 天。）
             if label == "balance_sheet":
-                c.set(f"{code}:balance_sheet", value)
+                c.set(f"{code}:balance_sheet", value, ttl_seconds=2_592_000)
                 result["balance_sheet"] = value
             elif label == "income_statement":
-                c.set(f"{code}:income_statement", value)
+                c.set(f"{code}:income_statement", value, ttl_seconds=2_592_000)
                 result["income_statement"] = value
             elif label == "cash_flow_statement":
-                c.set(f"{code}:cash_flow_statement", value)
+                c.set(f"{code}:cash_flow_statement", value, ttl_seconds=2_592_000)
                 result["cash_flow_statement"] = value
             elif label == "financial_indicators":
-                c.set(f"{code}:indicators", value)
+                c.set(f"{code}:indicators", value, ttl_seconds=2_592_000)
                 result["financial_indicators"] = value
             elif label == "industry_info":
                 c.set(f"{code}:industry_info", value, ttl_seconds=2_592_000)
@@ -239,7 +242,7 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                     c.set(f"{code}:industry_pe", value, ttl_seconds=86_400)
                     result["industry_pe"] = value
             elif label == "quarterly_income":
-                c.set(f"{code}:quarterly_income", value)
+                c.set(f"{code}:quarterly_income", value, ttl_seconds=2_592_000)
                 result["quarterly_income"] = value
             elif label == "macro_indicators":
                 c.set("macro_indicators", value, ttl_seconds=86_400)
