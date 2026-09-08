@@ -101,3 +101,88 @@ class TestTTLByDate:
         past = time.time() - 1
         cache.set("old", {"v": 1}, expire_at=past)
         assert cache.get("old") is None
+
+
+class TestConcurrentWriteSafety:
+    """fix(concurrent-cache)：DataCache 并发写安全（2026-09-08 缓存层审计）。
+
+    真实缺陷：共享 Connection 无锁，两个分析请求并发 fetch_data 时并发
+    c.set → InterfaceError: bad parameter or other API misuse + 写入静默
+    丢失（实测 400 次并发写只成功 200）。管线表现为随机一方 fetch_data
+    崩溃 → 整条分析失败。
+    """
+
+    def test_concurrent_set_no_error_no_loss(self, cache):
+        """两线程各写 200 key：无异常、400 全部落库。"""
+        import threading
+
+        errors: list[str] = []
+
+        def writer(tag: str):
+            try:
+                for i in range(200):
+                    cache.set(f"{tag}:k{i}", {"v": i}, ttl_seconds=3600)
+            except Exception as e:  # noqa: BLE001 - 收集线程错误
+                errors.append(f"{tag}: {type(e).__name__}: {e}")
+
+        t1 = threading.Thread(target=writer, args=("600519",))
+        t2 = threading.Thread(target=writer, args=("688072",))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"并发写异常: {errors[:3]}"
+        keys = cache.keys()
+        n_600519 = sum(1 for k in keys if k.startswith("600519:"))
+        n_688072 = sum(1 for k in keys if k.startswith("688072:"))
+        assert n_600519 == 200, f"600519 写入丢失: {n_600519}/200"
+        assert n_688072 == 200, f"688072 写入丢失: {n_688072}/200"
+
+    def test_concurrent_get_set_mixed(self, cache):
+        """读写并发（一管线 check_cache 读、一管线 fetch_data 写）不崩。"""
+        import threading
+
+        cache.set("seed:0", {"v": 0}, ttl_seconds=3600)
+        errors: list[str] = []
+
+        def reader():
+            try:
+                for i in range(200):
+                    cache.get(f"seed:{i % 5}")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"reader: {type(e).__name__}")
+
+        def writer():
+            try:
+                for i in range(200):
+                    cache.set(f"w:{i}", {"v": i}, ttl_seconds=3600)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"writer: {type(e).__name__}")
+
+        t1 = threading.Thread(target=reader)
+        t2 = threading.Thread(target=writer)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        assert not errors, f"读写并发异常: {errors[:3]}"
+
+
+class TestSharedCacheSingleton:
+    """fix(cache-singleton)：nodes/cache 与 nodes/fetch 共用同一 DataCache 实例。
+
+    此前两模块各自 DataCache() 单例（两个 Connection 指向同一 cache.db），
+    加倍并发冲突面且语义分裂。统一后跨模块读写经同一实例（有锁保护）。
+    """
+
+    def test_nodes_modules_share_singleton(self):
+        from finance_agent.data.cache import get_shared_cache
+        from finance_agent.nodes import cache as cache_mod
+        from finance_agent.nodes import fetch as fetch_mod
+
+        c1 = cache_mod._get_cache()
+        c2 = fetch_mod._get_cache()
+        c3 = get_shared_cache()
+        assert c1 is c2, "nodes/cache 与 nodes/fetch 单例分裂"
+        assert c1 is c3, "未统一到 get_shared_cache"

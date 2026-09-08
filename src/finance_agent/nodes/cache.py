@@ -22,18 +22,15 @@ TTL 策略（ADR-0004 + 收窄）：
 
 from __future__ import annotations
 
-from finance_agent.data.cache import DataCache
-
-_CACHE: DataCache | None = None
+from finance_agent.data.cache import DataCache, get_shared_cache
 
 
 def _get_cache(cache: DataCache | None = None) -> DataCache:
     if cache is not None:
         return cache
-    global _CACHE
-    if _CACHE is None:
-        _CACHE = DataCache()
-    return _CACHE
+    # 2026-09-08 统一：与 nodes/fetch 共用进程级单例（此前两模块各自实例，
+    # 两个 Connection 指向同一 cache.db，加倍并发冲突面且语义分裂）
+    return get_shared_cache()
 
 
 def check_cache(state: dict, cache=None) -> dict:

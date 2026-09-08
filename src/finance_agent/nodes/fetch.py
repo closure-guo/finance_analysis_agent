@@ -28,7 +28,6 @@ from finance_agent.langfuse_tracing import open_span
 
 logger = logging.getLogger(__name__)
 
-_CACHE: DataCache | None = None
 _CLIENT: AKShareClient | None = None
 
 
@@ -105,10 +104,11 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
 def _get_cache(cache: DataCache | None = None) -> DataCache:
     if cache is not None:
         return cache
-    global _CACHE
-    if _CACHE is None:
-        _CACHE = DataCache()
-    return _CACHE
+    # 2026-09-08 统一：与 nodes/cache 共用进程级单例（此前两模块各自实例，
+    # 两个 Connection 指向同一 cache.db，加倍并发冲突面且语义分裂）
+    from finance_agent.data.cache import get_shared_cache
+
+    return get_shared_cache()
 
 
 def _get_client(client: AKShareClient | None = None) -> AKShareClient:
@@ -263,7 +263,9 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                 (result.get("industry_info") or {}).get("name", ""),
                 use_web_search=use_web,
             )
-            c.set(f"{code}:key_events", events)
+            # TTL 1 天（2026-09-08 缓存层审计）：事件含 WebSearch 实时快照，
+            # 时效性最强，此前永久缓存依赖 quote 1 天 TTL 间接兜底刷新
+            c.set(f"{code}:key_events", events, ttl_seconds=86_400)
             result["key_events"] = events
             if obs:
                 obs.update(output={"status": "success", "count": len(events)})
