@@ -249,10 +249,13 @@ class AKShareClient:
             if result.get("name") or result.get("industry"):
                 return result
         # 降级：cninfo 行业 + 名称 fallback
+        logger.warning("东财个股信息不可用，降级 cninfo 行业+名称: %s", stock_code)
         result = self._fetch_name_fallback(stock_code)
         industry = self._fetch_industry_cninfo(stock_code)
         if industry:
             result["industry"] = industry
+        else:
+            logger.error("行业数据降级后仍缺失（名称/cninfo 均无返回）: %s", stock_code)
         return result
 
     def fetch_stock_quote(self, stock_code: str) -> dict:
@@ -268,6 +271,10 @@ class AKShareClient:
                 raw = row.iloc[0].to_dict()
                 return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
         # 降级：仅获取名称+代码
+        # 可观测性（2026-09-08 审计）：东财行情被 TLS 风控封锁时此处静默降级，
+        # PE/PB/市值/价格全部丢失且无日志——下游估值维度（GARP/相对估值）会静默
+        # 跳过，人工无从察觉。降级 MUST 留 ERROR（数据维度缺失，非预期降级）。
+        logger.error("东财行情接口不可用，降级为仅名称（PE/PB/市值/价格缺失）: %s", stock_code)
         fallback = self._fetch_name_fallback(stock_code)
         if fallback:
             fallback["code"] = stock_code
@@ -564,7 +571,7 @@ class AKShareClient:
         """
         result: dict[str, list[dict] | dict] = {}
 
-        def _safe_macro(key: str, func):
+        def _safe_macro(key: str, func) -> None:
             df = _call_ak(func)
             if df is not None and not df.empty:
                 # akshare 宏观接口为降序（最新在前）；显式按首列（月份/日期）降序排序，
@@ -580,6 +587,9 @@ class AKShareClient:
                 # ── 时效守卫：as_of_date + freshness（90 天界，各指标独立）──
                 result[key] = self._with_freshness(key, records)
             else:
+                # 可观测性（2026-09-08 审计）：宏观指标失败/空返回时此前静默置 []
+                # ——宏观分析师看不到该维度却无日志可查。空返回 MUST 留 ERROR。
+                logger.error("宏观指标 %s 拉取失败/返回空", key)
                 result[key] = []
 
         _safe_macro("cpi", ak.macro_china_cpi)
@@ -599,6 +609,9 @@ class AKShareClient:
         """
         df = _call_ak(ak.stock_news_em, symbol=stock_code)
         if df is None or df.empty:
+            # 可观测性（2026-09-08 审计）：新闻是舆情分析师唯一数据源，失败静默
+            # 返回 [] 会让舆情维度无数据却无日志可查。空返回 MUST 留 ERROR。
+            logger.error("个股新闻拉取失败/返回空（舆情数据缺失）: %s", stock_code)
             return []
         df = df.head(limit)
         # 标准化列名

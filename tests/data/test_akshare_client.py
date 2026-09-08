@@ -342,3 +342,63 @@ class TestFetchKlineTencentFallback:
         mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame()
         result = client.fetch_kline("600519", days=3)
         assert result.empty
+
+
+class TestDataGapLogging:
+    """数据未正确拉取时必须有日志报错（可观测性：静默降级 = 隐性数据缺失）。
+
+    背景（2026-09-08 审计）：东财行情接口被 TLS 风控封锁时 stock_quote 静默
+    降级为仅名称（PE/PB/市值丢失无日志）、news/macro 失败静默返回空——下游
+    与人工都无从得知数据维度缺失。以下用例钉死「降级/空返回必须留日志」契约。
+    """
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_quote_degraded_to_name_only_logs_error(self, mock_ak, client, caplog):
+        """行情主源失败、降级为仅名称时 MUST 留 ERROR 日志（PE/PB 丢失可观测）。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None  # 主源全失败
+        mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
+            {"code": ["600519"], "name": ["贵州茅台"]}
+        )
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_stock_quote("600519")
+        assert result.get("name") == "贵州茅台"  # fallback 仍返回名称
+        assert any(
+            "行情" in r.message or "PE" in r.message or "spot_em" in r.message
+            for r in caplog.records
+        ), "行情降级无 ERROR 日志"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_news_empty_logs_error(self, mock_ak, client, caplog):
+        """新闻接口失败返回空列表时 MUST 留 ERROR 日志。"""
+        mock_ak.stock_news_em.return_value = None
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_news("600519")
+        assert result == []
+        assert any("news" in r.message or "新闻" in r.message for r in caplog.records), (
+            "新闻空返回无 ERROR 日志"
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_macro_indicator_failure_logs_error(self, mock_ak, client, caplog):
+        """宏观指标接口失败返回空列表时 MUST 留 ERROR 日志。"""
+        mock_ak.macro_china_cpi.side_effect = ConnectionError("refused")
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_macro_indicators()
+        assert result["cpi"] == []
+        assert any("cpi" in r.message for r in caplog.records), "宏观指标失败无 ERROR 日志"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_industry_fallback_logs_warning(self, mock_ak, client, caplog):
+        """个股信息主源失败、走 cninfo fallback 时 MUST 留 WARNING 日志（降级路径可观测）。"""
+        mock_ak.stock_individual_info_em.return_value = None
+        mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
+            {"code": ["600519"], "name": ["贵州茅台"]}
+        )
+        mock_ak.stock_industry_change_cninfo.return_value = pd.DataFrame({"行业名称": ["白酒"]})
+        with caplog.at_level("WARNING", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_industry("600519")
+        assert result.get("name") == "贵州茅台"
+        assert any(
+            "降级" in r.message or "fallback" in r.message or "cninfo" in r.message
+            for r in caplog.records
+        ), "行业 fallback 无 WARNING 日志"
