@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { RunInfoPane } from '../../pages/settings/panes/RunInfoPane'
 
-// 记录全部 fetch 调用。通过全局 __runInfoFail 让第 N 次 /api/run-info 请求返回 500（0/缺省 = 永不失败）。
+// 记录全部 fetch 调用。通过全局 __runInfoFail 让第 N 次 /api/run-info 请求返回 500（0/缺省 = 永不失败）；
+// __runInfoGitCommit 定制 git_commit 返回值（null 模拟非 git 环境，如 docker 部署）。
 function stubFetch(calls: Array<{ url: string; init?: RequestInit }>) {
   vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
     calls.push({ url, init })
@@ -17,7 +18,10 @@ function stubFetch(calls: Array<{ url: string; init?: RequestInit }>) {
       if (failAt > 0 && runInfoCalls === failAt) {
         return Promise.resolve(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }))
       }
-      // 契约：GET /api/run-info 只读返回运行信息，绝不含 apiKey
+      // 契约：GET /api/run-info 只读返回运行信息，绝不含 apiKey；git_commit 后端声明为 string|null。
+      // 注意：此处不能对 __runInfoGitCommit 用 ?? 做缺省回退——null 是合法的“非 git 环境”契约值，
+      // 而 ?? 会把 null 当作未设置直接吞掉；应由 beforeEach 提供默认 'abc123' 后原样透传。
+      const gitCommit = (globalThis as unknown as { __runInfoGitCommit: string | null }).__runInfoGitCommit
       return Promise.resolve(new Response(JSON.stringify({
         model: 'deepseek/deepseek-chat',
         base_url: 'https://api.deepseek.com/v1',
@@ -25,7 +29,7 @@ function stubFetch(calls: Array<{ url: string; init?: RequestInit }>) {
         langfuse_host: 'http://localhost:3000',
         langfuse_enabled: true,
         version: '0.1.0',
-        git_commit: 'abc123',
+        git_commit: gitCommit,
         health: 'ok',
       })))
     }
@@ -39,6 +43,7 @@ describe('RunInfoPane 运行信息分区', () => {
     stubFetch(calls)
     ;(globalThis as unknown as { __calls?: Array<{ url: string; init?: RequestInit }> }).__calls = calls
     ;(globalThis as unknown as { __runInfoFail?: number }).__runInfoFail = 0
+    ;(globalThis as unknown as { __runInfoGitCommit: string | null }).__runInfoGitCommit = 'abc123'
   })
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -67,6 +72,26 @@ describe('RunInfoPane 运行信息分区', () => {
     expect(screen.queryByText(/secret/i)).not.toBeInTheDocument()
     // 仅展示契约声明的 8 个字段，无额外密钥条目
     expect(screen.queryByText(/密钥/)).not.toBeInTheDocument()
+  })
+
+  it('git_commit 为 null（非 git 环境）时分区正常展示，Git Commit 渲染 —，不进入错误态', async () => {
+    // 模拟 docker 部署：后端 _git_commit() 返回 None → JSON 中 git_commit: null
+    ;(globalThis as unknown as { __runInfoGitCommit: null }).__runInfoGitCommit = null
+    render(<RunInfoPane />)
+    // 其余字段照常展示，不进错误态
+    expect(await screen.findByText(/deepseek\/deepseek-chat/)).toBeInTheDocument()
+    expect(screen.getByText(/https:\/\/api\.deepseek\.com\/v1/)).toBeInTheDocument()
+    expect(screen.getByText(/enabled/)).toBeInTheDocument()
+    expect(screen.getByText(/http:\/\/localhost:3000/)).toBeInTheDocument()
+    expect(screen.getByText(/0\.1\.0/)).toBeInTheDocument()
+    expect(screen.getByText('正常')).toBeInTheDocument()
+    // git_commit 以 — 兜底，不再渲染字面 hash 或 'undefined'
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.queryByText(/abc123/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument()
+    // 不进入错误态
+    expect(screen.queryByTestId('run-info-error')).not.toBeInTheDocument()
+    expect(screen.queryByText('运行信息加载失败')).not.toBeInTheDocument()
   })
 
   it('首次加载失败进入错误态，点重试后恢复展示', async () => {

@@ -6,6 +6,8 @@ import { toast } from 'sonner'
 import { Button } from '../../../components/ui/button'
 
 // 契约：GET /api/run-info（src/finance_agent/api.py）返回以下字段，绝不含 apiKey。
+// git_commit 可空：非 git 环境（如 docker 部署，.dockerignore 排除 .git）后端返回 null，
+// 不应因该字段为 null 判定整包加载失败（与 base_url 可变缺失同层的降级处理）。
 interface RunInfo {
   model: string
   base_url: string
@@ -13,7 +15,7 @@ interface RunInfo {
   langfuse_host: string
   langfuse_enabled: boolean
   version: string
-  git_commit: string
+  git_commit: string | null
   health: string
 }
 
@@ -41,8 +43,9 @@ export function RunInfoPane() {
       const res = await fetch('/api/run-info')
       if (!res.ok) throw new Error(String(res.status))
       const data = (await res.json()) as RunInfo
-      // 契约校验：关键字段缺失视为加载失败（安全兜底，防止渲染异常形状）
-      if (typeof data.model !== 'string' || typeof data.git_commit !== 'string') {
+      // 契约校验：仅关键字段（model）缺失才视为加载失败（安全兜底，防止渲染异常形状）；
+      // git_commit 可空不判失败——非 git 环境后端返回 null，属合法值。
+      if (typeof data.model !== 'string') {
         throw new Error('invalid run-info payload')
       }
       setInfo(data)
@@ -78,22 +81,22 @@ export function RunInfoPane() {
         <h3 className="text-sm font-medium mb-2">运行环境</h3>
         <InfoRow label="模型" value={info.model} />
         <InfoRow label="API 地址" value={info.base_url || '—'} />
-        <InfoRow label="思考模式" value={info.thinking} />
-        <InfoRow label="健康状态" value={info.health === 'ok' ? '正常' : info.health} />
+        <InfoRow label="思考模式" value={info.thinking || '—'} />
+        <InfoRow label="健康状态" value={info.health === 'ok' ? '正常' : (info.health || '—')} />
       </div>
 
       {/* 可观测性：Langfuse */}
       <div className="rounded-xl p-4 space-y-1" style={{ background: 'var(--bg-overlay-l1)' }}>
         <h3 className="text-sm font-medium mb-2">可观测性（Langfuse）</h3>
-        <InfoRow label="地址" value={info.langfuse_host} />
+        <InfoRow label="地址" value={info.langfuse_host || '—'} />
         <InfoRow label="链路追踪" value={info.langfuse_enabled ? '已启用' : '未启用'} />
       </div>
 
       {/* 版本信息 */}
       <div className="rounded-xl p-4 space-y-1" style={{ background: 'var(--bg-overlay-l1)' }}>
         <h3 className="text-sm font-medium mb-2">版本信息</h3>
-        <InfoRow label="版本" value={info.version} />
-        <InfoRow label="Git Commit" value={info.git_commit} />
+        <InfoRow label="版本" value={info.version || '—'} />
+        <InfoRow label="Git Commit" value={info.git_commit || '—'} />
       </div>
     </div>
   )
