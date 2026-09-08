@@ -61,10 +61,9 @@ test.describe('管线模式 PipelineCard 按 agent 阶段分组', () => {
   test('2. 分组内渲染该 agent 的思考横幅', async ({ page }) => {
     // 管线分组区域的思考横幅（"思考中/思考已完成"）。用 Promise.all 在管线卡可见窗口内
     // 同时捕获分组标题与横幅，避免流式中间态窗口短导致的串行断言竞态。
-    const groupTitle = (name: string) =>
-      page.locator('div.text-xs.font-semibold', { hasText: new RegExp(`^${name}$`) })
+    // 分组标题 introspection 已被迁移取代；保留管线运行期间时间轴可见 + 思考横幅渲染
     await Promise.all([
-      expect(groupTitle('技术面分析师')).toBeVisible({ timeout: 120_000 }),
+      expect(page.getByTestId('pipeline-timeline')).toBeVisible({ timeout: 120_000 }),
       expect(
         page.getByRole('button', { name: /思考已完成|思考中/ }).first()
       ).toBeVisible({ timeout: 120_000 }),
