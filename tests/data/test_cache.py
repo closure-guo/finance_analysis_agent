@@ -186,3 +186,40 @@ class TestSharedCacheSingleton:
         c3 = get_shared_cache()
         assert c1 is c2, "nodes/cache 与 nodes/fetch 单例分裂"
         assert c1 is c3, "未统一到 get_shared_cache"
+
+
+def test_stats_reports_per_type_and_totals(cache: DataCache):
+    cache.set("600519:stock_quote", {"price": 100}, ttl_seconds=3600)
+    cache.set("600519:kline", {"x": 1}, ttl_seconds=3600)
+    cache.set("000001:stock_quote", {"price": 50})  # 永久
+    s = cache.stats()
+    assert s["entries"] == 3
+    assert s["permanent"] == 1
+    cats = {p["category"]: p["entries"] for p in s["per_type"]}
+    assert cats["stock_quote"] == 2
+    assert cats["kline"] == 1
+
+
+def test_stats_counts_expired(cache: DataCache):
+    import time
+
+    cache.set("600519:news", {"n": 1}, expire_at=time.time() - 10)
+    s = cache.stats()
+    assert s["expired"] == 1
+
+
+def test_clear_all_and_delete_by_code(cache: DataCache):
+    cache.set("600519:news", {"n": 1})
+    cache.set("000001:news", {"n": 2})
+    assert cache.delete_by_code("600519") == 1
+    assert cache.keys() == ["000001:news"]
+    assert cache.clear_all() == 1
+    assert cache.keys() == []
+
+
+def test_delete_by_type_uses_key_suffix(cache: DataCache):
+    cache.set("600519:kline", {"k": 1})
+    cache.set("000001:stock_quote", {"q": 1})
+    cache.set("benchmark_kline", {"b": 1})
+    assert cache.delete_by_type("kline") == 1  # 只清 600519:kline，不动 benchmark_kline
+    assert sorted(cache.keys()) == ["000001:stock_quote", "benchmark_kline"]

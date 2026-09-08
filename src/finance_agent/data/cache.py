@@ -106,6 +106,68 @@ class DataCache:
             rows = self._conn.execute("SELECT key FROM cache").fetchall()
             return [r[0] for r in rows]
 
+    def stats(self) -> dict:
+        """返回数据缓存统计：总条目/占用/已过期/永久 + 按业务类别聚合。
+
+        业务类别从 key 后缀解析（`{code}:{suffix}`，全局键无前缀取整 key）。
+        """
+        with self._lock:
+            now = time.time()
+            rows = self._conn.execute(
+                "SELECT CASE WHEN instr(key, ':') > 0 "
+                "THEN substr(key, instr(key, ':') + 1) ELSE key END AS cat, "
+                "COUNT(*) AS n, SUM(LENGTH(data)) AS bytes, MIN(expire_at) AS earliest "
+                "FROM cache GROUP BY cat"
+            ).fetchall()
+            per_type = []
+            for r in rows:
+                per_type.append(
+                    {
+                        "category": r[0],
+                        "entries": r[1],
+                        "bytes": r[2],
+                        "earliest_expire": r[3],
+                    }
+                )
+            expired = self._conn.execute(
+                "SELECT COUNT(*) FROM cache WHERE expire_at IS NOT NULL AND expire_at < ?", (now,)
+            ).fetchone()[0]
+            permanent = self._conn.execute(
+                "SELECT COUNT(*) FROM cache WHERE expire_at IS NULL"
+            ).fetchone()[0]
+            return {
+                "entries": sum(p["entries"] for p in per_type),
+                "bytes": sum(p["bytes"] or 0 for p in per_type),
+                "expired": expired,
+                "permanent": permanent,
+                "per_type": per_type,
+            }
+
+    def clear_all(self) -> int:
+        """清空全部数据缓存条目，返回删除行数。"""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM cache")
+            self._conn.commit()
+            return cur.rowcount
+
+    def delete_by_code(self, code: str) -> int:
+        """删除某股票代码的全部缓存条目（`{code}:*`），返回删除行数。"""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM cache WHERE key LIKE ?", (f"{code}:%",))
+            self._conn.commit()
+            return cur.rowcount
+
+    def delete_by_type(self, category: str) -> int:
+        """删除业务类别等于 category 的条目（key 后缀匹配，或整 key == category），返回删除行数。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM cache WHERE (instr(key, ':') > 0 "
+                "AND substr(key, instr(key, ':') + 1) = ?) OR key = ?",
+                (category, category),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
