@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
+import importlib.metadata
 import json
 import logging
 import os
 import re
+import subprocess
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -25,13 +28,17 @@ _logger = logging.getLogger("finance_agent.api")
 
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
+from finance_agent.data.cache import get_shared_cache  # noqa: E402
+from finance_agent.data.monitoring import get_monitor  # noqa: E402
 from finance_agent.graph import build_5layer_graph  # noqa: E402
 from finance_agent.langfuse_tracing import get_langfuse  # noqa: E402
 from finance_agent.llm import LLMConfig  # noqa: E402
+from finance_agent.llm.probe_cache import get_probe_cache  # noqa: E402
 from finance_agent.pipeline_runner import PipelineRunner, build_layer_tree  # noqa: E402
 from finance_agent.session_store import (  # noqa: E402
     append_chat,
     append_session_event,
+    clear_all_sessions,
     create_chat_session,
     create_session,
     delete_session,
@@ -271,6 +278,19 @@ class ExportRequest(BaseModel):
 
     session_id: str
     fmt: str  # pdf | word | markdown（映射 docx/md）
+
+
+class CacheClearRequest(BaseModel):
+    """缓存清理请求体（POST /api/cache/clear）。
+
+    scope: type（按类别）| code（按代码）| all（全清）。
+    scope=all 必须携带 confirm=true，否则拒绝（高危确认红线）。
+    """
+
+    scope: str  # type | code | all
+    data_type: str | None = None
+    code: str | None = None
+    confirm: bool = False
 
 
 # ── Helpers ──
@@ -2276,6 +2296,120 @@ def _now() -> str:
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
+
+
+# ── Agent 设置中心（add-agent-settings-center）──
+
+
+@functools.lru_cache(maxsize=1)
+def _git_commit() -> str | None:
+    """返回当前 git 仓库 HEAD 短哈希（前 12 位）；非 git 环境返回 None。
+
+    从 api.py 所在目录向上逐级寻找含 .git 的仓库根（不同部署布局下
+    __file__ 深度可能不同，故用向上搜索而非固定 parents 下标）。
+    """
+    root = Path(__file__).resolve().parent
+    for _ in range(8):  # 向上最多找 8 层，防御性边界
+        if (root / ".git").exists():
+            try:
+                out = subprocess.run(  # noqa: S603 - 固定命令列表，无用户输入
+                    ["git", "-C", str(root), "rev-parse", "HEAD"],  # noqa: S607 - 用 PATH 中的 git
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                if out.returncode == 0:
+                    return out.stdout.strip()[:12]
+            except Exception:  # noqa: BLE001 - git 不可用视为无版本信息
+                return None
+            return None
+        parent = root.parent
+        if parent == root:
+            break
+        root = parent
+    return None
+
+
+@app.get("/api/cache/stats")
+async def cache_stats() -> dict:
+    """缓存统计：数据缓存（cache.db）与能力探测缓存（内存）+ 数据源监控快照。"""
+    data = await asyncio.to_thread(get_shared_cache().stats)
+    probe = await asyncio.to_thread(get_probe_cache().stats)
+    return {"data": data, "probe": probe, "monitor": get_monitor().snapshot()}
+
+
+@app.post("/api/cache/clear")
+async def cache_clear(req: CacheClearRequest) -> dict:
+    """清理数据缓存：按类别 / 按代码 / 全清。
+
+    高危红线：scope=all 未携带 confirm=true 时拒绝（400），缓存保持不变。
+    """
+    cache = get_shared_cache()
+    if req.scope == "all":
+        if not req.confirm:
+            raise HTTPException(status_code=400, detail="clear all requires confirm=true")
+        removed = await asyncio.to_thread(cache.clear_all)
+        return {"scope": "all", "removed": removed}
+    if req.scope == "type":
+        if not req.data_type:
+            raise HTTPException(status_code=400, detail="data_type required for scope=type")
+        removed = await asyncio.to_thread(cache.delete_by_type, req.data_type)
+        return {"scope": "type", "data_type": req.data_type, "removed": removed}
+    if req.scope == "code":
+        if not req.code:
+            raise HTTPException(status_code=400, detail="code required for scope=code")
+        removed = await asyncio.to_thread(cache.delete_by_code, req.code)
+        return {"scope": "code", "code": req.code, "removed": removed}
+    raise HTTPException(status_code=400, detail="unknown scope")
+
+
+@app.post("/api/cache/probe-cache/clear")
+async def probe_cache_clear() -> dict:
+    """清除能力探测缓存（内存）：下次请求将重新执行能力探测。"""
+    await asyncio.to_thread(get_probe_cache().clear)
+    return {"cleared": True}
+
+
+@app.post("/api/sessions/clear-all")
+async def clear_all_sessions_endpoint() -> dict:
+    """清空全部会话及其事件日志（级联删除），返回删除的会话数。"""
+    n = await asyncio.to_thread(clear_all_sessions)
+    return {"cleared": n}
+
+
+@app.get("/api/run-info")
+async def run_info() -> dict:
+    """只读运行信息：默认 LLM 配置 / 健康状态 / Langfuse / git 版本。
+
+    安全红线：绝不含 apiKey（与 GET /api/llm-config 不回显密钥一致）。
+    """
+    model = os.environ.get("LLM_MODEL") or "deepseek/deepseek-chat"
+    base_url = os.environ.get("LLM_BASE_URL") or ""
+    thinking = os.environ.get("LLM_THINKING") or "enabled"
+    langfuse_host = os.environ.get("LANGFUSE_HOST") or "http://localhost:3000"
+    langfuse_enabled = bool(
+        os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")
+    )
+    version = "0.1.0"
+    with contextlib.suppress(Exception):  # 包未安装时回退默认版本
+        version = importlib.metadata.version("finance-agent")
+    return {
+        "model": model,
+        "base_url": base_url,
+        "thinking": thinking,
+        "langfuse_host": langfuse_host,
+        "langfuse_enabled": langfuse_enabled,
+        "version": version,
+        "git_commit": _git_commit(),
+        "health": "ok",
+    }
+
+
+@app.get("/api/data-source/status")
+async def data_source_status() -> dict:
+    """数据源状态：命中/未命中/失败计数 + 数据新鲜度列表。"""
+    data = await asyncio.to_thread(get_shared_cache().stats)
+    return {"monitor": get_monitor().snapshot(), "freshness": data}
 
 
 # ── AG-UI 协议通道（add-assistant-ui-thread PoC，双轨隔离：仅挂载，不接入 registry）──
