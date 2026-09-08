@@ -7,6 +7,7 @@
 
 from fastapi.testclient import TestClient
 
+from finance_agent import session_store
 from finance_agent.api import app
 from finance_agent.data.cache import get_shared_cache
 
@@ -70,7 +71,11 @@ def test_data_source_status_shape():
     assert "monitor" in body and "freshness" in body
 
 
-def test_sessions_clear_all_and_probe_clear():
+def test_sessions_clear_all_and_probe_clear(tmp_path, monkeypatch):
+    """清空会话作用于隔离的临时 session DB，绝不清开发者的真实 data/sessions.db。"""
     client = TestClient(app)
+    # 隔离 session DB 路径（函数在调用时读模块全局 _DB_PATH，monkeypatch 对端点路径生效）
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions-test.db")
+    session_store.init_db()
     assert client.post("/api/sessions/clear-all").status_code == 200
     assert client.post("/api/cache/probe-cache/clear").status_code == 200

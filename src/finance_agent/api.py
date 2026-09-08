@@ -2400,7 +2400,7 @@ async def run_info() -> dict:
         "langfuse_host": langfuse_host,
         "langfuse_enabled": langfuse_enabled,
         "version": version,
-        "git_commit": _git_commit(),
+        "git_commit": await asyncio.to_thread(_git_commit),
         "health": "ok",
     }
 
