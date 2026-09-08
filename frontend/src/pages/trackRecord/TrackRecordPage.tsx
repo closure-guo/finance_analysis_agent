@@ -5,6 +5,7 @@ import type { EquityCurvePoint, PredictionRecord, PredictionStatus, PredictionsR
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
 import { cssVar } from '../../Charts'
+import { loadTrackPrefs } from '../../lib/trackPrefs'
 
 const STATUS_LABEL: Record<PredictionStatus, string> = {
   open: '进行中',
@@ -163,6 +164,13 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const showCurve = curve !== null && curve.length >= 2
   const versions = overview?.versions ?? []
 
+  // 战绩展示偏好（add-agent-settings-center Task 12）：渲染期读取本地偏好并应用到
+  // 回撤警示阈值 / 基准线开关 / 净值图形态。时间跨度仅存储——后端 equity-curve
+  // 端点暂无区间参数，接入待后端支持（见 lib/trackPrefs.ts 注释）。
+  const prefs = loadTrackPrefs()
+  const showBenchmark = prefs.benchmark !== 'none'
+  const isAreaForm = prefs.navChartForm === 'interval'
+
   const chartOption = {
     color: [cssVar('--chart-sky', '#228EBF'), cssVar('--chart-amber', '#CBB54C')],
     tooltip: { trigger: 'axis' as const, valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)) },
@@ -170,8 +178,25 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
     xAxis: { type: 'category' as const, data: (curve ?? []).map(p => p.date), axisLabel: { fontSize: 10 } },
     yAxis: { type: 'value' as const, axisLabel: { fontSize: 10 } },
     series: [
-      { name: '组合净值', type: 'line' as const, data: (curve ?? []).map(p => p.agent_nav), showSymbol: false, connectNulls: false },
-      { name: '沪深300', type: 'line' as const, data: (curve ?? []).map(p => p.benchmark_nav), showSymbol: false, connectNulls: false },
+      {
+        name: '组合净值',
+        type: 'line' as const,
+        data: (curve ?? []).map(p => p.agent_nav),
+        showSymbol: false,
+        connectNulls: false,
+        // 净值图形态偏好：'interval'（区间收益）以面积填充突出区间变动；'cumulative'（累计净值）为纯折线
+        ...(isAreaForm ? { areaStyle: { opacity: 0.18 } } : {}),
+      },
+      // 基准偏好：'none' 不叠加基准线；其它值叠加现有沪深300序列（zz500/zz1000 序列待接入，见 trackPrefs.ts）
+      ...(showBenchmark
+        ? [{
+            name: '沪深300',
+            type: 'line' as const,
+            data: (curve ?? []).map(p => p.benchmark_nav),
+            showSymbol: false,
+            connectNulls: false,
+          }]
+        : []),
     ],
   }
 
@@ -266,7 +291,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 </div>
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>最大回撤</div>
-                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= 0.2 ? 'var(--status-error-default)' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
+                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= prefs.drawdownThreshold ? 'var(--status-error-default)' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
                 </div>
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>风险分（{portfolio.risk_label ?? '—'}）</div>

@@ -1,16 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { TrackRecordPage } from '../../pages/trackRecord/TrackRecordPage'
 import App from '../../App'
+import { DEFAULT_TRACK_PREFS } from '../../lib/trackPrefs'
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
   Toaster: () => null,
 }))
 
-// ECharts 需要 canvas，jsdom 不支持：stub 组件（chartsMarkLine.test 同款方案）
+// ECharts 需要 canvas，jsdom 不支持：stub 组件并捕获 option（chartsMarkLine.test 同款方案），
+// 便于断言基准线开关 / 净值图形态等消费行为。
+const capturedOptions: unknown[] = []
 vi.mock('echarts-for-react', () => ({
-  default: () => <div data-testid="mock-chart" />,
+  default: (props: { option: unknown }) => {
+    capturedOptions.push(props.option)
+    return <div data-testid="mock-chart" />
+  },
 }))
 
 const OVERVIEW = {
@@ -398,5 +404,96 @@ describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-fil
     expect(next).toBeInTheDocument()
     fireEvent.click(next)
     await waitFor(() => expect(calls.some(u => u.includes('page=2'))).toBe(true))
+  })
+})
+
+describe('战绩展示偏好消费（add-agent-settings-center Task 12）', () => {
+  // 净值点 ≥2 才渲染曲线（TrackRecordPage showCurve 条件）
+  const CURVE = [
+    { date: '2026-08-03', agent_nav: 1.0, benchmark_nav: 1.0 },
+    { date: '2026-09-03', agent_nav: 1.02, benchmark_nav: 1.01 },
+  ]
+
+  // 最近一次捕获的图表 option
+  function lastChartOption() {
+    return capturedOptions[capturedOptions.length - 1] as {
+      series: Array<{ name: string; areaStyle?: unknown }>
+    }
+  }
+
+  beforeEach(() => {
+    capturedOptions.length = 0
+    localStorage.clear()
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    localStorage.clear()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('回撤阈值默认 0.2：max_drawdown=0.12 时不触发警示高亮', async () => {
+    // 未设置偏好 → 使用默认阈值 0.2；0.12 < 0.2 应为正常色
+    mockFetch({
+      overview: { ...OVERVIEW, portfolio: { ...OVERVIEW.portfolio, max_drawdown: 0.12 } },
+      predictions: PREDICTIONS,
+    })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const md = within(screen.getByTestId('track-record-risk')).getByText('12.0%')
+    expect(md.getAttribute('style')).not.toContain('status-error-default')
+  })
+
+  it('回撤阈值偏好 0.1 生效：max_drawdown=0.12 时风险卡警示高亮', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({ ...DEFAULT_TRACK_PREFS, drawdownThreshold: 0.1 }))
+    mockFetch({
+      overview: { ...OVERVIEW, portfolio: { ...OVERVIEW.portfolio, max_drawdown: 0.12 } },
+      predictions: PREDICTIONS,
+    })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const md = within(screen.getByTestId('track-record-risk')).getByText('12.0%')
+    expect(md.getAttribute('style')).toContain('status-error-default')
+  })
+
+  it('基准偏好 none：净值图只渲染组合净值系列', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({ ...DEFAULT_TRACK_PREFS, benchmark: 'none' }))
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS, equity: CURVE })
+    renderPage()
+    await screen.findByTestId('track-record-curve')
+    expect(lastChartOption().series.map(s => s.name)).toEqual(['组合净值'])
+  })
+
+  it('基准偏好 hs300：净值图叠加沪深300基准线（无 areaStyle）', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({ ...DEFAULT_TRACK_PREFS, benchmark: 'hs300' }))
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS, equity: CURVE })
+    renderPage()
+    await screen.findByTestId('track-record-curve')
+    const series = lastChartOption().series
+    expect(series.map(s => s.name)).toEqual(['组合净值', '沪深300'])
+    // 默认累计净值形态：折线不带面积填充
+    expect(series[0].areaStyle).toBeUndefined()
+  })
+
+  it('净值形态偏好 interval：组合净值 series 带 areaStyle 面积填充', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({ ...DEFAULT_TRACK_PREFS, navChartForm: 'interval' }))
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS, equity: CURVE })
+    renderPage()
+    await screen.findByTestId('track-record-curve')
+    const series = lastChartOption().series
+    expect(series[0].name).toBe('组合净值')
+    expect(series[0].areaStyle).toBeTruthy()
+  })
+
+  it('基准 none + 形态 interval 组合生效：单系列且带面积', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({
+      ...DEFAULT_TRACK_PREFS, benchmark: 'none', navChartForm: 'interval',
+    }))
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS, equity: CURVE })
+    renderPage()
+    await screen.findByTestId('track-record-curve')
+    const series = lastChartOption().series
+    expect(series.map(s => s.name)).toEqual(['组合净值'])
+    expect(series[0].areaStyle).toBeTruthy()
   })
 })
