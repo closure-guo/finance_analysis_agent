@@ -13,11 +13,13 @@ const TIME_SPAN_OPTIONS: Array<{ value: TrackTimeSpan; label: string }> = [
   { value: '6m', label: '近 6 月' },
   { value: '1y', label: '近 1 年' },
 ]
+// 基准选项：zz500/zz1000 的曲线序列后端尚未提供（现仅沪深300有基准线），选项保留
+// 存储与展示（见 lib/trackPrefs），以「（待接入）」标注避免与 hs300 同序列造成误导。
 const BENCHMARK_OPTIONS: Array<{ value: TrackBenchmark; label: string }> = [
   { value: 'none', label: '不对比基准' },
   { value: 'hs300', label: '沪深300' },
-  { value: 'zz500', label: '中证500' },
-  { value: 'zz1000', label: '中证1000' },
+  { value: 'zz500', label: '中证500（待接入）' },
+  { value: 'zz1000', label: '中证1000（待接入）' },
 ]
 // 回撤警示阈值：比例 → 展示为百分比
 const DRAWDOWN_OPTIONS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
@@ -50,13 +52,13 @@ export function TrackPrefsPane() {
   // 初始值取当前存储（无 / 损坏 → 默认）；改动即时保存并同步控件显示
   const [prefs, setPrefs] = useState<TrackPrefs>(loadTrackPrefs)
 
-  // 更新某字段：先更新本地态，再全量写入 localStorage（改动即保存）
+  // 更新某字段：以本次渲染的 prefs 构造 next，setPrefs 与持久化分离执行（改动即保存）。
+  // 说明（审查反馈）：把 saveTrackPrefs 从 setState updater 内移出，避免 updater 副作用；
+  // update 读取当前渲染闭包，离散 select 事件之间必有重渲染，连续改动不会读到陈旧值。
   const update = <K extends keyof TrackPrefs>(key: K, value: TrackPrefs[K]) => {
-    setPrefs(prev => {
-      const next = { ...prev, [key]: value }
-      saveTrackPrefs(next)
-      return next
-    })
+    const next = { ...prefs, [key]: value }
+    setPrefs(next)
+    saveTrackPrefs(next)
   }
 
   return (
@@ -69,7 +71,7 @@ export function TrackPrefsPane() {
       </div>
 
       <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--bg-overlay-l1)' }}>
-        <PrefRow label="默认时间跨度" hint="净值曲线展示的时间范围（后端区间参数支持后生效）">
+        <PrefRow label="默认时间跨度" hint="净值曲线展示的时间范围（前端按日期裁剪曲线，总览指标仍为全期）">
           <select
             data-testid="track-prefs-timespan"
             value={prefs.timeSpan}

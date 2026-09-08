@@ -414,10 +414,20 @@ describe('战绩展示偏好消费（add-agent-settings-center Task 12）', () =
     { date: '2026-09-03', agent_nav: 1.02, benchmark_nav: 1.01 },
   ]
 
-  // 最近一次捕获的图表 option
+  // 时间跨度用例：5 个点横跨 8 个月（2026-01 ~ 2026-09），超出所有选项窗口
+  const LONG_CURVE = [
+    { date: '2026-01-05', agent_nav: 0.95, benchmark_nav: 0.96 },
+    { date: '2026-03-05', agent_nav: 0.98, benchmark_nav: 0.97 },
+    { date: '2026-06-05', agent_nav: 1.0, benchmark_nav: 0.99 },
+    { date: '2026-08-05', agent_nav: 1.02, benchmark_nav: 1.0 },
+    { date: '2026-09-03', agent_nav: 1.04, benchmark_nav: 1.02 },
+  ]
+
+  // 最近一次捕获的图表 option（含 xAxis 日期序列，用于断言时间跨度窗口裁剪）
   function lastChartOption() {
     return capturedOptions[capturedOptions.length - 1] as {
-      series: Array<{ name: string; areaStyle?: unknown }>
+      xAxis: { data: string[] }
+      series: Array<{ name: string; data?: number[]; areaStyle?: unknown }>
     }
   }
 
@@ -495,5 +505,24 @@ describe('战绩展示偏好消费（add-agent-settings-center Task 12）', () =
     const series = lastChartOption().series
     expect(series.map(s => s.name)).toEqual(['组合净值'])
     expect(series[0].areaStyle).toBeTruthy()
+  })
+
+  it('时间跨度 6m：净值曲线点按最近 6 个月裁剪（总览指标仍全期）', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({ ...DEFAULT_TRACK_PREFS, timeSpan: '6m' }))
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS, equity: LONG_CURVE })
+    renderPage()
+    await screen.findByTestId('track-record-curve')
+    const opt = lastChartOption()
+    // 最新点 2026-09-03 往前 6 个月 → 保留日期 ≥2026-03-03，剔除 2026-01-05
+    expect(opt.xAxis.data).toEqual(['2026-03-05', '2026-06-05', '2026-08-05', '2026-09-03'])
+    expect(opt.series[0].data).toEqual([0.98, 1.0, 1.02, 1.04])
+  })
+
+  it('时间跨度 all：净值曲线点不过滤，全量展示', async () => {
+    localStorage.setItem('fa_track_prefs', JSON.stringify({ ...DEFAULT_TRACK_PREFS, timeSpan: 'all' }))
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS, equity: LONG_CURVE })
+    renderPage()
+    await screen.findByTestId('track-record-curve')
+    expect(lastChartOption().xAxis.data).toEqual(LONG_CURVE.map(p => p.date))
   })
 })

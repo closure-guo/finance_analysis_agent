@@ -5,7 +5,7 @@ import type { EquityCurvePoint, PredictionRecord, PredictionStatus, PredictionsR
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
 import { cssVar } from '../../Charts'
-import { loadTrackPrefs } from '../../lib/trackPrefs'
+import { loadTrackPrefs, type TrackTimeSpan } from '../../lib/trackPrefs'
 
 const STATUS_LABEL: Record<PredictionStatus, string> = {
   open: '进行中',
@@ -43,6 +43,38 @@ const COLUMNS: Array<{ key: string; label: string; numeric?: boolean }> = [
 ]
 
 const PAGE_SIZE = 50
+
+// 时间跨度窗口（add-agent-settings-center Task 12 审查修复）：
+// 后端 GET /api/v1/track-record/equity-curve 无区间参数（src/finance_agent/api.py:2117），
+// timeSpan 由前端在拉取全量曲线后按日期窗口裁剪。口径：timeSpan 仅作用于净值曲线展示
+// 窗口（'3m'/'6m'/'1y' = 截至曲线最新点的最近 3/6/12 个月），总览指标（胜率/超额/
+// 风险卡/切片）仍为全期口径不受影响；'all' 不过滤。
+const TIME_SPAN_MONTHS: Record<Exclude<TrackTimeSpan, 'all'>, number> = {
+  '3m': 3,
+  '6m': 6,
+  '1y': 12,
+}
+
+// ISO 日期（YYYY-MM-DD）平移 deltaMonths 个月；日超目标月末时按月末钳制，
+// 规避 Date#setMonth 的溢出进位（如 05-31 减 6 个月应落 11-30，而非 12-01）。
+function isoDateShiftMonths(iso: string, deltaMonths: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const monthIndex = y * 12 + (m - 1) + deltaMonths
+  const ny = Math.floor(monthIndex / 12)
+  const nm = ((monthIndex % 12) + 12) % 12
+  const nd = Math.min(d, new Date(ny, nm + 1, 0).getDate())
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${ny}-${pad(nm + 1)}-${pad(nd)}`
+}
+
+// 按时间跨度裁剪曲线点：'all' 原样返回；否则以数据内最新日期为右边界保留最近
+// N 个月（含边界日）。后端按 curve_date ASC 返回，过滤后仍保持原顺序。
+function windowCurveByTimeSpan(points: EquityCurvePoint[], timeSpan: TrackTimeSpan): EquityCurvePoint[] {
+  if (points.length === 0 || timeSpan === 'all') return points
+  const lastDate = points.reduce<string>((mx, p) => (p.date > mx ? p.date : mx), points[0].date)
+  const cutoff = isoDateShiftMonths(lastDate, -TIME_SPAN_MONTHS[timeSpan])
+  return points.filter(p => p.date >= cutoff)
+}
 
 function Delta({ value }: { value: number | null }) {
   if (value === null) return <span className="text-txt-tertiary">—</span>
@@ -94,7 +126,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
       if (!ovResp.ok || !cvResp.ok || !sgResp.ok) throw new Error(String(ovResp.status))
       setOverview((await ovResp.json()) as TrackRecordOverview)
       const cv = (await cvResp.json()) as { points: EquityCurvePoint[] }
-      setCurve(cv.points)
+      // 时间跨度窗口在拉取后裁剪（见 windowCurveByTimeSpan；默认 'all' 不过滤）
+      setCurve(windowCurveByTimeSpan(cv.points, loadTrackPrefs().timeSpan))
       const sg = (await sgResp.json()) as { dimensions: SegmentDimension[] }
       setSegments(sg.dimensions)
     } catch {
@@ -165,8 +198,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const versions = overview?.versions ?? []
 
   // 战绩展示偏好（add-agent-settings-center Task 12）：渲染期读取本地偏好并应用到
-  // 回撤警示阈值 / 基准线开关 / 净值图形态。时间跨度仅存储——后端 equity-curve
-  // 端点暂无区间参数，接入待后端支持（见 lib/trackPrefs.ts 注释）。
+  // 回撤警示阈值 / 基准线开关 / 净值图形态；时间跨度在 load() 拉取 equity-curve 后
+  // 按 windowCurveByTimeSpan 前端窗口裁剪（'all' 不过滤），仅作用于曲线窗口。
   const prefs = loadTrackPrefs()
   const showBenchmark = prefs.benchmark !== 'none'
   const isAreaForm = prefs.navChartForm === 'interval'
@@ -345,7 +378,9 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           {/* 净值曲线（stage-b：agent vs 沪深300，起点归一 1.0；数据缺口断点不插值） */}
           {showCurve && (
             <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-curve">
-              <div className="text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>组合净值 vs 沪深300（起点归一 1.0）</div>
+              <div className="text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                {showBenchmark ? '组合净值 vs 沪深300' : '组合净值'}（起点归一 1.0）
+              </div>
               <ReactECharts option={chartOption} style={{ height: 240 }} notMerge />
             </div>
           )}

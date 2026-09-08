@@ -4,7 +4,8 @@
 //
 // 字段说明：
 // - timeSpan 默认时间跨度：'all' 全部 | '3m' 近 3 月 | '6m' 近 6 月 | '1y' 近 1 年
-//   （后端 /api/v1/track-record/equity-curve 暂不支持区间参数，先存储，接入待后端支持）
+//   （后端 equity-curve 端点无区间参数，前端按该跨度对已拉取曲线做日期窗口裁剪，
+//    见 TrackRecordPage.windowCurveByTimeSpan；仅曲线窗口，总览指标仍为全期）
 // - benchmark 对比基准指数：'none' 不对比 | 'hs300' 沪深300 | 'zz500' 中证500 | 'zz1000' 中证1000
 //   （净值曲线当前仅有沪深300基准序列，zz500/zz1000 的序列待接入）
 // - drawdownThreshold 回撤警示阈值（比例，0.2 = 20%）
