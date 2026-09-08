@@ -659,3 +659,201 @@ class TestDirectionVerification:
         (r,) = verify_claims([claim], self._STATE)
         assert r.status == "PASS"
         assert r.bucket != "internal_inconsistency"
+
+
+class TestPercentUnitNormalization:
+    """fix(percent-unit)：growth_rates/费率小数真值 vs 百分比申报的 100 倍归一。
+
+    真实缺陷（2026-09-08 拓荆科技 trace 04b872ae）：state 真值存小数比率
+    （营收增速 0.5887 = 58.87%、研发费用率 0.118 = 11.8%），LLM 以百分比
+    申报（58.87 / 11.8），校验器直接 |0.5887 - 58.87| = 58.28 判 value_mismatch
+    ——正确数据被误报 FAIL，抬高幻觉率、触发无谓重试。
+    """
+
+    def _claim(
+        self,
+        stated_value,
+        field_ref,
+        metric_name=None,
+        interpretation="",
+        direction="flat",
+        period="2025",
+    ):
+        return Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref=field_ref,
+            stated_value=stated_value,
+            interpretation=interpretation or f"{stated_value}",
+            metric_name=metric_name,
+            period=period,
+            direction=direction,
+        )
+
+    def test_growth_rate_percent_vs_decimal_ratio_passes(self):
+        """营收增速：state 存 0.5887（小数），LLM 报 58.87（百分比）→ PASS。"""
+        state = {"growth_rates": {"profitability": {"营业收入": 0.5887}}}
+        claim = self._claim(
+            58.87, "growth_rates.profitability.营业收入", "营业收入", direction="positive"
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "PASS", results[0]
+
+    def test_rd_expense_rate_percent_vs_decimal_passes(self):
+        """研发费用率：dupont 存 0.118（小数），LLM 报 11.80（百分比）→ PASS。"""
+        state = {"dupont_tree": {"L3": {"2025": {"研发费用率": 0.118}}}}
+        claim = self._claim(11.8, "dupont_tree.L3.2025.研发费用率", period="2025")
+        results = verify_claims([claim], state)
+        assert results[0].status == "PASS", results[0]
+
+    def test_true_mismatch_still_fails(self):
+        """真错值不受归一影响：增速实际 58.87%，LLM 报 30% → 仍 FAIL。"""
+        state = {"growth_rates": {"profitability": {"营业收入": 0.5887}}}
+        claim = self._claim(
+            30.0, "growth_rates.profitability.营业收入", "营业收入", direction="positive"
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "FAIL", results[0]
+        assert results[0].bucket == "value_mismatch"
+
+
+class TestComparativeEchoSkipped:
+    """fix(comparative-echo)：comparative claim 跳过单值回声检查。
+
+    真实缺陷：PMI claim「8月 49.8 较 7月 49.2 回升 0.6」（stated=基准值，
+    interpretation 是差值 0.6）被 _check_internal_echo 拿 49.8 匹配 0.6
+    误判 internal_inconsistency——数据完全正确。
+    """
+
+    def test_comparative_echo_not_checked(self):
+        """comparative claim 走方向比较校验（stated 为方向枚举），回声不误杀。
+
+        修复前被 _check_internal_echo 拿 49.8 匹配差值 0.6 误判 FAIL
+        internal_inconsistency；修复后跳过回声、走值级比较校验 → PASS。
+        """
+        state = {
+            "macro_indicators": {
+                "pmi": {
+                    "records": [
+                        {"月份": "2026-08-01", "制造业-指数": 49.8},
+                        {"月份": "2026-07-01", "制造业-指数": 49.2},
+                    ]
+                }
+            }
+        }
+        claim = Claim(
+            claim_type="comparative",
+            source_type="data",
+            field_ref="macro_indicators.pmi.0.制造业-指数",
+            # stated_value 为比较方向（_verify_comparative 契约）；
+            # 值两侧经 field_ref/field_ref_b 取真值 49.8/49.2 比较
+            stated_value="greater_than",
+            interpretation="8月制造业PMI较7月回升0.6个点",
+            field_ref_b="macro_indicators.pmi.1.制造业-指数",
+            stated_value_b=49.2,
+            metric_name="PMI",
+            period="2026-08",
+            direction="positive",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "PASS", results[0]
+
+    def test_comparative_numeric_direction_field_not_false_fail(self):
+        """兼容：LLM 偶发以数值填 stated_value（如 49.8）→ 不误判 FAIL。
+
+        修复前回声检查把它误判为 internal_inconsistency FAIL（假阳性抬高幻觉率）；
+        修复后跳过回声，值级校验对非方向枚举返回 UNVERIFIABLE（未知语义不武断判错）。
+        """
+        state = {
+            "macro_indicators": {
+                "pmi": {
+                    "records": [
+                        {"月份": "2026-08-01", "制造业-指数": 49.8},
+                        {"月份": "2026-07-01", "制造业-指数": 49.2},
+                    ]
+                }
+            }
+        }
+        claim = Claim(
+            claim_type="comparative",
+            source_type="data",
+            field_ref="macro_indicators.pmi.0.制造业-指数",
+            stated_value=49.8,  # 真实 trace 形态：LLM 以数值申报
+            interpretation="8月制造业PMI较7月回升0.6个点",
+            field_ref_b="macro_indicators.pmi.1.制造业-指数",
+            stated_value_b=49.2,
+            metric_name="PMI",
+            period="2026-08",
+            direction="positive",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status in ("PASS", "UNVERIFIABLE"), results[0]
+        assert results[0].status != "FAIL", results[0]
+
+
+class TestPercentUnitNormalizationComputational:
+    """fix(percent-unit)：计算型重算指标（dupont 费率/ROE）同样归一。"""
+
+    def test_rd_expense_rate_computational_percent_passes(self, balance_sheet, income_statement):
+        """研发费用率：state 重算 0.03（小数），LLM 报 3.0（百分比）→ PASS。"""
+        dupont_tree = calc_dupont(balance_sheet, income_statement)
+        state = {
+            "balance_sheet": balance_sheet,
+            "income_statement": income_statement,
+            "dupont_tree": dupont_tree,
+        }
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="dupont_tree.L3.2024.研发费用率",
+            stated_value=3.0,
+            interpretation="2024年研发费用率约3%",
+            metric_name="研发费用率",
+            period="2024",
+            direction="flat",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "PASS", results[0]
+
+    def test_roe_percent_stated_passes(self, balance_sheet, income_statement):
+        """杜邦 ROE：state 0.2833（小数），LLM 报 28.33（百分比）→ PASS。"""
+        dupont_tree = calc_dupont(balance_sheet, income_statement)
+        state = {
+            "balance_sheet": balance_sheet,
+            "income_statement": income_statement,
+            "dupont_tree": dupont_tree,
+        }
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="dupont_tree.L1.2024.ROE",
+            stated_value=28.33,
+            interpretation="杜邦分解 ROE 为 28.33%",
+            metric_name="ROE",
+            period="2024",
+            direction="flat",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "PASS", results[0]
+
+    def test_computational_true_mismatch_still_fails(self, balance_sheet, income_statement):
+        """真错值不受归一影响：ROE 实际 28.33%，LLM 报 15% → 仍 FAIL。"""
+        dupont_tree = calc_dupont(balance_sheet, income_statement)
+        state = {
+            "balance_sheet": balance_sheet,
+            "income_statement": income_statement,
+            "dupont_tree": dupont_tree,
+        }
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="dupont_tree.L1.2024.ROE",
+            stated_value=15.0,
+            interpretation="杜邦分解 ROE 为 15%",
+            metric_name="ROE",
+            period="2024",
+            direction="flat",
+        )
+        results = verify_claims([claim], state)
+        assert results[0].status == "FAIL", results[0]
+        assert results[0].bucket == "value_mismatch"
