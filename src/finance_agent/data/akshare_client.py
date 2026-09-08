@@ -437,6 +437,24 @@ class AKShareClient:
             df = df.sort_values("日期").reset_index(drop=True)
             return df.tail(days).reset_index(drop=True)
 
+        # ── 方案3: 腾讯 stock_zh_a_hist_tx（二级回退，独立链路） ──
+        logger.info("新浪K线拉取失败，尝试腾讯源: %s", stock_code)
+        df = _call_ak(ak.stock_zh_a_hist_tx, symbol=sina_symbol, adjust="qfq")
+        if df is not None and not df.empty:
+            rename_map = {
+                "date": "日期",
+                "open": "开盘",
+                "close": "收盘",
+                "high": "最高",
+                "low": "最低",
+                "volume": "成交量",
+                "amount": "成交额",
+                "turnover": "换手率",
+            }
+            df = df.rename(columns=rename_map)
+            df = df.sort_values("日期").reset_index(drop=True)
+            return df.tail(days).reset_index(drop=True)
+
         logger.error("K线拉取均失败: %s", stock_code)
         return pd.DataFrame()
 

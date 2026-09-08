@@ -282,3 +282,63 @@ class TestSinaIndexSymbolMapping:
 
     def test_chinext_is_sz(self):
         assert AKShareClient._to_sina_index_symbol("399006") == "sz399006"
+
+
+class TestFetchKlineTencentFallback:
+    """kline-tencent-fallback：东财+新浪均失败→腾讯三级回退。"""
+
+    @staticmethod
+    def _tx_daily_df():
+        return pd.DataFrame(
+            {
+                "date": ["2026-08-01", "2026-08-02", "2026-08-03"],
+                "open": [4500.0, 4520.0, 4530.0],
+                "high": [4520.0, 4540.0, 4550.0],
+                "low": [4490.0, 4510.0, 4520.0],
+                "close": [4510.0, 4530.0, 4540.0],
+                "volume": [100.0, 110.0, 120.0],
+                "amount": [1e8, 1.1e8, 1.2e8],
+                "turnover": [0.01, 0.011, 0.012],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_sina_fail_falls_back_to_tx(self, mock_ak, client, monkeypatch):
+        """东财+新浪均失败 → 回退腾讯，列归一化为中文。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_hist.side_effect = ConnectionError("RST")
+        mock_ak.stock_zh_a_daily.return_value = pd.DataFrame()
+        mock_ak.stock_zh_a_hist_tx.return_value = self._tx_daily_df()
+        result = client.fetch_kline("600519", days=3)
+        assert len(result) == 3
+        assert "日期" in result.columns and "收盘" in result.columns
+        assert result.iloc[-1]["收盘"] == 4540.0
+        mock_ak.stock_zh_a_hist_tx.assert_called_once()
+        _, kwargs = mock_ak.stock_zh_a_hist_tx.call_args
+        assert kwargs.get("symbol") == "sh600519"
+        assert kwargs.get("adjust") == "qfq"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_success_no_fallback(self, mock_ak, client, monkeypatch):
+        """东财正常时不触发新浪/腾讯。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        em_df = pd.DataFrame(
+            {"日期": ["2026-08-03", "2026-08-02", "2026-08-01"], "收盘": [4540.0, 4530.0, 4510.0]}
+        )
+        mock_ak.stock_zh_a_hist.return_value = em_df
+        client.fetch_kline("600519", days=2)
+        mock_ak.stock_zh_a_daily.assert_not_called()
+        mock_ak.stock_zh_a_hist_tx.assert_not_called()
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_all_fail_returns_empty(self, mock_ak, client, monkeypatch):
+        """三级全失败返回空且不抛异常。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_hist.side_effect = ConnectionError("RST")
+        mock_ak.stock_zh_a_daily.return_value = pd.DataFrame()
+        mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame()
+        result = client.fetch_kline("600519", days=3)
+        assert result.empty
