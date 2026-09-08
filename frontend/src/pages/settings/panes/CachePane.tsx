@@ -53,25 +53,31 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
 
 export function CachePane() {
   const [stats, setStats] = useState<CacheStats | null>(null)
+  // 加载状态机：loading 首次加载中 / ready 已就绪（含刷新失败保留旧数据）/ error 首次加载失败
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [code, setCode] = useState('')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmText, setConfirmText] = useState('')
 
-  // 拉取缓存统计（挂载 + 每次操作后刷新）
-  const loadStats = useCallback(async () => {
+  // 拉取缓存统计：
+  // - mode='full'（初次挂载 / 失败后点重试）：进入 loading，失败置 error 渲染错误态
+  // - mode='refresh'（清理操作后刷新）：失败保留旧 stats 不清空、不回落加载态，仅 toast
+  const loadStats = useCallback(async (mode: 'full' | 'refresh' = 'full') => {
+    if (mode === 'full') setStatus('loading')
     try {
       const res = await fetch('/api/cache/stats')
       if (!res.ok) throw new Error(String(res.status))
       setStats((await res.json()) as CacheStats)
+      setStatus('ready')
     } catch {
-      setStats(null)
+      if (mode === 'full') setStatus('error')
       toast.error('缓存统计加载失败')
     }
   }, [])
 
   useEffect(() => { void loadStats() }, [loadStats])
 
-  // 清理请求 + 成功后刷新统计
+  // 清理请求 + 成功后刷新统计（刷新走 refresh 模式，失败不清空已展示数据）
   const postAndRefresh = useCallback(async (path: string, body: unknown) => {
     try {
       const res = await fetch(path, {
@@ -83,7 +89,7 @@ export function CachePane() {
     } catch {
       toast.error('缓存清理失败')
     } finally {
-      void loadStats()
+      void loadStats('refresh')
     }
   }, [loadStats])
 
@@ -110,6 +116,18 @@ export function CachePane() {
   // 能力探测缓存一键清除
   const clearProbe = () => {
     void postAndRefresh('/api/cache/probe-cache/clear', {})
+  }
+
+  // 首次加载失败：错误文案 + 重试（点击重新 full 加载）
+  if (status === 'error') {
+    return (
+      <div data-testid="cache-pane-error" className="py-6 text-sm space-y-3" style={{ color: 'var(--text-tertiary)' }}>
+        <p>缓存统计加载失败</p>
+        <Button data-testid="cache-stats-retry" size="sm" variant="outline" onClick={() => void loadStats('full')}>
+          重试
+        </Button>
+      </div>
+    )
   }
 
   if (!stats) {

@@ -16,11 +16,17 @@ const statsBody = {
   monitor: { hits: 1, misses: 0, fails: {}, last_hit: 123 },
 }
 
-// 记录全部 fetch 调用（url + init），便于断言请求体
+// 记录全部 fetch 调用（url + init），便于断言请求体。
+// 通过全局 __statsFailAt 可让第 N 次 /api/cache/stats 请求返回 500（0/缺省 = 永不失败）。
 function stubFetch(calls: Array<{ url: string; init?: RequestInit }>) {
   vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
     calls.push({ url, init })
     if (url.endsWith('/api/cache/stats')) {
+      const failAt = (globalThis as unknown as { __statsFailAt?: number }).__statsFailAt ?? 0
+      const statsCount = calls.filter(c => c.url === '/api/cache/stats').length
+      if (failAt > 0 && statsCount === failAt) {
+        return Promise.resolve(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }))
+      }
       return Promise.resolve(new Response(JSON.stringify(statsBody)))
     }
     return Promise.resolve(new Response(JSON.stringify({ ok: true })))
@@ -32,6 +38,7 @@ describe('CachePane 缓存管理分区', () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     stubFetch(calls)
     ;(globalThis as unknown as { __calls?: Array<{ url: string; init?: RequestInit }> }).__calls = calls
+    ;(globalThis as unknown as { __statsFailAt?: number }).__statsFailAt = 0
   })
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -124,12 +131,45 @@ describe('CachePane 缓存管理分区', () => {
     })
   })
 
-  it('能力探测缓存一键清除调用 /api/cache/probe-cache/clear', async () => {
+  it('能力探测缓存一键清除调用 POST /api/cache/probe-cache/clear', async () => {
     render(<CachePane />)
     await screen.findByText('kline')
     fireEvent.click(screen.getByTestId('cache-probe-clear'))
     await waitFor(() => {
-      expect(captureCalls().some(c => c.url === '/api/cache/probe-cache/clear')).toBe(true)
+      const call = captureCalls().find(c => c.url === '/api/cache/probe-cache/clear')
+      expect(call).toBeTruthy()
+      expect(call!.init?.method).toBe('POST')
     })
+  })
+
+  it('加载失败渲染错误态，点重试后恢复展示', async () => {
+    // 第 1 次 stats 请求失败 → 错误态 + 重试按钮
+    ;(globalThis as unknown as { __statsFailAt: number }).__statsFailAt = 1
+    render(<CachePane />)
+    expect(await screen.findByTestId('cache-pane-error')).toBeInTheDocument()
+    expect(screen.getByText('缓存统计加载失败')).toBeInTheDocument()
+    const retry = screen.getByTestId('cache-stats-retry')
+    expect(retry).toBeInTheDocument()
+    // 首次失败后停在错误态（不是「加载中…」），且无任何清空按钮可用
+    expect(screen.queryByText('缓存统计加载中…')).not.toBeInTheDocument()
+    // 点重试 → 重新加载成功 → 恢复统计展示，错误态消失
+    fireEvent.click(retry)
+    expect(await screen.findByText('kline')).toBeInTheDocument()
+    expect(screen.queryByTestId('cache-pane-error')).not.toBeInTheDocument()
+  })
+
+  it('操作后刷新 stats 失败保留已展示数据不清空', async () => {
+    // 挂载成功（第 1 次 stats），清空后刷新失败（第 2 次 stats）
+    ;(globalThis as unknown as { __statsFailAt: number }).__statsFailAt = 2
+    render(<CachePane />)
+    await screen.findByText('kline')
+    fireEvent.click(screen.getByText('清空该类'))
+    await waitFor(() => {
+      expect(captureCalls().filter(c => c.url === '/api/cache/stats').length).toBeGreaterThanOrEqual(2)
+    })
+    // 刷新失败后仍保留已展示数据：不清空、不回落「加载中…」、不进入错误态
+    expect(screen.getByText('kline')).toBeInTheDocument()
+    expect(screen.queryByText('缓存统计加载中…')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('cache-pane-error')).not.toBeInTheDocument()
   })
 })
