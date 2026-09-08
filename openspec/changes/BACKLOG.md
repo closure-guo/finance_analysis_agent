@@ -25,7 +25,9 @@
 1. **judge 人工校准标注**：首轮跨模型代理门禁已归档（deepseek/qwen/k3 90 对），spec 要求的人工
    ≥80% 一致性校验仍开放——标注工具链就绪（exporter 抽样直链可用），回填 human_score 重跑
    measure.py 即闭合。
-2. **nightly @live 门禁 secrets**：CI workflow 已透传 LANGFUSE_*/JUDGE_*，需仓库管理员在
-   GitHub Settings 配置 secrets 后 @live 套件（FM 门禁/性能回归/校准抽样）才真正生效。
+2. **nightly @live 门禁**（已决策 2026-09-08：不暴露本地 Langfuse、不上云）：
+   CI secrets **不配置**，GitHub Actions 侧 @live 维持跳过。live 验证走本地手动
+   （`uv run pytest -m live`，本机 Langfuse+LLM 环境就绪），或未来愿开电脑时挂
+   Windows 计划任务在收盘后定时跑——不引入公网暴露与数据上云。
 3. **docker 后端重建**：8000 端口 docker 镜像基于修复前代码（FM state 修复/根 span output/
    session 头等未入镜像）——`docker compose up -d --build` 刷新。
