@@ -71,6 +71,13 @@ class ProbeCache:
         with self._lock:
             self._store.clear()
 
+    def stats(self) -> dict:
+        """能力探测缓存统计（进程内）。"""
+        with self._lock:
+            now = time.monotonic()
+            expired = sum(1 for _, expiry in self._store.values() if now >= expiry)
+            return {"entries": len(self._store), "expired": expired}
+
 
 _probe_cache: ProbeCache | None = None
 
