@@ -333,6 +333,93 @@ def _persist_decision_from_tool(
         logger.warning("ReAct 深模式落库兜底失败(不阻断): %s", e)
 
 
+# 单字段截断上限（结构化结论摘要各字段长度保护；工具结果总预算见
+# harness/context.py tool_result_budget=50000，此处字段级约束先行）
+_SUMMARY_FIELD_LIMIT = 600
+
+
+def _clip(text: str, limit: int = _SUMMARY_FIELD_LIMIT) -> str:
+    """截断长文本并附省略号，防单字段撑爆工具输出。"""
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _format_decision_line(decision: Any) -> str:
+    """将 TradeDecision（pydantic 或 dict）压成一行关键信息。"""
+    if hasattr(decision, "model_dump"):
+        data = decision.model_dump()
+    elif isinstance(decision, dict):
+        data = decision
+    else:
+        return _clip(str(decision))
+    action = data.get("action", "N/A")
+    confidence = data.get("confidence")
+    conf = f"{confidence:.0%}" if isinstance(confidence, (int, float)) else str(confidence)
+    reasoning = _clip(data.get("reasoning", ""))
+    return f"{action}（置信度 {conf}）：{reasoning}"
+
+
+def _build_summary_brief(accumulated: dict, report_md: str) -> str:
+    """构造 run_deep_analysis 工具返回给摘要 LLM 的结构化结论摘要。
+
+    修复根因（add-deep-summary-brief）：此前仅截 report_md[:2000]，报告前段
+    几乎全是图表列表与分析师章节开头，多空辩论/交易/风控/基金经理章节在
+    截断线之后 → 摘要 LLM 看不到结论章节，只能按 deep_mode 指令写
+    「本次分析未覆盖」。此处从 accumulated 提取各层结论拼装为固定格式块，
+    使摘要 LLM 具备填全全部摘要字段所需的上游材料；缺失字段跳过不造占位。
+    """
+    blocks: list[str] = []
+
+    # Layer I 分析师一句话（按管线展示顺序 technical/macro/fundamental/sentiment）
+    reports = accumulated.get("analyst_reports") or {}
+    analyst_lines = []
+    for name in ("technical", "macro", "fundamental", "sentiment"):
+        report = reports.get(name)
+        if not report:
+            continue
+        summary = (
+            report.summary
+            if hasattr(report, "summary")
+            else (report.get("summary", "") if isinstance(report, dict) else "")
+        )
+        if summary:
+            analyst_lines.append(f"- {name}: {_clip(summary)}")
+    if analyst_lines:
+        blocks.append("【分析师结论】\n" + "\n".join(analyst_lines))
+
+    # Layer II 多空辩论结论
+    conclusion = accumulated.get("research_manager_conclusion")
+    if conclusion:
+        blocks.append(f"【多空辩论结论】\n{_clip(conclusion)}")
+
+    # Layer III Trader 交易建议
+    plan = accumulated.get("trader_plan")
+    if plan:
+        blocks.append(f"【交易建议】\n{_format_decision_line(plan)}")
+
+    # Layer IV 风控裁决（Risk Judge 的最终交易决策）
+    risk_decision = accumulated.get("final_trade_decision")
+    if risk_decision:
+        blocks.append(f"【风控裁决】\n{_format_decision_line(risk_decision)}")
+
+    # Layer V 基金经理审批
+    fm_decision = accumulated.get("fund_manager_decision")
+    if fm_decision:
+        fm_line = f"【基金经理审批】\n{fm_decision}"
+        # #111：审批理由随决策呈现（在场时），缺失则仅展示决策值
+        fm_reasoning = accumulated.get("fund_manager_decision_reasoning")
+        if fm_reasoning:
+            fm_line += f"\n理由：{_clip(fm_reasoning)}"
+        blocks.append(fm_line)
+
+    brief = "\n\n".join(blocks)
+    if not brief:
+        return ""
+    return f"报告结论摘要：\n{brief}\n\n"
+
+
 def _make_run_deep_analysis(
     api_key: str | None = None,
     analysis_type: str = "comprehensive",
@@ -802,11 +889,15 @@ def _make_run_deep_analysis(
                     "sse_type": "report_ready",
                 }
 
-                # LLM 上下文只放摘要
+                # LLM 上下文放结构化结论摘要 + 报告正文节选（修复 add-deep-summary-brief：
+                # 仅截 report_md[:2000] 时辩论/交易/风控/基金经理章节不可见 → 「本次分析未覆盖」）
                 llm_output = f"深度分析完成。股票：{metadata['stock_name']}({stock_code})。\n"
                 llm_output += f"报告已生成，共 {len(report_md)} 字符。\n"
+                brief = _build_summary_brief(accumulated, report_md)
+                if brief:
+                    llm_output += f"\n{brief}"
                 if len(report_md) > 2000:
-                    llm_output += f"报告摘要：\n{report_md[:2000]}...\n"
+                    llm_output += f"报告正文（节选）：\n{report_md[:2000]}...\n"
                 else:
                     llm_output += f"报告内容：\n{report_md}"
 
