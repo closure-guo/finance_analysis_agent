@@ -12,29 +12,36 @@ interface SessionsPaneProps {
 
 export function SessionsPane({ onCleared }: SessionsPaneProps) {
   const [count, setCount] = useState<number | null>(null)
-  // 加载状态机：loading 首次加载中 / ready 已就绪 / error 首次加载失败
+  // 加载状态机：loading 首次加载中 / ready 已就绪（含刷新失败保留旧数据）/ error 首次加载失败
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
-  // 拉取会话总数
-  const loadSessions = useCallback(async () => {
-    setStatus('loading')
+  // 拉取会话总数：
+  // - mode='full'（初次挂载 / 失败后点重试）：进入 loading，失败置 error 渲染错误态
+  // - mode='refresh'（清空操作后刷新）：失败保留旧 count 不清空、不回落加载态，仅 toast
+  const loadSessions = useCallback(async (mode: 'full' | 'refresh' = 'full') => {
+    if (mode === 'full') setStatus('loading')
     try {
       const res = await fetch('/api/sessions')
       if (!res.ok) throw new Error(String(res.status))
-      const list = (await res.json()) as unknown[]
-      setCount(list.length)
+      const data = (await res.json()) as { sessions?: unknown }
+      // 契约：GET /api/sessions 返回 { sessions: [...] }；缺字段或非数组视为失败
+      if (!Array.isArray(data.sessions)) throw new Error('invalid sessions payload')
+      setCount(data.sessions.length)
       setStatus('ready')
     } catch {
-      setStatus('error')
+      if (mode === 'full') setStatus('error')
       toast.error('会话列表加载失败')
     }
   }, [])
 
   useEffect(() => { void loadSessions() }, [loadSessions])
 
-  // 确认清空：POST clear-all 成功回调 onCleared，失败仅 toast
+  // 确认清空：POST clear-all 成功回调 onCleared，失败仅 toast。
+  // 提交期间 submitting 禁用确认按钮防重复点击；结束后走 refresh 刷新（失败保留旧数据）。
   const clearAll = async () => {
+    setSubmitting(true)
     try {
       const res = await fetch('/api/sessions/clear-all', { method: 'POST' })
       if (!res.ok) throw new Error(String(res.status))
@@ -42,8 +49,9 @@ export function SessionsPane({ onCleared }: SessionsPaneProps) {
     } catch {
       toast.error('清空会话失败')
     } finally {
+      setSubmitting(false)
       setConfirmOpen(false)
-      void loadSessions()
+      void loadSessions('refresh')
     }
   }
 
@@ -106,9 +114,10 @@ export function SessionsPane({ onCleared }: SessionsPaneProps) {
                 size="sm"
                 variant="destructive"
                 data-testid="sessions-clear-all-submit"
+                disabled={submitting}
                 onClick={() => void clearAll()}
               >
-                确认清空
+                {submitting ? '清空中…' : '确认清空'}
               </Button>
             </div>
           </div>
