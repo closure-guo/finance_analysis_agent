@@ -37,3 +37,8 @@
 ## 结论
 [ ] 全部通过，可 archive（需人工确认上述 5 项主观项后签字）
 [ ] 存在失败项，需修复后重新验证
+## 终审修复增补（2026-09-09）
+
+- **M1（MAJOR）**：清空全部会话后 App 层状态未联动（仅 navigate('/')）→ 已修：`handleSessionsCleared` 复用 newAnalysis 空态重置语义（重置 currentSessionId/消息/SSE 订阅 + 重载会话列表 + 回首页），`onCleared` 独立 prop 注入。spec「清空后回到空态首页」场景在「从会话视图进入设置页→清空→返回」路径下已满足。前端 settings 套件 34 用例 + 相关验证通过。
+- **N1**：`/api/run-info` 默认模型与 `/api/llm-config` 占位不一致 → 已修：提共享常量 `DEFAULT_LLM_MODEL` 统一两处回退（`deepseek/deepseek-v4-pro`）；注释标明「实际管线默认在 agent_factory，后续如需统一另行裁决」。api 相关 22 用例通过。
+- 其余累计 Minor 经终审逐条裁定为可留（明细见分支审查记录）。
