@@ -677,7 +677,7 @@ def clear_all_sessions() -> int:
     """清空全部会话及其事件日志，返回删除的会话数。"""
     conn = _get_db()
     try:
-        n = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        n = int(conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0])
         conn.execute("DELETE FROM session_events")
         conn.execute("DELETE FROM sessions")
         conn.commit()
