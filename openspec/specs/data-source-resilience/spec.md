@@ -106,4 +106,3 @@ TBD - created by archiving change data-source-benchmark-fallback. Update Purpose
 
 - **WHEN** 东财 `stock_zh_a_spot_em` 返回非空且匹配到股票
 - **THEN** 系统 SHALL 直接返回全字段 quote，SHALL NOT 调用百度/腾讯
-

@@ -189,16 +189,7 @@ test.describe('切换会话恢复管线（resume-pipeline-across-sessions）', (
     // 报告恢复可见（completed 分支按报告消息重建，轮询重试直到报告出现）
     await expect(page.getByText('深度分析报告').first()).toBeVisible({ timeout: 15_000 })
 
-    // 静态时间轴：completed 分支按快照 layerTree 静态渲染（App.tsx:168-181）。
-    // 已知限制（task-6-report 缺口 2）：fetch_data 节点快照恒 pending，
-    // 允许部分节点仍 pending，不要求全部 completed；只要 6 层均渲染且有计数即可。
-    const timeline = page.getByTestId('pipeline-timeline')
-    await expect(timeline).toBeVisible({ timeout: 15_000 })
-    const counts = await readCompletedCounts(page)
-    // 6 层全部渲染（prep/fetch_data、analysts、bull_bear、trader、risk、manager）
-    expect(counts.length).toBe(6)
-    const total = counts.reduce((a, b) => a + b, 0)
-    // 25 节点中至少 20 完成（fetch_data 已知 pending 留 1 余量，慢环境再留 4 余量）
-    expect(total).toBeGreaterThanOrEqual(20)
+    // 静态完成态：迁移后 completed 会话恢复渲染「分析完成」卡（非 pipeline-timeline 时间轴）
+    await expect(page.getByText(/分析完成 · \d+ 个阶段/).first()).toBeVisible({ timeout: 15_000 })
   })
 })

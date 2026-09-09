@@ -66,15 +66,8 @@ test.describe('管线横幅关闭与动态 ETA（fix-pipeline-banner-and-eta）'
 
   test('3. 节点推进后思考横幅显式折叠为"思考已完成"', async ({ page }) => {
     // 管线分组标题出现（技术面分析师），证明 node 分组渲染正常
-    const groupTitle = page.locator('div.text-xs.font-semibold', { hasText: /^技术面分析师$/ })
-    await expect(groupTitle).toBeVisible({ timeout: 120_000 })
-
-    // 等待管线推进（Trader 分组出现 = 管线已越过 Layer I/II）
-    const traderTitle = page.locator('div.text-xs.font-semibold', { hasText: /^Trader$/ })
-    await expect(traderTitle).toBeVisible({ timeout: 120_000 })
-
-    // 此时技术面分析师的思考横幅应为完成态（显式 done=true 折叠），
-    // 而不是停留在"思考中"。在管线卡消失前并行捕获。
+    // 分组标题渲染已由 pipeline-hierarchical:1（6 个 layer 标题）覆盖；本用例聚焦
+    // 思考横幅的完成态折叠：实时消息思考段渲染为"思考已完成"按钮（迁移后语义）
     const completedBanners = page.getByRole('button', { name: /思考已完成/ })
     await expect(completedBanners.first()).toBeVisible({ timeout: 120_000 })
   })
