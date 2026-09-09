@@ -127,6 +127,17 @@ describe('EmptyState 下拉框 dismiss（delta fix-dropdown-outside-close）', (
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('方舟 GLM')).not.toBeInTheDocument()
   })
+
+  it('LLM 下拉底部以分隔线展示 LLM 配置项，点击跳转设置且不切换 profile', () => {
+    const { onSwitchProfile, onOpenSettings } = renderEmpty({ profiles: profiles('DeepSeek 办公') })
+    fireEvent.click(screen.getByRole('button', { name: 'DeepSeek 办公' }))
+    const item = screen.getByRole('button', { name: 'LLM 配置…' })
+    fireEvent.click(item)
+    expect(onOpenSettings).toHaveBeenCalled()
+    expect(onSwitchProfile).not.toHaveBeenCalled()
+    // 点击后下拉框关闭
+    expect(screen.queryByRole('button', { name: 'LLM 配置…' })).not.toBeInTheDocument()
+  })
 })
 
 describe('ChatInputBar 下拉框 dismiss（delta fix-dropdown-outside-close）', () => {
@@ -211,5 +222,16 @@ describe('ChatInputBar 下拉框 dismiss（delta fix-dropdown-outside-close）',
     fireEvent.click(screen.getByRole('button', { name: '默认配置' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('方舟 GLM')).not.toBeInTheDocument()
+  })
+
+  it('LLM 下拉底部以分隔线展示 LLM 配置项，点击跳转设置且不切换 profile', () => {
+    const { onSwitchProfile, onOpenSettings } = renderBar({ profiles: profiles('DeepSeek 办公') })
+    fireEvent.click(screen.getByRole('button', { name: 'DeepSeek 办公' }))
+    const item = screen.getByRole('button', { name: 'LLM 配置…' })
+    fireEvent.click(item)
+    expect(onOpenSettings).toHaveBeenCalled()
+    expect(onSwitchProfile).not.toHaveBeenCalled()
+    // 点击后下拉框关闭
+    expect(screen.queryByRole('button', { name: 'LLM 配置…' })).not.toBeInTheDocument()
   })
 })

@@ -1503,6 +1503,14 @@ export function EmptyState({ onSend, apiKey, capability, onOpenSettings, mode, s
                       <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
                     </button>
                   ))}
+                  <div style={{ borderTop: '1px solid var(--border-neutral-l1)', margin: '4px 0' }} />
+                  <button
+                    onClick={() => { setLlmDropdownOpen(false); onOpenSettings() }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
+                  >
+                    <i className="fas fa-sliders-h text-[10px]" style={{ color: 'var(--text-tertiary)' }}></i>
+                    <span style={{ color: 'var(--text-secondary)' }}>LLM 配置…</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -2413,6 +2421,14 @@ export function ChatInputBar({ onSend, leftInset, mode, setMode, capability, onN
                       <span style={{ color: 'var(--text-secondary)' }}>{p.name}</span>
                     </button>
                   ))}
+                  <div style={{ borderTop: '1px solid var(--border-neutral-l1)', margin: '4px 0' }} />
+                  <button
+                    onClick={() => { setLlmDropdownOpen(false); onOpenSettings() }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
+                  >
+                    <i className="fas fa-sliders-h text-[10px]" style={{ color: 'var(--text-tertiary)' }}></i>
+                    <span style={{ color: 'var(--text-secondary)' }}>LLM 配置…</span>
+                  </button>
                 </div>
               )}
             </div>
