@@ -37,6 +37,10 @@ export function SettingsCenterPage(props: {
   onSwitchProfile: (id: string) => void
   onDeleteProfile: (id: string) => void
   onBack: () => void
+  // 清空全部会话成功后的回调（独立于 onBack：清空需回到空态首页并重置会话状态，
+  // 而非仅返回上一页）。由 App 注入真正的清空处理器；可选，缺省时仅由 SessionsPane
+  // 内部刷新自身计数、不触发导航。
+  onCleared?: () => void
   initialModule?: ModuleId
 }) {
   const [active, setActive] = useState<ModuleId>(props.initialModule ?? 'llm')
@@ -89,7 +93,7 @@ export function SettingsCenterPage(props: {
           />
         )}
         {active === 'cache' && <CachePane />}
-        {active === 'sessions' && <SessionsPane onCleared={props.onBack} />}
+        {active === 'sessions' && <SessionsPane onCleared={props.onCleared} />}
         {active === 'run' && <RunInfoPane />}
         {active === 'monitor' && <DataMonitorPane />}
         {active === 'track' && <TrackPrefsPane />}

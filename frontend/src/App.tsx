@@ -549,6 +549,26 @@ export default function App() {
     if (pathname !== '/') navigate('/')
   }
 
+  // 清空全部会话（settings 会话管理分区清空成功后回调，M1 修复）：
+  // 复用 newAnalysis 的「回到空态」重置语义——重置 currentSessionId、断开本地 SSE 订阅、
+  // 清空消息流/phase 使视图派生成空态首页——并重载会话列表（后端已清空，避免侧边栏残留
+  // 已删会话的幽灵项），再回到首页。若仅 navigate('/') 而不重置，返回后主区会渲染
+  // 已删除会话的幽灵视图、侧边栏仍显示已删会话。
+  const handleSessionsCleared = useCallback(() => {
+    // AG-UI 通道守卫：同 newAnalysis，重置 quick Thread（abort 在途 run + 清空新 run 消息）
+    if (quickThreadRef.current?.isRunning()) quickThreadRef.current.abort()
+    setAguiEpoch(e => e + 1)
+    setQuickActive(false)
+    setQuickRunning(false)
+    setPendingQuickMessage(null)
+    // 断开当前会话本地 SSE 订阅 + 清空消息/phase → 派生空态首页
+    store.switchSession(null)
+    setAndPersistSession(null)
+    // 后端已清空，重载会话列表刷新侧边栏（去除已删会话）
+    void loadSessions()
+    if (pathname !== '/') navigate('/')
+  }, [store, setAndPersistSession, loadSessions, pathname])
+
   // 停止当前会话的生成任务（quick AG-UI 通道 abort；深度模式本地 abort + 后端 cancel）
   const stopGeneration = async () => {
     if (quickThreadRef.current?.isRunning()) {
@@ -902,6 +922,7 @@ export default function App() {
             onSwitchProfile={switchProfile}
             onDeleteProfile={handleDeleteProfile}
             onBack={() => navigate('/')}
+            onCleared={handleSessionsCleared}
             initialModule={settingsFocus}
           />
         ) : bootRestoring && viewState === 'empty' ? (

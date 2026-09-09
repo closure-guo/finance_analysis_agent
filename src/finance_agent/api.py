@@ -28,6 +28,10 @@ _logger = logging.getLogger("finance_agent.api")
 
 load_dotenv()  # 加载 .env，须在 finance_agent 模块导入前执行（llm.py 等在 import 时读取环境变量）
 
+# 默认 LLM 模型（无环境变量 LLM_MODEL 时的回退值）。
+# 与 /api/llm-config 占位保持一致；实际管线默认在 agent_factory，后续如需统一另行裁决。
+DEFAULT_LLM_MODEL = "deepseek/deepseek-v4-pro"
+
 from finance_agent.data.cache import get_shared_cache  # noqa: E402
 from finance_agent.data.monitoring import get_monitor  # noqa: E402
 from finance_agent.graph import build_5layer_graph  # noqa: E402
@@ -1816,7 +1820,7 @@ async def get_llm_config():
     不返回 apiKey（安全：不向后端暴露密钥）。
     """
     return {
-        "model": os.getenv("LLM_MODEL", "deepseek/deepseek-v4-pro"),
+        "model": os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL),
         "baseUrl": os.getenv("LLM_BASE_URL", ""),
         "thinking": os.getenv("LLM_THINKING", "enabled"),
     }
@@ -1878,7 +1882,7 @@ async def test_llm_config(req: LLMConfigRequest):
 
     cfg = _to_llm_config(req)
     startMs = _time.time()
-    usedModel = (cfg.model if cfg else None) or os.getenv("LLM_MODEL", "deepseek/deepseek-v4-pro")
+    usedModel = (cfg.model if cfg else None) or os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
     usedApiKey = (cfg.apiKey if cfg else None) or None
     usedBaseUrl = (cfg.baseUrl if cfg else None) or None
     # 模型前缀归一（设计档案 §6）：自定义 baseUrl + 裸模型名 → 强制 openai/，
@@ -2383,7 +2387,7 @@ async def run_info() -> dict:
 
     安全红线：绝不含 apiKey（与 GET /api/llm-config 不回显密钥一致）。
     """
-    model = os.environ.get("LLM_MODEL") or "deepseek/deepseek-chat"
+    model = os.environ.get("LLM_MODEL") or DEFAULT_LLM_MODEL
     base_url = os.environ.get("LLM_BASE_URL") or ""
     thinking = os.environ.get("LLM_THINKING") or "enabled"
     langfuse_host = os.environ.get("LANGFUSE_HOST") or "http://localhost:3000"
