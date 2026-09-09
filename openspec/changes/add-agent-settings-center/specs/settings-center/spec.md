@@ -1,0 +1,99 @@
+# Delta for settings-center
+
+## ADDED Requirements
+
+### Requirement: 设置中心页路由与左侧垂直导航
+系统 SHALL 提供 `/settings` 设置中心页，采用左侧垂直导航 + 右侧内容区布局，聚合六大分区：LLM 配置、缓存管理、会话管理、运行信息、数据监控、战绩展示偏好；一次仅显示一个激活分区的内容。
+
+#### Scenario: 访问 /settings 显示导航与默认分区
+- **GIVEN** 用户导航到 `/settings`
+- **THEN** 页面 SHALL 显示左侧垂直导航（含六大分区项）与右侧内容区
+- **AND** 默认激活「LLM 配置」分区并显示其内容
+
+#### Scenario: 点击导航切换分区
+- **GIVEN** 用户在左侧垂直导航点击「缓存管理」
+- **THEN** 右侧内容区 SHALL 切换到缓存管理分区内容
+- **AND** 导航高亮 SHALL 同步到激活分区
+
+#### Scenario: 各分区互不影响
+- **GIVEN** 用户在「缓存管理」分区执行了清空操作
+- **THEN** 切换回「LLM 配置」分区时 LLM 配置与 profile 状态 SHALL 保持不变
+
+### Requirement: 设置入口迁移（弹窗 → 页面跳转）
+系统 SHALL 将原 `SettingsModal` 的设置入口迁移为跳转 `/settings` 设置中心页：header 设置按钮、侧栏 gear 按钮、无 profile 强制配置三处入口 SHALL 改为跳转/定位到设置中心页；系统 SHALL 不再渲染 SettingsModal 弹窗。
+
+#### Scenario: header 设置按钮跳转设置页
+- **GIVEN** 用户点击 header 的「设置」按钮
+- **THEN** 系统 SHALL 跳转到 `/settings` 设置中心页
+- **AND** 不再弹出任何设置弹窗
+
+#### Scenario: 侧栏 gear 按钮跳转设置页
+- **GIVEN** 用户点击侧边栏的 gear 按钮
+- **THEN** 系统 SHALL 跳转到 `/settings` 设置中心页
+
+#### Scenario: 无 profile 强制配置跳转设置页
+- **GIVEN** 用户尝试发起分析/聊天但当前无任何 LLM profile
+- **THEN** 系统 SHALL 阻止发送并跳转到 `/settings` 设置中心页
+- **AND** 定位到「LLM 配置」分区以引导用户配置
+
+#### Scenario: SettingsModal 不再渲染
+- **GIVEN** 应用任意状态下不存在 showSettings 弹窗状态
+- **THEN** 系统 SHALL 不在任何位置渲染 SettingsModal 弹窗
+- **AND** 所有设置能力通过 `/settings` 页面访问
+
+### Requirement: 运行环境与关于分区
+系统 SHALL 在设置中心页提供「运行信息」分区，只读展示后端默认 LLM 配置（model/base_url/thinking）、健康状态、Langfuse 地址、git 版本/commit；数据来自只读运行信息端点，响应 SHALL NOT 包含 apiKey。
+
+#### Scenario: 获取运行信息
+- **GIVEN** 用户进入设置中心页「运行信息」分区
+- **THEN** 前端 SHALL 调用 `GET /api/run-info`
+- **AND** 分区 SHALL 展示 model、base_url、thinking、健康状态、Langfuse 地址、git 版本/commit
+
+#### Scenario: apiKey 绝不在响应中
+- **GIVEN** 后端存在已配置的 LLM API Key
+- **THEN** `GET /api/run-info` 响应 SHALL NOT 包含 apiKey 或任何密钥字段
+
+### Requirement: 会话管理分区（清空全部会话）
+系统 SHALL 在设置中心页提供「会话管理」分区，展示会话总数，并提供「清空全部会话」操作；操作 SHALL 经二次确认后调用批量删除端点，级联删除全部会话及其事件；清空后前端回到空态首页。单会话删除/重命名语义 SHALL 保持不变。
+
+#### Scenario: 清空全部会话需二次确认
+- **GIVEN** 用户点击「清空全部会话」
+- **THEN** 系统 SHALL 弹出二次确认提示
+- **WHEN** 用户确认
+- **THEN** 系统 SHALL 调用批量删除端点删除全部会话及事件
+- **AND** 前端会话列表 SHALL 清空并回到空态首页
+
+#### Scenario: 取消清空不删除
+- **GIVEN** 用户点击「清空全部会话」后取消二次确认
+- **THEN** 系统 SHALL 不删除任何会话
+- **AND** 会话列表 SHALL 保持不变
+
+#### Scenario: 单会话操作不受影响
+- **GIVEN** 系统存在多个会话
+- **WHEN** 用户在侧边栏删除或重命名单个会话
+- **THEN** 该操作行为 SHALL 与引入本功能前一致
+
+### Requirement: 战绩展示偏好分区
+系统 SHALL 在设置中心页提供「战绩展示偏好」分区，提供四项偏好：默认时间跨度、对比基准指数、回撤警示阈值、净值图默认形态；偏好 SHALL 持久化到浏览器 localStorage（key `fa_track_prefs`），战绩页（/track-record、校准页、详情页）SHALL 读取并应用。
+
+#### Scenario: 修改并持久化偏好
+- **GIVEN** 用户在战绩展示偏好分区将默认时间跨度选择为「近 6 月」
+- **THEN** 系统 SHALL 将 `fa_track_prefs.timeSpan = "6m"` 写入 localStorage
+- **AND** 页面刷新后重新进入分区 SHALL 恢复该值
+
+#### Scenario: 战绩页应用默认时间跨度
+- **GIVEN** 用户已设置默认时间跨度「近 6 月」
+- **THEN** 进入战绩页时净值图与列表 SHALL 默认按该跨度展示
+
+#### Scenario: 战绩页应用回撤警示阈值
+- **GIVEN** 用户已设置回撤警示阈值 10%
+- **THEN** 战绩卡中回撤幅度超过 10% 的项 SHALL 显示警示高亮
+- **AND** 回撤未超阈值的项 SHALL 保持正常样式
+
+#### Scenario: 战绩页应用净值图默认形态
+- **GIVEN** 用户已设置净值图默认形态为「区间收益」
+- **THEN** 战绩页净值图 SHALL 默认按区间收益口径渲染
+
+#### Scenario: 未设置时使用默认值
+- **GIVEN** 用户从未设置任何战绩展示偏好
+- **THEN** 系统 SHALL 使用默认值（全部时间跨度、不对比基准、内置默认回撤阈值、累计净值形态）

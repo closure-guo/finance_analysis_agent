@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
 import type { PredictionDetail } from '../../types'
 import { Button } from '../../components/ui/button'
+import { cssVar } from '../../Charts'
 
 const STATUS_LABEL: Record<string, string> = {
   open: '进行中',
@@ -23,7 +24,7 @@ function pct(v: number | null, digits = 1) {
 function Delta({ value }: { value: number | null }) {
   if (value === null) return <span style={{ color: 'var(--text-tertiary)' }}>—</span>
   const up = value >= 0
-  return <span className={`${up ? 'text-red-500' : 'text-green-600'} font-medium`}>{up ? '+' : ''}{pct(value, 2)}</span>
+  return <span className={`${up ? 'text-[color:var(--status-error-default)]' : 'text-[color:var(--status-success-default)]'} font-medium`}>{up ? '+' : ''}{pct(value, 2)}</span>
 }
 
 /** 判定卡信息行 */
@@ -60,7 +61,7 @@ export function PredictionDetailPage({ predictionId, onBack }: { predictionId: s
 
   // 预测 vs 实际叠加：mark_price 序列 + entry/target 水平线
   const chartOption = {
-    color: ['#1677ff', '#fa8c16', '#67c23a'],
+    color: [cssVar('--chart-sky', '#228EBF'), cssVar('--chart-amber', '#CBB54C'), cssVar('--status-success-default', '#10B981')],
     tooltip: { trigger: 'axis' as const },
     legend: { bottom: 0, textStyle: { fontSize: 10 } },
     grid: { left: 52, right: 16, top: 24, bottom: 40 },

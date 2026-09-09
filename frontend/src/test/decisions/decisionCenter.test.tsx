@@ -85,8 +85,8 @@ describe('决策战绩页面（expose-decision-outcomes）', () => {
     renderPage()
     const up = await screen.findByText('+15.00%')
     const down = await screen.findByText('-5.00%')
-    expect(up.className).toContain('red')
-    expect(down.className).toContain('green')
+    expect(up.className).toContain('status-error-default')
+    expect(down.className).toContain('status-success-default')
   })
 
   it('按状态与股票过滤调用带参数接口', async () => {

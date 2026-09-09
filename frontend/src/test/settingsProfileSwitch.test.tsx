@@ -1,8 +1,9 @@
-// 切换已存 profile 时设置弹窗表单应整体切换（设计档案 §15 原子切换；
-// 修复前：弹窗本地 useState 只在挂载取初值，切 profile 后表单不刷新）。
+// 切换已存 profile 时 LLM 配置分区表单应整体切换（设计档案 §15 原子切换；
+// 修复前：本地 useState 只在挂载取初值，切 profile 后表单不刷新）。
+// Task 7 后该逻辑由弹窗抽取为 LlmConfigPane，由设置中心页内嵌渲染。
 import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { SettingsModal } from '../App'
+import { LlmConfigPane } from '../pages/settings/panes/LlmConfigPane'
 import type { LLMConfig, ProfileStore } from '../llmConfig'
 
 function cfg(over: Partial<LLMConfig>): LLMConfig {
@@ -18,9 +19,9 @@ const noop = vi.fn()
 function renderModal(store: ProfileStore, onSwitchProfile: (id: string) => void) {
   const active = store.profiles.find(p => p.id === store.activeId)!
   return render(
-    <SettingsModal
+    <LlmConfigPane
       config={active.config}
-      backendDefaults={{ model: 'deepseek/deepseek-chat', baseUrl: '', thinking: 'enabled', apiKey: '' } as never}
+      backendDefaults={{ model: 'deepseek/deepseek-chat', baseUrl: '', thinking: 'enabled' }}
       profileStore={store}
       capability={null}
       onProbeCapability={noop}
@@ -28,12 +29,11 @@ function renderModal(store: ProfileStore, onSwitchProfile: (id: string) => void)
       onSaveAs={noop}
       onSwitchProfile={onSwitchProfile}
       onDeleteProfile={noop}
-      onClose={noop}
     />,
   )
 }
 
-describe('SettingsModal profile 切换（ZCode 式整体切换）', () => {
+describe('LlmConfigPane profile 切换（ZCode 式整体切换）', () => {
   it('点击 profile 后表单字段立即切换为目标配置', () => {
     const store = storeOf(
       { id: 'a', name: '办公 DeepSeek', config: cfg({ model: 'deepseek/deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-a', thinking: 'enabled' }) },
@@ -49,9 +49,9 @@ describe('SettingsModal profile 切换（ZCode 式整体切换）', () => {
     const rerenderWith = (s: ProfileStore) => {
       const active = s.profiles.find(p => p.id === s.activeId)!
       view.rerender(
-        <SettingsModal
+        <LlmConfigPane
           config={active.config}
-          backendDefaults={{ model: 'deepseek/deepseek-chat', baseUrl: '', thinking: 'enabled', apiKey: '' } as never}
+          backendDefaults={{ model: 'deepseek/deepseek-chat', baseUrl: '', thinking: 'enabled' }}
           profileStore={s}
           capability={null}
           onProbeCapability={noop}
@@ -59,7 +59,6 @@ describe('SettingsModal profile 切换（ZCode 式整体切换）', () => {
           onSaveAs={noop}
           onSwitchProfile={onSwitch}
           onDeleteProfile={noop}
-          onClose={noop}
         />,
       )
     }

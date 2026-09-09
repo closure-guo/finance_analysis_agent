@@ -9,6 +9,7 @@ import pytest
 
 from finance_agent.agent_factory import _make_run_deep_analysis
 from finance_agent.harness import ActionType
+from finance_agent.models import TradeDecision
 
 
 class FakeGraph:
@@ -367,3 +368,105 @@ class TestRunDeepAnalysisStreaming:
         assert fake_graph.last_input["analysis_type"] == "technical"
         assert fake_graph.last_input["peer_codes"] == ["000858"]
         assert fake_graph.last_input["enable_web_search"] is True
+
+
+def _make_analyst_report(name: str, summary: str) -> dict:
+    """构造 AnalystReport（dict 形态，兼容状态合并）。"""
+    return {
+        "agent_name": name,
+        "summary": summary,
+        "key_findings": [f"{name} 关键发现"],
+        "claims": [],
+        "markdown": f"## {name}\n{summary}",
+    }
+
+
+CHUNKY_REPORT = "\n".join([f"图表 {i} 占位" for i in range(200)]) + "\n# 完整报告正文后段"
+
+
+class TestRunDeepAnalysisToolFeedback:
+    """add-deep-summary-brief：工具返回内容含各层结论（摘要 LLM 材料完整性）。"""
+
+    @pytest.mark.asyncio
+    async def test_tool_output_contains_debate_and_decision_sections(self):
+        """工具输出包含多空辩论结论、交易决策、基金经理决策、分析师一句话。
+
+        报告 >2000 字符时结论章节必须可见——回归根因：此前仅截 report_md[:2000]，
+        辩论/交易/风控/基金经理章节在截断线之后，摘要 LLM 只能写「本次分析未覆盖」。
+        """
+        chunks = [
+            _make_node_chunk(
+                "technical_analyst",
+                summary="技术面：均线空头排列，MACD 绿柱扩张",
+            ),
+            _make_node_chunk(
+                "fundamental_analyst",
+                summary="基本面：高成长弱质量，健康度 40 分",
+            ),
+            _make_node_chunk(
+                "research_manager",
+                research_manager_conclusion="多空核心分歧：多方主张盈利爆发，空方强调利好已price-in",
+            ),
+            _make_node_chunk(
+                "trader",
+                trader_plan=TradeDecision(
+                    action="watch",
+                    confidence=0.6,
+                    reasoning="空头排列未反转前观望",
+                ),
+            ),
+            _make_node_chunk(
+                "fund_manager",
+                fund_manager_decision="reject",
+                fund_manager_decision_reasoning="技术趋势未反转，拒绝方案",
+            ),
+            _make_final_chunk(
+                report=CHUNKY_REPORT,
+                chart_data={},
+                analyst_reports={
+                    "technical": _make_analyst_report("technical", "技术面：均线空头排列"),
+                },
+            ),
+        ]
+        fake_graph = FakeGraph(chunks)
+
+        with patch("finance_agent.graph.build_5layer_graph", return_value=fake_graph):
+            tool_fn = _make_run_deep_analysis(api_key="test")
+            events = []
+            async for event in tool_fn(stock_code="688072", stock_name="拓荆科技"):
+                events.append(event)
+
+        assert events[-1].event_type == ActionType.TOOL_RESULT
+        output = events[-1].tool_result.output
+
+        # 各层结论必须在工具输出中可见
+        assert "多空核心分歧" in output, "多空辩论结论缺失——摘要 LLM 看不到分歧"
+        assert "空头排列" in output, "交易决策理由缺失"
+        assert "reject" in output, "基金经理决策缺失"
+        assert "技术面：均线空头排列" in output, "分析师一句话结论缺失"
+
+    @pytest.mark.asyncio
+    async def test_tool_output_missing_field_skips_gracefully(self):
+        """某层结论缺失（fund_manager_decision 空）时不抛异常、不输出占位符。"""
+        chunks = [
+            _make_node_chunk(
+                "research_manager",
+                research_manager_conclusion="中性略偏谨慎",
+            ),
+            _make_final_chunk(
+                report=CHUNKY_REPORT,
+                chart_data={},
+                analyst_reports={},
+            ),
+        ]
+        fake_graph = FakeGraph(chunks)
+
+        with patch("finance_agent.graph.build_5layer_graph", return_value=fake_graph):
+            tool_fn = _make_run_deep_analysis(api_key="test")
+            events = []
+            async for event in tool_fn(stock_code="688072"):
+                events.append(event)
+
+        output = events[-1].tool_result.output
+        assert "中性略偏谨慎" in output
+        assert "未覆盖" not in output  # 系统输出本身不写占位符（占位是 LLM 摘要指令行为）

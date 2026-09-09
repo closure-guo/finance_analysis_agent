@@ -276,6 +276,18 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
         )
     delta = abs(ground_truth - stated)
 
+    # fix(percent-unit)：同 _verify_numerical——重算指标多为小数比率
+    # （dupont 费率 0.118 = 11.8%），LLM 以百分比申报，归一 100 倍口径
+    # 更贴近时采用（2026-09-08 trace 04b872ae 实测误报）。
+    OTHER_SCALE = 100.0
+    if ground_truth != 0 and stated != 0:
+        normalized = min(
+            abs(ground_truth - stated / OTHER_SCALE),
+            abs(ground_truth / OTHER_SCALE - stated),
+        )
+        if normalized < delta:
+            delta = normalized
+
     # 相对容差 0.5%（FinGround 标准）
     passed = delta < ABS_TOL if ground_truth == 0 else delta / abs(ground_truth) < REL_TOL
 
@@ -339,7 +351,22 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
             delta=abs(gt_float - eff),
             bucket="direction_mismatch",
         )
+    # fix(percent-unit)：小数真值 ↔ 百分比申报的 100 倍单位归一。state 存
+    # growth_rates/费率等为小数比率（0.5887 = 58.87%、0.118 = 11.8%），LLM
+    # 以百分比申报（58.87/11.8）；直接比对做差判 value_mismatch 是误报
+    # （2026-09-08 trace 04b872ae 实测 3/3 value_mismatch 全为此因）。
+    # 仅当 |stated/gt| ≈ 100（且 gt 为小数比率、stated 为百分比量级）时
+    # 归一后再比对，其余场景原值比对，防普通数值误归一。
     delta = abs(gt_float - eff)
+    OTHER_SCALE = 100.0
+    if gt_float != 0 and eff != 0:
+        # 归一候选二选一：stated/100 对 gt（LLM 报百分比、state 存小数），
+        # 或 gt*100 对 stated（等价视角）。取更接近者，仍走统一容差。
+        normalized = min(abs(gt_float - eff / OTHER_SCALE), abs(gt_float / OTHER_SCALE - eff))
+        raw = abs(gt_float - eff)
+        # 仅在 100 倍口径确实更贴近时采用归一 delta（贴近 = 归一优于原值）。
+        if normalized < raw:
+            delta = normalized
     status: Literal["PASS", "FAIL"] = "PASS" if delta < tol else "FAIL"
     return CitationResult(
         status=status,
@@ -744,10 +771,15 @@ def _verify_data_claim(
         # ehr-style-claim-direction：数值/计算型 claim 未申报 direction 亦计缺口
         or (claim.claim_type in ("numerical", "computational") and claim.direction is None)
     )
-    echo_fail = _check_internal_echo(claim)
-    if echo_fail is not None:
-        echo_fail.coverage_gap = gap
-        return echo_fail
+    # fix(comparative-echo)：comparative claim 跳过单值回声检查——其 stated_value
+    # 是基准/当前值，interpretation 常描述差值（「8月 49.8 较 7月 49.2 回升 0.6」），
+    # 拿基准值匹配差值必然误判 internal_inconsistency（2026-09-08 trace 实测）。
+    # 回声语义只适用于数值/计算型（值即事实本身）；comparative 交给值级校验。
+    if claim.claim_type != "comparative":
+        echo_fail = _check_internal_echo(claim)
+        if echo_fail is not None:
+            echo_fail.coverage_gap = gap
+            return echo_fail
     result = value_fn(claim, state)
     if result.status == "PASS":
         direction_fail = _check_direction_words(claim)

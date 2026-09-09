@@ -478,6 +478,7 @@ export interface PredictionRecord {
   raw_return: number | null
   excess_return: number | null
   resolution_rule: string | null
+  rationale_snapshot?: unknown
 }
 
 // 战绩总览（GET /api/v1/track-record/overview 返回项）

@@ -282,3 +282,195 @@ class TestSinaIndexSymbolMapping:
 
     def test_chinext_is_sz(self):
         assert AKShareClient._to_sina_index_symbol("399006") == "sz399006"
+
+
+class TestFetchKlineTencentFallback:
+    """kline-tencent-fallback：东财+新浪均失败→腾讯三级回退。"""
+
+    @staticmethod
+    def _tx_daily_df():
+        return pd.DataFrame(
+            {
+                "date": ["2026-08-01", "2026-08-02", "2026-08-03"],
+                "open": [4500.0, 4520.0, 4530.0],
+                "high": [4520.0, 4540.0, 4550.0],
+                "low": [4490.0, 4510.0, 4520.0],
+                "close": [4510.0, 4530.0, 4540.0],
+                "volume": [100.0, 110.0, 120.0],
+                "amount": [1e8, 1.1e8, 1.2e8],
+                "turnover": [0.01, 0.011, 0.012],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_sina_fail_falls_back_to_tx(self, mock_ak, client, monkeypatch):
+        """东财+新浪均失败 → 回退腾讯，列归一化为中文。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_hist.side_effect = ConnectionError("RST")
+        mock_ak.stock_zh_a_daily.return_value = pd.DataFrame()
+        mock_ak.stock_zh_a_hist_tx.return_value = self._tx_daily_df()
+        result = client.fetch_kline("600519", days=3)
+        assert len(result) == 3
+        assert "日期" in result.columns and "收盘" in result.columns
+        assert result.iloc[-1]["收盘"] == 4540.0
+        mock_ak.stock_zh_a_hist_tx.assert_called_once()
+        _, kwargs = mock_ak.stock_zh_a_hist_tx.call_args
+        assert kwargs.get("symbol") == "sh600519"
+        assert kwargs.get("adjust") == "qfq"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_em_success_no_fallback(self, mock_ak, client, monkeypatch):
+        """东财正常时不触发新浪/腾讯。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        em_df = pd.DataFrame(
+            {"日期": ["2026-08-03", "2026-08-02", "2026-08-01"], "收盘": [4540.0, 4530.0, 4510.0]}
+        )
+        mock_ak.stock_zh_a_hist.return_value = em_df
+        client.fetch_kline("600519", days=2)
+        mock_ak.stock_zh_a_daily.assert_not_called()
+        mock_ak.stock_zh_a_hist_tx.assert_not_called()
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_all_fail_returns_empty(self, mock_ak, client, monkeypatch):
+        """三级全失败返回空且不抛异常。"""
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_hist.side_effect = ConnectionError("RST")
+        mock_ak.stock_zh_a_daily.return_value = pd.DataFrame()
+        mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame()
+        result = client.fetch_kline("600519", days=3)
+        assert result.empty
+
+
+class TestDataGapLogging:
+    """数据未正确拉取时必须有日志报错（可观测性：静默降级 = 隐性数据缺失）。
+
+    背景（2026-09-08 审计）：东财行情接口被 TLS 风控封锁时 stock_quote 静默
+    降级为仅名称（PE/PB/市值丢失无日志）、news/macro 失败静默返回空——下游
+    与人工都无从得知数据维度缺失。以下用例钉死「降级/空返回必须留日志」契约。
+    """
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_quote_degraded_to_name_only_logs_error(self, mock_ak, client, caplog):
+        """行情主源失败、降级为仅名称时 MUST 留 ERROR 日志（PE/PB 丢失可观测）。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None  # 主源全失败
+        mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
+            {"code": ["600519"], "name": ["贵州茅台"]}
+        )
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_stock_quote("600519")
+        assert result.get("name") == "贵州茅台"  # fallback 仍返回名称
+        assert any(
+            "行情" in r.message or "PE" in r.message or "spot_em" in r.message
+            for r in caplog.records
+        ), "行情降级无 ERROR 日志"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_news_empty_logs_error(self, mock_ak, client, caplog):
+        """新闻接口失败返回空列表时 MUST 留 ERROR 日志。"""
+        mock_ak.stock_news_em.return_value = None
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_news("600519")
+        assert result == []
+        assert any("news" in r.message or "新闻" in r.message for r in caplog.records), (
+            "新闻空返回无 ERROR 日志"
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_macro_indicator_failure_logs_error(self, mock_ak, client, caplog):
+        """宏观指标接口失败返回空列表时 MUST 留 ERROR 日志。"""
+        mock_ak.macro_china_cpi.side_effect = ConnectionError("refused")
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_macro_indicators()
+        assert result["cpi"] == []
+        assert any("cpi" in r.message for r in caplog.records), "宏观指标失败无 ERROR 日志"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_industry_fallback_logs_warning(self, mock_ak, client, caplog):
+        """个股信息主源失败、走 cninfo fallback 时 MUST 留 WARNING 日志（降级路径可观测）。"""
+        mock_ak.stock_individual_info_em.return_value = None
+        mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
+            {"code": ["600519"], "name": ["贵州茅台"]}
+        )
+        mock_ak.stock_industry_change_cninfo.return_value = pd.DataFrame({"行业名称": ["白酒"]})
+        with caplog.at_level("WARNING", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_industry("600519")
+        assert result.get("name") == "贵州茅台"
+        assert any(
+            "降级" in r.message or "fallback" in r.message or "cninfo" in r.message
+            for r in caplog.records
+        ), "行业 fallback 无 WARNING 日志"
+
+
+class TestFetchStockQuoteBaiduFallback:
+    """add-quote-baidu-fallback：东财行情失败时回退百度估值+腾讯日线。"""
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_baidu_market_cap_pb_and_tencent_price(self, mock_ak, client):
+        """东财失败 → 百度总市值/PB + 腾讯最新收盘价并入 result。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None  # 东财主源失败
+        # 百度估值：总市值 + 市净率（各返回 df，末行最新）
+        mock_ak.stock_zh_valuation_baidu.side_effect = [
+            __import__("pandas").DataFrame(
+                {"date": [__import__("datetime").date(2026, 9, 7)], "value": [1846.54]}
+            ),
+            __import__("pandas").DataFrame(
+                {"date": [__import__("datetime").date(2026, 9, 7)], "value": [14.52]}
+            ),
+        ]
+        # 腾讯日线：最新收盘 632.0
+        mock_ak.stock_zh_a_hist_tx.return_value = __import__("pandas").DataFrame(
+            {"date": [__import__("datetime").date(2026, 9, 8)], "close": [632.0]}
+        )
+        mock_ak.stock_info_a_code_name.return_value = __import__("pandas").DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+
+        result = client.fetch_stock_quote("688072")
+
+        assert result.get("market_cap") == 1846.54
+        assert result.get("PB") == 14.52
+        assert result.get("price") == 632.0
+        assert result.get("name") == "拓荆科技"
+        # PE 不推导（留给下游），不出现
+        assert "PE" not in result or result["PE"] is None
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_baidu_pb_failure_keeps_market_cap(self, mock_ak, client):
+        """百度市净率失败不影响总市值（部分成功，不抛异常）。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None
+        mock_ak.stock_zh_valuation_baidu.side_effect = [
+            __import__("pandas").DataFrame(
+                {"date": [__import__("datetime").date(2026, 9, 7)], "value": [1846.54]}
+            ),
+            ConnectionError("baidu pb refused"),
+        ]
+        mock_ak.stock_zh_a_hist_tx.return_value = __import__("pandas").DataFrame(
+            {"date": [__import__("datetime").date(2026, 9, 8)], "close": [632.0]}
+        )
+        mock_ak.stock_info_a_code_name.return_value = __import__("pandas").DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+
+        result = client.fetch_stock_quote("688072")
+
+        assert result.get("market_cap") == 1846.54  # 总市值保留
+        assert "PB" not in result or result["PB"] is None  # PB 缺失不抛
+        assert result.get("price") == 632.0
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_all_fallback_fail_returns_name_only(self, mock_ak, client, caplog):
+        """百度腾讯全失败 → 仅名称 + ERROR 日志。"""
+        mock_ak.stock_zh_a_spot_em.return_value = None
+        mock_ak.stock_zh_valuation_baidu.side_effect = ConnectionError("baidu refused")
+        mock_ak.stock_zh_a_hist_tx.side_effect = ConnectionError("tencent refused")
+        mock_ak.stock_info_a_code_name.return_value = __import__("pandas").DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+        with caplog.at_level("ERROR", logger="finance_agent.data.akshare_client"):
+            result = client.fetch_stock_quote("688072")
+        assert result.get("name") == "拓荆科技"
+        assert "PE" not in result or result["PE"] is None
+        assert any("行情" in r.message for r in caplog.records), "全部回退失败无 ERROR 日志"

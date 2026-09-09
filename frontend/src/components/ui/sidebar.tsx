@@ -141,8 +141,12 @@ export function Sidebar({
       }}
     >
       {/* 固定 256px 内层：aside 宽度动画期间内容只被 overflow 裁剪，不逐帧重排（否则列表文字抖动） */}
-      <div data-testid="sidebar-content-inner" className="h-full w-64 min-w-64 flex flex-col">
-        {collapsed ? collapsedRail : expandedRail}
+      <div data-testid="sidebar-content-inner" className="h-full w-64 min-w-64">
+        {/* 展开/收起两 rail 恒挂载，仅以 display 切换显隐，避免每次展开重挂载整棵
+            会话列表（数百 DOM 节点）阻塞主线程导致连点卡顿。隐藏 rail 用 display:none
+            同时移出可访问性树，视觉与仅渲染当前态一致。 */}
+        <div className="h-full" style={{ display: collapsed ? 'none' : 'flex' }}>{expandedRail}</div>
+        <div className="h-full" style={{ display: collapsed ? 'flex' : 'none' }}>{collapsedRail}</div>
       </div>
     </aside>
   )

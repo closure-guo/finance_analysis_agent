@@ -24,11 +24,11 @@ import pandas as pd
 
 from finance_agent.data.akshare_client import AKShareClient
 from finance_agent.data.cache import DataCache
+from finance_agent.data.monitoring import get_monitor
 from finance_agent.langfuse_tracing import open_span
 
 logger = logging.getLogger(__name__)
 
-_CACHE: DataCache | None = None
 _CLIENT: AKShareClient | None = None
 
 
@@ -105,10 +105,11 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
 def _get_cache(cache: DataCache | None = None) -> DataCache:
     if cache is not None:
         return cache
-    global _CACHE
-    if _CACHE is None:
-        _CACHE = DataCache()
-    return _CACHE
+    # 2026-09-08 统一：与 nodes/cache 共用进程级单例（此前两模块各自实例，
+    # 两个 Connection 指向同一 cache.db，加倍并发冲突面且语义分裂）
+    from finance_agent.data.cache import get_shared_cache
+
+    return get_shared_cache()
 
 
 def _get_client(client: AKShareClient | None = None) -> AKShareClient:
@@ -195,6 +196,8 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                     if obs:
                         obs.update(output=_summarize_success_output(value))
                 except Exception as e:
+                    # 数据源监控：失败计数（非侵入，不改重试/降级/回退/终态发布逻辑）
+                    get_monitor().record_fail(label)
                     if obs:
                         obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
                     if label in ("balance_sheet", "income_statement", "cash_flow_statement"):
@@ -203,18 +206,21 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                     _set_optional_fallback(result, label)
                     continue
 
-            # 按类型处理成功结果
+            # 按类型处理成功结果。
+            # 报表缓存 TTL 30 天（2026-09-08 收窄：此前永久，财报季 staleness 理论
+            # 窗口依赖 quote 1 天 TTL 间接触发刷新；收窄后显式覆盖财报季间隔，
+            # 新财报发布后至多 30 天必刷新。行业归属同 30 天。）
             if label == "balance_sheet":
-                c.set(f"{code}:balance_sheet", value)
+                c.set(f"{code}:balance_sheet", value, ttl_seconds=2_592_000)
                 result["balance_sheet"] = value
             elif label == "income_statement":
-                c.set(f"{code}:income_statement", value)
+                c.set(f"{code}:income_statement", value, ttl_seconds=2_592_000)
                 result["income_statement"] = value
             elif label == "cash_flow_statement":
-                c.set(f"{code}:cash_flow_statement", value)
+                c.set(f"{code}:cash_flow_statement", value, ttl_seconds=2_592_000)
                 result["cash_flow_statement"] = value
             elif label == "financial_indicators":
-                c.set(f"{code}:indicators", value)
+                c.set(f"{code}:indicators", value, ttl_seconds=2_592_000)
                 result["financial_indicators"] = value
             elif label == "industry_info":
                 c.set(f"{code}:industry_info", value, ttl_seconds=2_592_000)
@@ -239,7 +245,7 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                     c.set(f"{code}:industry_pe", value, ttl_seconds=86_400)
                     result["industry_pe"] = value
             elif label == "quarterly_income":
-                c.set(f"{code}:quarterly_income", value)
+                c.set(f"{code}:quarterly_income", value, ttl_seconds=2_592_000)
                 result["quarterly_income"] = value
             elif label == "macro_indicators":
                 c.set("macro_indicators", value, ttl_seconds=86_400)
@@ -260,7 +266,9 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                 (result.get("industry_info") or {}).get("name", ""),
                 use_web_search=use_web,
             )
-            c.set(f"{code}:key_events", events)
+            # TTL 1 天（2026-09-08 缓存层审计）：事件含 WebSearch 实时快照，
+            # 时效性最强，此前永久缓存依赖 quote 1 天 TTL 间接兜底刷新
+            c.set(f"{code}:key_events", events, ttl_seconds=86_400)
             result["key_events"] = events
             if obs:
                 obs.update(output={"status": "success", "count": len(events)})

@@ -200,3 +200,28 @@ class TestFetchDataSpanObservability:
         assert not any(isinstance(v, pd.DataFrame) for v in output.values()), (
             f"output 误含完整 DataFrame: {output}"
         )
+
+
+class TestFetchDataMonitoring:
+    """数据源失败埋点（非侵入）：可选数据拉取失败 → monitor 记 fail，不改降级。"""
+
+    def test_fetch_failure_records_fail(self):
+        """非必需数据（news_list）抛错 → fails 记对应 label 且降级继续。
+
+        埋点 label 沿用 fetch 结果字段名（news_list；简报示例 'news' 为意图描述，
+        实现实际记录值为 fetch 循环的 futures label）。
+        """
+        from finance_agent.data.monitoring import get_monitor, reset_monitor_for_tests
+
+        reset_monitor_for_tests()
+        try:
+            mock_client = _setup_client()
+            mock_client.fetch_news.side_effect = RuntimeError("akshare timeout")
+            state = {"stock_code": "600519"}
+            result = fetch_data(state, cache=MagicMock(), client=mock_client)
+            # 降级契约不变：可选数据缺失标记 N/A，调用整体成功返回
+            assert result["news_list"] == []
+            snap = get_monitor().snapshot()
+            assert snap["fails"].get("news_list", 0) >= 1
+        finally:
+            reset_monitor_for_tests()

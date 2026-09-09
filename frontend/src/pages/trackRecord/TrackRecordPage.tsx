@@ -4,6 +4,8 @@ import ReactECharts from 'echarts-for-react'
 import type { EquityCurvePoint, PredictionRecord, PredictionStatus, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
+import { cssVar } from '../../Charts'
+import { loadTrackPrefs, type TrackTimeSpan } from '../../lib/trackPrefs'
 
 const STATUS_LABEL: Record<PredictionStatus, string> = {
   open: '进行中',
@@ -13,13 +15,13 @@ const STATUS_LABEL: Record<PredictionStatus, string> = {
   unresolvable: '不可判定',
 }
 
-// 状态标签色：命中=绿、未中=红、中性=灰、进行中=蓝、不可判定=灰斜杠
+// 状态标签色（语义令牌）：命中=成功绿、未中=错误红、中性=次要灰、进行中=主色蓝、不可判定=三级灰斜杠
 const STATUS_CLS: Record<PredictionStatus, string> = {
-  open: 'text-blue-600',
-  resolved_win: 'text-green-600',
-  resolved_loss: 'text-red-500',
-  resolved_neutral: 'text-gray-500',
-  unresolvable: 'text-gray-400 line-through',
+  open: 'text-[color:var(--status-primary-default)]',
+  resolved_win: 'text-[color:var(--status-success-default)]',
+  resolved_loss: 'text-[color:var(--status-error-default)]',
+  resolved_neutral: 'text-[color:var(--text-secondary)]',
+  unresolvable: 'text-[color:var(--text-tertiary)] line-through',
 }
 
 const DIRECTION_LABEL: Record<string, string> = {
@@ -42,11 +44,43 @@ const COLUMNS: Array<{ key: string; label: string; numeric?: boolean }> = [
 
 const PAGE_SIZE = 50
 
+// 时间跨度窗口（add-agent-settings-center Task 12 审查修复）：
+// 后端 GET /api/v1/track-record/equity-curve 无区间参数（src/finance_agent/api.py:2117），
+// timeSpan 由前端在拉取全量曲线后按日期窗口裁剪。口径：timeSpan 仅作用于净值曲线展示
+// 窗口（'3m'/'6m'/'1y' = 截至曲线最新点的最近 3/6/12 个月），总览指标（胜率/超额/
+// 风险卡/切片）仍为全期口径不受影响；'all' 不过滤。
+const TIME_SPAN_MONTHS: Record<Exclude<TrackTimeSpan, 'all'>, number> = {
+  '3m': 3,
+  '6m': 6,
+  '1y': 12,
+}
+
+// ISO 日期（YYYY-MM-DD）平移 deltaMonths 个月；日超目标月末时按月末钳制，
+// 规避 Date#setMonth 的溢出进位（如 05-31 减 6 个月应落 11-30，而非 12-01）。
+function isoDateShiftMonths(iso: string, deltaMonths: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const monthIndex = y * 12 + (m - 1) + deltaMonths
+  const ny = Math.floor(monthIndex / 12)
+  const nm = ((monthIndex % 12) + 12) % 12
+  const nd = Math.min(d, new Date(ny, nm + 1, 0).getDate())
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${ny}-${pad(nm + 1)}-${pad(nd)}`
+}
+
+// 按时间跨度裁剪曲线点：'all' 原样返回；否则以数据内最新日期为右边界保留最近
+// N 个月（含边界日）。后端按 curve_date ASC 返回，过滤后仍保持原顺序。
+function windowCurveByTimeSpan(points: EquityCurvePoint[], timeSpan: TrackTimeSpan): EquityCurvePoint[] {
+  if (points.length === 0 || timeSpan === 'all') return points
+  const lastDate = points.reduce<string>((mx, p) => (p.date > mx ? p.date : mx), points[0].date)
+  const cutoff = isoDateShiftMonths(lastDate, -TIME_SPAN_MONTHS[timeSpan])
+  return points.filter(p => p.date >= cutoff)
+}
+
 function Delta({ value }: { value: number | null }) {
   if (value === null) return <span className="text-txt-tertiary">—</span>
   const pct = value * 100
   const up = value >= 0
-  return <span className={`${up ? 'text-red-500' : 'text-green-600'} font-medium`}>{up ? '+' : ''}{pct.toFixed(2)}%</span>
+  return <span className={`${up ? 'text-[color:var(--status-error-default)]' : 'text-[color:var(--status-success-default)]'} font-medium`}>{up ? '+' : ''}{pct.toFixed(2)}%</span>
 }
 
 function fmt(value: number | null, digits = 2) {
@@ -60,9 +94,9 @@ function pct(value: number | null, digits = 1) {
 // 风险分 → 展示色（stage-b：分数越高风险越高）
 function riskColor(score: number | null) {
   if (score === null) return ''
-  if (score >= 8) return 'text-red-500'
-  if (score >= 5) return 'text-orange-500'
-  return 'text-green-600'
+  if (score >= 8) return 'text-[color:var(--status-error-default)]'
+  if (score >= 5) return 'text-[color:var(--status-warning-default)]'
+  return 'text-[color:var(--status-success-default)]'
 }
 
 export function TrackRecordPage({ onBack }: { onBack: () => void }) {
@@ -92,7 +126,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
       if (!ovResp.ok || !cvResp.ok || !sgResp.ok) throw new Error(String(ovResp.status))
       setOverview((await ovResp.json()) as TrackRecordOverview)
       const cv = (await cvResp.json()) as { points: EquityCurvePoint[] }
-      setCurve(cv.points)
+      // 时间跨度窗口在拉取后裁剪（见 windowCurveByTimeSpan；默认 'all' 不过滤）
+      setCurve(windowCurveByTimeSpan(cv.points, loadTrackPrefs().timeSpan))
       const sg = (await sgResp.json()) as { dimensions: SegmentDimension[] }
       setSegments(sg.dimensions)
     } catch {
@@ -162,15 +197,39 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const showCurve = curve !== null && curve.length >= 2
   const versions = overview?.versions ?? []
 
+  // 战绩展示偏好（add-agent-settings-center Task 12）：渲染期读取本地偏好并应用到
+  // 回撤警示阈值 / 基准线开关 / 净值图形态；时间跨度在 load() 拉取 equity-curve 后
+  // 按 windowCurveByTimeSpan 前端窗口裁剪（'all' 不过滤），仅作用于曲线窗口。
+  const prefs = loadTrackPrefs()
+  const showBenchmark = prefs.benchmark !== 'none'
+  const isAreaForm = prefs.navChartForm === 'interval'
+
   const chartOption = {
-    color: ['#1677ff', '#fa8c16'],
+    color: [cssVar('--chart-sky', '#228EBF'), cssVar('--chart-amber', '#CBB54C')],
     tooltip: { trigger: 'axis' as const, valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)) },
     grid: { left: 48, right: 16, top: 24, bottom: 28 },
     xAxis: { type: 'category' as const, data: (curve ?? []).map(p => p.date), axisLabel: { fontSize: 10 } },
     yAxis: { type: 'value' as const, axisLabel: { fontSize: 10 } },
     series: [
-      { name: '组合净值', type: 'line' as const, data: (curve ?? []).map(p => p.agent_nav), showSymbol: false, connectNulls: false },
-      { name: '沪深300', type: 'line' as const, data: (curve ?? []).map(p => p.benchmark_nav), showSymbol: false, connectNulls: false },
+      {
+        name: '组合净值',
+        type: 'line' as const,
+        data: (curve ?? []).map(p => p.agent_nav),
+        showSymbol: false,
+        connectNulls: false,
+        // 净值图形态偏好：'interval'（区间收益）以面积填充突出区间变动；'cumulative'（累计净值）为纯折线
+        ...(isAreaForm ? { areaStyle: { opacity: 0.18 } } : {}),
+      },
+      // 基准偏好：'none' 不叠加基准线；其它值叠加现有沪深300序列（zz500/zz1000 序列待接入，见 trackPrefs.ts）
+      ...(showBenchmark
+        ? [{
+            name: '沪深300',
+            type: 'line' as const,
+            data: (curve ?? []).map(p => p.benchmark_nav),
+            showSymbol: false,
+            connectNulls: false,
+          }]
+        : []),
     ],
   }
 
@@ -265,7 +324,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 </div>
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>最大回撤</div>
-                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= 0.2 ? 'text-red-500' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
+                  <div className="text-lg font-semibold" style={{ color: portfolio.max_drawdown !== null && portfolio.max_drawdown >= prefs.drawdownThreshold ? 'var(--status-error-default)' : 'var(--text-default)' }}>{pct(portfolio.max_drawdown)}</div>
                 </div>
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>风险分（{portfolio.risk_label ?? '—'}）</div>
@@ -319,7 +378,9 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           {/* 净值曲线（stage-b：agent vs 沪深300，起点归一 1.0；数据缺口断点不插值） */}
           {showCurve && (
             <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-curve">
-              <div className="text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>组合净值 vs 沪深300（起点归一 1.0）</div>
+              <div className="text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                {showBenchmark ? '组合净值 vs 沪深300' : '组合净值'}（起点归一 1.0）
+              </div>
               <ReactECharts option={chartOption} style={{ height: 240 }} notMerge />
             </div>
           )}

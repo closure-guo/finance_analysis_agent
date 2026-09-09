@@ -116,3 +116,12 @@ def test_thread_safety_smoke() -> None:
     assert errors == []
     cache.clear()
     assert cache.get("k0-0") is None
+
+
+def test_stats_counts_entries_and_expired() -> None:
+    cache = ProbeCache()
+    cache.put("k1", _report(), ttl_seconds=100)  # type: ignore[arg-type]
+    cache.put("k2", _report(), ttl_seconds=-1)  # 立即过期
+    stats = cache.stats()
+    assert stats["entries"] == 2
+    assert stats["expired"] == 1

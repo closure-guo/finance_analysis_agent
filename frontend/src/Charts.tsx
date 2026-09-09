@@ -3,9 +3,8 @@ import type { ChartData, AnnualEntry } from './types'
 
 // ── ECharts 主题注入（refactor-ui-design-system Task 5）──
 // 每次构建 option 时从 CSS 变量实时读取，保证主题变更后图表跟随；
-// getComputedStyle 不可用或变量缺失时回退到原 TRAE Work light 十六进制值。
-
-function cssVar(name: string, fallback: string): string {
+// getComputedStyle 不可用或变量缺失时回退到明日方舟 UI 色卡十六进制值。
+export function cssVar(name: string, fallback: string): string {
   if (typeof document === 'undefined') return fallback
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return value || fallback
@@ -13,24 +12,24 @@ function cssVar(name: string, fallback: string): string {
 
 export function getChartTheme() {
   return {
-    textColor: cssVar('--muted-foreground', '#525252'),
-    axisLabelColor: cssVar('--muted-foreground', '#A3A3A3'),
+    textColor: cssVar('--muted-foreground', '#888A8C'),
+    axisLabelColor: cssVar('--muted-foreground', '#888A8C'),
     tooltipBg: cssVar('--popover', '#FFFFFF'),
-    tooltipBorder: cssVar('--border', 'rgba(115, 115, 115, 0.12)'),
-    tooltipTextColor: cssVar('--foreground', '#171717'),
-    brand: cssVar('--primary', '#4B3FE3'),
+    tooltipBorder: cssVar('--border', 'rgba(47, 49, 50, 0.14)'),
+    tooltipTextColor: cssVar('--foreground', '#0A0B0D'),
+    brand: cssVar('--primary', '#228EBF'),
     coral: cssVar('--chart-coral', '#F87454'),
     mint: cssVar('--chart-mint', '#1DC981'),
-    amber: cssVar('--chart-amber', '#F5A623'),
-    sky: cssVar('--chart-sky', '#3B82F6'),
-    violet: cssVar('--chart-violet', '#8B5CF6'),
+    amber: cssVar('--chart-amber', '#CBB54C'),
+    sky: cssVar('--chart-sky', '#228EBF'),
+    violet: cssVar('--chart-violet', '#2A5BA8'),
     rose: cssVar('--chart-rose', '#EC4899'),
-    teal: cssVar('--chart-teal', '#14B8A6'),
-    gridLine: cssVar('--muted-foreground', '#A3A3A3'),
-    splitLine: 'rgba(115, 115, 115, 0.08)',
+    teal: cssVar('--chart-teal', '#3FC6E0'),
+    gridLine: cssVar('--muted-foreground', '#888A8C'),
+    splitLine: 'rgba(47, 49, 50, 0.10)',
     heat: [
       cssVar('--destructive', '#EF4444'),
-      cssVar('--status-warning-default', '#F5A623'),
+      cssVar('--status-warning-default', '#CBB54C'),
       cssVar('--status-success-default', '#10B981'),
     ],
   }

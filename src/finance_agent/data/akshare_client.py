@@ -249,10 +249,13 @@ class AKShareClient:
             if result.get("name") or result.get("industry"):
                 return result
         # 降级：cninfo 行业 + 名称 fallback
+        logger.warning("东财个股信息不可用，降级 cninfo 行业+名称: %s", stock_code)
         result = self._fetch_name_fallback(stock_code)
         industry = self._fetch_industry_cninfo(stock_code)
         if industry:
             result["industry"] = industry
+        else:
+            logger.error("行业数据降级后仍缺失（名称/cninfo 均无返回）: %s", stock_code)
         return result
 
     def fetch_stock_quote(self, stock_code: str) -> dict:
@@ -267,11 +270,43 @@ class AKShareClient:
             if not row.empty:
                 raw = row.iloc[0].to_dict()
                 return {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
-        # 降级：仅获取名称+代码
-        fallback = self._fetch_name_fallback(stock_code)
-        if fallback:
-            fallback["code"] = stock_code
-        return fallback
+
+        # ── 二级回退（add-quote-baidu-fallback）：东财被 TLS 风控封锁时，
+        # 用百度估值补 market_cap/PB、腾讯日线补 price——恢复估值与价格维度
+        # （此前静默降级为仅名称，GARP/相对估值/图表全部丢失且无日志）。
+        # PE 不在 quote 内推导（口径依赖财务数据，留给下游 compute/charts），
+        # 各源独立 try/except：任一失败不影响其余，缺失字段由下游守卫跳过。
+        logger.warning("东财行情不可用，尝试百度估值+腾讯日线回退: %s", stock_code)
+        result = self._fetch_name_fallback(stock_code)
+        if result:
+            result["code"] = stock_code
+
+        # 百度估值：总市值 → market_cap；市净率 → PB（各指标末行最新）
+        for indicator, key in (("总市值", "market_cap"), ("市净率", "PB")):
+            try:
+                df_val = _call_ak(
+                    ak.stock_zh_valuation_baidu, symbol=stock_code, indicator=indicator
+                )
+                if df_val is not None and not df_val.empty and "value" in df_val.columns:
+                    result[key] = float(df_val.iloc[-1]["value"])
+            except Exception:
+                logger.warning("百度估值 %s 拉取失败: %s", indicator, stock_code)
+
+        # 腾讯日线最新收盘 → price
+        try:
+            df_tx = _call_ak(
+                ak.stock_zh_a_hist_tx, symbol=self._to_sina_symbol(stock_code), adjust="qfq"
+            )
+            if df_tx is not None and not df_tx.empty and "close" in df_tx.columns:
+                result["price"] = float(df_tx.iloc[-1]["close"])
+        except Exception:
+            logger.warning("腾讯日线价格拉取失败: %s", stock_code)
+
+        # 可观测性：估值/价格维度全部缺失时留 ERROR（数据维度缺失，非预期降级）
+        has_valuation = any(result.get(k) is not None for k in ("market_cap", "PB", "price"))
+        if not has_valuation:
+            logger.error("行情回退后仍缺估值/价格（PE/PB/市值/价格缺失）: %s", stock_code)
+        return result
 
     def fetch_quarterly_income(self, stock_code: str, quarters: int = 4) -> pd.DataFrame:
         """拉取单季度利润表，计算同比/环比变化率。
@@ -437,6 +472,24 @@ class AKShareClient:
             df = df.sort_values("日期").reset_index(drop=True)
             return df.tail(days).reset_index(drop=True)
 
+        # ── 方案3: 腾讯 stock_zh_a_hist_tx（二级回退，独立链路） ──
+        logger.info("新浪K线拉取失败，尝试腾讯源: %s", stock_code)
+        df = _call_ak(ak.stock_zh_a_hist_tx, symbol=sina_symbol, adjust="qfq")
+        if df is not None and not df.empty:
+            rename_map = {
+                "date": "日期",
+                "open": "开盘",
+                "close": "收盘",
+                "high": "最高",
+                "low": "最低",
+                "volume": "成交量",
+                "amount": "成交额",
+                "turnover": "换手率",
+            }
+            df = df.rename(columns=rename_map)
+            df = df.sort_values("日期").reset_index(drop=True)
+            return df.tail(days).reset_index(drop=True)
+
         logger.error("K线拉取均失败: %s", stock_code)
         return pd.DataFrame()
 
@@ -546,7 +599,7 @@ class AKShareClient:
         """
         result: dict[str, list[dict] | dict] = {}
 
-        def _safe_macro(key: str, func):
+        def _safe_macro(key: str, func) -> None:
             df = _call_ak(func)
             if df is not None and not df.empty:
                 # akshare 宏观接口为降序（最新在前）；显式按首列（月份/日期）降序排序，
@@ -562,6 +615,9 @@ class AKShareClient:
                 # ── 时效守卫：as_of_date + freshness（90 天界，各指标独立）──
                 result[key] = self._with_freshness(key, records)
             else:
+                # 可观测性（2026-09-08 审计）：宏观指标失败/空返回时此前静默置 []
+                # ——宏观分析师看不到该维度却无日志可查。空返回 MUST 留 ERROR。
+                logger.error("宏观指标 %s 拉取失败/返回空", key)
                 result[key] = []
 
         _safe_macro("cpi", ak.macro_china_cpi)
@@ -581,6 +637,9 @@ class AKShareClient:
         """
         df = _call_ak(ak.stock_news_em, symbol=stock_code)
         if df is None or df.empty:
+            # 可观测性（2026-09-08 审计）：新闻是舆情分析师唯一数据源，失败静默
+            # 返回 [] 会让舆情维度无数据却无日志可查。空返回 MUST 留 ERROR。
+            logger.error("个股新闻拉取失败/返回空（舆情数据缺失）: %s", stock_code)
             return []
         df = df.head(limit)
         # 标准化列名

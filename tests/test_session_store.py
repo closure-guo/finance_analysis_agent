@@ -136,3 +136,24 @@ def test_failure_reason_overwrite(tmp_path, monkeypatch):
 
     row = session_store.get_session(sid)
     assert row["failure_reason"] == "第二次失败"
+
+
+def test_clear_all_sessions_cascades_events(tmp_path, monkeypatch):
+    """clear_all_sessions 应清空全部会话并级联删除其事件日志，返回删除的会话数。"""
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "test.db")
+    session_store.init_db()
+    # 建两个会话，并给每个会话追加事件
+    sid1 = session_store.create_session(
+        stock_code="600519", stock_name="贵州茅台", status="running"
+    )
+    sid2 = session_store.create_session(stock_code="000001", stock_name="平安银行")
+    session_store.append_session_event(sid1, {"type": "token"})
+    session_store.append_session_event(sid1, {"type": "token"})
+    session_store.append_session_event(sid2, {"type": "token"})
+
+    n = session_store.clear_all_sessions()
+    assert n == 2
+    assert session_store.list_sessions() == []
+    # 事件日志应被级联清空（按旧 sid 查询不再有任何事件）
+    assert session_store.list_session_events(sid1, after_seq=0) == []
+    assert session_store.list_session_events(sid2, after_seq=0) == []

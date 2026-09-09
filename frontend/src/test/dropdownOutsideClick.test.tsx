@@ -25,14 +25,14 @@ describe('EmptyState 下拉框 dismiss（delta fix-dropdown-outside-close）', (
     const setMode = vi.fn()
     const onSwitchProfile = vi.fn()
     const onSend = vi.fn()
-    const setShowSettings = vi.fn()
+    const onOpenSettings = vi.fn()
     const profs = over.profiles ?? profiles('DeepSeek 办公', '方舟 GLM')
     const view = render(
       <EmptyState
         onSend={onSend}
         apiKey="sk-test"
         capability={over.capability ?? null}
-        setShowSettings={setShowSettings}
+        onOpenSettings={onOpenSettings}
         mode="deep"
         setMode={setMode}
         profileName={profs.length ? profs[0].name : '默认配置'}
@@ -41,7 +41,7 @@ describe('EmptyState 下拉框 dismiss（delta fix-dropdown-outside-close）', (
         onSwitchProfile={onSwitchProfile}
       />,
     )
-    return { view, setMode, onSwitchProfile, onSend, setShowSettings }
+    return { view, setMode, onSwitchProfile, onSend, onOpenSettings }
   }
 
   it('模式下拉框展开后点击外部区域关闭，不触发模式变更或发送', () => {
@@ -122,10 +122,21 @@ describe('EmptyState 下拉框 dismiss（delta fix-dropdown-outside-close）', (
   })
 
   it('无 LLM profile 时点击 LLM 切换引导打开设置面板，不展开下拉框', () => {
-    const { setShowSettings } = renderEmpty({ profiles: [] })
+    const { onOpenSettings } = renderEmpty({ profiles: [] })
     fireEvent.click(screen.getByRole('button', { name: '默认配置' }))
-    expect(setShowSettings).toHaveBeenCalledTimes(1)
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('方舟 GLM')).not.toBeInTheDocument()
+  })
+
+  it('LLM 下拉底部以分隔线展示 LLM 配置项，点击跳转设置且不切换 profile', () => {
+    const { onSwitchProfile, onOpenSettings } = renderEmpty({ profiles: profiles('DeepSeek 办公') })
+    fireEvent.click(screen.getByRole('button', { name: 'DeepSeek 办公' }))
+    const item = screen.getByRole('button', { name: 'LLM 配置…' })
+    fireEvent.click(item)
+    expect(onOpenSettings).toHaveBeenCalled()
+    expect(onSwitchProfile).not.toHaveBeenCalled()
+    // 点击后下拉框关闭
+    expect(screen.queryByRole('button', { name: 'LLM 配置…' })).not.toBeInTheDocument()
   })
 })
 
@@ -135,7 +146,7 @@ describe('ChatInputBar 下拉框 dismiss（delta fix-dropdown-outside-close）',
     const onSwitchProfile = vi.fn()
     const onSend = vi.fn()
     const onNewAnalysis = vi.fn()
-    const setShowSettings = vi.fn()
+    const onOpenSettings = vi.fn()
     const profs = over.profiles ?? profiles('DeepSeek 办公', '方舟 GLM')
     const view = render(
       <ChatInputBar
@@ -146,14 +157,14 @@ describe('ChatInputBar 下拉框 dismiss（delta fix-dropdown-outside-close）',
         capability={null}
         onNewAnalysis={onNewAnalysis}
         apiKey="sk-test"
-        setShowSettings={setShowSettings}
+        onOpenSettings={onOpenSettings}
         profileName={profs.length ? profs[0].name : '默认配置'}
         profiles={profs}
         activeProfileId={profs[0]?.id ?? 'p1'}
         onSwitchProfile={onSwitchProfile}
       />,
     )
-    return { view, setMode, onSwitchProfile, onSend, onNewAnalysis, setShowSettings }
+    return { view, setMode, onSwitchProfile, onSend, onNewAnalysis, onOpenSettings }
   }
 
   it('模式下拉框展开后点击外部区域关闭，当前模式与会话不变', () => {
@@ -207,9 +218,20 @@ describe('ChatInputBar 下拉框 dismiss（delta fix-dropdown-outside-close）',
   })
 
   it('无 LLM profile 时点击 LLM 切换引导打开设置面板，不展开下拉框', () => {
-    const { setShowSettings } = renderBar({ profiles: [] })
+    const { onOpenSettings } = renderBar({ profiles: [] })
     fireEvent.click(screen.getByRole('button', { name: '默认配置' }))
-    expect(setShowSettings).toHaveBeenCalledTimes(1)
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('方舟 GLM')).not.toBeInTheDocument()
+  })
+
+  it('LLM 下拉底部以分隔线展示 LLM 配置项，点击跳转设置且不切换 profile', () => {
+    const { onSwitchProfile, onOpenSettings } = renderBar({ profiles: profiles('DeepSeek 办公') })
+    fireEvent.click(screen.getByRole('button', { name: 'DeepSeek 办公' }))
+    const item = screen.getByRole('button', { name: 'LLM 配置…' })
+    fireEvent.click(item)
+    expect(onOpenSettings).toHaveBeenCalled()
+    expect(onSwitchProfile).not.toHaveBeenCalled()
+    // 点击后下拉框关闭
+    expect(screen.queryByRole('button', { name: 'LLM 配置…' })).not.toBeInTheDocument()
   })
 })
