@@ -105,6 +105,38 @@ def _format_claims(claims: list) -> str:
     return "; ".join(items)
 
 
+def _rebuttal_coverage(history: list) -> str | None:
+    """交锋覆盖率（D1 1.12）：各角色论点被对方回应的比例——零 token 确定性指标。
+
+    覆盖率 = 被对方 rebuttal_to 引用的论点数（并集）/ 该角色论点总数。
+    无 rebuttal_to 数据（历史 trace/首轮未开始）返回 None。
+    """
+    total: dict[str, int] = {}
+    covered: dict[str, set] = {}
+    prev_role: str | None = None
+    prev_n_args = 0
+    for raw in history:
+        msg = _as_dict(raw)
+        if not msg:
+            continue
+        role = str(msg.get("role", "?"))
+        args = [str(a).strip() for a in (msg.get("key_arguments") or []) if str(a).strip()]
+        rebuttal = msg.get("rebuttal_to") or []
+        # 本条的 rebuttal_to 指向上一条发言（对方）的论点序号
+        if prev_role and rebuttal:
+            covered.setdefault(prev_role, set()).update(
+                (prev_role, n) for n in rebuttal if isinstance(n, int) and 1 <= n <= prev_n_args
+            )
+        prev_role, prev_n_args = role, len(args)
+        total[role] = total.get(role, 0) + len(args)
+    lines = []
+    for role, cnt in total.items():
+        if cnt == 0:
+            continue
+        lines.append(f"{role} 论点被回应 {len(covered.get(role, set()))}/{cnt}")
+    return "；".join(lines) if lines else None
+
+
 def _summarize_debate(history: list) -> str:
     # 每条发言上限（字节）：多轮【bull】【bear】交替时保证全部轮次可见——
     # 整体 head/tail 截断会把中间轮次连标签一起挖掉（judge 评「逐条交锋」时
@@ -133,32 +165,89 @@ def _summarize_debate(history: list) -> str:
                 )
             arg_line = f"论点: {joined}\n"
         parts.append(f"【{role}】{arg_line}{truncate_for_trace(content, _MESSAGE_MAX_BYTES)}")
+    # 交锋覆盖率尾行（确定性指标，1.12）：有 rebuttal_to 数据时才追加
+    coverage = _rebuttal_coverage(history)
+    if coverage:
+        parts.append(f"交锋覆盖: {coverage}")
+    return "\n".join(parts)
+
+
+def _structured_report_var(state: dict) -> str:
+    """deep 报告的 judge 变量 `report`：结构化拼装，替代全文 head/tail 截断。
+
+    实证（4f58faf7）：final_report 约 2 万字符且开头为图表节——4096 字节挖心后
+    judge 仅见图表路径与审批章，从章节标题幻觉推断「全面覆盖」恒 5 分。结构化
+    拼装（聚焦/分析师/RM/交易方案/FM）保证可读分析内容在场；图片路径（judge
+    无法读取的纯噪声）天然不进入。拼装为空时回退 final_report 全文（兼容）。
+    """
+    parts: list[str] = []
+    focus_summary = state.get("focus_summary") or ""
+    if focus_summary:
+        parts.append(f"【研究聚焦】{focus_summary}")
+    analyst = _summarize_analyst_reports(state.get("analyst_reports") or {})
+    if analyst:
+        parts.append(f"【分析师结论】{analyst}")
+    rm = state.get("research_manager_conclusion") or ""
+    if rm:
+        parts.append(f"【研究经理结论】{rm}")
+    trade = _serialize_decision(state.get("final_trade_decision") or state.get("trader_plan"))
+    if trade:
+        parts.append(f"【交易方案】{trade}")
+    fm_decision = state.get("fund_manager_decision") or ""
+    if fm_decision:
+        fm_action = state.get("fund_manager_action")
+        fm_conf = state.get("fund_manager_confidence")
+        qualifier = ""
+        if fm_action:
+            qualifier = f"（操作定性 {fm_action}"
+            if fm_conf is not None:
+                qualifier += f"，置信度 {fm_conf}"
+            qualifier += "）"
+        fm_reasoning = (state.get("fund_manager_decision_reasoning") or "").strip()
+        fm_text = f"{fm_decision}{qualifier}"
+        if fm_reasoning:
+            fm_text += f"\n理由: {fm_reasoning}"
+        parts.append(f"【基金经理决策】{fm_text}")
     return "\n".join(parts)
 
 
 def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
     """提取 9 个 judge 变量,全字符串,缺失给 ""。"""
-    report = state.get("final_report") or ""
+    raw_report = state.get("final_report") or ""
+    report = _structured_report_var(state) or raw_report
     decision = state.get("final_trade_decision") or {}
     risk_debate = state.get("risk_debate_history") or []
     risk_tail = _summarize_debate(risk_debate[-2:]) if risk_debate else ""
     decision_txt = _serialize_decision(decision)
+    # D1：FM 操作定性随决策进 judge 变量——「approve 批准的是什么方向」直接可见
+    fm_decision = state.get("fund_manager_decision") or ""
+    fm_action = state.get("fund_manager_action")
+    fm_conf = state.get("fund_manager_confidence")
+    fm_parts: list[str] = []
+    if fm_decision:
+        qualifier = ""
+        if fm_action:
+            qualifier = f"（操作定性 {fm_action}"
+            if fm_conf is not None:
+                qualifier += f"，置信度 {fm_conf}"
+            qualifier += "）"
+        fm_parts.append(f"{fm_decision}{qualifier}")
+    fm_reasoning = state.get("fund_manager_decision_reasoning")
+    if fm_reasoning:
+        fm_parts.append(f"理由: {fm_reasoning}")
     return {
         "query": query,
         "report": _trunc(report),
-        "report_conclusion": _trunc(extract_conclusion(report)),
+        # D3：报告结论取「研究聚焦」分析综合（focus_summary），回退全文标题提取
+        # （旧行为=审批章复述，与 FM 节点逐字重复，consistency 无独立信号）
+        "report_conclusion": _trunc(state.get("focus_summary") or extract_conclusion(raw_report)),
         "analyst_reports": _trunc(_summarize_analyst_reports(state.get("analyst_reports") or {})),
         "debate_history": _trunc(_summarize_debate(state.get("debate_history") or [])),
         "research_manager_decision": _trunc(state.get("research_manager_conclusion") or ""),
         "trade_decision": _trunc(decision_txt),
         "risk_judgment": _trunc(decision_txt + ("\n" + risk_tail if risk_tail else "")),
         # #111：FM 理由随决策进 judge 变量（consistency 维度可见否决依据）
-        "fund_manager_decision": (state.get("fund_manager_decision") or "")
-        + (
-            f"\n理由: {state.get('fund_manager_decision_reasoning')}"
-            if state.get("fund_manager_decision_reasoning")
-            else ""
-        ),
+        "fund_manager_decision": "\n".join(fm_parts),
     }
 
 

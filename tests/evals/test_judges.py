@@ -244,12 +244,13 @@ class TestInputMissingGuard:
 class TestDecisionGroundingRubricV3:
     def test_version_incremented(self):
         """rubric 变更递增版本号（evidence_refs 版为 v2，语义核对版为 v3，confidence 契约版为 v4）。"""
-        assert RUBRIC_VERSIONS["decision_grounding"] == 4
+        assert RUBRIC_VERSIONS["decision_grounding"] == 5
 
     def test_other_rubrics_version_pinned(self):
-        assert RUBRIC_VERSIONS["report_relevance"] == 2  # v2 = confidence 输出契约
+        assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
         assert RUBRIC_VERSIONS["debate_quality"] == 2
         assert RUBRIC_VERSIONS["consistency"] == 3  # v3 = approve 语义(v2) + confidence 契约
+        assert RUBRIC_VERSIONS["decision_grounding"] == 5  # v5 = 补辩论记录
 
     def test_rubric_includes_semantic_check(self):
         """语义核对条款：术语/期次/方向与所引数值一致；解读失当扣分。"""

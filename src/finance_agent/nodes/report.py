@@ -49,6 +49,24 @@ def parse_focus_tags(focus: str) -> list[str]:
     return tags
 
 
+def derive_focus_from_query(query: str) -> str:
+    """focus 兜底（harden-decision-report-semantics D4）：从原始 query 提取命中的
+    关注点中文关键词（去重保序，最多 4 个）合成弱 focus 文本。
+
+    意图澄清未收集到 focus 时，保证用户角度仍以关键词形式进入各层 context；
+    零命中返回空串（不硬造关注点）。原始 query 全文 MUST NOT 经此进入分析师层。
+    """
+    if not query:
+        return ""
+    low = query.lower()
+    hits: list[str] = []
+    for _tag, keywords in _FOCUS_KEYWORDS:
+        for kw in keywords:
+            if kw in low and kw not in hits:
+                hits.append(kw)
+    return "、".join(hits[:4])
+
+
 # ── 图表 -> 关联标签（硬编码映射，可控可测） ──
 
 _CHART_TAGS: dict[str, set[str]] = {
@@ -184,8 +202,9 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
         "紧扣用户关注点组织语言，点出最关键的结论与数据。纯文本，不使用 emoji，不输出标题。"
         "内容仅基于所提供材料中的数据组织，不得引入材料外的数值或推测。"
     )
+    focus_line = f"用户关注点: {focus}\n" if focus else "（用户未指定关注点，请综合各维度要点）\n"
     prompt = (
-        f"股票: {stock_name}\n用户关注点: {focus}\n关注维度: {tags_desc}\n\n"
+        f"股票: {stock_name}\n{focus_line}关注维度: {tags_desc}\n\n"
         f"各层分析产出:\n" + "\n".join(materials)
     )
     with contextlib.suppress(Exception):
@@ -264,12 +283,10 @@ def generate_report(state: dict) -> dict:
         seq += 1
         return f"## {_cn_num(seq)}、{label}\n"
 
-    # ── 研究聚焦摘要（仅 has_focus） ──
-    if has_focus:
-        summary = _build_focus_summary(state, focus, focus_tags)
-        if summary:
-            sections.append(f"## 研究聚焦\n\n{summary}\n")
-
+    # ── 研究聚焦摘要（无条件生成——judge 变量 focus_summary 的数据源，D3）──
+    summary = _build_focus_summary(state, focus, focus_tags)
+    if summary:
+        sections.append(f"## 研究聚焦\n\n{summary}\n")
     # ── 图表：按 focus 排序，分重点/完整两组 ──
     if chart_paths:
         ordered = _rank_charts([c for c, _ in all_chart_titles], focus_tags)
@@ -358,8 +375,28 @@ def generate_report(state: dict) -> dict:
         annotation = _FUND_MANAGER_ANNOTATIONS.get(fm_decision, fm_decision)
         # #111：审批理由随决策渲染（在场时）；缺失时保持仅标注（历史 state 兼容）
         fm_reasoning = (state.get("fund_manager_decision_reasoning") or "").strip()
+        # D1：FM 操作定性（action/置信度）与裁决 action 并排展示——「批准的是什么
+        # 方案」直接可见，方向相悖时矛盾自明；历史 state 无字段时保持旧行为
+        qualifier = ""
+        fm_action = state.get("fund_manager_action")
+        if fm_action:
+            qualifier = f"（操作定性 {fm_action}"
+            fm_confidence = state.get("fund_manager_confidence")
+            if fm_confidence is not None:
+                qualifier += f"，置信度 {fm_confidence}"
+            qualifier += "）"
+            ruling = state.get("final_trade_decision") or {}
+            ruling_action = (
+                ruling.get("action")
+                if isinstance(ruling, dict)
+                else getattr(ruling, "action", None)
+            )
+            if ruling_action:
+                qualifier += f" · 裁决: {ruling_action}"
         reasoning_block = f"\n\n{fm_reasoning}\n" if fm_reasoning else "\n"
-        sections.append(f"{next_title('基金经理决策')}\n\n**{annotation}**{reasoning_block}")
+        sections.append(
+            f"{next_title('基金经理决策')}\n\n**{annotation}**{qualifier}{reasoning_block}"
+        )
 
     # ── 参考资料信源（Kimi 风格 URL 引用溯源）──
     # 信源列表在前端以卡片形式展示，报告 Markdown 中不再重复列出
@@ -367,6 +404,7 @@ def generate_report(state: dict) -> dict:
 
     return {
         "final_report": "\n".join(sections),
+        "focus_summary": summary,
         "chart_data": chart_data,
     }
 

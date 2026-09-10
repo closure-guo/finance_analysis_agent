@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from finance_agent.models import DebateMessage, TradeDecision
-from finance_agent.nodes._llm_utils import call_llm_for_json
+from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -81,6 +81,11 @@ def risk_judge(state: dict) -> dict:
 def _build_risk_context(state: dict) -> str:
     """构建风险辩论的 LLM context。"""
     sections = []
+
+    # 用户关注点（D5）：风险谱向用户期限/关注维度倾斜
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
 
     # Trader 方案
     plan = state.get("trader_plan") or {}

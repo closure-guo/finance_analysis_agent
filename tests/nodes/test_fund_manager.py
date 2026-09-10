@@ -10,11 +10,12 @@ from finance_agent.nodes.fund_manager import fund_manager
 
 
 def _mock_response(decision: str) -> str:
-    """构造指定决策值的 LLM 响应。"""
-    return json.dumps(
-        {"decision": decision, "reasoning": "测试理由"},
-        ensure_ascii=False,
-    )
+    """构造指定决策值的 LLM 响应（approve 自动带操作定性，D1 必填）。"""
+    payload = {"decision": decision, "reasoning": "测试理由"}
+    if decision.strip().lower() == "approve":
+        payload["action"] = "watch"
+        payload["confidence"] = 0.55
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _base_state() -> dict:

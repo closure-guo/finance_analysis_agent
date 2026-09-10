@@ -77,6 +77,22 @@ class TestFundManagerSemantics:
         assert "reject" in text
         assert "return" in text
 
+    def test_action_confidence_contract(self):
+        """D1：approve 必含操作定性（action）与置信度（confidence）的格式与语义说明。"""
+        text = _load("fund_manager.md")
+        assert '"action"' in text and '"confidence"' in text
+        assert "操作定性" in text
+        # approve 的对象是最终方案而非对裁决的赞成票（round5 误判根因）
+        assert "最终交易方案" in text
+
+    def test_reasoning_boundary_clause(self):
+        """D2：审批理由职责边界——限定范围 + 禁止方向性投资背书（含反例锚点）。"""
+        text = _load("fund_manager.md")
+        assert "职责边界" in text
+        assert "风控结论的一致性" in text
+        assert "长期价值投资" in text  # 反例锚点
+        assert "MUST NOT" in text
+
 
 class TestResearchManagerStance:
     def test_has_stance_section(self):

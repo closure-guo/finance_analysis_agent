@@ -39,6 +39,8 @@ def fund_manager(state: dict) -> dict:
     result: dict = {
         "fund_manager_decision": decision,
         "fund_manager_decision_reasoning": parsed.reasoning,
+        "fund_manager_action": parsed.action,
+        "fund_manager_confidence": parsed.confidence,
     }
     if decision == "return":
         result["return_count"] = state.get("return_count", 0) + 1

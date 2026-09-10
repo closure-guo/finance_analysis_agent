@@ -84,7 +84,10 @@ class AnalysisState(TypedDict, total=False):
 
     # Layer II: Researcher Team（Bull/Bear 辩论）
     debate_history: Annotated[list[dict], add]
-    research_manager_conclusion: str
+    focus_summary: str  # 研究聚焦摘要（report 节点无条件生成，judge report_conclusion 直取源）
+    research_manager_conclusion: str  # 评级前置拼装（RM 结构化输出的人读渲染）
+    research_manager_rating: str | None  # 看多/看空/中性（战绩结算与 judge 变量直取）
+    research_manager_confidence: float | None
 
     # Layer III: Trader
     trader_plan: dict  # TradeDecision 序列化
@@ -96,6 +99,8 @@ class AnalysisState(TypedDict, total=False):
     # Layer V: Fund Manager
     fund_manager_decision: Literal["approve", "reject", "return"]
     fund_manager_decision_reasoning: str  # FM 退回/批准理由（回路契约：未声明则被图合并丢弃）
+    fund_manager_action: str | None  # FM 操作定性（approve 必有；reject/return 为 None）
+    fund_manager_confidence: float | None  # FM 对操作定性的把握（approve 必有）
     return_count: int  # 退回次数（上限 1）
     langfuse_trace_id: str  # fund_manager approve 时捕获,decision_log 反向上报用
 

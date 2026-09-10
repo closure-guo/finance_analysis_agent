@@ -30,7 +30,12 @@ _TAIL_ANCHORS = ("只输出 JSON", "\n评估", "\n若交易决策含", "\n无 ev
 DIMENSION_SECTIONS: dict[str, tuple[str, ...]] = {
     "report_relevance": ("【用户查询】", "【分析报告】"),
     "debate_quality": ("【多空辩论记录】",),
-    "decision_grounding": ("【分析师结论】", "【Research Manager 结论】", "【交易决策】"),
+    "decision_grounding": (
+        "【分析师结论】",
+        "【多空辩论记录】",
+        "【Research Manager 结论】",
+        "【交易决策】",
+    ),
     "consistency": (
         "【分析师章节结论】",
         "【Research Manager 结论】",

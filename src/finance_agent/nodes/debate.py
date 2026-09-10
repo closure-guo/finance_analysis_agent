@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from finance_agent.models import DebateMessage
-from finance_agent.nodes._llm_utils import call_llm_for_json
+from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -61,6 +61,11 @@ def _build_debate_context(state: dict) -> str:
     """构建辩论的 LLM context。"""
     sections = []
 
+    # 用户关注点（D5）：辩题向用户角度收敛
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
+
     # 分析师报告摘要
     reports = state.get("analyst_reports") or {}
     for name, report in reports.items():
@@ -70,14 +75,27 @@ def _build_debate_context(state: dict) -> str:
             sections.append(f"[{name}] {report.get('summary', '')}")
 
     # 辩论历史（第 2 轮需要参考第 1 轮）
+    # 交锋结构化引用（1.10）：历史发言以「R{n} 论点: ①…②…」编号行前置 key_arguments
+    # ——对方的论点获得稳定身份，输出方可按编号回应（rebuttal_to）与被覆盖率核算
     history = state.get("debate_history") or []
     if history:
         history_lines = []
         for msg in history:
             if hasattr(msg, "role"):
-                history_lines.append(f"{msg.role}: {msg.content}")
+                role, rnd = msg.role, msg.round
+                content, args = msg.content, msg.key_arguments
             elif isinstance(msg, dict):
-                history_lines.append(f"{msg.get('role', '?')}: {msg.get('content', '')}")
+                role, rnd = msg.get("role", "?"), msg.get("round", 1)
+                content, args = msg.get("content", ""), msg.get("key_arguments") or []
+            else:
+                continue
+            arg_line = ""
+            if args:
+                numbered = " ".join(
+                    f"{'①②③④⑤⑥⑦⑧⑨⑩'[i] if i < 10 else i + 1}.{a}" for i, a in enumerate(args)
+                )
+                arg_line = f"R{rnd} 论点: {numbered}\n"
+            history_lines.append(f"{arg_line}{role}(R{rnd}): {content}")
         sections.append("辩论历史:\n" + "\n".join(history_lines))
 
     return "\n\n".join(sections) if sections else "无可用数据"

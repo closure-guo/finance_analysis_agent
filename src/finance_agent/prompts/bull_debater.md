@@ -9,9 +9,12 @@
   "role": "bull",
   "round": 1,
   "content": "看多论述",
-  "key_arguments": ["论点1", "论点2"]
+  "key_arguments": ["论点1", "论点2"],
+  "rebuttal_to": [1, 3]
 }
 ```
+
+**`rebuttal_to`（交锋引用）**：本轮 content 中回应的对方上一轮论点编号列表（对应辩论历史中「R{n} 论点: ①…②…」的序号）。content 中回应处须标注「回应对方①」；首轮开场（无对方论点可回应）输出空列表 []。
 
 role 必须原样输出 `bull`，不要改写或翻译；round 为大于 0 的整数
 

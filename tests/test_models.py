@@ -194,13 +194,39 @@ class TestFundManagerDecision:
     """Layer V 基金经理审批决策模型（harden-llm-output-validation）。"""
 
     def test_legal_decisions_accepted(self):
-        for decision in ("approve", "reject", "return"):
+        # approve 须带操作定性（D1）；reject/return 可缺 action/confidence
+        approve = FundManagerDecision(
+            decision="approve", action="watch", confidence=0.55, reasoning="理由"
+        )
+        assert approve.action == "watch"
+        for decision in ("reject", "return"):
             model = FundManagerDecision(decision=decision, reasoning="理由")
             assert model.decision == decision
+            assert model.action is None and model.confidence is None
+
+    def test_approve_without_action_or_confidence_rejected(self):
+        """D1：approve 缺 action/confidence 任一即 ValidationError（操作性结论必填）。"""
+        import pytest
+
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve", reasoning="缺 action")
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve", action="watch", reasoning="缺 confidence")
+
+    def test_confidence_out_of_range_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve", action="buy", confidence=1.5, reasoning="理由")
 
     def test_normalizes_case_and_whitespace(self):
         """大小写与首尾空白归一化。"""
-        assert FundManagerDecision(decision=" Approve ", reasoning="理由").decision == "approve"
+        assert (
+            FundManagerDecision(
+                decision=" Approve ", action="watch", confidence=0.5, reasoning="理由"
+            ).decision
+            == "approve"
+        )
         assert FundManagerDecision(decision="REJECT", reasoning="理由").decision == "reject"
 
     def test_invalid_decision_rejected(self):

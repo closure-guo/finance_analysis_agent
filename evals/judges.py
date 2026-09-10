@@ -54,9 +54,9 @@ _JSON_TAIL = (
 # 全维度最新一版 = 输出契约加 confidence（材料依据不充分 MUST 降低，
 # 使残缺输入上的幻觉可从低置信暴露），评分档位语义未变）
 RUBRIC_VERSIONS: dict[str, int] = {
-    "report_relevance": 2,
+    "report_relevance": 3,
     "debate_quality": 2,
-    "decision_grounding": 4,
+    "decision_grounding": 5,
     "consistency": 3,
 }
 
@@ -65,6 +65,9 @@ RUBRICS: dict[str, str] = {
 【用户查询】{{query}}
 【分析报告】{{report}}
 评估报告对查询的切题度:
+口径必读:「切题」指回答了用户的问题——覆盖再多相关维度但回避用户所问的
+直接决策问题(如问「能不能买」而不给出买/不买/观望的结论),SHALL ≤3;
+因合规或数据约束无法直接回答时,如实说明约束并给出约束下的可行分析,视为已回答。
 5 = 完全切题,紧扣查询意图展开
 4 = 基本切题,少量无关内容
 3 = 部分切题,有显著偏离或答非所需的段落
@@ -85,6 +88,7 @@ RUBRICS: dict[str, str] = {
     "decision_grounding": (
         """你是投资决策依据评审专家。
 【分析师结论】{{analyst_reports}}
+【多空辩论记录】{{debate_history}}
 【Research Manager 结论】{{research_manager_decision}}
 【交易决策】{{trade_decision}}
 评估交易决策的论据是否有前文支撑:

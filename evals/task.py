@@ -72,6 +72,7 @@ def _run_deep(inp: dict) -> dict:
     return {
         "report": state.get("final_report"),
         "ticker": inp["stock_code"],
+        "focus_summary": state.get("focus_summary") or "",
         "judge_vars": extract_judge_vars(state, query=inp.get("query", "")),
         "mode": "deep",
         "skipped": None,

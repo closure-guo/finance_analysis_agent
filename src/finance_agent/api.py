@@ -936,6 +936,14 @@ def _run_graph_streaming(
         session_id: 可选外部传入的 session_id。若未提供，内部创建新 session。
         llm_config: 请求级 LLM 配置，透传到管线节点的 call_llm_streaming。
     """
+    # D4 focus 兜底：意图澄清未收集到 focus 时，从 query 提取关注点关键词
+    # 合成弱 focus（零命中保持为空，不硬造；query 全文不进分析师层）
+    focus_value = (req.focus or "").strip()
+    if not focus_value:
+        from finance_agent.nodes.report import derive_focus_from_query
+
+        focus_value = derive_focus_from_query(req.query or "")
+
     initial_state = {
         "stock_code": stock_code,
         "stock_name": stock_name or stock_code,
@@ -943,7 +951,7 @@ def _run_graph_streaming(
         "peer_codes": [c.strip() for c in (req.peer_codes or "").split(",") if c.strip()] or None,
         "enable_web_search": req.enable_web_search,
         "api_key": req.api_key,
-        "focus": (req.focus or "").strip(),
+        "focus": focus_value,
         # 请求级 LLM 配置透传到管线节点（call_llm_streaming / call_llm）
         "llm_config": llm_config,
     }

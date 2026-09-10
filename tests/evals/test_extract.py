@@ -56,7 +56,9 @@ class TestExtractJudgeVars:
         assert "buy" in vars_["risk_judgment"], "risk_judgment 应含决策 JSON"
         assert "激进看法" in vars_["risk_judgment"], "risk_judgment 应含 risk_debate 末条"
         assert vars_["query"] == "分析茅台", "query 应原样 echo"
-        assert "财务分析" in vars_["report"], "report 应含 final_report 原文"
+        assert "【分析师结论】" in vars_["report"], (
+            "report 已结构化拼装（3.5），不再回显 final_report 全文"
+        )
 
     def test_analyst_reports_prefers_plain_conclusion(self):
         """add-agent-readable-conclusion：analyst_reports 优先展示普通人可读结论。"""
@@ -95,6 +97,115 @@ class TestExtractJudgeVars:
         vars_ = extract_judge_vars(state)
         assert len(vars_["research_manager_decision"]) < 5000
         assert "truncated" in vars_["research_manager_decision"]
+
+    def test_fm_action_confidence_in_judge_var(self):
+        """D1：FM 操作定性进 judge 变量——approve 批准的方向无需从理由推断。"""
+        state = {
+            "final_trade_decision": {"action": "watch"},
+            "fund_manager_decision": "approve",
+            "fund_manager_decision_reasoning": "风控可控，批准执行",
+            "fund_manager_action": "watch",
+            "fund_manager_confidence": 0.55,
+        }
+        out = extract_judge_vars(state)["fund_manager_decision"]
+        assert "approve" in out
+        assert "操作定性 watch" in out
+        assert "置信度 0.55" in out
+
+    def test_fm_legacy_state_without_action(self):
+        """历史 state 无 action/confidence 键时保持旧行为（决策+理由）。"""
+        state = {
+            "fund_manager_decision": "reject",
+            "fund_manager_decision_reasoning": "回撤超限",
+        }
+        out = extract_judge_vars(state)["fund_manager_decision"]
+        assert out == "reject" + chr(10) + "理由: 回撤超限"
+        assert "操作定性" not in out
+
+    def test_rm_rating_prefixed_conclusion_passed_through(self):
+        """D1（1.9）：RM conclusion（评级前置拼装）进 judge 变量为直取——
+        消费端不解析正文，前置的「评级: …」行原样到达 judge。"""
+        state = {
+            "research_manager_conclusion": "评级: 看多（置信度 0.65）" + chr(10) + "多方论据扎实。",
+        }
+        out = extract_judge_vars(state)["research_manager_decision"]
+        assert out.startswith("评级: 看多（置信度 0.65）")
+
+    def test_rebuttal_coverage_in_debate_variable(self):
+        """D1（1.12）：交锋覆盖率进入 debate_history 变量——确定性指标（零 token），
+        「对方论点被回应的比例」由各轮 rebuttal_to 并集直接计算。"""
+        state = {
+            "debate_history": [
+                {
+                    "role": "bull",
+                    "round": 1,
+                    "content": "开场",
+                    "key_arguments": ["论点甲", "论点乙", "论点丙"],
+                    "rebuttal_to": [],
+                },
+                {
+                    "role": "bear",
+                    "round": 1,
+                    "content": "回应甲和丙",
+                    "key_arguments": ["反论点一"],
+                    "rebuttal_to": [1, 3],
+                },
+                {
+                    "role": "bull",
+                    "round": 2,
+                    "content": "回应反论点一",
+                    "key_arguments": [],
+                    "rebuttal_to": [1],
+                },
+            ],
+        }
+        out = extract_judge_vars(state)["debate_history"]
+        assert "交锋覆盖" in out
+        # bear 回应了 bull 的 1、3 → bull 侧覆盖 2/3；bull 回应了 bear 的 1 → bear 侧 1/1
+        assert "bull 论点被回应 2/3" in out
+        assert "bear 论点被回应 1/1" in out
+
+    def test_report_conclusion_prefers_focus_summary(self):
+        """D3（3.3）：report_conclusion 优先取 state["focus_summary"]（分析综合结论），
+        回退 extract_conclusion(final_report)（审批复述——历史 trace 兼容）。"""
+        # 有 focus_summary：取它
+        state = {
+            "focus_summary": "研究聚焦：多空均衡，建议观望。",
+            "final_report": "## 六、基金经理决策" + chr(10) + "审批通过",
+        }
+        out = extract_judge_vars(state)["report_conclusion"]
+        assert out == "研究聚焦：多空均衡，建议观望。"
+        # 无 focus_summary：回退全文提取（旧行为）
+        state2 = {"final_report": "## 六、基金经理决策" + chr(10) + "审批通过"}
+        out2 = extract_judge_vars(state2)["report_conclusion"]
+        assert "审批通过" in out2
+
+    def test_report_var_structured_assembly_no_images(self):
+        """D3（3.5）：deep 报告的 report 变量改为结构化拼装（聚焦/分析师/RM/决策/FM），
+        剔除图片 markdown；全文 head/tail 截断使 judge 只见图表路径+审批章（幻觉输入，
+        4f58faf7 实测） SHALL NOT 再发生。"""
+        state = {
+            "focus_summary": "聚焦：多空均衡。",
+            "analyst_reports": {"technical": {"summary": "技术面企稳", "plain_conclusion": "偏多"}},
+            "research_manager_conclusion": "评级: 中性（置信度 0.55）" + chr(10) + "证据均衡。",
+            "final_trade_decision": {"action": "watch"},
+            "fund_manager_decision": "approve",
+            "fund_manager_action": "watch",
+            "fund_manager_confidence": 0.55,
+        }
+        out = extract_judge_vars(state)["report"]
+        assert "【研究聚焦】聚焦：多空均衡。" in out
+        assert "【分析师结论】" in out
+        assert "【研究经理结论】" in out
+        assert "【交易方案】" in out
+        assert "【基金经理决策】" in out
+        assert "![重大" not in out and "![" not in out  # 图片引用剔除
+
+    def test_report_var_falls_back_to_final_report(self):
+        """旧 trace 无结构化字段时回退 final_report 全文截断（兼容）。"""
+        state = {"final_report": "# 报告" + chr(10) + "正文内容", "focus_summary": ""}
+        out = extract_judge_vars(state)["report"]
+        assert "正文内容" in out
 
 
 class TestExtractConclusion:
