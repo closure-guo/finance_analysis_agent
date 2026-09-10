@@ -115,7 +115,9 @@
 
 ### Requirement: 评估 Dataset 与覆盖矩阵
 
-系统 SHALL 维护一个评估 Dataset（命名如 `a-share-analysis-v1`），含 15-20 条覆盖矩阵用例（deep 典型 5-6 / deep 边界 2-3 / quick 3-4 / follow_up 2-3 / 意图澄清 1-2）。每条 item SHALL 含 `input`（query / mode / session_id）与 `expected_output`（仅断言结构性字段，不断言时效数值）。Dataset SHALL 可从历史 trace 捞取并幂等重建。
+系统 SHALL 维护评估 Dataset（命名如 `a-share-analysis-v1`），每条 item SHALL 含 `input`（query / mode / session_id）与 `expected_output`（仅断言结构性字段，不断言时效数值），metadata SHALL 含 `category`、`source` 与 `pool`。Dataset 条目按 pool 分两组：`baseline` 池为固定可比集合（跨实验配对对比的对象，不得随轮次变动）；`rotating` 池为轮换候选池，每轮实验 SHALL 从池中按标的分组随机抽样（seed 可复现），防对固定标的过拟合。Dataset SHALL 可从历史 trace 捞取并幂等重建。
+
+(Previously: Dataset 条目只按 category 分类，无 pool 区分；重复执行实验始终跑同一批 16 条 items，标的固定无轮换。)
 
 #### Scenario: Item Schema
 
@@ -135,6 +137,32 @@
 - **GIVEN** 某 deep 典型 case
 - **THEN** `expected_output` SHALL NOT 含具体财务数值（如净利润 X 亿）
 - **AND** 只含结构性断言（章节、ticker）
+
+#### Scenario: baseline 池固定可比
+
+- **GIVEN** 两次实验均使用 baseline 池
+- **WHEN** 运行实验
+- **THEN** 两次实验的 item 集合 SHALL 完全一致（配对 bootstrap 可比前提）
+- **AND** rotating 池条目 SHALL NOT 混入 baseline 实验
+
+#### Scenario: rotating 池按标的分组抽样
+
+- **WHEN** 以 `--pool rotating --rotating-sample N --rotating-seed S` 建库
+- **THEN** SHALL 随机抽取 N 个标的，每个标的的全部条目（deep/quick）一并入池
+- **AND** 相同 seed 抽取结果 SHALL 完全一致（可复现），不同 seed 应倾向不同标的组合
+- **AND** rotating 条目 SHALL 建于独立 dataset（如 `a-share-analysis-v1-rot-<seed>`），不污染 baseline 的可比集合
+
+#### Scenario: 确定性断言覆盖
+
+- **WHEN** 定义 quick/deep 条目
+- **THEN** 能明确对应单一标的的条目 SHALL 提供 `expected_output.ticker`（供 ticker_match 确定性评分）
+- **AND** 无单一标的的行业类查询（如「银行股现在估值贵吗」）可留空，但须在 metadata 标注原因
+
+#### Scenario: 出分条目占比
+
+- **WHEN** 审视 Dataset 设计
+- **THEN** 非 skipped 条目（可出分）SHALL 占条目总数 ≥ 80%
+- **AND** follow_up / 意图澄清等首版跳过条目合计 SHALL NOT 超过 3 条
 
 ### Requirement: 实验回归工作流
 
@@ -225,7 +253,9 @@ Judge 评估器 SHALL NOT 在未校准情况下用于线上决策（如阻塞 PR
 
 ### Requirement: 校验器准度测量与门禁
 
-系统 SHALL 提供校验器准度测量：对基准集运行 `verify_claims`，输出整体 Precision / Recall / F1，以及两个对抗子集的分项召回——(a) 擦边子集：stated_value 在真值 ±5% 以内的对抗 claim；(b) hedged 措辞子集：含"约""可能""接近"等模糊措辞的 claim。校验器整体 F1 ≥ 0.90 为可信门禁；擦边子集召回 SHALL 单独显式披露（不设硬门禁），以暴露近边界盲区。
+系统 SHALL 提供校验器准度测量：对基准集运行 `verify_claims`，输出整体 Precision / Recall / F1，以及两个对抗子集的分项召回——(a) 擦边子集：stated_value 在真值 ±5% 以内的对抗 claim；(b) hedged 措辞子集：含"约""可能""接近"等模糊措辞的 claim。整体 F1 ≥ 0.90 与相对冻结基线退步 ≤ 0.02 的 CI 门禁 SHALL 保留，擦边子集召回 SHALL 单独显式披露（不设硬门禁）；但门禁产物（measure 报告）SHALL 显式披露所用基准集的身份：`rule_derived`（构造标签）基准集 SHALL 被标注为「算法回归探针——仅验证实现未回归，不构成真实准度声明」；真实准度声明 SHALL 仅来自含人工标注（annotator=double_human/single_human）与真实来源（origin 非空）的金标准集，且须报告标注者一致性 κ。两个信号 SHALL 分开展示，SHALL NOT 混编为一句话的「F1 可信」。
+
+(Previously: 校验器 F1 ≥ 0.90 即为「准度可信」，未区分基准集身份与来源。)
 
 #### Scenario: 准度达标
 
@@ -238,6 +268,18 @@ Judge 评估器 SHALL NOT 在未校准情况下用于线上决策（如阻塞 PR
 
 - **WHEN** 生成准度报告
 - **THEN** 擦边子集召回 SHALL 单独成行披露，SHALL NOT 被整体指标掩盖
+
+#### Scenario: 构造集身份披露
+
+- **WHEN** CI 或报告中呈现校验器 F1
+- **THEN** 若基准集全部为构造标签，SHALL 输出「回归探针，非真实准度」声明
+- **AND** SHALL NOT 出现「校验器准度可信」措辞
+
+#### Scenario: 真实准度声明
+
+- **WHEN** 使用含人工标注与真实来源的样本报告准度
+- **THEN** SHALL 报告整体 P/R/F1（带 CI）与标注者一致性 κ
+- **AND** F1 ≥ 0.90 时方可表述「准度可信」
 
 ### Requirement: 实验对比统计显著性
 
@@ -303,4 +345,47 @@ decision_grounding judge 的 rubric SHALL 扩展：核对 interpretation/报告�
 - **GIVEN** 报告将行业垫底的 45.2% 毛利率表述为"行业领先"，且 evidence_refs 指向该值
 - **WHEN** 运行 decision_grounding judge
 - **THEN** judge SHALL 按 rubric 对解读失当扣分（不得仅因数值有出处给高分）
+
+### Requirement: deep 边界歧义解析样本
+
+deep 边界类别 SHALL 覆盖至少一个「模糊名称无代码」的歧义解析样本（如「分析平安」→ 期望解析到具体标的或触发反问），用于加压 ticker 解析与意图澄清路径。
+
+#### Scenario: 歧义样本加压
+
+- **GIVEN** dataset 含「分析平安」这类无代码模糊 query
+- **WHEN** 运行实验
+- **THEN** 该条目 SHALL 期望解析到确定标的（ticker_match 打分）或经 `should_clarify` 触发反问
+- **AND** 两种预期均在 expected_output 中显式声明
+
+### Requirement: 章节覆盖评估（section_coverage）
+
+`SECTION_SYNONYMS` 词典 SHALL 携带版本号（`SECTION_SYNONYMS_VERSION`），冻结测试 SHALL 锁定词典内容（防止无人察觉的漂移）；prompt（`src/finance_agent/prompts/*.md`）中出现的章节性词与词典的交叉一致性 SHALL 有测试覆盖——prompt 引入词典未覆盖的章节词时测试 SHALL 红（提示更新词典或冻结版本）。
+
+#### Scenario: 词典冻结
+
+- **WHEN** 词典内容被修改
+- **THEN** 冻结测试 SHALL 红（提示显式更新版本与冻结快照）
+- **AND** 版本号随内容变更递增
+
+#### Scenario: prompt 章节词回归
+
+- **WHEN** prompt 中出现词典未覆盖的章节性标题词（如新增「分红能力」章节）
+- **THEN** 交叉一致性测试 SHALL 红
+- **AND** 修复方式 SHALL 是更新词典（或将已知英文标题显式列入 allowlist），SHALL NOT 修改测试
+
+### Requirement: 幻觉率真值来源标注
+
+幻觉率测量的真值数据（`data_map`）SHALL 携带 `source` 字段（快照来源与时点，如 `snapshot:akshare-2026-08-25`）；缺 source 的 data_map SHALL 被拒绝测量。真值来源 SHALL 与报告生成所用数据管道解耦（独立快照），防止「报告 vs 自己抓的数据」自证。
+
+#### Scenario: 缺 source 拒绝
+
+- **WHEN** 传入无 `source` 字段的 data_map
+- **THEN** 测量 SHALL 报错并拒绝执行
+- **AND** 错误信息 SHALL 指明需提供独立快照来源
+
+#### Scenario: 带 source 正常测量
+
+- **WHEN** data_map 含 `source`（如 `snapshot:akshare-2026-08-25`）
+- **THEN** 测量正常执行，source 随报告输出
+- **AND** 报告 SHALL 展示真值快照来源（供审计追溯）
 

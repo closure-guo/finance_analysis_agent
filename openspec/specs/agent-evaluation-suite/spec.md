@@ -14,7 +14,20 @@ TBD - created by archiving change add-toolcall-evaluation. Update Purpose after 
 
 ### Requirement: 工具调用评估维度
 
-评估体系 SHALL 覆盖：工具选择正确性（合法集合断言，非唯一序列）、参数合法性、调用效率（冗余/循环检测）、失败恢复（失败后换策略）。
+工具选择正确性维度的合法工具集合 SHALL 从权威工具注册（`finance_agent.tool_registry.AGENT_TOOL_NAMES`）派生，评估器 SHALL NOT 各自硬编码一份允许集；`agent_factory` 注册工具名 SHALL 引用同一注册表常量。允许集 SHALL 仍可被评估调用方覆盖（如历史快照评估），但默认值 SHALL 与当前注册表一致。
+
+(Previously: 允许集在 `evals/toolcall/measure.py` 硬编码 `DEFAULT_ALLOWED_TOOLS`，与 agent 实际工具注册可能漂移。)
+
+#### Scenario: 默认与注册表一致
+
+- **WHEN** 评估器使用默认允许集
+- **THEN** 默认允许集 SHALL 等于 `tool_registry.AGENT_TOOL_NAMES`
+- **AND** agent_factory 注册的工具名 SHALL 均 ∈ 注册表（注册表为准，防止评估漏注册）
+
+#### Scenario: 覆盖保留
+
+- **WHEN** 调用方显式传入 allowed 集合（历史快照/特定场景）
+- **THEN** 以显式值生效，覆盖不改变注册表
 
 #### Scenario: 合法集合断言
 
@@ -147,4 +160,27 @@ judge prompt 变更后 SHALL 必跑一致性校准；校准结论归档至 docs/
 
 - **WHEN** judge prompt 经部署管线发布新版本
 - **THEN** 下一轮评测强制附带一致性校准，结论归档
+
+### Requirement: 评估材料优先展示分析师可读结论
+
+评估材料（judge 输入变量 `analyst_reports` 的拼装、人工标注导出表的 agent 摘要）SHALL 优先使用分析师报告的 `plain_conclusion`（普通人可读的结论+解释）；旧 trace 报告对象无该字段时 SHALL 回退现状（`summary` 拼贴），不得报错或中断评估。评估材料 SHALL NOT 以「正文前 N 字符」截取的方式充当该层摘要（与原文重复、无信息量）。
+
+#### Scenario: 新报告展示可读结论
+
+- **GIVEN** 分析师报告对象含非空 `plain_conclusion`
+- **WHEN** 拼装 analyst_reports judge 变量或生成标注材料 agent 摘要
+- **THEN** 该 agent 的展示文本 SHALL 取自 `plain_conclusion`
+- **AND** `summary` 不再作为该 agent 的默认展示文本
+
+#### Scenario: 旧 trace 回退
+
+- **GIVEN** 分析师报告对象缺 `plain_conclusion`（旧版本产出）
+- **WHEN** 拼装评估材料
+- **THEN** SHALL 回退使用 `summary`（或 `conclusion`），不报错、不中断评估
+
+#### Scenario: 禁止截取式摘要
+
+- **WHEN** 生成人工标注材料
+- **THEN** 评估材料 SHALL NOT 用「正文前 N 字符」充当该层摘要
+- **AND** 分析师节以「各 agent 的 plain_conclusion（或回退 summary）」分行展示
 

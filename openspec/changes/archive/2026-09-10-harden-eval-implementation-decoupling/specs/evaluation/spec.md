@@ -1,6 +1,6 @@
 # Delta for evaluation
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: 章节覆盖评估（section_coverage）
 

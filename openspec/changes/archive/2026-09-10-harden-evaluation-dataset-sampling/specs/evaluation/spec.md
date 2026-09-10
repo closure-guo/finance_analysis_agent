@@ -4,9 +4,28 @@
 
 ### Requirement: 评估 Dataset 与覆盖矩阵
 
-系统 SHALL 维护评估 Dataset（命名如 `a-share-analysis-v1`），每条 item SHALL 含 `input`（query / mode / session_id）与 `expected_output`（仅断言结构性字段，不断言时效数值），metadata SHALL 含 `category`、`source` 与 `pool`。Dataset 条目按 pool 分两组：`baseline` 池为固定可比集合（跨实验配对对比的对象，不得随轮次变动）；`rotating` 池为轮换候选池，每轮实验 SHALL 从池中按标的分组随机抽样（seed 可复现），防对固定标的过拟合。
+系统 SHALL 维护评估 Dataset（命名如 `a-share-analysis-v1`），每条 item SHALL 含 `input`（query / mode / session_id）与 `expected_output`（仅断言结构性字段，不断言时效数值），metadata SHALL 含 `category`、`source` 与 `pool`。Dataset 条目按 pool 分两组：`baseline` 池为固定可比集合（跨实验配对对比的对象，不得随轮次变动）；`rotating` 池为轮换候选池，每轮实验 SHALL 从池中按标的分组随机抽样（seed 可复现），防对固定标的过拟合。Dataset SHALL 可从历史 trace 捞取并幂等重建。
 
 (Previously: Dataset 条目只按 category 分类，无 pool 区分；重复执行实验始终跑同一批 16 条 items，标的固定无轮换。)
+
+#### Scenario: Item Schema
+
+- **WHEN** Dataset item 定义
+- **THEN** `input` SHALL 含 `query`、`mode`（deep/quick/follow_up）、可选 `session_id`
+- **AND** `expected_output` 可含 `ticker`、`must_cover`、`should_clarify`，均为可选
+- **AND** `metadata` 含 `category` 与 `source`
+
+#### Scenario: 幂等建库
+
+- **WHEN** `dataset_seed.py` 重复执行
+- **THEN** SHALL 不产生重复 item（以 input.query + mode 为去重键）
+- **AND** 已存在 item 不被覆盖
+
+#### Scenario: expected 不含时效数值
+
+- **GIVEN** 某 deep 典型 case
+- **THEN** `expected_output` SHALL NOT 含具体财务数值（如净利润 X 亿）
+- **AND** 只含结构性断言（章节、ticker）
 
 #### Scenario: baseline 池固定可比
 
@@ -33,6 +52,8 @@
 - **WHEN** 审视 Dataset 设计
 - **THEN** 非 skipped 条目（可出分）SHALL 占条目总数 ≥ 80%
 - **AND** follow_up / 意图澄清等首版跳过条目合计 SHALL NOT 超过 3 条
+
+## ADDED Requirements
 
 ### Requirement: deep 边界歧义解析样本
 

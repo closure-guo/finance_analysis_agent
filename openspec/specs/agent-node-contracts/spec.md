@@ -3,9 +3,7 @@
 ## Purpose
 
 定义各 Agent 节点对 LLM 结构化输出的契约校验与降级行为：Fund Manager 决策枚举强校验与状态类型标注、报告决策中文标注、分析师解析失败降级可观测、prompt 枚举一致性、辩论角色与置信度约束，以及异常路径的测试覆盖要求。
-
 ## Requirements
-
 ### Requirement: Fund Manager Decision Enum Validation
 
 Layer V Fund Manager 节点 SHALL 对 LLM 输出的 `decision` 字段做枚举强校验，合法值为 `approve`、`reject`、`return` 三者之一。校验前 SHALL 对原始值做归一化（去首尾空白 + 转小写），归一化后仍不在合法集内的 SHALL 抛出验证异常中断管线，SHALL NOT 降级为任何默认决策语义。
@@ -159,3 +157,27 @@ Prompt 模板中声明的枚举取值 SHALL 与代码中的合法值集合保持
 
 - **WHEN** 运行分析师节点测试
 - **THEN** 测试 SHALL 覆盖坏 JSON 触发降级、以及 `claim_type` / `source_type` 非法值改写两类场景
+
+### Requirement: 分析师报告可读结论字段
+
+每个分析师节点输出的 `AnalystReport` 对象 SHALL 包含 `plain_conclusion` 字段：普通人可直接看懂的一句话结论+简短解释（非纯技术黑话，如「技术面偏空：MACD 死叉、反弹动能存疑，不宜右侧追入」）。该字段 SHALL 非空；LLM 输出解析失败走降级路径时 SHALL 以可读占位回填（如「技术面数据缺失，无法给出结论」），且 `parse_degraded` 照常置位。
+
+#### Scenario: 正常输出可读结论
+
+- **GIVEN** 分析师节点成功解析 LLM 结构化输出
+- **WHEN** 产出 `AnalystReport`
+- **THEN** `plain_conclusion` SHALL 为非空字符串且面向普通人可读
+- **AND** `summary`（面向 RM 的精简语言）行为保持不变
+
+#### Scenario: 解析失败降级回填
+
+- **GIVEN** LLM 响应无法解析为合法分析师报告结构（坏 JSON 或 schema 不符）
+- **WHEN** 分析师节点走降级路径产出报告
+- **THEN** `plain_conclusion` SHALL 为可读占位（非空）
+- **AND** `parse_degraded` SHALL 为 True，下游可识别降级来源
+
+#### Scenario: 空值或缺失被拒绝
+
+- **WHEN** `AnalystReport` 校验时 `plain_conclusion` 缺失或为空串
+- **THEN** 校验失败（ValidationError），不得静默产出无可读结论的分析师报告
+
