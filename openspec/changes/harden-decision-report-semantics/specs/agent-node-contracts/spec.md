@@ -4,12 +4,18 @@
 
 ### Requirement: Fund Manager 操作性结论字段
 
-`FundManagerDecision` SHALL 新增 `action`（枚举同 `TradeDecision.action`）与 `confidence`（0-1 浮点）可选字段；`decision` 为 `"approve"` 时两者 SHALL 必填（模型校验，缺失中断管线），`"reject"`/`"return"` 时 SHALL 允许为 None。FM 的 action 是对 Risk Judge 裁决后最终方案的操作定性，MUST NOT 被硬拦截为管线异常（与裁决方向相悖时交由报告展示与一致性评估披露）。
+`FundManagerDecision` SHALL 新增 `action`（枚举同 `TradeDecision.action`）与 `confidence`（0-1 浮点）可选字段；`decision` 为 `"approve"` 时两者 SHALL 必填（模型校验；节点带校验错误摘要重试一次，仍缺失则中断管线），`"reject"`/`"return"` 时 SHALL 允许为 None。FM 的 action 是对 Risk Judge 裁决后最终方案的操作定性，MUST NOT 被硬拦截为管线异常（与裁决方向相悖时交由报告展示与一致性评估披露）。FM 的 LLM 上下文 SHALL 包含其审批对象 `final_trade_decision` 的完整字段，无论 state 中该值是 `TradeDecision` 对象还是 dict。
 
 #### Scenario: approve 决策必含操作定性与置信度
 
 - **WHEN** FM 输出 `decision` 为 `"approve"` 但缺少 `action` 或 `confidence`
-- **THEN** `FundManagerDecision.model_validate` SHALL 抛出 ValidationError 中断管线（不静默降级）
+- **THEN** 节点 SHALL 携带校验错误摘要重新调用一次 LLM
+- **AND** 重试输出仍不通过校验时 SHALL 抛出 ValidationError 中断管线（重试 ≠ 降级，不静默降级）
+
+#### Scenario: 审批对象进 FM 上下文
+
+- **WHEN** state 中 `final_trade_decision` 为 `TradeDecision` 对象（risk_judge 原样写入，与 `trader_plan` 同惯例）或其 dict 序列化
+- **THEN** FM 的 LLM 上下文 SHALL 包含「交易决策」段（action/confidence/仓位/理由等字段），FM MUST NOT 在看不到方案的情况下审批
 
 #### Scenario: reject/return 允许无操作定性
 

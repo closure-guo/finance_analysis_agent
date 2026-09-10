@@ -216,3 +216,48 @@ def test_truncation_retry_escalates_budget():
 
         assert call_llm_streaming("p", node_name="trader") == "ok"
     assert captured == [65536, 131071]
+
+
+class TestValidateHook:
+    """validate 钩子：JSON 合法但字段校验不过 → 带错误摘要重试一次，仍不过向上抛。
+
+    JSON 级重试解决「不是 JSON」，validate 解决「是 JSON 但缺必填/枚举非法」——
+    两者同属「坏输出重试一次、重试 ≠ 降级」的收口设计。
+    """
+
+    def test_validation_failure_retries_with_error_hint(self):
+        from pydantic import BaseModel
+
+        class Out(BaseModel):
+            decision: str
+            action: str
+
+        fake, calls = _mock_call(
+            ['{"decision": "approve"}', '{"decision": "approve", "action": "watch"}']
+        )
+        with patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake):
+            result = call_llm_for_json("审批", validate=Out.model_validate)
+        assert result == {"decision": "approve", "action": "watch"}
+        assert len(calls) == 2
+        assert "action" in calls[1]["prompt"]  # 重试 prompt 携带校验错误摘要
+        assert calls[1]["prompt"].startswith("审批")
+
+    def test_validation_failure_twice_raises(self):
+        from pydantic import BaseModel, ValidationError
+
+        class Out(BaseModel):
+            action: str
+
+        fake, calls = _mock_call(['{"x": 1}', '{"y": 2}'])
+        with (
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+            pytest.raises(ValidationError),
+        ):
+            call_llm_for_json("审批", validate=Out.model_validate)
+        assert len(calls) == 2
+
+    def test_no_validate_keeps_old_behavior(self):
+        fake, calls = _mock_call(['{"x": 1}'])
+        with patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake):
+            assert call_llm_for_json("p") == {"x": 1}
+        assert len(calls) == 1

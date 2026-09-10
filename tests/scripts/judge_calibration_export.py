@@ -52,7 +52,9 @@ def _auth() -> str:
     return base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
 
 
-def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
+def export_to_jsonl(
+    out: Path, limit: int, from_timestamp: str | None = None
+) -> list[dict[str, Any]]:
     from evals.judge_calibration.measure import DEFAULT_DIMENSIONS
 
     _load_env()
@@ -81,10 +83,15 @@ def export_to_jsonl(out: Path, limit: int) -> list[dict[str, Any]]:
     per_trace: dict[str, dict[str, float]] = {}
     reasons: dict[tuple[str, str], str] = {}
     page = 1
+    # from_timestamp 把抽样锁定到某轮实验（scores 端点按时间倒序翻页，不加窗口时
+    # 一页 100 条会混入旧轮 trace，随后按 trace_id 字典序截 limit 会把本轮 trace 挤掉）
+    params_base: dict[str, Any] = {"limit": 100}
+    if from_timestamp:
+        params_base["fromTimestamp"] = from_timestamp
     while len(per_trace) < limit and page <= 30:
         resp = requests.get(
             f"{LANGFUSE_HOST}/api/public/scores",
-            params={"limit": 100, "page": page},
+            params={**params_base, "page": page},
             headers={"Authorization": f"Basic {auth}"},
             timeout=40,
         )
@@ -203,6 +210,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="judge-人工校准标注抽样导出")
     parser.add_argument("--limit", type=int, default=30, help="抽样 trace 数（默认 30）")
     parser.add_argument(
+        "--from-timestamp",
+        default=None,
+        help="只抽该时刻之后的 judge 分数（ISO 8601，如 2026-09-10T13:13:00Z）——"
+        "把抽样锁定到某一轮实验，避免混入旧轮 trace",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path("evals/judge_calibration/data/judge-sample-round1.jsonl"),
@@ -237,7 +250,7 @@ def main() -> None:
         "供 measure.py --judge-jsonl 合并计算一致性，非标注展示）",
     )
     args = parser.parse_args()
-    payload = export_to_jsonl(args.out, args.limit)
+    payload = export_to_jsonl(args.out, args.limit, from_timestamp=args.from_timestamp)
 
     if args.csv or args.xlsx or args.blind_xlsx or args.blind_judge:
         from evals.judge_calibration.material import to_csv, to_xlsx

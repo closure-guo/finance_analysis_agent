@@ -16,6 +16,8 @@
 - [x] 1.10 失败测试 + 实现：辩论 context 编号呈现——`_build_debate_context` 各历史发言以「论点: ①…」编号行前置（取 key_arguments）
 - [x] 1.11 失败测试 + 实现：`DebateMessage` 新增可选 `rebuttal_to: list[int]`；bull/bear prompt 输出格式加 rebuttal_to 与「回应对方N」标注要求（随 §2.3 一并 deploy_prompts）
 - [x] 1.12 失败测试 + 实现：交锋覆盖率计算（各轮 rebuttal_to 并集 / 对方论点总数，纯函数）并进入 debate_quality judge 材料（evals/extract.py 拼装时并列呈现双方论点编号）
+- [x] 1.13 失败测试 + 实现（§6.1 健康检查发现）：`call_llm_for_json` 加 `validate` 钩子——JSON 合法但 pydantic 校验不过时带错误摘要重试一次，仍不过向上抛；FM 节点接入（实证：r1 实验 17 条中 1 条 approve 首答缺 action/confidence，未重试直接炸整条 trace，SDK 丢弃 item）
+- [x] 1.14 失败测试 + 实现（§6.1 健康检查发现）：`_build_fund_manager_context` 接受 `TradeDecision` 对象——旧 `isinstance(dict)` 守卫遇 risk_judge 原样写入的对象静默跳过，FM 自首次提交起从未看到过审批对象（Langfuse 实证 4/4 trace 的 fund_manager 输入无「交易决策」段；旧测试 fixture 用 dict 喂 state 恰好绕过）
 
 ## 2. FM 理由职责边界（D2，agent-prompt-contracts）
 
@@ -42,12 +44,14 @@
 
 ## 5. 集成验证
 
-- [ ] 5.1 `uv run pytest` 全绿 + `uv run ruff check` + `uv run mypy` 通过
-- [ ] 5.2 本地跑 1 条深度分析（真实 LLM）：确认 FM 输出含 action/confidence、报告含研究聚焦与并排定性、辩论/风控 context 含关注点行（Langfuse trace 人工核对）
-- [ ] 5.3 若涉及前端 FM 展示：E2E 门禁通过（交互类变更红线）；无前端改动则本项标注「不适用」
+- [x] 5.1 `uv run pytest` 全绿 + `uv run ruff check` + `uv run mypy` 通过——门禁口径（-m "not live"）2182 passed；顺手修复 tests/outcome/test_trace_capture.py 3 条 approve mock 未随 D1 契约补 action/confidence 的既有失败
+- [x] 5.2 本地跑 1 条深度分析（真实 LLM）：确认 FM 输出含 action/confidence、报告含研究聚焦与并排定性、辩论/风控 context 含关注点行（Langfuse trace 人工核对）——7/7 通过
+- [x] 5.3 若涉及前端 FM 展示：E2E 门禁通过（交互类变更红线）；无前端改动则本项标注「不适用」——不适用（本 delta 无前端改动）
 
 ## 6. 评估收口（实施后）
 
-- [ ] 6.1 重跑 dataset 实验（baseline 池），确认 judge 分正常落库、无 input_missing/judge_parse_failed 异常
+- [x] 6.1 重跑 dataset 实验（baseline 池）：`baseline-decision-semantics-r1` 16/17 完成，37/37 judge 分落库、confidence 100% 落库（0.40–0.95）、judge_failures=0；1 条（`deep 分析平安`）因 FM 缺字段崩溃 → 1.13/1.14 修复。契约抽验全绿：无图片路径 13/13、论点编号+覆盖率+【bear】8/8、decision_grounding 四节 8/8、consistency 五节+RM 评级前置 8/8、【最终报告结论章节】已为聚焦摘要
+- [ ] 6.1b 决定是否以 1.13/1.14 修复版重跑 r2：r1 的 FM 决策全部在看不到方案的前提下做出，consistency 维度的 judge 分与 round6 人工标注反映的是「盲审批」行为，非修复后行为
 - [ ] 6.2 consistency 与 decision_grounding 维度重评（FM 序列化 + report_conclusion 变更影响面）；report_relevance/debate_quality 无需重评（judge 变量未变）
 - [ ] 6.3 对照 round5 基线归档对比报告（tests/validation/ 或 docs/evals/），rubric v2「评分前必读」段的简化评估（可简化则 rubric 升 v3 走独立校准）
+- [ ] 6.4 round6 盲标：`evals/judge_calibration/data/judge-sample-round6-blind.xlsx`（37 行/13 trace，`--from-timestamp` 锁定 r1）人工回填后 measure → 与 round5 对比
