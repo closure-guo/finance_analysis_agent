@@ -58,6 +58,31 @@ class TestExtractJudgeVars:
         assert vars_["query"] == "分析茅台", "query 应原样 echo"
         assert "财务分析" in vars_["report"], "report 应含 final_report 原文"
 
+    def test_analyst_reports_prefers_plain_conclusion(self):
+        """add-agent-readable-conclusion：analyst_reports 优先展示普通人可读结论。"""
+        state = {
+            "final_report": "报告",
+            "analyst_reports": {
+                "fundamental": {
+                    "summary": "基本面黑话摘要：ROE 32%、负债率 41%",
+                    "plain_conclusion": "基本面偏多：盈利质量优秀，负债率低",
+                    "claims": [],
+                }
+            },
+        }
+        vars_ = extract_judge_vars(state, query="q")
+        assert "基本面偏多：盈利质量优秀" in vars_["analyst_reports"]
+        assert "ROE 32%" not in vars_["analyst_reports"]  # summary 不再默认展示
+
+    def test_analyst_reports_fallbacks_without_plain_conclusion(self):
+        """旧 trace 报告对象无 plain_conclusion 时回退 summary，不报错。"""
+        state = {
+            "final_report": "报告",
+            "analyst_reports": {"fundamental": {"summary": "旧版本摘要", "claims": []}},
+        }
+        vars_ = extract_judge_vars(state, query="q")
+        assert "旧版本摘要" in vars_["analyst_reports"]
+
     def test_missing_keys_give_empty_string(self):
         vars_ = extract_judge_vars({})
         assert vars_["report"] == ""
@@ -77,10 +102,25 @@ class TestExtractConclusion:
         report = "## 财务分析\nA\n## 结论\n买入。\n## 风险提示\nB"
         assert extract_conclusion(report) == "买入。"
 
-    def test_fallback_to_tail(self):
-        report = "没有任何章节标题。" + "尾" * 600
+    def test_fallback_starts_at_sentence_boundary(self):
+        """回归（2026-09-09）：无结论性标题时不得从 report[-500:] 中间切开（半句话），
+        须从最近断句边界（句号）之后开始。"""
+        report = "前置句。" + "中" * 400 + "边界句。" + "尾" * 300
         conclusion = extract_conclusion(report)
-        assert conclusion == "尾" * 500
+        assert conclusion == "尾" * 300  # 从「边界句。」之后起，不以「中」开头
+
+    def test_numbered_fund_manager_title(self):
+        """真实报告结论标题为「## 六、基金经理决策」这类编号式，词表须匹配到。"""
+        report = (
+            "# 报告\n## 一、研究聚焦\n内容。\n"
+            "## 六、基金经理决策\n批准买入，仓位 light，止损 1280。\n"
+        )
+        assert extract_conclusion(report) == "批准买入，仓位 light，止损 1280。"
+
+    def test_last_conclusion_title_wins(self):
+        """「多空辩论结论」等中间章节也含关键词时，取最后一个结论性标题。"""
+        report = "## 三、多空辩论结论\n辩论内容\n## 六、基金经理决策\n最终决策内容\n"
+        assert extract_conclusion(report) == "最终决策内容"
 
     def test_empty_report(self):
         assert extract_conclusion("") == ""
@@ -108,6 +148,70 @@ class TestPydanticStateCompat:
         vars_ = extract_judge_vars(state, query="q")
         assert "看多：净息差改善" in vars_["debate_history"]
         assert "看空：不良抬头" in vars_["debate_history"]
+
+    def test_all_debate_rounds_kept_under_total_budget(self):
+        """回归（2026-09-10 实测 2fd1ee6d）：多轮辩论总量超 _JUDGE_MAX_BYTES 时，
+        整体 head/tail 截断把中间发言连【bear】标签一起挖掉——judge 评「逐条交锋」
+        时看不到交锋过程。须按消息边界截断：每个角色标签都保留。"""
+        messages = []
+        for rnd, (role_a, role_b) in enumerate([("bull", "bear"), ("bull", "bear")], start=1):
+            messages.append(
+                {
+                    "role": role_a,
+                    "round": rnd,
+                    "content": f"{role_a} 第{rnd}轮开场。" + "论据。" * 300,
+                }
+            )
+            messages.append(
+                {
+                    "role": role_b,
+                    "round": rnd,
+                    "content": f"{role_b} 第{rnd}轮回应对方论点。" + "反驳。" * 300,
+                }
+            )
+        state = {"debate_history": messages, "risk_debate_history": []}
+        out = extract_judge_vars(state)["debate_history"]
+        # 全部轮次的全部角色标签保留（中间发言不被整体截断挖掉）
+        assert "【bull】" in out
+        assert out.count("【bear】") == 2
+        assert "第1轮回应对方论点" in out
+        assert "第2轮回应对方论点" in out
+
+    def test_key_arguments_prepended_to_debate_messages(self):
+        """回归（2026-09-10）：DebateMessage.key_arguments 早已存在且被 LLM 填充，
+        但 _summarize_debate 只拼 content 将其丢弃——judge 评「逐条交锋」时见不到
+        每轮论点骨架。拼装 SHALL 把论点前置到每条发言开头（正文截断时骨架仍在）。"""
+        state = {
+            "debate_history": [
+                {
+                    "role": "bull",
+                    "round": 1,
+                    "key_arguments": ["估值下移空间未释放", "历史外推属归纳谬误"],
+                    "content": "多头痛斥空头误读定价逻辑，展开论述。" * 50,
+                },
+                {
+                    "role": "bear",
+                    "round": 1,
+                    "key_arguments": ["戴维斯双杀风险"],
+                    "content": "空头反驳。",
+                },
+            ],
+            "risk_debate_history": [],
+        }
+        out = extract_judge_vars(state)["debate_history"]
+        # 论点骨架前置且完整（长正文被截断也不影响论点行）
+        assert "论点: 估值下移空间未释放; 历史外推属归纳谬误" in out
+        assert "论点: 戴维斯双杀风险" in out
+        # pydantic DebateMessage 同样拼论点
+        from finance_agent.models import DebateMessage
+
+        state2 = {
+            "debate_history": [
+                DebateMessage(role="bull", round=1, content="看多", key_arguments=["净息差改善"])
+            ]
+        }
+        out2 = extract_judge_vars(state2)["debate_history"]
+        assert "论点: 净息差改善" in out2
 
     def test_pydantic_risk_debate_extracted(self):
         from finance_agent.models import DebateMessage
@@ -171,6 +275,40 @@ class TestSummarizeAnalystReportsKeepsNumbers:
         vars_ = extract_judge_vars(state)
         assert "3.4" in vars_["analyst_reports"]
         assert "ROE 处于行业中等水平" in vars_["analyst_reports"]
+
+    def test_all_agents_kept_under_total_budget(self):
+        """回归（2026-09-09 实测）：4 个分析师结论+论据总量超 _JUDGE_MAX_BYTES(4096)
+        时，整体 head/tail 截断会整段切掉中间 agent——fundamental 的 plain_conclusion
+        在 judge 输入与标注材料里都不可见，consistency 评分无法核对各层结论。
+        须按 agent 边界截断：每个 agent 的结论方向都保留。"""
+        reports = {}
+        for name, conclusion in (
+            ("technical", "技术面偏多：均线多头排列，动能向上"),
+            ("macro", "宏观中性：低通胀低利率，估值有支撑"),
+            ("fundamental", "基本面优异但增速放缓：ROE 32.5%，营收转负"),
+            ("sentiment", "舆情偏正面：渠道动作密集，资金回流"),
+        ):
+            reports[name] = {
+                "agent_name": name,
+                "plain_conclusion": conclusion,
+                "claims": [
+                    {
+                        "claim_type": "numerical",
+                        "source_type": "data",
+                        "field_ref": "f",
+                        "stated_value": float(i),
+                        "interpretation": f"论据{name}{i}：数值核对" + "。" * 40,
+                    }
+                    for i in range(20)
+                ],
+            }
+        state = {"final_trade_decision": {}, "analyst_reports": reports, "risk_debate_history": []}
+        out = extract_judge_vars(state)["analyst_reports"]
+        # 4 个 agent 全部保留（中间 agent 不被整体截断切掉）
+        assert "【technical】" in out
+        assert "【macro】" in out
+        assert "【fundamental】" in out
+        assert "【sentiment】" in out
 
 
 class TestFormatClaims:

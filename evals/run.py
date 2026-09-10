@@ -146,8 +146,14 @@ def _judge_adapter(dimension: str):
             # score=null:解析失败,记入失败率(已实测 langfuse 4.13
             # Evaluation.value 接受 None,无需 _failed 占位 fallback)
             return make_evaluation({"name": dimension, "value": None, "comment": result["reason"]})
+        # confidence 随 comment 落库（round5 校准实证：残缺输入上 judge 幻觉高分
+        # 无信号可辨——置信度使「高分+低置信」组合可识别）
+        conf = result.get("confidence")
+        comment = result["reason"]
+        if conf is not None:
+            comment = f"[conf={conf:.2f}] {comment}"
         return make_evaluation(
-            {"name": dimension, "value": float(result["score"]), "comment": result["reason"]}
+            {"name": dimension, "value": float(result["score"]), "comment": comment}
         )
 
     _eval.__name__ = f"eval_{dimension}"
@@ -230,6 +236,11 @@ def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="evals 实验回归")
     parser.add_argument("name", help="实验名(如 baseline-v1)")
+    parser.add_argument(
+        "--dataset",
+        default=DATASET_NAME,
+        help=f"评估 dataset 名(默认 {DATASET_NAME}；rotating 轮换池用 seed 建库后的独立名)",
+    )
     args = parser.parse_args()
 
     # run_experiment 是实验唯一执行入口(spec「实验回归工作流」Scenario「无 Langfuse 时显式报错」):
@@ -255,13 +266,13 @@ def main() -> None:
             "拒绝运行实验（防测错版本）:\n  - " + "\n  - ".join(mismatched) + "\n" + hint
         )
 
-    dataset = client.get_dataset(DATASET_NAME)
+    dataset = client.get_dataset(args.dataset)
     result = dataset.run_experiment(
         name=args.name,
         task=run_task,
         evaluators=all_evaluators(),
         max_concurrency=1,  # 管线分钟级,禁高并发
-        metadata={"prompt_versions": prompt_versions},
+        metadata={"prompt_versions": prompt_versions, "dataset": args.dataset},
     )
     rows = [
         {

@@ -37,15 +37,27 @@ def _judge_api_key() -> str:
 
 JUDGE_ENV = "langfuse-llm-as-a-judge"
 
-_JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以篇幅长短论优劣。'
+# 输出契约含 confidence（0-1）：round5 校准实证 judge 对残缺输入（图表路径+审批章）
+# 仍「全面覆盖」打 5 分无任何不确定性信号（幻觉不可从分面识别）——置信度定义为
+# 「对评分依据充分性的把握」，材料缺失/截断/不足时 MUST 降低，使幻觉可从低置信暴露。
+_JSON_TAIL = (
+    '只输出 JSON: {"score": <1-5>, "confidence": <0-1>, "reason": "<一句话理由>"}\n'
+    "不以篇幅长短论优劣。\n"
+    "置信度语义: confidence 是你对本次评分依据充分性的把握;输入材料缺失、截断或不足以"
+    "支撑判断时 MUST 降低置信度(如 <0.5),依据完整充分才给高置信度。"
+)
 
 # rubric 版本（变更递增，校准门禁按版本重校准；decision_grounding：
-# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对）
+# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对；
+# consistency：v1 初版 → v2 approve 批准对象语义定义，消除「watch+approve=
+# 冲突」误判——round5 实测 11 条中 7 条被误打 1-3 分；
+# 全维度最新一版 = 输出契约加 confidence（材料依据不充分 MUST 降低，
+# 使残缺输入上的幻觉可从低置信暴露），评分档位语义未变）
 RUBRIC_VERSIONS: dict[str, int] = {
-    "report_relevance": 1,
-    "debate_quality": 1,
-    "decision_grounding": 3,
-    "consistency": 1,
+    "report_relevance": 2,
+    "debate_quality": 2,
+    "decision_grounding": 4,
+    "consistency": 3,
 }
 
 RUBRICS: dict[str, str] = {
@@ -100,13 +112,20 @@ RUBRICS: dict[str, str] = {
 【Risk Judge 裁决】{{risk_judgment}}
 【Fund Manager 最终决策】{{fund_manager_decision}}
 【最终报告结论章节】{{report_conclusion}}
+先明确决策语义(评分前必读):
+- Fund Manager 的 approve/reject/return 针对的是 Risk Judge 裁决后的最终交易方案
+  (即裁决 JSON 中的 action/position_size),不是对裁决本身的赞成/否决票;
+- approve = 同意执行该方案:裁决为 watch(观望)而 FM approve,表示批准观望,方向一致,
+  不是冲突;裁决为 buy/hold/sell 而 FM approve 同理;
+- 真正的冲突是:FM 批准了与裁决方向相反的行动(如裁决 sell 而 FM 批准买入建仓)、
+  FM 理由与裁决逻辑相悖、或报告结论章节与决策方向不一致。
 评估各层结论的一致性:
 5 = 各层结论完全一致,无静默推翻
 4 = 基本一致,个别表述差异但不影响方向
 3 = 存在不一致但已显式说明理由
 2 = 存在未说明的结论冲突
-1 = 明显自相矛盾(如 Fund Manager 批准与 Risk Judge 否决相悖)
-特别关注:Fund Manager 结论是否与 Risk Judge 裁决一致;报告结论章节是否与分析师章节一致。
+1 = 明显自相矛盾(如 FM 批准与 Risk Judge 裁决方向相悖的行动)
+特别关注:Fund Manager 结论是否与 Risk Judge 裁决后的方案方向一致;报告结论章节是否与分析师章节一致。
 """
     + _JSON_TAIL,
 }
@@ -189,11 +208,18 @@ def run_judge(dimension: str, variables: dict[str, str]) -> dict:
     输入合同：维度关键变量缺失 → score=None + reason="input_missing"
     （不调 LLM、不评分），保证评估结果不被空输入污染。
 
-    Returns: {"name": dimension, "score": int 1-5 | None, "reason": str}
+    Returns: {"name", "score": int 1-5 | None, "reason": str,
+              "confidence": float 0-1 | None}——confidence 缺失/非法时为 None
+    （旧格式容错，不阻塞评分）。
     """
     missing = _input_missing(dimension, variables)
     if missing is not None:
-        return {"name": dimension, "score": None, "reason": f"input_missing:{missing}"}
+        return {
+            "name": dimension,
+            "score": None,
+            "reason": f"input_missing:{missing}",
+            "confidence": None,
+        }
     prompt = _render(dimension, variables)
     for _attempt in range(2):
         try:
@@ -201,7 +227,16 @@ def run_judge(dimension: str, variables: dict[str, str]) -> dict:
             score = int(data["score"])
             if not 1 <= score <= 5:
                 raise ValueError(f"score 越界: {score}")
-            return {"name": dimension, "score": score, "reason": str(data.get("reason", ""))}
+            confidence: float | None = None
+            raw_conf = data.get("confidence")
+            if isinstance(raw_conf, (int, float)) and 0 <= float(raw_conf) <= 1:
+                confidence = float(raw_conf)
+            return {
+                "name": dimension,
+                "score": score,
+                "reason": str(data.get("reason", "")),
+                "confidence": confidence,
+            }
         except Exception:  # noqa: S112 -- 故意静默重试;解析失败已通过最终 judge_parse_failed 记录
             continue
-    return {"name": dimension, "score": None, "reason": "judge_parse_failed"}
+    return {"name": dimension, "score": None, "reason": "judge_parse_failed", "confidence": None}
