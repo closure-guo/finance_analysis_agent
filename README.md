@@ -273,14 +273,15 @@ frontend/src/
 
 ## 文档
 
+- [docs 索引](docs/README.md) - docs/ 全量文档一张图（2026-09-08 新建）
 - [PRD](docs/PRD.md) - 产品需求文档（初始设计稿，后续演进见 ADR）
 - [架构设计](docs/architecture.md) - 系统架构详细设计
 - [领域上下文](CONTEXT.md) - 术语表和分析框架定义
-- [ADR](docs/adr/) - 架构决策记录（0001-0017，人工维护）
+- [ADR](docs/adr/) - 架构决策记录（0001-0020，人工维护，只增不改）
 - [专题设计](docs/design/) - LLM Provider Gateway、E2E 方案、评估体系等专项设计档案
 - [评估体系](evals/) - 评估框架（judge/对比/消融/claim 基准），基线说明见 [docs/evals/](docs/evals/)
 - [项目工作流](docs/project-workflow.md) - OpenSpec + Superpowers 双框架实施指南
-- [事故记录](docs/incidents/) - 系统性问题与解决方案（001-022）
+- [事故记录](docs/incidents/) - 系统性问题与解决方案（001-025）
 - [AGENTS.md](AGENTS.md) - Agent 工作指南（任务路由、契约红线、测试约束）
 - [OpenSpec](openspec/specs/) - 系统行为规范（唯一真相来源，28 个 capability）
 

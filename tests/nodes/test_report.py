@@ -24,6 +24,7 @@ class TestGenerateReport:
                 "fundamental": AnalystReport(
                     agent_name="fundamental",
                     summary="基本面强劲",
+                    plain_conclusion="结论：基本面强劲",
                     key_findings=["ROE 28.33%"],
                     claims=[],
                     markdown="## 基本面分析\n...",
@@ -31,6 +32,7 @@ class TestGenerateReport:
                 "technical": AnalystReport(
                     agent_name="technical",
                     summary="技术面偏多",
+                    plain_conclusion="结论：技术面偏多",
                     key_findings=["MA5 上穿 MA20"],
                     claims=[],
                     markdown="## 技术面分析\n...",
@@ -129,6 +131,7 @@ class TestGenerateReport:
                 "fundamental": AnalystReport(
                     agent_name="fundamental",
                     summary="基本面强劲",
+                    plain_conclusion="结论：基本面强劲",
                     key_findings=["ROE 28.33%"],
                     claims=[],
                     markdown="",
@@ -136,6 +139,7 @@ class TestGenerateReport:
                 "technical": AnalystReport(
                     agent_name="technical",
                     summary="技术面偏多",
+                    plain_conclusion="结论：技术面偏多",
                     key_findings=["MA5 上穿 MA20"],
                     claims=[],
                     markdown="",

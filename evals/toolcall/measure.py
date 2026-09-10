@@ -27,10 +27,11 @@ from typing import Any
 
 _TOOL_PREFIX = "tool_call:"
 
-# 允许工具集（quick/deep 模式已注册的全部工具）
-DEFAULT_ALLOWED_TOOLS = frozenset(
-    {"web_search", "batch_web_search", "search_stock", "run_deep_analysis"}
-)
+# 允许工具集：唯一权威来源 tool_registry（harden-eval-implementation-decoupling），
+# 评估与实现共享同一注册表，禁止各自维护一份允许集
+from finance_agent.tool_registry import AGENT_TOOL_NAMES  # noqa: E402
+
+DEFAULT_ALLOWED_TOOLS = AGENT_TOOL_NAMES
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:

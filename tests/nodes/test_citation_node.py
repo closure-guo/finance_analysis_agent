@@ -23,6 +23,7 @@ class TestVerifyCitations:
         report = AnalystReport(
             agent_name="fundamental",
             summary="基本面分析",
+            plain_conclusion="结论：基本面分析",
             key_findings=["资产负债率 40%"],
             claims=[
                 Claim(
@@ -49,6 +50,7 @@ class TestVerifyCitations:
         report = AnalystReport(
             agent_name="fundamental",
             summary="基本面分析",
+            plain_conclusion="结论：基本面分析",
             key_findings=["资产负债率 45%"],
             claims=[
                 Claim(
@@ -74,6 +76,7 @@ class TestVerifyCitations:
         report = AnalystReport(
             agent_name="macro",
             summary="宏观分析",
+            plain_conclusion="结论：宏观分析",
             key_findings=["通胀温和"],
             claims=[],
             markdown="## 宏观分析",
@@ -88,6 +91,7 @@ class TestVerifyCitations:
         report_a = AnalystReport(
             agent_name="fundamental",
             summary="基本面",
+            plain_conclusion="结论：基本面",
             key_findings=[],
             claims=[
                 Claim(
@@ -103,6 +107,7 @@ class TestVerifyCitations:
         report_b = AnalystReport(
             agent_name="technical",
             summary="技术面",
+            plain_conclusion="结论：技术面",
             key_findings=[],
             claims=[
                 Claim(
@@ -129,6 +134,7 @@ class TestVerifyCitations:
         report = AnalystReport(
             agent_name="fundamental",
             summary="基本面分析",
+            plain_conclusion="结论：基本面分析",
             key_findings=["资产负债率 45%"],
             claims=[
                 Claim(
@@ -157,6 +163,7 @@ class TestVerifyCitations:
         report = AnalystReport(
             agent_name="fundamental",
             summary="",
+            plain_conclusion="结论：分析完成",
             key_findings=[],
             claims=[
                 Claim(
@@ -315,6 +322,7 @@ class TestFailRateHistory:
         report = AnalystReport(
             agent_name="fundamental",
             summary="基本面分析",
+            plain_conclusion="结论：基本面分析",
             key_findings=["资产负债率 45%"],
             claims=[
                 Claim(
@@ -437,6 +445,7 @@ def _report(agent: str, claims: list[Claim], markdown: str) -> AnalystReport:
     return AnalystReport(
         agent_name=agent,
         summary=f"{agent} 分析",
+        plain_conclusion=f"{agent} 分析结论",
         key_findings=[],
         claims=claims,
         markdown=markdown,

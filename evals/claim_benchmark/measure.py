@@ -206,7 +206,13 @@ def measure(entries: list[dict], f1_gate: float = F1_GATE) -> dict:
 
 
 def _print_report(rep: dict) -> None:
+    identity = rep.get("benchmark_identity") or {}
     print("\n========== 校验器准度报告（离线复判 vs 人工标签）==========")
+    if identity.get("role") == "regression_probe":
+        print(
+            "⚠️ 基准集身份: rule_derived 构造标签 —— 本报告为【算法回归探针】，"
+            "仅验证校验器实现未回归，不构成真实准度声明（spec evaluation「校验器准度测量与门禁」）"
+        )
     print(f"核心样本 n={rep['n_core']}（排除 {rep['n_excluded']}：复判不可得/回归样本）")
     print(f"混淆矩阵: {rep['confusion']}")
     print(
@@ -277,6 +283,13 @@ def main() -> int:
         return 2
 
     rep = measure(entries, f1_gate=args.gate)
+    # 构造性一致防御（spec evaluation MODIFIED）：rule_derived 基准集仅声明为回归探针
+    rep["benchmark_identity"] = {
+        "labels": "rule_derived",
+        "role": "regression_probe",
+        "real_accuracy_not_claimed": True,
+        "annotation_note": "人工标注与真实来源（origin）样本另由 assertion-golden-set 承担真实准度声明",
+    }
     if args.baseline:
         rep["baseline_regression"] = _baseline_regression(
             rep, Path(args.baseline), args.max_regression

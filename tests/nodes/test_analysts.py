@@ -30,6 +30,7 @@ def _mock_llm_response() -> str:
         {
             "agent_name": "technical",
             "summary": "技术面分析显示短期趋势向上",
+            "plain_conclusion": "技术面偏多：短期趋势向上，MACD 金叉确认",
             "key_findings": ["MA5 上穿 MA20", "MACD 金叉"],
             "claims": [
                 {

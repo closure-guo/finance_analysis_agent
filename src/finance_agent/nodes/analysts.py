@@ -23,6 +23,15 @@ from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger(__name__)
 
+# add-agent-readable-conclusion：解析降级时的普通人可读结论占位（按 agent 中文名映射）
+_PLAIN_FALLBACK = {
+    "technical": "技术面数据缺失，无法给出有效结论",
+    "macro": "宏观数据缺失，无法给出有效结论",
+    "fundamental": "基本面数据缺失，无法给出有效结论",
+    "sentiment": "舆情数据缺失，无法给出有效结论",
+}
+_PLAIN_FALLBACK_DEFAULT = "分析数据缺失，无法给出有效结论"
+
 _VALID_CLAIM_TYPES = {
     "numerical",
     "temporal",
@@ -135,6 +144,9 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
                 synthesized = AnalystReport(
                     agent_name=data.get("agent_name", agent_name),
                     summary=str(data.get("summary", ""))[:200],
+                    plain_conclusion=str(
+                        data.get("plain_conclusion") or data.get("summary") or "分析完成"
+                    )[:200],
                     key_findings=findings,
                     claims=data.get("claims") or [],
                     markdown="\n\n".join(parts),
@@ -167,6 +179,7 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
         return AnalystReport(
             agent_name=agent_name,
             summary=response[:200] if response else "分析完成",
+            plain_conclusion=_PLAIN_FALLBACK.get(agent_name, _PLAIN_FALLBACK_DEFAULT),
             key_findings=[],
             claims=[],
             markdown=response or "## 分析\n（LLM 响应解析失败，显示原始文本）",

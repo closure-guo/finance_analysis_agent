@@ -13,6 +13,39 @@ from finance_agent.models import (
 )
 
 
+class TestAnalystReportPlainConclusion:
+    """add-agent-readable-conclusion：分析师报告普通人可读结论字段。"""
+
+    def test_plain_conclusion_required_nonblank(self):
+        """缺失 / 空串 / 纯空白 → 校验失败（同 reasoning 强校验模式）。"""
+        import pytest
+
+        base = {
+            "agent_name": "technical",
+            "summary": "技术面偏空",
+            "key_findings": [],
+            "claims": [],
+            "markdown": "## 分析\n内容",
+        }
+        with pytest.raises(ValueError):
+            AnalystReport(**base)  # 缺 plain_conclusion
+        with pytest.raises(ValueError):
+            AnalystReport(**base, plain_conclusion="")
+        with pytest.raises(ValueError):
+            AnalystReport(**base, plain_conclusion="   ")
+
+    def test_plain_conclusion_accepted(self):
+        report = AnalystReport(
+            agent_name="technical",
+            summary="技术面偏空",
+            key_findings=[],
+            claims=[],
+            markdown="## 分析\n内容",
+            plain_conclusion="技术面偏空：MACD 死叉、反弹动能存疑，不宜右侧追入",
+        )
+        assert report.plain_conclusion.startswith("技术面偏空")
+
+
 class TestAnalystReport:
     """Layer I 分析师输出模型。"""
 
@@ -21,6 +54,7 @@ class TestAnalystReport:
         report = AnalystReport(
             agent_name="fundamental",
             summary="基本面分析",
+            plain_conclusion="结论：基本面分析",
             key_findings=["ROE 28.33%", "资产负债率 40%"],
             claims=[
                 Claim(
@@ -166,8 +200,8 @@ class TestFundManagerDecision:
 
     def test_normalizes_case_and_whitespace(self):
         """大小写与首尾空白归一化。"""
-        assert FundManagerDecision(decision=" Approve ").decision == "approve"
-        assert FundManagerDecision(decision="REJECT").decision == "reject"
+        assert FundManagerDecision(decision=" Approve ", reasoning="理由").decision == "approve"
+        assert FundManagerDecision(decision="REJECT", reasoning="理由").decision == "reject"
 
     def test_invalid_decision_rejected(self):
         """非法值被拒绝，不做同义词映射。"""
@@ -175,11 +209,18 @@ class TestFundManagerDecision:
 
         for illegal in ("revise", "拒绝", "maybe", ""):
             with pytest.raises(ValueError):
-                FundManagerDecision(decision=illegal)
+                FundManagerDecision(decision=illegal, reasoning="理由")
 
-    def test_reasoning_optional(self):
-        """reasoning 缺省为空串，不阻塞校验。"""
-        assert FundManagerDecision(decision="approve").reasoning == ""
+    def test_reasoning_required(self):
+        """reasoning 必填且非空（spec「否决理由完整」：决策必须带理由，供审计/一致性核对）。"""
+        import pytest
+
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve")  # 缺 reasoning
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="reject", reasoning="")  # 空 reasoning
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="return", reasoning="   ")  # 纯空白 reasoning
 
 
 class TestTradeDecisionEvidenceRefs:

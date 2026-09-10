@@ -2,7 +2,7 @@
 
 > 本手册是日常开发工作流规范。路由规则见 [AGENTS.md](../AGENTS.md)，本手册提供各条路线的详细执行步骤、产物模板和衔接细节。
 >
-> E2E 测试的完整代码模板（playwright.config.ts、LLM stub、spec 示例、CI yaml）见独立文档 `docs/e2e-implementation.md`，本手册 §5.6 收录其基础设施与工具链纪律。
+> E2E 测试的完整代码模板（playwright.config.ts、LLM stub、spec 示例、CI yaml）见独立文档 [docs/design/E2E测试实现方案-finance_analysis_agent.md](design/E2E测试实现方案-finance_analysis_agent.md)，本手册 §5.6 收录其基础设施与工具链纪律。
 
 ---
 
@@ -365,7 +365,7 @@ git commit -m "feat: add specific feature"
 cd e2e && npx playwright test
 ```
 
-stub 套件（后端以 `TESTING=1` 启动，独立测试库 + LLM 可控 stub，见 `docs/e2e-implementation.md`），确定性、秒级-分钟级完成。
+stub 套件（后端以 `TESTING=1` 启动，独立测试库 + LLM 可控 stub，见 [docs/design/E2E测试实现方案-finance_analysis_agent.md](design/E2E测试实现方案-finance_analysis_agent.md)），确定性、秒级-分钟级完成。
 
 **通过标准**: 全绿。
 
@@ -664,7 +664,7 @@ npx skills add voidmatcha/e2e-skills -g --all
 | P4 CI（半天） | GitHub Actions、trace artifact、@live nightly | PR 上自动跑，失败可查证据 |
 | P5 扩展 | interaction.spec 补交互态、generator 补覆盖率缺口 | 核心用户路径全覆盖 |
 
-> **实现细节**（初始化命令、playwright.config.ts 完整配置、TESTING=1 后端实现、CI yaml 模板、seed/reset 接口设计）见独立文档 `docs/e2e-implementation.md`。
+> **实现细节**（初始化命令、playwright.config.ts 完整配置、TESTING=1 后端实现、CI yaml 模板、seed/reset 接口设计）见独立文档 [docs/design/E2E测试实现方案-finance_analysis_agent.md](design/E2E测试实现方案-finance_analysis_agent.md)。
 
 ---
 

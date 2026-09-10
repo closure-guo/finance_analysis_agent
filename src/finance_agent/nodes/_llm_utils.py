@@ -69,6 +69,7 @@ def _stub_pipeline_answer(node_name: str) -> str:
             {
                 "agent_name": agent_name,
                 "summary": f"STUB {agent_name} 分析摘要（测试数据）",
+                "plain_conclusion": f"STUB {agent_name} 分析结论（测试数据）",
                 "key_findings": [f"STUB 发现：{agent_name} 指标正常"],
                 "claims": [],
                 "markdown": f"## {agent_name} 分析\n\nSTUB 分析正文（测试数据）。",

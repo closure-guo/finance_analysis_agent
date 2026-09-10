@@ -22,6 +22,7 @@ class AnalystReport(BaseModel):
 
     agent_name: str  # "macro" | "fundamental" | "technical" | "sentiment"
     summary: str
+    plain_conclusion: str = Field(..., min_length=1)
     key_findings: list[str]
     claims: list[Claim]  # 用于确定性引用校验
     markdown: str  # 完整章节 Markdown，用于最终报告渲染
@@ -29,6 +30,14 @@ class AnalystReport(BaseModel):
     # 「解析失败导致的零 claim」与「LLM 正常输出的零 claim」
     # （零 claim 会使引用校验 all_passed=True，见 citation.py 的 failed == 0）
     parse_degraded: bool = False
+
+    @field_validator("plain_conclusion")
+    @classmethod
+    def _plain_conclusion_not_blank(cls, v: str) -> str:
+        """add-agent-readable-conclusion：普通人可读结论必填非空（纯空白等同缺失）。"""
+        if not v.strip():
+            raise ValueError("plain_conclusion 不得为空或纯空白")
+        return v
 
 
 class DebateMessage(BaseModel):
@@ -143,7 +152,15 @@ class FundManagerDecision(BaseModel):
     """
 
     decision: Literal["approve", "reject", "return"]
-    reasoning: str = ""
+    reasoning: str = Field(..., min_length=1)
+
+    @field_validator("reasoning")
+    @classmethod
+    def _reasoning_not_blank(cls, v: str) -> str:
+        """spec「否决理由完整」：决策必须带理由（审批/退回/否决依据），纯空白等同缺失。"""
+        if not v.strip():
+            raise ValueError("reasoning 不得为空或纯空白")
+        return v
 
     @field_validator("decision", mode="before")
     @classmethod

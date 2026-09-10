@@ -30,6 +30,12 @@ from finance_agent.harness.context import ContextBudget
 from finance_agent.llm import LLMConfig
 from finance_agent.outcome.track_record.ingest import persist_prediction_from_accumulated
 from finance_agent.prompts.loader import PromptInfo, load_prompt_with_meta
+from finance_agent.tool_registry import (
+    TOOL_BATCH_WEB_SEARCH,
+    TOOL_RUN_DEEP_ANALYSIS,
+    TOOL_SEARCH_STOCK,
+    TOOL_WEB_SEARCH,
+)
 
 logger = logging.getLogger("finance_agent.agent_factory")
 
@@ -788,7 +794,7 @@ def _make_run_deep_analysis(
                         content=_timeout_note,
                         tool_result=ToolResult(
                             tool_call_id="",
-                            name="run_deep_analysis",
+                            name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_timeout_note,
                             metadata={"pipeline_timeout": True},
                         ),
@@ -819,7 +825,7 @@ def _make_run_deep_analysis(
                         content=_error_note,
                         tool_result=ToolResult(
                             tool_call_id="",
-                            name="run_deep_analysis",
+                            name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_error_note,
                             metadata={"pipeline_error": True},
                         ),
@@ -907,7 +913,7 @@ def _make_run_deep_analysis(
                         content=llm_output,
                         tool_result=ToolResult(
                             tool_call_id="",
-                            name="run_deep_analysis",
+                            name=TOOL_RUN_DEEP_ANALYSIS,
                             output=llm_output,
                             metadata=metadata,
                         ),
@@ -1232,8 +1238,8 @@ def build_agent(
         from finance_agent.api import TESTING
 
         agent.tools.register(
-            _trace_tool("web_search")(_stub_web_search if TESTING else _web_search),
-            name="web_search",
+            _trace_tool(TOOL_WEB_SEARCH)(_stub_web_search if TESTING else _web_search),
+            name=TOOL_WEB_SEARCH,
         )
         session_id = kwargs.get("session_id")
         if session_id:
@@ -1253,10 +1259,10 @@ def build_agent(
         )
         web_sources_collector: list[dict] = []
         agent.tools.register(
-            _trace_tool("search_stock")(_make_search_stock(api_key)), name="search_stock"
+            _trace_tool(TOOL_SEARCH_STOCK)(_make_search_stock(api_key)), name=TOOL_SEARCH_STOCK
         )
         agent.tools.register(
-            _trace_tool("run_deep_analysis")(
+            _trace_tool(TOOL_RUN_DEEP_ANALYSIS)(
                 _make_run_deep_analysis(
                     api_key=api_key,
                     analysis_type=analysis_type,
@@ -1267,7 +1273,7 @@ def build_agent(
                     llm_config=llm_config,
                 )
             ),
-            name="run_deep_analysis",
+            name=TOOL_RUN_DEEP_ANALYSIS,
         )
         # TESTING=1 时注册 stub web_search（固定结果，不调真实 Tavily），
         # 与 quick 分支同一 stub 逻辑，使深度模式澄清阶段也能确定性复现
@@ -1275,16 +1281,16 @@ def build_agent(
         from finance_agent.api import TESTING
 
         agent.tools.register(
-            _trace_tool("web_search")(
+            _trace_tool(TOOL_WEB_SEARCH)(
                 _stub_web_search
                 if TESTING
                 else _make_web_search_with_collector(web_sources_collector)
             ),
-            name="web_search",
+            name=TOOL_WEB_SEARCH,
         )
         agent.tools.register(
-            _trace_tool("batch_web_search")(_make_batch_web_search(web_sources_collector)),
-            name="batch_web_search",
+            _trace_tool(TOOL_BATCH_WEB_SEARCH)(_make_batch_web_search(web_sources_collector)),
+            name=TOOL_BATCH_WEB_SEARCH,
         )
         session_id = kwargs.get("session_id")
         if session_id:
@@ -1310,7 +1316,7 @@ def build_agent(
             llm=llm_client,
             context_budget=context_budget,
         )
-        agent.tools.register(_trace_tool("web_search")(_web_search), name="web_search")
+        agent.tools.register(_trace_tool(TOOL_WEB_SEARCH)(_web_search), name=TOOL_WEB_SEARCH)
         return agent
 
     raise ValueError(f"未知模式: {mode}")

@@ -22,6 +22,7 @@
 {
   "agent_name": "sentiment",
   "summary": "一句话总结舆情面状况",
+"plain_conclusion": "一句普通人可读的舆情结论（含多空方向与关键依据，非黑话堆砌）",
   "key_findings": ["关键发现1", "关键发现2"],
   "claims": [
   "markdown": "## 舆情分析\n详细分析内容..."
@@ -45,6 +46,7 @@
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. 如果新闻数据缺失，标注"新闻数据暂不可用"，基于已有信息分析
 5. markdown 中包含完整的舆情分析章节
+- 输出纪律：`plain_conclusion` 为必填，必须是普通人可直接读懂的一句话结论+解释（明确多空方向与关键依据，禁止纯黑话堆砌），供审计与评估材料直接展示
 6. entity/event 型 claim 的 metric_name 与 period 可置 null（舆情分析以实体/事件引用为主，不强制数值口径）；若引用了具体数值（如百分比、金额），则应补填 metric_name 与 period，规则同数据型分析师，并同时申报 direction（positive/negative/flat，符号语义见数据型分析师 6.5 条：正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；signed 值 → positive；无方向语义 → flat）
 
 ## 分析方法论

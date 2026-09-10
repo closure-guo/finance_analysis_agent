@@ -64,7 +64,7 @@ class TestRate:
         assert result.rate == round(1 / 3, 4)
 
     def test_zero_countable_rate_none(self):
-        result = run_offline("无数字文本", {"price": 100.0})
+        result = run_offline("无数字文本", {"source": "snapshot:test", "price": 100.0})
         assert result.rate is None
         assert result.countable == 0
 
@@ -72,14 +72,16 @@ class TestRate:
 class TestRunOffline:
     def test_end_to_end(self):
         report = "股价 100 元，较昨日上涨 3%，PE 15，市值 800 亿"
-        result = run_offline(report, {"price": 100.0, "pct": 0.5, "pe": 15.0})
+        result = run_offline(
+            report, {"source": "snapshot:test", "price": 100.0, "pct": 0.5, "pe": 15.0}
+        )
         assert result.contradicted == 1  # pct 3 vs 0.5
         assert result.unverifiable == 1  # 市值无源
         assert result.rate is not None
 
     def test_clean_report_rate_zero(self):
         report = "股价 100 元，上涨 0.5%"
-        result = run_offline(report, {"price": 100.0, "pct": 0.5})
+        result = run_offline(report, {"source": "snapshot:test", "price": 100.0, "pct": 0.5})
         assert result.rate == 0.0
         assert result.unverifiable == 0
 
@@ -92,6 +94,7 @@ class TestGate:
 
         text = "股价 100 元，涨 5%，PE 15，PB 2，市值 800 亿，ROE 12%"
         data = {
+            "source": "snapshot:test",
             "price": 100.0,
             "pct": 5.0,
             "pe": 15.0,
@@ -159,6 +162,7 @@ class TestGate:
 
         text = "股价 100 元，涨 5%，PE 15，PB 2，市值 800 亿，ROE 12%"
         data = {
+            "source": "snapshot:test",
             "price": 100.0,
             "pct": 5.0,
             "pe": 15.0,
@@ -209,7 +213,11 @@ class TestFactualExtraction:
             def invoke(self, prompt: str) -> str:
                 return '[{"raw": "公司在合肥新建产能", "type": "factual"}]'
 
-        result = run_offline("股价 100 元。公司在合肥新建产能。", {"price": 100.0}, llm=_FakeLLM())
+        result = run_offline(
+            "股价 100 元。公司在合肥新建产能。",
+            {"source": "snapshot:test", "price": 100.0},
+            llm=_FakeLLM(),
+        )
         factual = [v for v in result.verdicts if v.claim.type == "factual"]
         assert len(factual) == 1
         assert factual[0].status == "unverifiable"

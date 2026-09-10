@@ -221,6 +221,7 @@ def _analyst_report_obj(name: str):
     return AnalystReport(
         agent_name=name,
         summary=f"{name} 摘要",
+        plain_conclusion=f"{name} 可读结论",
         key_findings=[f"{name} 关键发现"],
         claims=[],
         markdown=f"## {name} 完整报告\n全文正文……",
