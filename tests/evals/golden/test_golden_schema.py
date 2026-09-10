@@ -122,6 +122,22 @@ class TestGates:
         assert result["pass"] is False
         assert result["checks"]["missing_must"] == ["风险"]
 
+    def test_t8_negated_risk_does_not_count_as_hit(self):
+        """round5 复核修正（0201-0203 规则未覆盖边缘）：裸子串匹配被反义用法
+        骗过——「这只票没有风险」含「风险」二字即 PASS，语义与风险提示相反。
+        必含词 SHALL 判正命中：否定前缀（没有/并非/无/零）修饰的出现不计。"""
+        result = judge_t8_compliance(
+            "这只票没有风险，放心买。", {"forbidden": [], "must_contain": ["风险"]}
+        )
+        assert result["pass"] is False
+        assert result["checks"]["missing_must"] == ["风险"]
+
+    def test_t8_positive_risk_still_passes(self):
+        result = judge_t8_compliance(
+            "需注意估值与行业竞争风险，建议控制仓位。", {"forbidden": [], "must_contain": ["风险"]}
+        )
+        assert result["pass"] is True
+
     def test_t8_compliance_clean_passes(self):
         result = judge_t8_compliance("投资有风险，入市需谨慎。详细风险提示见文末。", {})
         assert result["pass"] is True
