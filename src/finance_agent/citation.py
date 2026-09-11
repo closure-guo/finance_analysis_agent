@@ -67,6 +67,8 @@ class Claim(BaseModel):
     # 方向语义（ROE/资产负债率等）。None = 旧格式未申报 → 校验器跳过方向检查并
     # 计覆盖缺口（与 metric_name/period 未申报的既有降级先例一致）。
     direction: Literal["positive", "negative", "flat"] | None = None
+    # rework-citation-gate-attribution 阶段 4：由覆盖普查唯一匹配 state 条目自动合成的 claim
+    auto: bool = False
 
 
 class CitationResult(BaseModel):
@@ -77,6 +79,9 @@ class CitationResult(BaseModel):
     ground_truth: float | str | None = None
     delta: float | None = None
     coverage_gap: bool = False  # 覆盖缺口（未注册根键 / 未申报术语期次）
+    # 阶段 1 归一标记："亿"/"万" = interpretation 单位词缩放；"inferred" = 无单位词
+    # 1e4/1e8 比值兜底；"echo" = 文本回声命中；"quarter"/"date" 由解析层隐式处理
+    unit_normalized: str | None = None
     # FAIL 分桶（harden-citation-semantic-coverage）：value_mismatch=值级（gt 存在且
     # 超容差，定向重试）；path_unresolvable=路径/事件不可解析；semantic_*=术语/期次
     # 张冠李戴；internal_inconsistency=stated 与 interpretation 两张皮/方向矛盾；
@@ -161,7 +166,7 @@ def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
       时，若当前 part 不是该 dict 的键，先自动下钻 records 再解析，保持
       field_ref 语义（macro_indicators.cpi.0.<列>）不变。
     """
-    parts = _expand_brackets(field_ref)
+    parts = _normalize_quarter_segments(_expand_brackets(field_ref), state)
     current: object = state
     i = 0
     while i < len(parts):
@@ -181,12 +186,8 @@ def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
             col_name = parts[i + 1]
             if col_name not in current.columns:
                 return None
-            mask = None
-            for col in current.columns:
-                mask = current[col].astype(str) == part
-                if mask.any():
-                    break
-            if mask is None or not mask.any():
+            mask = _dataframe_row_mask(current, part)
+            if mask is None:
                 return None
             current = current[mask].iloc[0][col_name]
             i += 2
@@ -197,10 +198,53 @@ def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
     return current
 
 
+_QUARTER_LABEL_RE = re.compile(r"^(\d{4})[Qq]([1-4])$")
+
+
+def _normalize_quarter_segments(parts: list[str], state: dict) -> list[str]:
+    """阶段 1（incident 026）：`quarterly_trend.yoy.2026Q2` 的季度标签 → quarters 位置索引。
+
+    LLM 照抄 context 里的季度标签，校验器要位置索引——r2 该域 22/31 path_unresolvable。
+    标签不在 quarters 列表中时原样保留（后续解析自然失败）。
+    """
+    if not parts or parts[0] != "quarterly_trend":
+        return parts
+    trend = state.get("quarterly_trend")
+    quarters = trend.get("quarters") if isinstance(trend, dict) else None
+    if not isinstance(quarters, list):
+        return parts
+    labels = [str(q).upper() for q in quarters]
+    out: list[str] = []
+    for seg in parts:
+        m = _QUARTER_LABEL_RE.match(seg)
+        if m:
+            label = f"{m.group(1)}Q{m.group(2)}"
+            if label in labels:
+                out.append(str(labels.index(label)))
+                continue
+        out.append(seg)
+    return out
+
+
+def _dataframe_row_mask(frame: pd.DataFrame, key: str) -> object | None:
+    """行键按任意列单元格值匹配；阶段 1 归一：`2025-12-31` ↔ `20251231` 双向
+    （context 经 render_date 显示带连字符，行键存无连字符——r2 financial_indicators 3/3 挂）。"""
+    key_norm = key.replace("-", "")
+    for col in frame.columns:
+        ser = frame[col].astype(str)
+        mask = ser == key
+        if mask.any():
+            return mask
+        mask = ser.str.replace("-", "", regex=False) == key_norm
+        if mask.any():
+            return mask
+    return None
+
+
 # ── 计算型 claim 重算注册表 ──
 # field_ref 根键 → 从 state 原始数据重算的函数。
 # 覆盖 metrics/ 全部纯函数指标族；未注册根键 → UNVERIFIABLE + coverage_gap 计数。
-_COMPUTATIONAL_RECALC: dict[str, Callable[[dict], dict]] = {
+_COMPUTATIONAL_RECALC: dict[str, Callable[[dict], object]] = {
     "dupont_tree": lambda s: calc_dupont(s["balance_sheet"], s["income_statement"]),
     "solvency_metrics": lambda s: calc_solvency(
         s["balance_sheet"], s["income_statement"], s.get("financial_indicators")
@@ -216,7 +260,21 @@ _COMPUTATIONAL_RECALC: dict[str, Callable[[dict], dict]] = {
     ),
     "technical_indicators": lambda s: calc_technical(s["kline"]),
     "risk_metrics": lambda s: calc_risk(s["kline"], s.get("benchmark_kline")),
+    # 阶段 2（incident 026）：快照派生字段用同一份 compute 代码重算（r2 约 23 条恒 UNVERIFIABLE）
+    "garp_result": lambda s: _recompute_snapshot(s, "garp_result"),
+    "anomalies": lambda s: _recompute_snapshot(s, "anomalies"),
 }
+
+
+def _recompute_snapshot(state: dict, key: str) -> object:
+    from typing import Any, cast
+
+    from finance_agent.nodes.compute import compute_metrics
+
+    value = compute_metrics(cast(Any, state)).get(key)
+    if value is None:
+        raise KeyError(key)
+    return value
 
 
 def _verify_computational(claim: Claim, state: dict) -> CitationResult:
@@ -255,6 +313,29 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
                 bucket="path_unresolvable",
             )
 
+    # 阶段 2：字符串枚举（GARP failures）按归一后相等比对；列表（anomalies）按回声命中
+    if isinstance(current, bool):
+        current = float(current)
+    if isinstance(current, str) and not _looks_numeric(current):
+        same = _norm_text(str(claim.stated_value)) == _norm_text(current) or (
+            _norm_text(current) and _norm_text(current) in _norm_text(claim.interpretation)
+        )
+        return CitationResult(
+            status="PASS" if same else "FAIL",
+            claim=claim,
+            ground_truth=current,
+            bucket=None if same else "value_mismatch",
+            unit_normalized="echo" if same else None,
+        )
+    if isinstance(current, list | tuple):
+        items = [str(x) for x in current]
+        hay = _norm_text(claim.interpretation) + _norm_text(str(claim.stated_value))
+        hit = next((it for it in items if _norm_text(it) and _norm_text(it) in hay), None)
+        if hit is not None:
+            return CitationResult(
+                status="PASS", claim=claim, ground_truth=hit, unit_normalized="echo"
+            )
+        return CitationResult(status="UNVERIFIABLE", claim=claim)
     if not isinstance(current, int | float | str):
         return CitationResult(
             status="FAIL",
@@ -300,6 +381,58 @@ def _verify_computational(claim: Claim, state: dict) -> CitationResult:
     )
 
 
+_PUNCT_CHARS = (
+    "，。；、：:;,()（）[]【】—_·.%％" + '"' + chr(0x2018) + chr(0x2019) + chr(0x201C) + chr(0x201D)
+)
+_TEXT_STRIP_RE = re.compile("[" + re.escape(_PUNCT_CHARS) + r"\s" + "]")
+
+
+def _norm_text(text: object) -> str:
+    """文本回声归一：去空白/标点/百分号，小写。"""
+    return _TEXT_STRIP_RE.sub("", str(text or "")).lower()
+
+
+def _looks_numeric(text: str) -> bool:
+    try:
+        float(str(text).replace(",", ""))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+_SIGNED_ROOTS = frozenset({"growth_rates", "quarterly_trend"})
+_SIGNED_NAME_KEYWORDS = ("同比", "环比", "增速", "变动", "变化", "涨跌", "差额")
+
+
+def _is_signed_claim(claim: Claim) -> bool:
+    """阶段 1（incident 026）：direction 只对「有符号量」参与符号比对——
+    增长率/同比环比/变动幅度为有符号量；PMI/比率/价格等恒正水平量的
+    negative 申报是「低于阈值」的字面误读（r2 5/5 direction_mismatch 皆此因），
+    记覆盖缺口提示而非 FAIL。"""
+    root = claim.field_ref.split(".")[0]
+    if root in _SIGNED_ROOTS:
+        return True
+    name = claim.metric_name or ""
+    return any(k in name for k in _SIGNED_NAME_KEYWORDS)
+
+
+_MAG_SCALES: tuple[tuple[str, float], ...] = (("万", 1e4), ("亿", 1e8))
+_UNIT_TOKEN_RE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?)\s*(亿|万)")
+
+
+def _unit_from_interpretation(claim: Claim) -> str | None:
+    """从 interpretation 中找与 stated_value 面值相同的 token 的紧邻单位词（亿/万）。"""
+    try:
+        face = abs(float(claim.stated_value))
+    except (TypeError, ValueError):
+        return None
+    for m in _UNIT_TOKEN_RE.finditer(claim.interpretation or ""):
+        token_val = abs(float(m.group(1).replace(",", "")))
+        if abs(token_val - face) < 1e-9:
+            return m.group(2)
+    return None
+
+
 def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     """数值型 claim：直接读 state 字段，绝对容差 0.01 比对。
 
@@ -326,10 +459,7 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
             delta=None,
             bucket="path_unresolvable",
         )
-    delta = abs(gt_float - sv_float)
-    # fix-citation-contract-diseases 修 C：|delta|<0.01 或相对误差<0.5%
-    # （与计算型容差对齐；绝对 0.01 对亿元级数值是假阴性——LLM 须精确到分才过）
-    tol = max(ABS_TOL, abs(gt_float) * REL_TOL)
+    delta = abs(gt_float - sv_float)  # raw 候选；容差在尾部按各候选参照系判定
 
     # ehr-style-claim-direction：已申报方向 → 先按 sign(stated)×direction 与
     # 真值符号对齐（「下滑 10.05%」↔ gt=-10.05 用 eff=-10.05 比对），符号冲突
@@ -340,10 +470,20 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
         declared_sign = -1
     elif claim.direction == "positive":
         declared_sign = 1
-    eff = sv_float * declared_sign if declared_sign is not None else sv_float
+    # 阶段 1：非有符号量上的 negative/positive 申报是「低于/高于阈值」的字面误读
+    # ——不比符号，记覆盖缺口提示（歧义降级而非 FAIL）
+    signed = _is_signed_claim(claim)
+    direction_misapplied = declared_sign is not None and declared_sign != 0 and not signed
+    eff = sv_float * declared_sign if (declared_sign is not None and signed) else sv_float
     eff_sign = 1 if eff > 0 else (-1 if eff < 0 else 0)
     gt_sign = 1 if gt_float > 0 else (-1 if gt_float < 0 else 0)
-    if declared_sign is not None and eff_sign != 0 and gt_sign != 0 and eff_sign != gt_sign:
+    if (
+        signed
+        and declared_sign is not None
+        and eff_sign != 0
+        and gt_sign != 0
+        and eff_sign != gt_sign
+    ):
         return CitationResult(
             status="FAIL",
             claim=claim,
@@ -351,30 +491,45 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
             delta=abs(gt_float - eff),
             bucket="direction_mismatch",
         )
-    # fix(percent-unit)：小数真值 ↔ 百分比申报的 100 倍单位归一。state 存
-    # growth_rates/费率等为小数比率（0.5887 = 58.87%、0.118 = 11.8%），LLM
-    # 以百分比申报（58.87/11.8）；直接比对做差判 value_mismatch 是误报
-    # （2026-09-08 trace 04b872ae 实测 3/3 value_mismatch 全为此因）。
-    # 仅当 |stated/gt| ≈ 100（且 gt 为小数比率、stated 为百分比量级）时
-    # 归一后再比对，其余场景原值比对，防普通数值误归一。
-    delta = abs(gt_float - eff)
-    OTHER_SCALE = 100.0
+    # 候选统一按「各自参照系」判相对容差（阶段 1，incident 026）：
+    #   raw      → 参照 gt
+    #   percent  → 参照 gt 或 gt/100（各算各的；修注入演练暴露的缺陷——超大真值的
+    #              gt 级容差曾放行 100 倍缩水值）
+    #   亿/万/inferred → 参照 gt 或 gt/scale
+    # 取相对误差最小者裁决；原值已是最佳时不打归一标记。
+    candidates: list[tuple[str | None, float, float]] = [(None, abs(gt_float - eff), gt_float)]
     if gt_float != 0 and eff != 0:
-        # 归一候选二选一：stated/100 对 gt（LLM 报百分比、state 存小数），
-        # 或 gt*100 对 stated（等价视角）。取更接近者，仍走统一容差。
-        normalized = min(abs(gt_float - eff / OTHER_SCALE), abs(gt_float / OTHER_SCALE - eff))
-        raw = abs(gt_float - eff)
-        # 仅在 100 倍口径确实更贴近时采用归一 delta（贴近 = 归一优于原值）。
-        if normalized < raw:
-            delta = normalized
-    status: Literal["PASS", "FAIL"] = "PASS" if delta < tol else "FAIL"
+        ratio = gt_float / eff
+        if 50 < ratio < 200 or 0.005 < ratio < 0.02:
+            candidates.append(("percent", abs(gt_float - eff / 100.0), gt_float))
+            candidates.append(("percent", abs(gt_float / 100.0 - eff), abs(gt_float / 100.0)))
+        unit = _unit_from_interpretation(claim)
+        unit_cands = (
+            [(unit, _UNIT_SCALE[unit])] if unit else [("inferred", sc) for _, sc in _MAG_SCALES]
+        )
+        for name, sc in unit_cands:
+            candidates.append((name, abs(gt_float - eff * sc), gt_float))
+            candidates.append((name, abs(gt_float / sc - eff), abs(gt_float / sc)))
+
+    def _rel(entry: tuple[str | None, float, float]) -> float:
+        _, d, ref = entry
+        return d / abs(ref) if ref else d
+
+    def _pass(d: float, ref: float) -> bool:
+        return d < max(ABS_TOL, abs(ref) * REL_TOL)
+
+    unit_note, delta, ref = min(candidates, key=_rel)
+    if not _pass(delta, ref):
+        unit_note, delta, ref = None, candidates[0][1], candidates[0][2]
+    status: Literal["PASS", "FAIL"] = "PASS" if _pass(delta, ref) else "FAIL"
     return CitationResult(
         status=status,
         claim=claim,
         ground_truth=gt_float,
         delta=delta,
         bucket=None if status == "PASS" else "value_mismatch",
-        coverage_gap=claim.direction is None,
+        coverage_gap=claim.direction is None or direction_misapplied,
+        unit_normalized=unit_note,
     )
 
 
@@ -453,6 +608,44 @@ def _verify_comparative(claim: Claim, state: dict) -> CitationResult:
     )
 
 
+def _verify_textual(claim: Claim, state: dict) -> CitationResult:
+    """文本 claim 回声匹配：归一后子串命中 news_list / key_events / field_ref 解析文本。
+
+    未命中判 UNVERIFIABLE(text)——文本 claim 的语义忠实性由 decision_grounding
+    judge（rubric v6 逐条核对 claim 与 source）与人工盲标承担，确定性门禁不越权。
+    """
+    sources: list[str] = []
+    news = state.get("news_list") or []
+    if isinstance(news, list):
+        sources += [str(n.get("title") or "") for n in news if isinstance(n, dict)]
+    events = state.get("key_events") or []
+    if isinstance(events, list):
+        for e in events:
+            sources.append(str(e.get("title") or "") if isinstance(e, dict) else str(e))
+    resolved = _resolve_field_ref(claim.field_ref, state)
+    if isinstance(resolved, str):
+        sources.append(resolved)
+    # 目标：stated_value / interpretation / field_ref（旧 event 契约用 field_ref 承载标题）
+    targets = [
+        t
+        for t in (
+            _norm_text(claim.stated_value),
+            _norm_text(claim.interpretation),
+            _norm_text(claim.field_ref),
+        )
+        if t
+    ]
+    if not targets:
+        return CitationResult(status="UNVERIFIABLE", claim=claim)
+    for src in sources:
+        src_n = _norm_text(src)
+        if src_n and any(src_n in t or t in src_n for t in targets):
+            return CitationResult(
+                status="PASS", claim=claim, ground_truth=src, unit_normalized="echo"
+            )
+    return CitationResult(status="UNVERIFIABLE", claim=claim)
+
+
 def _verify_event(claim: Claim, state: dict) -> CitationResult:
     """事件型 claim：验证引用的事件存在于 key_events。"""
     key_events = state.get("key_events", [])
@@ -482,17 +675,29 @@ def _verify_event(claim: Claim, state: dict) -> CitationResult:
 # ── 语义层检查（harden-citation-semantic-coverage）──
 
 
-def _check_metric_term(claim: Claim) -> tuple[CitationResult | None, bool]:
+def _check_metric_term(claim: Claim, state: dict) -> tuple[CitationResult | None, bool]:
     """术语一致性。返回 (FAIL 结果或 None, 是否覆盖缺口)。
 
     词表内规范键不一致 → FAIL（张冠李戴拦截面）；词表外（无规范键）→ 跳过
     检查计覆盖缺口（D5 扩展，2026-09-01 三标的冒烟实证：state 指标段空间
     开放——报表行名/dupont/health_score/garp，词表不可闭合，词表外 FAIL
     全为误报）。未申报（None）由外层缺口公式兜底，此处不重复计。
+
+    阶段 1（incident 026）：报表域（DataFrame 根键）上，metric_name 与 field_ref
+    段/真实列名一致（含词表别名归一后一致）即判术语一致——照抄真实列名
+    （如「归属于母公司的净利润」）不得被词表判为张冠李戴。
     """
     name = (claim.metric_name or "").strip()
     if not name:
         return None, False
+    root = claim.field_ref.split(".")[0]
+    root_obj = state.get(root)
+    if _is_dataframe(root_obj):
+        cols = {str(c).strip() for c in root_obj.columns}
+        name_variants = {name, canonical_metric(name) or ""}
+        segs = {seg.strip() for seg in claim.field_ref.split(".")[1:]}
+        if name_variants & cols or name_variants & segs:
+            return None, False
     canonical = canonical_metric(name)
     if canonical is None:
         return None, True
@@ -731,7 +936,12 @@ def verify_claims(claims: list[Claim], state: dict) -> list[CitationResult]:
     """校验所有 Claim，返回逐条结果。"""
     results: list[CitationResult] = []
     for claim in claims:
-        if claim.source_type == "llm_inference":
+        if claim.claim_type in ("entity", "regulatory") or claim.source_type == "event":
+            # 阶段 3（incident 026）：文本 claim 数值比对永远验不了（news_list 61/61、
+            # key_events 14/14）——回声匹配（归一子串命中即 PASS(echo)），未命中
+            # UNVERIFIABLE(text)，不进 FAIL 分母、不计覆盖缺口
+            results.append(_verify_textual(claim, state))
+        elif claim.source_type == "llm_inference":
             results.append(CitationResult(status="UNVERIFIABLE", claim=claim))
         elif claim.source_type == "event":
             results.append(_verify_event(claim, state))
@@ -756,7 +966,7 @@ def _verify_data_claim(
     首个 FAIL 短路；术语/期次缺省或不可解析计覆盖缺口（D5 显式降级）。
     方向词检查只在值级 PASS 上执行（值级 FAIL 已由重试反馈携带真值）。
     """
-    term_fail, term_gap = _check_metric_term(claim)
+    term_fail, term_gap = _check_metric_term(claim, state)
     if term_fail is not None:
         return term_fail
     period_fail, period_gap = _check_period(claim, state)

@@ -62,7 +62,16 @@ _METRIC_ALIASES: dict[str, list[str]] = {
     "净利润": ["净利润", "net profit"],
     # net_profit 是 quarterly_trend 的归母净利润序列键（冒烟实证：申报「归母净利润」
     # 撞 net_profit→净利润 映射造成词表内误判 FAIL），归母净利润序列归此 canonical
-    "归母净利润": ["归母净利润", "归属母公司净利润", "归母净利润(单季)", "net_profit"],
+    "归母净利润": [
+        "归母净利润",
+        "归属母公司净利润",
+        "归母净利润(单季)",
+        "net_profit",
+        "归属于母公司的净利润",
+        "归属于母公司所有者的净利润",
+    ],
+    "加权ROE": ["加权roe", "加权净资产收益率", "weighted_roe"],
+    "每股收益": ["每股收益", "eps", "加权每股收益", "基本每股收益"],
 }
 
 _ALIAS_TO_CANONICAL: dict[str, str] = {
