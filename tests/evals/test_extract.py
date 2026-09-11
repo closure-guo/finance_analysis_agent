@@ -131,6 +131,25 @@ class TestExtractJudgeVars:
         out = extract_judge_vars(state)["research_manager_decision"]
         assert out.startswith("评级: 看多（置信度 0.65）")
 
+    def test_rebuttal_coverage_counts_each_round_separately(self):
+        """r1 实证 bug：去重键只用「角色 + 单条发言内序号」，bull 第 1 轮的①与第 2 轮的①
+        被当成同一条——分子封顶在单轮论点数，8 条 trace 全部报「4/8」。被回应的论点
+        须按「哪条发言的第几条」区分。"""
+        from evals.extract import _rebuttal_coverage
+
+        def msg(role, args, rebuttal):
+            return {"role": role, "key_arguments": args, "rebuttal_to": rebuttal}
+
+        history = [
+            msg("bull", ["a1", "a2", "a3", "a4"], []),
+            msg("bear", ["b1", "b2", "b3", "b4"], [1, 2, 3, 4]),
+            msg("bull", ["a5", "a6", "a7", "a8"], [1, 2, 3, 4]),
+            msg("bear", ["b5", "b6", "b7", "b8"], [1, 2, 3, 4]),
+        ]
+        # bear 两轮各回应了 bull 当轮全部 4 条 → bull 8/8；bull 第 2 轮回应了 bear 第 1 轮
+        # 全部 4 条，bear 第 2 轮之后无人发言 → bear 4/8
+        assert _rebuttal_coverage(history) == "bull 论点被回应 8/8；bear 论点被回应 4/8"
+
     def test_rebuttal_coverage_in_debate_variable(self):
         """D1（1.12）：交锋覆盖率进入 debate_history 变量——确定性指标（零 token），
         「对方论点被回应的比例」由各轮 rebuttal_to 并集直接计算。"""

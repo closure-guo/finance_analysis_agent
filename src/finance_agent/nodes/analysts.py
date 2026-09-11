@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from pydantic import ValidationError
 
@@ -23,14 +24,52 @@ from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger(__name__)
 
-# add-agent-readable-conclusion：解析降级时的普通人可读结论占位（按 agent 中文名映射）
+# add-agent-readable-conclusion：解析降级时的普通人可读结论占位（按 agent 中文名映射）。
+# 措辞必须如实说「解析失败」——r1 实证旧文案「数据缺失」让 judge 与最终报告
+# 都以为分析师没拿到数据，而实际是 JSON 解析挂了（数据齐全、辩手已引用）
 _PLAIN_FALLBACK = {
-    "technical": "技术面数据缺失，无法给出有效结论",
-    "macro": "宏观数据缺失，无法给出有效结论",
-    "fundamental": "基本面数据缺失，无法给出有效结论",
-    "sentiment": "舆情数据缺失，无法给出有效结论",
+    "technical": "技术面分析师输出解析失败，结论暂不可用",
+    "macro": "宏观分析师输出解析失败，结论暂不可用",
+    "fundamental": "基本面分析师输出解析失败，结论暂不可用",
+    "sentiment": "舆情分析师输出解析失败，结论暂不可用",
 }
-_PLAIN_FALLBACK_DEFAULT = "分析数据缺失，无法给出有效结论"
+_PLAIN_FALLBACK_DEFAULT = "分析师输出解析失败，结论暂不可用"
+
+# 解析失败时从原始文本打捞已闭合的字符串字段（截断/后段损坏时前段字段通常完好）
+_SALVAGE_RE = {
+    field: re.compile(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    for field in ("summary", "plain_conclusion")
+}
+
+
+def _salvage_field(response: str, field: str) -> str:
+    match = _SALVAGE_RE[field].search(response or "")
+    if not match:
+        return ""
+    try:
+        return str(json.loads(f'"{match.group(1)}"')).strip()
+    except json.JSONDecodeError:
+        return match.group(1).strip()
+
+
+def _keep_valid_over_degraded(state: dict, agent: str, report: AnalystReport) -> AnalystReport:
+    """引用重试重跑时，降级结果不覆盖既有正常报告（r1 中芯实证：第 3 代解析失败
+    的兜底覆盖了前两代好报告，辩手与最终报告/judge 看到的版本不一致）。"""
+    if not report.parse_degraded:
+        return report
+    existing = (state.get("analyst_reports") or {}).get(agent)
+    if existing is None:
+        return report
+    if isinstance(existing, dict):
+        try:
+            existing = AnalystReport.model_validate(existing)
+        except ValidationError:
+            return report
+    if getattr(existing, "parse_degraded", False):
+        return report
+    logger.warning("分析师 %s 重跑解析失败，保留既有正常报告不覆盖", agent)
+    return existing
+
 
 _VALID_CLAIM_TYPES = {
     "numerical",
@@ -69,7 +108,22 @@ def _retry_feedback_section(state: dict, agent_name: str) -> str:
     return "\n".join(lines)
 
 
-def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
+def _degradation_metadata(agent_name: str, round_no: int, kind: str, **extra: object) -> dict:
+    """降级标记：legacy 键（degradation/agent，供既有看板过滤）+ 带 agent 与重试轮次的
+    命名空间键。分析师节点没有自己的 span，所有标记落到同一父 span——只用 `degradation`
+    单键会被后来的降级覆盖（r1 实证：中芯 ≥3 次降级只剩最后一个、agent=None）。"""
+    md: dict = {
+        "degradation": kind,
+        "agent": agent_name,
+        f"degradation.{agent_name}.r{round_no}": kind,
+    }
+    for key, value in extra.items():
+        md[key] = value
+        md[f"{key}.{agent_name}.r{round_no}"] = value
+    return md
+
+
+def _sanitize_claims(data: dict, agent_name: str = "", round_no: int = 0) -> dict:
     """修正 LLM 输出中非法的 claim 字段值。
 
     非法枚举值被强制改写为兜底值，并记录 WARNING —— 改写本身是有意的降级
@@ -85,10 +139,11 @@ def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
             # 改写是刻意降级：保证管线不因单个 claim 失败中断，但需在 trace 可见
             update_current_span(
                 metadata={
-                    "degradation": "sanitize_claims",
+                    **_degradation_metadata(agent_name, round_no, "sanitize_claims"),
                     "field": "claim_type",
                     "raw": claimType,
                     "fixed": "entity",
+                    f"degradation.{agent_name}.r{round_no}.sanitize.claim_type": f"{claimType}->entity",
                 },
                 level="WARNING",
             )
@@ -100,10 +155,11 @@ def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
             )
             update_current_span(
                 metadata={
-                    "degradation": "sanitize_claims",
+                    **_degradation_metadata(agent_name, round_no, "sanitize_claims"),
                     "field": "source_type",
                     "raw": sourceType,
                     "fixed": "data",
+                    f"degradation.{agent_name}.r{round_no}.sanitize.source_type": f"{sourceType}->data",
                 },
                 level="WARNING",
             )
@@ -120,7 +176,7 @@ def _sanitize_claims(data: dict, agent_name: str = "") -> dict:
     return data
 
 
-def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
+def _parse_analyst_report(response: str, agent_name: str, round_no: int = 0) -> AnalystReport:
     """解析 LLM 响应为 AnalystReport，解析失败时降级为原始文本报告。
 
     降级保障单个分析师解析失败不拖垮整条管线，但会产出 claims=[]，
@@ -128,9 +184,10 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
     故降级 SHALL 记录 WARNING 并打标记，使问题可被发现而非静默通过。
     降级标记仅用于可观测性，不改变图的走向（不触发 citation retry，
     见 harden-llm-output-validation 决策 4 与 incidents/006）。
+    round_no：引用重试轮次（state.iteration_count），进入降级标记键避免重跑互相覆盖。
     """
     try:
-        data = _sanitize_claims(parse_json_response(response), agent_name)
+        data = _sanitize_claims(parse_json_response(response), agent_name, round_no)
         return AnalystReport.model_validate(data)
     except Exception as e:
         # #109 重新定性：JSON 可解析但漏尾字段 markdown（glm 常见，schema 尾字段
@@ -156,7 +213,7 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
                     agent_name,
                 )
                 update_current_span(
-                    metadata={"degradation": "markdown_synthesized", "agent": agent_name},
+                    metadata=_degradation_metadata(agent_name, round_no, "markdown_synthesized"),
                     level="WARNING",
                 )
                 return synthesized
@@ -170,16 +227,20 @@ def _parse_analyst_report(response: str, agent_name: str) -> AnalystReport:
         )
         # 降级须在 trace 可见（此前完全静默），raw_excerpt 截断避免大文本进 span
         update_current_span(
-            metadata={
-                "degradation": "parse_degraded",
-                "raw_excerpt": truncate_for_trace(response[:500]),
-            },
+            metadata=_degradation_metadata(
+                agent_name,
+                round_no,
+                "parse_degraded",
+                raw_excerpt=truncate_for_trace(response[:500]),
+            ),
             level="WARNING",
         )
         return AnalystReport(
             agent_name=agent_name,
-            summary=response[:200] if response else "分析完成",
-            plain_conclusion=_PLAIN_FALLBACK.get(agent_name, _PLAIN_FALLBACK_DEFAULT),
+            summary=_salvage_field(response, "summary")
+            or (response[:200] if response else "分析完成"),
+            plain_conclusion=_salvage_field(response, "plain_conclusion")
+            or _PLAIN_FALLBACK.get(agent_name, _PLAIN_FALLBACK_DEFAULT),
             key_findings=[],
             claims=[],
             markdown=response or "## 分析\n（LLM 响应解析失败，显示原始文本）",
@@ -207,9 +268,11 @@ def technical_analyst(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    report = _parse_analyst_report(response, "technical")
+    report = _parse_analyst_report(
+        response, "technical", round_no=int(state.get("iteration_count") or 0)
+    )
 
-    return {"analyst_reports": {"technical": report}}
+    return {"analyst_reports": {"technical": _keep_valid_over_degraded(state, "technical", report)}}
 
 
 # analyst-context-budget delta：技术指标 context 窗口。250 期全窗口指标 JSON
@@ -346,9 +409,11 @@ def macro_analyst(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    report = _parse_analyst_report(response, "macro")
+    report = _parse_analyst_report(
+        response, "macro", round_no=int(state.get("iteration_count") or 0)
+    )
 
-    return {"analyst_reports": {"macro": report}}
+    return {"analyst_reports": {"macro": _keep_valid_over_degraded(state, "macro", report)}}
 
 
 def _build_macro_context(state: dict) -> str:
@@ -427,9 +492,13 @@ def fundamental_analyst(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    report = _parse_analyst_report(response, "fundamental")
+    report = _parse_analyst_report(
+        response, "fundamental", round_no=int(state.get("iteration_count") or 0)
+    )
 
-    return {"analyst_reports": {"fundamental": report}}
+    return {
+        "analyst_reports": {"fundamental": _keep_valid_over_degraded(state, "fundamental", report)}
+    }
 
 
 def _build_fundamental_context(state: dict) -> str:
@@ -585,9 +654,11 @@ def sentiment_analyst(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    report = _parse_analyst_report(response, "sentiment")
+    report = _parse_analyst_report(
+        response, "sentiment", round_no=int(state.get("iteration_count") or 0)
+    )
 
-    return {"analyst_reports": {"sentiment": report}}
+    return {"analyst_reports": {"sentiment": _keep_valid_over_degraded(state, "sentiment", report)}}
 
 
 def _build_sentiment_context(state: dict) -> str:

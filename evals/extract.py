@@ -114,20 +114,23 @@ def _rebuttal_coverage(history: list) -> str | None:
     total: dict[str, int] = {}
     covered: dict[str, set] = {}
     prev_role: str | None = None
+    prev_idx = -1
     prev_n_args = 0
-    for raw in history:
+    for idx, raw in enumerate(history):
         msg = _as_dict(raw)
         if not msg:
             continue
         role = str(msg.get("role", "?"))
         args = [str(a).strip() for a in (msg.get("key_arguments") or []) if str(a).strip()]
         rebuttal = msg.get("rebuttal_to") or []
-        # 本条的 rebuttal_to 指向上一条发言（对方）的论点序号
+        # 本条的 rebuttal_to 指向上一条发言（对方）的论点序号；被回应论点以
+        # 「哪条发言的第几条」为键——序号在每条发言内从 1 重新计数，只按序号去重
+        # 会把各轮的①合并，分子封顶在单轮论点数（r1 实证 8 条 trace 全「4/8」）
         if prev_role and rebuttal:
             covered.setdefault(prev_role, set()).update(
-                (prev_role, n) for n in rebuttal if isinstance(n, int) and 1 <= n <= prev_n_args
+                (prev_idx, n) for n in rebuttal if isinstance(n, int) and 1 <= n <= prev_n_args
             )
-        prev_role, prev_n_args = role, len(args)
+        prev_role, prev_idx, prev_n_args = role, idx, len(args)
         total[role] = total.get(role, 0) + len(args)
     lines = []
     for role, cnt in total.items():

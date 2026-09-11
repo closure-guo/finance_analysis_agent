@@ -18,6 +18,9 @@
 - [x] 1.12 失败测试 + 实现：交锋覆盖率计算（各轮 rebuttal_to 并集 / 对方论点总数，纯函数）并进入 debate_quality judge 材料（evals/extract.py 拼装时并列呈现双方论点编号）
 - [x] 1.13 失败测试 + 实现（§6.1 健康检查发现）：`call_llm_for_json` 加 `validate` 钩子——JSON 合法但 pydantic 校验不过时带错误摘要重试一次，仍不过向上抛；FM 节点接入（实证：r1 实验 17 条中 1 条 approve 首答缺 action/confidence，未重试直接炸整条 trace，SDK 丢弃 item）
 - [x] 1.14 失败测试 + 实现（§6.1 健康检查发现）：`_build_fund_manager_context` 接受 `TradeDecision` 对象——旧 `isinstance(dict)` 守卫遇 risk_judge 原样写入的对象静默跳过，FM 自首次提交起从未看到过审批对象（Langfuse 实证 4/4 trace 的 fund_manager 输入无「交易决策」段；旧测试 fixture 用 dict 喂 state 恰好绕过）
+- [x] 1.15 失败测试 + 实现（r1 全量复盘）：分析师解析降级保真——`extract_json` 容忍字符串内未转义成对引号；降级占位改为如实「输出解析失败」并打捞已闭合 summary/plain_conclusion；重跑降级不覆盖既有正常报告（`_keep_valid_over_degraded`）。实证：中芯 fundamental 第 3 代因 `"呈"低盈利"格局"` 解析失败，兜底「数据缺失」覆盖前两代好报告，judge 据此判 decision_grounding 2 分
+- [x] 1.16 失败测试 + 实现（r1 全量复盘）：`_rebuttal_coverage` 去重键改为「发言序 + 论点序号」——旧键只用角色+序号，多轮的①被合并，分子封顶单轮论点数，8 条 trace 全报「4/8」
+- [x] 1.17 失败测试 + 实现（r1 全量复盘）：降级标记键带 agent 与重试轮次（`degradation.{agent}.r{n}`），分析师节点无独立 span 时不再互相覆盖；节点透传 `state.iteration_count` 为轮次。后续决策：是否给分析师节点建独立 span（改 trace 拓扑）
 
 ## 2. FM 理由职责边界（D2，agent-prompt-contracts）
 

@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from finance_agent.models import AnalystReport
 from finance_agent.nodes.analysts import (
     _build_fundamental_context,
     _build_macro_context,
@@ -461,3 +462,144 @@ class TestCoverageGapFeedbackRender:
         section = _retry_feedback_section(state, "fundamental")
         assert "field_ref=x" in section
         assert "真实值 2.0" in section
+
+
+class TestDegradedReportHonesty:
+    """r1 实验实证：解析失败的兜底文案「基本面数据缺失」是谎言——数据没缺，是 JSON
+    解析挂了；judge 据此判「fundamental 无数据」，最终报告也向用户展示假结论。
+    兜底须如实说「解析失败」，且能从原始文本尽力打捞 summary/plain_conclusion。
+    """
+
+    _STATE = TestAnalystDegradationObservability._STATE
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_fallback_conclusion_says_parse_failed_not_data_missing(self, mock_llm):
+        mock_llm.return_value = "坏响应"
+        report = technical_analyst(dict(self._STATE))["analyst_reports"]["technical"]
+        assert report.parse_degraded is True
+        assert "数据缺失" not in report.plain_conclusion
+        assert "解析" in report.plain_conclusion
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_salvages_summary_and_conclusion_from_truncated_json(self, mock_llm):
+        """JSON 截断无法修复，但已闭合的 summary/plain_conclusion 字段应被打捞。"""
+        mock_llm.return_value = (
+            "```json\n{\n"
+            '  "agent_name": "technical",\n'
+            '  "summary": "均线空头排列，MACD 死叉",\n'
+            '  "plain_conclusion": "技术面偏空：短期趋势向下",\n'
+            '  "key_findings": ["MA5 下穿'
+        )
+        report = technical_analyst(dict(self._STATE))["analyst_reports"]["technical"]
+        assert report.parse_degraded is True
+        assert report.summary == "均线空头排列，MACD 死叉"
+        assert report.plain_conclusion == "技术面偏空：短期趋势向下"
+
+
+class TestRerunKeepsValidReport:
+    """引用重试重跑分析师时，降级结果不得覆盖已有的正常报告（r1 中芯实证：
+    第 3 代解析失败的兜底覆盖了前两代好报告，辩手与最终报告看到的版本不一致）。
+    """
+
+    _STATE = TestAnalystDegradationObservability._STATE
+
+    def _good(self) -> AnalystReport:
+        return AnalystReport(
+            agent_name="technical",
+            summary="好版本：短期趋势向上",
+            plain_conclusion="技术面偏多",
+            key_findings=["MA5 上穿 MA20"],
+            claims=[],
+            markdown="## 技术面\n好版本",
+        )
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_degraded_rerun_keeps_existing_valid_report(self, mock_llm):
+        good = self._good()
+        state = {**self._STATE, "analyst_reports": {"technical": good}}
+        mock_llm.return_value = "坏响应"
+        out = technical_analyst(state)["analyst_reports"]["technical"]
+        assert out.parse_degraded is False
+        assert out.summary == "好版本：短期趋势向上"
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_degraded_rerun_keeps_existing_valid_dict_report(self, mock_llm):
+        """state 里的既有报告可能已是 dict 序列化形态。"""
+        state = {**self._STATE, "analyst_reports": {"technical": self._good().model_dump()}}
+        mock_llm.return_value = "坏响应"
+        out = technical_analyst(state)["analyst_reports"]["technical"]
+        assert (
+            getattr(
+                out, "parse_degraded", out.get("parse_degraded") if isinstance(out, dict) else None
+            )
+            is False
+        )
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_valid_rerun_replaces_existing(self, mock_llm):
+        state = {**self._STATE, "analyst_reports": {"technical": self._good()}}
+        mock_llm.return_value = _mock_llm_response()
+        out = technical_analyst(state)["analyst_reports"]["technical"]
+        assert out.summary == "技术面分析显示短期趋势向上"
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_first_run_degraded_still_returns_degraded(self, mock_llm):
+        """没有既有报告时，降级报告照常返回（不改变首轮行为）。"""
+        mock_llm.return_value = "坏响应"
+        out = technical_analyst(dict(self._STATE))["analyst_reports"]["technical"]
+        assert out.parse_degraded is True
+
+
+class TestDegradationKeysNamespaced:
+    """r1 实证：分析师节点没有自己的 span，update_current_span 全落到根 span，
+    `degradation` 键被后来的降级覆盖——中芯 ≥3 次降级只剩最后一个、agent=None，
+    规范「降级 SHALL 可被发现」形同虚设。键须带 agent + 重试轮次，互不覆盖。
+    """
+
+    def _capture(self, monkeypatch):
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            "finance_agent.nodes.analysts.update_current_span",
+            lambda metadata=None, level=None: captured.append(
+                {"metadata": metadata, "level": level}
+            ),
+        )
+        return captured
+
+    def test_parse_degraded_key_carries_agent_and_round(self, monkeypatch):
+        from finance_agent.nodes.analysts import _parse_analyst_report
+
+        captured = self._capture(monkeypatch)
+        _parse_analyst_report("not a json {{{", "fundamental", round_no=2)
+        md = captured[-1]["metadata"]
+        assert md["degradation.fundamental.r2"] == "parse_degraded"
+        assert md["agent"] == "fundamental"
+        assert "raw_excerpt.fundamental.r2" in md
+
+    def test_two_agents_same_round_do_not_collide(self, monkeypatch):
+        from finance_agent.nodes.analysts import _parse_analyst_report
+
+        captured = self._capture(monkeypatch)
+        _parse_analyst_report("bad", "fundamental", round_no=0)
+        _parse_analyst_report("bad", "macro", round_no=0)
+        keys = {k for c in captured for k in (c["metadata"] or {})}
+        assert {"degradation.fundamental.r0", "degradation.macro.r0"} <= keys
+
+    def test_sanitize_key_carries_agent_round_and_field(self, monkeypatch):
+        from finance_agent.nodes.analysts import _sanitize_claims
+
+        captured = self._capture(monkeypatch)
+        _sanitize_claims(
+            {"claims": [{"claim_type": "非法类型", "source_type": "data"}]}, "technical", round_no=1
+        )
+        md = next(c["metadata"] for c in captured if c["metadata"])
+        assert md["degradation.technical.r1.sanitize.claim_type"] == "非法类型->entity"
+
+    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    def test_node_passes_iteration_count_as_round(self, mock_llm, monkeypatch):
+        """节点把 state.iteration_count（引用重试轮次）作为轮次传入。"""
+        captured = self._capture(monkeypatch)
+        mock_llm.return_value = "坏响应"
+        state = {**TestAnalystDegradationObservability._STATE, "iteration_count": 2}
+        technical_analyst(state)
+        assert any("degradation.technical.r2" in (c["metadata"] or {}) for c in captured)

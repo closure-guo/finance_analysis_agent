@@ -90,6 +90,36 @@ Bull/Bear 辩论 SHALL 以既有 `key_arguments` 为编号锚点建立显式交�
 - **THEN** 「对方论点被回应的比例」SHALL 可由各轮 `rebuttal_to` 并集直接计算（零 LLM 调用）
 - **AND** 该覆盖率 SHALL 进入 debate_quality 的 judge 材料与评估记录（作为 judge 打分的确定性对照锚点）
 
+#### Scenario: 覆盖率按发言逐条计数
+
+- **WHEN** 辩论有多轮，各轮 `rebuttal_to` 序号均在当轮对方发言内从 1 起计
+- **THEN** 被回应论点 SHALL 以「哪条发言的第几条」为键去重，不同轮次的同序号论点 MUST NOT 合并（否则分子封顶在单轮论点数，r1 实证 8 条 trace 全报「4/8」）
+
+### Requirement: 分析师解析降级保真
+
+分析师 LLM 输出解析失败走降级路径时，SHALL 保证降级产物如实反映失败原因且不破坏既有正常结果。
+
+#### Scenario: 字符串内未转义引号可解析
+
+- **WHEN** LLM 输出的 JSON 字符串值内含未转义的成对引号（如 `"呈"低盈利+高扩张"格局"`）
+- **THEN** 解析器 SHALL 将其识别为内嵌引号并成功解析（终止引号之后的首个非空白字符只能是结构字符或文本末尾）
+
+#### Scenario: 降级占位如实说明解析失败
+
+- **WHEN** 解析仍然失败进入降级
+- **THEN** `plain_conclusion` 占位 SHALL 表述为「输出解析失败」，MUST NOT 表述为「数据缺失」（r1 实证：judge 与最终报告据此误判分析师无数据）
+- **AND** 原始文本中已闭合的 `summary` / `plain_conclusion` 字段 SHALL 被尽力打捞回填
+
+#### Scenario: 重跑降级不覆盖正常报告
+
+- **WHEN** 引用重试重跑某分析师，本次结果 `parse_degraded=True`，而 state 中该分析师已有 `parse_degraded=False` 的报告
+- **THEN** 节点 SHALL 保留既有正常报告（不覆盖），并记录 WARNING
+
+#### Scenario: 降级标记可区分 agent 与轮次
+
+- **WHEN** 多个分析师或同一分析师多轮重跑发生降级，标记落到同一父 span
+- **THEN** 标记键 SHALL 含 agent 名与重试轮次（如 `degradation.fundamental.r2`），不同降级 MUST NOT 互相覆盖；legacy `degradation`/`agent` 键保留
+
 #### Scenario: 引用曲解可检测
 
 - **WHEN** 某轮发言的 content 标注「回应对方N」但所述与对方论点 N 原文明显不符（曲解/弱化）
