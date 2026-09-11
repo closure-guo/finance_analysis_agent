@@ -33,6 +33,7 @@
 | 023  | 2026-09-01 | [quick 通道迁移遗留三大共振 — 旧 spec 确定性全红 + 断连状态泄漏 running + 「flaky」错误归因](023-agui-channel-stale-specs-disconnect-leak.md) | 已修复 |
 | 024  | 2026-09-06 | [App.tsx 流状态所有权分散 — StreamStore 结构性重构根治竞态土壤](024-stream-store-refactor-20260906.md) | 已修复   |
 | 025  | 2026-09-07 | [opencode zen/go 网关强制 x-opencode-session 头 — 离线 judge 链路全挂约两周](025-opencode-session-header-20260907.md) | 已修复   |
+| 026  | 2026-09-11 | [citation 门禁把校验器解析缺陷记成分析师引用错误并自动重跑分析师 — 39 FAIL 抽样无一真错、重试 100% 打在误报桶](026-citation-gate-misattribution-20260911.md) | 归因完成，处置待执行 |
 
 ---
 
@@ -48,6 +49,7 @@
 - [006](006-citation-infinite-loop-20260716.md) 深度模式无响应 - citation 重试无限循环
 - [020](020-citation-contract-diseases-20260828.md) 考卷与答案册不同源：context 裁剪索引/中文词表/绝对容差 → 61% 假 FAIL；负索引约定 + 单一词表 + 相对容差，离线重判 41→5（残量全为真幻觉）
 - [022](022-citation-smoke-verify-20260830.md) 修复后多标的冒烟：稳态标的 2.2% FAIL 清零成疾；异动股暴露第四类契约疾病（技术 context 数组方向未声明 → LLM 期次错位，校验器裁决正确）
+- [026](026-citation-gate-misattribution-20260911.md) 020「考卷与答案册不同源」复发（日期显示格式/季度标签/单位量级/direction 符号字段）：FAIL 桶 100% 误报，重试只盯误报桶白烧 75 次生成并覆盖好报告；指标拆三报（真幻觉率/校验器误报率/结构不可验），处置对象必须匹配归因桶
 
 ### 评分与分析模型
 
