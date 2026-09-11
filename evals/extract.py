@@ -13,7 +13,9 @@ from typing import cast
 
 from finance_agent.langfuse_tracing import truncate_for_trace
 
-_JUDGE_MAX_BYTES = 4096
+# 用户决策（r2 三道关复盘）：截断预算一律放宽——800/4096 级中段截断让 judge 反复
+# 抱怨「无法核对」并压低置信度，还切出残句与丢期间标签的假矛盾
+_JUDGE_MAX_BYTES = 32768
 # 结论性标题词表：兼容真实报告的编号式标题（「## 六、基金经理决策」）。
 # 「多空辩论结论」是中间章节，标题命中时取最后一个（最终决策在报告末尾）。
 _CONCLUSION_HEADERS = ("结论", "总结", "交易建议", "投资建议", "综合结论", "基金经理决策")
@@ -79,7 +81,7 @@ def _summarize_analyst_reports(reports: dict) -> str:
     # 整体 head/tail 截断会把中间 agent 整段切掉（fundamental 不可见，
     # judge 的 consistency 评分与标注材料都拿不到各层结论，2026-09-09 回归）。
     # 4×_AGENT_MAX_BYTES ≈ 3200 < _JUDGE_MAX_BYTES(4096)，外层 _trunc 兜底不再命中。
-    _AGENT_MAX_BYTES = 800
+    _AGENT_MAX_BYTES = 6000
 
     parts: list[str] = []
     for name, rep in reports.items():
@@ -187,10 +189,10 @@ def _summarize_debate(history: list) -> str:
     # 整体 head/tail 截断会把中间轮次连标签一起挖掉（judge 评「逐条交锋」时
     # 看不到交锋过程，2026-09-10 实测回归：2fd1ee6d 的【bear】标签被挖掉）。
     # 4 条发言 × 800 字节 ≈ 3200 < _JUDGE_MAX_BYTES(4096)，外层 _trunc 兜底不再命中。
-    _MESSAGE_MAX_BYTES = 800
+    _MESSAGE_MAX_BYTES = 6000
     # 论点行上限：key_arguments 是每轮立场骨架（LLM 已结构化输出），截正文时骨架
     # 必须全数在场——judge 的「逐条回应对方论点」以论点行为对照锚点。
-    _ARGUMENTS_MAX_BYTES = 400
+    _ARGUMENTS_MAX_BYTES = 2000
 
     parts: list[str] = []
     for msg in history:
@@ -357,4 +359,4 @@ def _serialize_decision(decision: object) -> str:
 
 
 # 裁决 reasoning 上限：与 evidence_refs（十余条 claim ≈ 1KB）合计留在 _JUDGE_MAX_BYTES 之内
-_DECISION_REASONING_MAX_BYTES = 2400
+_DECISION_REASONING_MAX_BYTES = 6000

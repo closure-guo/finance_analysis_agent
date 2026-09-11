@@ -416,3 +416,38 @@ class TestHumanizeEvidenceRefsListed:
         assert "[technical] MACD 零轴下死叉" in out
         assert "[risk_neutral] 隐含PE约25倍" in out
         assert '{"action"' not in out
+
+
+class TestTailAnchorAndAllBlocks:
+    def test_scoring_instructions_do_not_leak_into_last_section(self):
+        """r2 三道关复盘：consistency rubric v2 的「先明确决策语义(评分前必读)」段紧跟
+        {{report_conclusion}}，末节没有尾部锚点时整段评测指令被拼进标注材料。"""
+        from evals.judge_calibration.material import build_summary
+
+        rendered = _render(
+            "consistency",
+            {
+                "analyst_reports": "【technical】偏多",
+                "research_manager_decision": "评级: 中性（置信度 0.55）",
+                "risk_judgment": '{"action": "watch", "confidence": 0.5, "reasoning": "r"}',
+                "fund_manager_decision": "approve",
+                "report_conclusion": "综合判断观望。",
+            },
+        )
+        s = build_summary(rendered, "consistency")
+        assert "综合判断观望" in s
+        assert "评分前必读" not in s
+        assert "先明确决策语义" not in s
+
+    def test_multiple_json_blocks_all_humanized(self):
+        from evals.judge_calibration.material import humanize_json_blocks
+
+        text = (
+            "【交易方案】\n"
+            '{"action": "buy", "confidence": 0.7, "reasoning": "a"}\n'
+            "【风控裁决】\n"
+            '{"action": "watch", "confidence": 0.5, "reasoning": "b"}'
+        )
+        out = humanize_json_blocks(text)
+        assert '{"action"' not in out
+        assert "action: buy" in out and "action: watch" in out

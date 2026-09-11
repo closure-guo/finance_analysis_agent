@@ -1,6 +1,7 @@
 # tests/evals/test_extract.py
 """judge 变量提取:state → 9 个字符串变量,缺失容错,结论章节提取。"""
 
+from evals.extract import _JUDGE_MAX_BYTES  # noqa: I001
 from evals.extract import extract_conclusion, extract_judge_vars
 
 from finance_agent.citation import Claim
@@ -95,9 +96,10 @@ class TestExtractJudgeVars:
 
     def test_long_values_truncated(self):
         state = _state()
-        state["research_manager_conclusion"] = "长" * 10000
+        # 超过预算（_JUDGE_MAX_BYTES）才截断；预算已按用户决策放宽，正常长度不再被切
+        state["research_manager_conclusion"] = "长" * (_JUDGE_MAX_BYTES // 3 * 2)
         vars_ = extract_judge_vars(state)
-        assert len(vars_["research_manager_decision"]) < 5000
+        assert len(vars_["research_manager_decision"].encode("utf-8")) < _JUDGE_MAX_BYTES
         assert "truncated" in vars_["research_manager_decision"]
 
     def test_fm_action_confidence_in_judge_var(self):
@@ -183,7 +185,7 @@ class TestExtractJudgeVars:
         parsed = _json.loads(out)
         assert parsed["action"] == "watch"
         assert parsed["evidence_refs"][0]["source"] == "risk_metrics"
-        assert len(out.encode("utf-8")) <= 4096
+        assert len(out.encode("utf-8")) <= _JUDGE_MAX_BYTES
         assert "truncated" in parsed["reasoning"]
 
     def test_risk_judgment_keeps_decision_json_intact(self):
@@ -221,8 +223,46 @@ class TestExtractJudgeVars:
         out = extract_judge_vars(state)["risk_judgment"]
         head = out.split("\n", 1)[0]
         assert _json.loads(head)["action"] == "watch"
-        assert len(out.encode("utf-8")) <= 4096
+        assert len(out.encode("utf-8")) <= _JUDGE_MAX_BYTES
         assert "【conservative】" in out or "【neutral】" in out
+
+    def test_relaxed_budgets_keep_long_analyst_and_debate_text_intact(self):
+        """用户决策（r2 三道关复盘）：分析师/辩论段截断预算一律放宽——800 字节中段截断
+        让 judge 在 6/41 条理由里抱怨「无法核对」并压低置信度，还切出「…行 综合四份」
+        类残句与丢期间标签的假矛盾。2500 字节量级的单段须完整可见。"""
+        long_summary = "营收增长16.5%、净利润增长36.3%、ROE 3.4%、自由现金流为负；" * 40  # ≈ 2.6KB
+        state = {
+            "analyst_reports": {
+                "fundamental": {
+                    "agent_name": "fundamental",
+                    "summary": long_summary,
+                    "plain_conclusion": "偏空",
+                    "key_findings": [],
+                    "claims": [],
+                    "markdown": "",
+                }
+            },
+            "debate_history": [
+                {
+                    "role": "bull",
+                    "round": 1,
+                    "content": "多方论述：" + long_summary,
+                    "key_arguments": ["论点甲"] * 12,
+                    "rebuttal_to": [],
+                },
+                {
+                    "role": "bear",
+                    "round": 1,
+                    "content": "空方论述：" + long_summary,
+                    "key_arguments": ["论点乙"] * 12,
+                    "rebuttal_to": [],
+                },
+            ],
+        }
+        out = extract_judge_vars(state)
+        assert "truncated" not in out["analyst_reports"]
+        assert "truncated" not in out["debate_history"]
+        assert out["debate_history"].count("论点甲") == 12
 
     def test_rebuttal_coverage_parallel_rounds_full_engagement(self):
         """r1/r2 复盘：辩论图按轮扇出——bull_r1 与 bear_r1 并行、bull_r2 与 bear_r2 并行

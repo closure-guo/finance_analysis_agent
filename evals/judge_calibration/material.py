@@ -23,7 +23,15 @@ from typing import Any
 _SPACE_RE = re.compile(r"\s+")
 
 # 切分后做尾部锚点：rubric 指令/评分标准从这些短语开始，截掉避免混进材料
-_TAIL_ANCHORS = ("只输出 JSON", "\n评估", "\n若交易决策含", "\n无 evidence_refs")
+_TAIL_ANCHORS = (
+    "只输出 JSON",
+    "\n评估",
+    "\n若交易决策含",
+    "\n无 evidence_refs",
+    # consistency rubric v2 的「评分前必读」段紧跟 {{report_conclusion}}，缺此锚点时
+    # 整段评测指令被拼进末节材料（r2 三道关复盘）
+    "\n先明确决策语义",
+)
 
 # 各维度人审需要的小节（与 judges.RUBRICS 的 {{var}} 对应【小节名】对齐；
 # 新增/改名小节需同步此处并跑测试）
@@ -179,7 +187,7 @@ def prompt_from_observation_input(raw: Any) -> str | None:
 # 表格中间截断「机器人叙…」，judge 看到的完整报告含「一句话总结」结论，标注人
 # 只见到一半——1 vs 5 的假分歧）；consistency 的 RM 结论同样被砍（81a133c2）。
 # 材料必须完整呈现 judge 所见，截断无正当场景。
-_DEFAULT_SUMMARY_LIMIT = 5000
+_DEFAULT_SUMMARY_LIMIT = 40000
 
 
 # 分析师类小节：其文本是各 agent 自带 summary 的拼贴（extract._summarize_analyst_reports
@@ -279,29 +287,56 @@ def _humanize_decision_obj(obj: dict) -> str | None:
     return "\n".join(lines) if lines else None
 
 
+def _top_level_json_blocks(text: str) -> list[str]:
+    """按括号配对扫描顶层 {...} 块（忽略字符串内的括号）。"""
+    blocks: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                blocks.append(text[start : i + 1])
+                start = -1
+    return blocks
+
+
 def humanize_json_blocks(text: str) -> str:
     """把材料文本中的决策类 JSON 块（含 "" 双重转义形态）渲染为人读格式。
 
-    信息内容等价（action/置信度/仓位/论据来源分布/理由分行），仅格式变化——
+    信息内容等价（action/置信度/仓位/逐条论据引用/理由分行），仅格式变化——
     标注人读的是 judge 所见的同一信息，不再啃转义 JSON（delta 3.7）。
-    解析失败保持原文，绝不丢内容。
+    逐块处理（一段材料可含交易方案与风控裁决两个块）；解析失败的块保持原文。
     """
     if not text or "{" not in text:
         return text
-    m = _JSON_BLOCK_RE.search(text)
-    if not m:
-        return text
-    raw = m.group(0)
-    try:
-        obj = json.loads(raw.replace('""', '"'))
-    except (json.JSONDecodeError, ValueError):
-        return text
-    if not isinstance(obj, dict):
-        return text
-    rendered = _humanize_decision_obj(obj)
-    if not rendered:
-        return text
-    return text.replace(raw, "\n" + rendered + "\n")
+    for raw in _top_level_json_blocks(text):
+        try:
+            obj = json.loads(raw.replace('""', '"'))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        rendered = _humanize_decision_obj(obj)
+        if rendered:
+            text = text.replace(raw, "\n" + rendered + "\n")
+    return text
 
 
 def to_csv(rows: list[dict[str, Any]]) -> str:
