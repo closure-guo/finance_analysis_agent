@@ -117,6 +117,14 @@ class AnalysisState(TypedDict, total=False):
     # 阶段 0 停滞保护（incident 026）：重试目标输出哈希与「重写无进展」标记
     citation_retry_prev_hash: dict[str, str]
     citation_retry_no_progress: bool
+    # 阶段 5 门禁三层分置 + 指标拆报（incident 026）
+    citation_blocked: bool  # 阻断层：归一后残余 FAIL > 0
+    citation_analyst_true_fail: int  # 分析师真错数 = 残余 FAIL + 单点修复回填数
+    citation_coverage_warn: bool  # 警告线：coverage < 0.90
+    citation_unverifiable_text: int  # 跟踪：文本 claim UNVERIFIABLE（分型排除，不进阻断分母）
+    citation_unverifiable_unregistered: int  # 跟踪：未注册/空值 UNVERIFIABLE
+    citation_verifier_normalized: int  # 归一后由 FAIL 转 PASS 的计数（unit/percent/echo）
+    auto_claims: int  # 阶段 4 自动合成 claim 数
     citation_retry_feedback: dict[str, list[dict]]  # 每分析师失败明细（重试上下文注入）
     citation_fail_buckets: dict[str, int]  # 桶计数（value_mismatch/path_unresolvable/...）
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）

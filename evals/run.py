@@ -109,6 +109,26 @@ def eval_citation_pass(*, input, output, expected_output, metadata):
     return make_evaluation({"name": "citation_pass", "value": float(value), "comment": None})
 
 
+def eval_citation_counter(name: str, comment: str):
+    def _eval(*, input, output, expected_output, metadata):
+        value = (output or {}).get(name)
+        if value is None:
+            return None
+        return make_evaluation({"name": name, "value": float(value), "comment": comment})
+
+    _eval.__name__ = f"eval_{name}"
+    return _eval
+
+
+def eval_citation_blocked(*, input, output, expected_output, metadata):
+    """阻断层：归一后残余 FAIL > 0（incident 026 拆报——此前的 citation_pass 把
+    校验器误报算在分析师头上）。"""
+    value = (output or {}).get("citation_blocked")
+    if value is None:
+        return None
+    return make_evaluation({"name": "citation_blocked", "value": float(value), "comment": None})
+
+
 def eval_citation_coverage(*, input, output, expected_output, metadata):
     """citation_coverage（正文数字普查覆盖率，harden-citation-semantic-coverage）。"""
     value = (output or {}).get("citation_coverage")
@@ -166,6 +186,17 @@ def all_evaluators() -> list:
         eval_ticker_match,
         eval_citation_pass,
         eval_citation_coverage,
+        eval_citation_blocked,
+        eval_citation_counter(
+            "citation_analyst_true_fail", "分析师真错数（残余 FAIL + 单点修复回填）"
+        ),
+        eval_citation_counter(
+            "citation_verifier_normalized", "归一后由 FAIL 转 PASS（校验器解析债的量化）"
+        ),
+        eval_citation_counter("citation_unverifiable_text", "文本 claim 分型排除（不进阻断分母）"),
+        eval_citation_counter(
+            "citation_unverifiable_unregistered", "未注册/空值 UNVERIFIABLE（跟踪指标）"
+        ),
     ] + [_judge_adapter(d) for d in _JUDGE_DIMS]
 
 

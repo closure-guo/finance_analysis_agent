@@ -9,6 +9,8 @@
 
 import logging
 
+import pandas as pd
+
 import finance_agent.nodes.citation_node as citation_node
 from finance_agent.citation import Claim
 from finance_agent.models import AnalystReport
@@ -1160,3 +1162,82 @@ class TestRetryNoProgress:
             )
             == "render"
         )
+
+
+class TestAutoClaim:
+    """阶段 4（incident 026）：正文未认领数字在注册根键中唯一匹配 → 自动合成 claim；
+    多匹配/零匹配不合成（防歧义洗白）。"""
+
+    def test_unique_match_synthesizes_and_covers(self):
+        report = _report("fundamental", [], "公司自由现金流110.6亿元，现金充沛。")
+        state = {
+            "analyst_reports": {"fundamental": report},
+            "cashflow_metrics": {"自由现金流": {"2025": 1.106e10}},
+        }
+        out = verify_citations(state)
+        assert out["citation_coverage"] == 1.0
+        assert out["auto_claims"] == 1
+
+    def test_ambiguous_match_not_synthesized(self):
+        report = _report("fundamental", [], "公司自由现金流110.6亿元，现金充沛。")
+        state = {
+            "analyst_reports": {"fundamental": report},
+            "cashflow_metrics": {"自由现金流": {"2025": 1.106e10, "2024": 1.106e10}},
+        }
+        out = verify_citations(state)
+        assert out["auto_claims"] == 0
+        assert out["citation_coverage"] < 1.0
+
+
+class TestGateLayers:
+    """阶段 5：门禁三层分置 + 指标拆报——残余 FAIL 阻断、覆盖警告、文本/未注册
+    UNVERIFIABLE 分开计数、归一转 PASS 单独量化。"""
+
+    def test_layer_keys_and_counts(self):
+        # ≥3 处值级失败走全量 FAIL（<3 走单点修复分支，会用真值回填）
+        bads = [
+            Claim(
+                claim_type="numerical",
+                source_type="data",
+                field_ref=f"solvency_metrics.资产负债率.{y}",
+                stated_value=99.0,
+                interpretation=f"{y} 年资产负债率 99%",
+            )
+            for y in ("2021", "2022", "2023")
+        ]
+        ghost = Claim(
+            claim_type="entity",
+            source_type="data",
+            field_ref="news_list.9.title",
+            stated_value="不存在的新闻",
+            interpretation="x",
+        )
+        report = _report("fundamental", [*bads, ghost], "资产负债率 99%")
+        state = {
+            "analyst_reports": {"fundamental": report},
+            "solvency_metrics": {"资产负债率": {"2021": 36.0, "2022": 37.0, "2023": 38.0}},
+        }
+        out = verify_citations(state)
+        assert out["citation_blocked"] is True
+        assert out["citation_analyst_true_fail"] == 3
+        assert out["citation_unverifiable_text"] == 1
+        assert out["citation_unverifiable_unregistered"] == 0
+        assert out["citation_verifier_normalized"] == 0
+
+    def test_normalized_count_counts_unit_fix(self):
+        from finance_agent.citation import Claim as NumericClaim
+
+        df = pd.DataFrame([{"报告日": "20251231", "归属于母公司的净利润": 5.040734e9}])
+        c = NumericClaim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="income_statement.20251231.归属于母公司的净利润",
+            stated_value=50.40734,
+            interpretation="2025年归母净利润50.41亿元",
+            direction="flat",
+        )
+        report = _report("fundamental", [c], "2025年归母净利润50.41亿元")
+        state = {"analyst_reports": {"fundamental": report}, "income_statement": df}
+        out = verify_citations(state)
+        assert out["citation_blocked"] is False
+        assert out["citation_verifier_normalized"] == 1

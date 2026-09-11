@@ -9,8 +9,15 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from typing import Any, cast
 
-from finance_agent.citation import CitationReport, CitationResult, Claim, verify_claims
+from finance_agent.citation import (
+    CitationReport,
+    CitationResult,
+    Claim,
+    value_close,
+    verify_claims,
+)
 from finance_agent.citation_coverage import (
     CoverageReport,
     compute_coverage,
@@ -265,6 +272,40 @@ def verify_citations(state: dict) -> dict:
     ]
     coverage = compute_coverage(markdown, all_stated, event_values=_event_values(state))
 
+    # 阶段 4 auto-claim（incident 026）：正文未认领数字在 state 结构化条目中
+    # 「唯一匹配」时自动合成 claim（auto=True）——契约病修契约，覆盖缺口不再
+    # 靠重跑分析师补。多匹配/零匹配不合成（防歧义洗白）。
+    auto_claims: list[Claim] = []
+    auto_paths: list[str] = []
+    for raw in coverage.unmatched:
+        val = _census_value_from_raw(raw)
+        if not val:
+            continue
+        path = _unique_state_match(state, val)
+        if path:
+            auto_claims.append(
+                Claim(
+                    claim_type="numerical",
+                    source_type="data",
+                    field_ref=path,
+                    stated_value=val,
+                    interpretation=raw,
+                    auto=True,
+                )
+            )
+            auto_paths.append(path)
+    if auto_claims:
+        auto_results = verify_claims(auto_claims, state)
+        results = results + auto_results
+        claims_by_agent["auto_claim"] = auto_claims
+        per_agent["auto_claim"] = auto_results
+        report = CitationReport.from_results(results)
+        all_stated = all_stated + [float(c.stated_value) for c in auto_claims]
+        coverage = compute_coverage(markdown, all_stated, event_values=_event_values(state))
+        update_current_span(
+            metadata={"auto_claims": len(auto_claims), "auto_claim_paths": auto_paths}
+        )
+
     _report_to_langfuse(report, coverage, markdown=markdown)
 
     # 递增 iteration_count，使 after_citation 的重试上限（< 3）真正生效。
@@ -364,6 +405,28 @@ def verify_citations(state: dict) -> dict:
         "citation_fail_buckets": fail_buckets,
         "citation_coverage": coverage.coverage,
         "citation_coverage_gap": citation_coverage_gap,
+        # 阶段 5 门禁三层分置 + 指标拆报（incident 026）
+        "citation_blocked": report.failed > 0,
+        # 分析师真错数 = 残余 FAIL + 单点修复已用真值回填的数（修复会把真错藏进 PASS）
+        "citation_analyst_true_fail": report.failed + int(value_mismatch_repaired or 0),
+        "citation_coverage_warn": coverage.coverage < 0.90,
+        "citation_unverifiable_text": sum(
+            1
+            for r in results
+            if r.status == "UNVERIFIABLE"
+            and (r.claim.claim_type in ("entity", "regulatory") or r.claim.source_type == "event")
+        ),
+        "citation_unverifiable_unregistered": sum(
+            1
+            for r in results
+            if r.status == "UNVERIFIABLE"
+            and r.claim.claim_type not in ("entity", "regulatory")
+            and r.claim.source_type != "event"
+        ),
+        "citation_verifier_normalized": sum(
+            1 for r in results if r.status == "PASS" and r.unit_normalized is not None
+        ),
+        "auto_claims": len(auto_claims),
         # surgical-citation-repair：单点修复遥测 + 修复后正文回填（供渲染/下游）
         "value_mismatch_repaired": value_mismatch_repaired,
         "analyst_reports": reports,
@@ -480,6 +543,76 @@ def _extract_claims(report: AnalystReport | dict) -> list[Claim]:
         return [Claim.model_validate(c) if isinstance(c, dict) else c for c in raw_claims]
 
     return []
+
+
+_AUTO_MATCH_ROOT_DFS = (
+    "income_statement",
+    "balance_sheet",
+    "cash_flow_statement",
+    "financial_indicators",
+)
+_AUTO_MATCH_ROOT_DICTS = (
+    "profitability_metrics",
+    "solvency_metrics",
+    "efficiency_metrics",
+    "cashflow_metrics",
+    "growth_rates",
+    "risk_metrics",
+)
+
+
+def _unique_state_match(state: dict, value: float, max_nodes: int = 20000) -> str | None:
+    """阶段 4：正文数值在 state 注册根键中「唯一匹配」时返回其 field_ref 路径。
+
+    遍历限于白名单根键的数值叶子（DataFrame 单元格 / dict 数值叶子），相对容差
+    0.5%；多匹配或零匹配返回 None（防同值多字段歧义洗白覆盖缺口）。
+    """
+    matches: list[str] = []
+    scanned = 0
+
+    def _visit(path: str, obj: object, depth: int) -> None:
+        nonlocal scanned
+        scanned += 1
+        if scanned > max_nodes or len(matches) > 1:
+            return
+        if isinstance(obj, bool) or obj is None:
+            return
+        if isinstance(obj, int | float):
+            if value_close(float(obj), value):
+                matches.append(path)
+            return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                _visit(f"{path}.{k}", v, depth + 1)
+            return
+        if isinstance(obj, list | tuple):
+            for i, v in enumerate(obj):
+                _visit(f"{path}.{i}", v, depth + 1)
+            return
+        if hasattr(obj, "columns") and hasattr(obj, "iloc"):  # DataFrame
+            df_obj = cast("Any", obj)
+            for _, row in df_obj.iterrows():
+                row_key = None
+                for cand in ("报告日", "日期", "date"):
+                    if cand in obj.columns:
+                        row_key = row[cand]
+                        break
+                key_str = str(row_key) if row_key is not None else "row"
+                for col in obj.columns:
+                    v = row[col]
+                    if isinstance(v, int | float) and not isinstance(v, bool):
+                        _visit(f"{path}.{key_str}.{col}", v, depth + 1)
+
+    for root in _AUTO_MATCH_ROOT_DFS:
+        obj = state.get(root)
+        if obj is not None:
+            _visit(root, obj, 0)
+    for root in _AUTO_MATCH_ROOT_DICTS:
+        obj = state.get(root)
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                _visit(f"{root}.{k}", v, 1)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _census_value_from_raw(raw: str) -> float:
