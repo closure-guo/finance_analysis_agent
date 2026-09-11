@@ -37,6 +37,8 @@ class TestExtractJudgeVars:
             "analyst_reports",
             "debate_history",
             "research_manager_decision",
+            "risk_metrics",
+            "risk_debate_history",
             "trade_decision",
             "risk_judgment",
             "fund_manager_decision",
@@ -130,6 +132,38 @@ class TestExtractJudgeVars:
         }
         out = extract_judge_vars(state)["research_manager_decision"]
         assert out.startswith("评级: 看多（置信度 0.65）")
+
+    def test_risk_metrics_and_risk_debate_become_judge_vars(self):
+        """r1 复盘：Risk Judge 裁决引用 beta/回撤与三方风险辩论，judge 材料里却没有。"""
+        state = {
+            "risk_metrics": {
+                "max_drawdown": 0.345,
+                "volatility": 0.584,
+                "var_95": 0.0516,
+                "beta": 1.96,
+            },
+            "risk_debate_history": [
+                {"role": "aggressive", "content": "左侧建仓", "key_arguments": ["超卖反弹"]},
+                {
+                    "role": "conservative",
+                    "content": "期限错配",
+                    "key_arguments": ["日度VaR不能为中期回撤背书"],
+                },
+                {"role": "neutral", "content": "隐含PE约25倍", "key_arguments": ["估值切换未完成"]},
+            ],
+        }
+        out = extract_judge_vars(state)
+        assert "最大回撤 34.5%" in out["risk_metrics"]
+        assert "beta 1.96" in out["risk_metrics"]
+        assert "VaR(95%) 5.2%" in out["risk_metrics"]
+        for role in ("aggressive", "conservative", "neutral"):
+            assert f"【{role}】" in out["risk_debate_history"], role
+        assert "隐含PE约25倍" in out["risk_debate_history"]
+
+    def test_risk_vars_empty_when_absent(self):
+        out = extract_judge_vars({})
+        assert out["risk_metrics"] == ""
+        assert out["risk_debate_history"] == ""
 
     def test_rebuttal_coverage_counts_each_round_separately(self):
         """r1 实证 bug：去重键只用「角色 + 单条发言内序号」，bull 第 1 轮的①与第 2 轮的①

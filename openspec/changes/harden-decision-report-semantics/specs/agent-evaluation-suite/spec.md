@@ -60,3 +60,20 @@ decision_grounding 的 judge 输入 SHALL 包含多空辩论记录（`{{debate_h
 
 - **WHEN** 导出 decision_grounding 维度的标注材料
 - **THEN** 材料小节 SHALL 含【多空辩论记录】（与 judge 输入同口径）
+
+### Requirement: decision_grounding judge 变量含裁决证据基础
+
+decision_grounding 评估的交易决策取 `final_trade_decision`（Risk Judge 裁决，回退 `trader_plan`）。Risk Judge 在三方风险辩论之后裁决，其理由建立在风控指标与风险辩论上——judge 输入 SHALL 包含【风控指标】（`{{risk_metrics}}`，人读格式：最大回撤/年化波动率/VaR(95%)/beta 等）与【风险辩论记录】（`{{risk_debate_history}}`，按消息边界截断，含 aggressive/conservative/neutral 标签）；rubric 的 source 枚举 SHALL 含 `risk_aggressive`/`risk_conservative`/`risk_neutral`/`risk_metrics`。material 标注配置 SHALL 同步补充两节。rubric 变更 SHALL 递增版本号（v6）。
+
+依据：r1 复盘 8 条 decision_grounding 理由中 5 条判「风控数字（beta/VaR/回撤）无出处」、3 条判「中性方/保守方论据无出处」，四个 2 分的 judge 置信度均 ≤0.5——是材料缺口而非决策缺陷。
+
+#### Scenario: 风控指标与风险辩论进入 judge 输入
+
+- **WHEN** state 含 `risk_metrics` 与 `risk_debate_history` 且 judge 评估 decision_grounding
+- **THEN** judge 输入 SHALL 含【风控指标】一行人读文本与【风险辩论记录】各方发言，使裁决中「beta 1.96」「中性方指出…」类论据可核对
+- **AND** 二者缺失时变量为空串，维度不因此记 input_missing（核心变量仍是分析师结论与 RM 结论）
+
+#### Scenario: 标注材料同步含两节
+
+- **WHEN** 导出 decision_grounding 维度的标注材料
+- **THEN** 材料小节 SHALL 含【风控指标】与【风险辩论记录】（与 judge 输入同口径）

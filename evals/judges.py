@@ -56,7 +56,7 @@ _JSON_TAIL = (
 RUBRIC_VERSIONS: dict[str, int] = {
     "report_relevance": 3,
     "debate_quality": 2,
-    "decision_grounding": 5,
+    "decision_grounding": 6,
     "consistency": 3,
 }
 
@@ -90,10 +90,12 @@ RUBRICS: dict[str, str] = {
 【分析师结论】{{analyst_reports}}
 【多空辩论记录】{{debate_history}}
 【Research Manager 结论】{{research_manager_decision}}
+【风控指标】{{risk_metrics}}
+【风险辩论记录】{{risk_debate_history}}
 【交易决策】{{trade_decision}}
 评估交易决策的论据是否有前文支撑:
 若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对：
-- claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager）的结论中找到出处，
+- claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager/risk_aggressive/risk_conservative/risk_neutral/risk_metrics）的结论中找到出处，
   且 reasoning 的主要论据都能在 evidence_refs 中找到对应项 → 4-5 分；
 - 语义一致性核对：论据表述的指标术语、期次、方向须与所引数值语义一致——
   数值有出处但术语张冠李戴（毛利率写成净利率）、期次错位（年报值说成季度值）、

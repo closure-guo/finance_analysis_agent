@@ -11,6 +11,12 @@ risk_judge、fund_manager 提示词 MUST 提供评级/决策选项的语义说�
 - **WHEN** 加载 risk_judge 提示词
 - **THEN** 模板中包含 buy/sell/hold/watch 的语义与取舍指导（如证据均衡时倾向 hold/watch）
 
+#### Scenario: Risk Judge 论据引用可标注风险层来源
+
+- **WHEN** Risk Judge 采纳或校准了来自激进/保守/中性方风险辩论或风控指标的论据
+- **THEN** 提示词 SHALL 允许 evidence_refs 的 source 取 `risk_aggressive`/`risk_conservative`/`risk_neutral`/`risk_metrics`（`RISK_EVIDENCE_SOURCES` ⊇ `TRADE_EVIDENCE_SOURCES`），且 SHALL 要求这类论据列入 evidence_refs 而非只出现在 reasoning 中
+- **AND** trader 提示词的来源集保持 `TRADE_EVIDENCE_SOURCES`（Trader 在风险辩论之前，不得引用风险方）
+
 #### Scenario: Fund Manager 审批决策语义
 
 - **WHEN** 加载 fund_manager 提示词

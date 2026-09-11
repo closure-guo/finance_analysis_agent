@@ -244,13 +244,23 @@ class TestInputMissingGuard:
 class TestDecisionGroundingRubricV3:
     def test_version_incremented(self):
         """rubric 变更递增版本号（evidence_refs 版为 v2，语义核对版为 v3，confidence 契约版为 v4）。"""
-        assert RUBRIC_VERSIONS["decision_grounding"] == 5
+        assert RUBRIC_VERSIONS["decision_grounding"] == 6  # v6 = 风控指标 + 风险辩论进材料
+
+    def test_v6_material_covers_risk_judge_evidence_base(self):
+        """r1 复盘：被评的是 Risk Judge 裁决，其理由建立在风控指标与三方风险辩论上，
+        但 v5 材料只有分析师/多空辩论/RM——judge 按 rubric 只能判「无中生有」（8 条里
+        5 条抱怨风控数字无出处、3 条抱怨中性方/保守方论据无出处，置信度 0.4）。"""
+        rubric = RUBRICS["decision_grounding"]
+        assert "【风控指标】{{risk_metrics}}" in rubric
+        assert "【风险辩论记录】{{risk_debate_history}}" in rubric
+        for src in ("risk_aggressive", "risk_conservative", "risk_neutral", "risk_metrics"):
+            assert src in rubric, src
 
     def test_other_rubrics_version_pinned(self):
         assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
         assert RUBRIC_VERSIONS["debate_quality"] == 2
         assert RUBRIC_VERSIONS["consistency"] == 3  # v3 = approve 语义(v2) + confidence 契约
-        assert RUBRIC_VERSIONS["decision_grounding"] == 5  # v5 = 补辩论记录
+        assert RUBRIC_VERSIONS["decision_grounding"] == 6  # v6 = 补风控指标 + 风险辩论
 
     def test_rubric_includes_semantic_check(self):
         """语义核对条款：术语/期次/方向与所引数值一致；解读失当扣分。"""

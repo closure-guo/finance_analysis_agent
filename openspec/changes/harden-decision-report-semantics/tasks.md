@@ -21,6 +21,7 @@
 - [x] 1.15 失败测试 + 实现（r1 全量复盘）：分析师解析降级保真——`extract_json` 容忍字符串内未转义成对引号；降级占位改为如实「输出解析失败」并打捞已闭合 summary/plain_conclusion；重跑降级不覆盖既有正常报告（`_keep_valid_over_degraded`）。实证：中芯 fundamental 第 3 代因 `"呈"低盈利"格局"` 解析失败，兜底「数据缺失」覆盖前两代好报告，judge 据此判 decision_grounding 2 分
 - [x] 1.16 失败测试 + 实现（r1 全量复盘）：`_rebuttal_coverage` 去重键改为「发言序 + 论点序号」——旧键只用角色+序号，多轮的①被合并，分子封顶单轮论点数，8 条 trace 全报「4/8」
 - [x] 1.17 失败测试 + 实现（r1 全量复盘）：降级标记键带 agent 与重试轮次（`degradation.{agent}.r{n}`），分析师节点无独立 span 时不再互相覆盖；节点透传 `state.iteration_count` 为轮次。后续决策：是否给分析师节点建独立 span（改 trace 拓扑）
+- [x] 1.18 失败测试 + 实现（r1 复盘）：Risk Judge evidence_refs 来源扩展——`RISK_EVIDENCE_SOURCES` = Trader 来源 + risk_aggressive/risk_conservative/risk_neutral/risk_metrics，别名归一（aggressive→risk_aggressive 等）；risk_judge.md 来源段更新并 deploy_prompts（14 导入）；prompt 漂移守卫按 prompt 分套
 
 ## 2. FM 理由职责边界（D2，agent-prompt-contracts）
 
@@ -38,6 +39,7 @@
 - [x] 3.6 失败测试 + 实现：decision_grounding rubric 模板加【多空辩论记录】{{debate_history}}（rubric v4）+ material DIMENSION_SECTIONS 同步；实证 2fd1ee6d：交易决策 7 条 evidence_refs 有 2 条 debate_bear 来源，judge 输入无辩论记录无法核对（rubric 要求核对未提供的材料，自相矛盾）；实施后 decision_grounding 全量重评
 - [x] 3.7 失败测试 + 实现：标注材料人类可读渲染——【交易决策】等节的转义 JSON 解析为人读格式（action/置信度/仓位/论据来源分布/理由分行），解析失败保持原文；展示层渲染不改变信息内容（同口径保持）
 - [x] 3.8 report_relevance rubric 口径修订（v3）：「切题=回答了用户的问题」——覆盖维度但回避用户所问的直接决策问题 SHALL ≤3；Safety 约束下如实说明约束并给可行答案 SHALL 视为已回答；失败测试锁定新口径措辞 + decision_grounding 式全量重评报告验证分歧收敛
+- [x] 3.9 失败测试 + 实现（r1 复盘）：decision_grounding v6——judge 变量新增 `risk_metrics`（人读一行）与 `risk_debate_history`（按消息截断），rubric 模板加【风控指标】【风险辩论记录】两节 + source 枚举加 risk_*；material DIMENSION_SECTIONS 同步。实证：8 条理由 5 条判风控数字无出处、3 条判中性方论据无出处，2 分置信度 ≤0.5
 
 ## 4. 用户意图贯穿（D4/D5，user-intent-propagation）
 

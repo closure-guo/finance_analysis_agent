@@ -87,7 +87,20 @@ _SOURCE_ALIASES = {
     "bull": "debate_bull",
     "bear": "debate_bear",
     "research_manager_conclusion": "research_manager",
+    "aggressive": "risk_aggressive",
+    "conservative": "risk_conservative",
+    "neutral": "risk_neutral",
+    "aggressive_debater": "risk_aggressive",
+    "conservative_debater": "risk_conservative",
+    "neutral_debater": "risk_neutral",
 }
+
+# Risk Judge 的论据来源：Trader 来源 + 三方风险辩论 + 风控指标（Risk Judge 在风险
+# 辩论之后裁决，其理由建立在这两样上；只给 Trader 那套来源会使「中性方/beta」
+# 类论据无法列入 evidence_refs，judge 必然判「关键论据未引用」）
+RISK_EVIDENCE_SOURCES = TRADE_EVIDENCE_SOURCES | frozenset(
+    {"risk_aggressive", "risk_conservative", "risk_neutral", "risk_metrics"}
+)
 
 
 class TradeEvidenceRef(BaseModel):

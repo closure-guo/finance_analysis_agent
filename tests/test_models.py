@@ -325,3 +325,41 @@ class TestTradeDecisionEvidenceRefs:
         )
         assert [r.claim for r in decision.evidence_refs] == ["正常"]
         assert decision.evidence_refs[0].source == "fundamental"
+
+
+class TestRiskEvidenceSources:
+    """Risk Judge 的论据来源 = Trader 来源 + 三方风险辩论 + 风控指标（r1 复盘：
+    裁决理由通篇引用「中性方/激进方/beta 1.96」，evidence_refs 却只能标 Trader 那套来源，
+    judge 必然判「关键论据未列入引用」）。"""
+
+    def test_risk_sources_superset_of_trade_sources(self):
+        from finance_agent.models import RISK_EVIDENCE_SOURCES, TRADE_EVIDENCE_SOURCES
+
+        assert TRADE_EVIDENCE_SOURCES < RISK_EVIDENCE_SOURCES
+        assert {
+            "risk_aggressive",
+            "risk_conservative",
+            "risk_neutral",
+            "risk_metrics",
+        } <= RISK_EVIDENCE_SOURCES
+
+    def test_risk_role_aliases_normalize(self):
+        from finance_agent.models import TradeDecision
+
+        d = TradeDecision.model_validate(
+            {
+                "action": "sell",
+                "confidence": 0.55,
+                "reasoning": "r",
+                "evidence_refs": [
+                    {"claim": "隐含PE约25倍", "source": "neutral"},
+                    {"claim": "beta 1.96", "source": "risk_metrics"},
+                    {"claim": "左侧建仓被否", "source": "Aggressive"},
+                ],
+            }
+        )
+        assert [e.source for e in d.evidence_refs] == [
+            "risk_neutral",
+            "risk_metrics",
+            "risk_aggressive",
+        ]

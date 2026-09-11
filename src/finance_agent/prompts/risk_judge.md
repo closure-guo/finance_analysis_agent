@@ -19,10 +19,13 @@
 action 仅允许: buy / sell / hold / watch
 confidence 必须是 0 到 1 之间的小数（如 0.6 表示 60% 置信度），不要用百分数
 
-evidence_refs（论据引用）：采纳自「交易方案」的论据，原样保留其 claim 与
-source（source 仅允许 technical / macro / fundamental / sentiment /
-debate_bull / debate_bear / research_manager）；不得编造来源；如论据无法
-对应上述来源，可省略该项（evidence_refs 允许为 []）。
+evidence_refs（论据引用）：采纳自「交易方案」的论据原样保留其 claim 与 source；
+你在风险辩论后新增或校准的论据也须列入，source 标注其真实来源。source 仅允许：
+technical / macro / fundamental / sentiment / debate_bull / debate_bear /
+research_manager（沿用交易方案的论据）；risk_aggressive / risk_conservative /
+risk_neutral（采纳自激进/保守/中性方风险辩论的论据）；risk_metrics（引用风控指标
+如最大回撤、波动率、VaR、beta 的论据）。不得编造来源；如论据无法对应上述来源，
+可省略该项（evidence_refs 允许为 []）。
 
 ## 决策语义
 

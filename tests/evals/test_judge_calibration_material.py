@@ -52,6 +52,9 @@ class TestPromptParsing:
             assert sections_for_dimension(dim)  # 每个维度至少一个小节
         # decision_grounding 人审必须含交易决策小节
         assert "【交易决策】" in sections_for_dimension("decision_grounding")
+        # v6：裁决的证据基础（风控指标 + 三方风险辩论）必须在人审材料里
+        assert "【风控指标】" in sections_for_dimension("decision_grounding")
+        assert "【风险辩论记录】" in sections_for_dimension("decision_grounding")
         assert "【多空辩论记录】" in sections_for_dimension("debate_quality")
 
     def test_prompt_from_observation_input_variants(self):

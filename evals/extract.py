@@ -215,7 +215,7 @@ def _structured_report_var(state: dict) -> str:
 
 
 def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
-    """提取 9 个 judge 变量,全字符串,缺失给 ""。"""
+    """提取 judge 变量（11 个）,全字符串,缺失给 ""。"""
     raw_report = state.get("final_report") or ""
     report = _structured_report_var(state) or raw_report
     decision = state.get("final_trade_decision") or {}
@@ -247,11 +247,48 @@ def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
         "analyst_reports": _trunc(_summarize_analyst_reports(state.get("analyst_reports") or {})),
         "debate_history": _trunc(_summarize_debate(state.get("debate_history") or [])),
         "research_manager_decision": _trunc(state.get("research_manager_conclusion") or ""),
+        # decision_grounding v6：被评的是 Risk Judge 裁决，其证据基础含风控指标与三方
+        # 风险辩论——r1 复盘 8 条理由里 5 条抱怨风控数字无出处、3 条抱怨中性方论据无出处
+        "risk_metrics": _format_risk_metrics(state.get("risk_metrics") or {}),
+        "risk_debate_history": _trunc(_summarize_debate(risk_debate)),
         "trade_decision": _trunc(decision_txt),
         "risk_judgment": _trunc(decision_txt + ("\n" + risk_tail if risk_tail else "")),
         # #111：FM 理由随决策进 judge 变量（consistency 维度可见否决依据）
         "fund_manager_decision": "\n".join(fm_parts),
     }
+
+
+_RISK_METRIC_LABELS: tuple[tuple[str, str, bool], ...] = (
+    # (state 键, 展示名, 是否百分比)
+    ("max_drawdown", "最大回撤", True),
+    ("volatility", "年化波动率", True),
+    ("var_95", "VaR(95%)", True),
+    ("sharpe_ratio", "夏普比率", False),
+    ("beta", "beta", False),
+)
+
+
+def _format_risk_metrics(metrics: object) -> str:
+    """风控指标 → 一行人读文本（已知键按中文名+百分比呈现，未知键原样附带）。"""
+    if not isinstance(metrics, dict) or not metrics:
+        return ""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for key, label, is_pct in _RISK_METRIC_LABELS:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        seen.add(key)
+        try:
+            parts.append(
+                f"{label} {float(value) * 100:.1f}%" if is_pct else f"{label} {float(value):.2f}"
+            )
+        except (TypeError, ValueError):
+            parts.append(f"{label} {value}")
+    for key, value in metrics.items():
+        if key not in seen and value is not None:
+            parts.append(f"{key} {value}")
+    return "；".join(parts)
 
 
 def _serialize_decision(decision: object) -> str:
