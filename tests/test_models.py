@@ -363,3 +363,22 @@ class TestRiskEvidenceSources:
             "risk_metrics",
             "risk_aggressive",
         ]
+
+    def test_risk_bull_bear_alias_to_debate_sources(self):
+        """r2 实证：Risk Judge 输出 risk_bull / risk_bear 两个枚举外标签（把多空辩论误挂到风险层前缀），
+        应归一为 debate_bull / debate_bear。"""
+        from finance_agent.models import TradeDecision
+
+        d = TradeDecision.model_validate(
+            {
+                "action": "watch",
+                "confidence": 0.5,
+                "reasoning": "r",
+                "evidence_refs": [
+                    {"claim": "x", "source": "risk_bull"},
+                    {"claim": "y", "source": "risk_bear"},
+                    {"claim": "z", "source": "RISK_METRICS"},
+                ],
+            }
+        )
+        assert [e.source for e in d.evidence_refs] == ["debate_bull", "debate_bear", "risk_metrics"]

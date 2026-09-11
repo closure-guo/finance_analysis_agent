@@ -93,6 +93,9 @@ _SOURCE_ALIASES = {
     "aggressive_debater": "risk_aggressive",
     "conservative_debater": "risk_conservative",
     "neutral_debater": "risk_neutral",
+    # r2 实证：Risk Judge 把多空辩论误挂风险层前缀
+    "risk_bull": "debate_bull",
+    "risk_bear": "debate_bear",
 }
 
 # Risk Judge 的论据来源：Trader 来源 + 三方风险辩论 + 风控指标（Risk Judge 在风险
