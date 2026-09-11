@@ -107,3 +107,21 @@
 - 经营现金流：生意实际收到的钱；持续为正才是真赚钱。
 - 资产负债率：总负债 ÷ 总资产；>70% 杠杆偏高须警惕。
 - 回撤/波动率：回撤大 = 曾深度亏损；波动率大 = 价格上蹿下跳。
+
+
+---
+
+## round7 口径卡（标注前必读，2026-09-11）
+
+**材料来源**：r3 实验（HEAD 4f0db3f），41 行 / 14 trace（9 deep × 4 维 + 5 quick × report_relevance）。材料已过三道关（存在性程序检查 41/41、跨层一致性、整齐度解释），并做过全量人读审计。
+
+**建议标注顺序**：decision_grounding（9）→ consistency（9）→ debate_quality（9）→ report_relevance（14，其中 5 条 quick 信息量最小放最后）。judge 在 report_relevance / debate_quality 两维全给 5 分，你的分歧越明确越有价值。
+
+**本轮口径边界**
+- consistency 只评 **RM → Risk Judge → FM → 报告** 四层；材料没有 Trader 原方案，Trader→Risk Judge 的转向不在评分范围（round8 补）。风险辩论里透露的「原方案」只作背景。
+- decision_grounding：逐条核对【交易决策】的 `[source] claim` 是否能在对应【agent】段找到；找不到就按 rubric 扣，**source 标错是真问题不是材料瑕疵**（如「中报+36.06%」标 fundamental 但数字在 sentiment 段）。
+- 置信度列：填你对自己评分的把握（0–1）。材料看不懂/信息不够就压低，不要猜。
+
+**遇到以下情况立刻停，别边标边猜**：数字对不上上游、某节缺失或为空、看到原始 JSON、看到「评分前必读」之类评测指令、覆盖率行数字怪异。截图或贴 ROW 号给我即可。
+
+**保存**：每 10 行 Ctrl+S 一次。文件已入 git（无标注版），你的标注是唯一副本。
