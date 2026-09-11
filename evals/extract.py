@@ -29,6 +29,21 @@ def _trunc(text: str) -> str:
     return truncate_for_trace(text, _JUDGE_MAX_BYTES)
 
 
+def _append_within_budget(head: str, tail: str, limit: int = _JUDGE_MAX_BYTES) -> str:
+    """head（决策 JSON）保持完整，tail 只在剩余预算内追加。
+
+    整体 _trunc 会把 head 的中段连闭合括号一起挖掉（r2 实证 consistency 材料
+    【Risk Judge 裁决】9/9 成残缺 JSON，人读化失败）。
+    """
+    head = _trunc(head)
+    if not tail:
+        return head
+    remaining = limit - len(head.encode("utf-8")) - 1
+    if remaining < 200:
+        return head
+    return head + "\n" + truncate_for_trace(tail, remaining)
+
+
 def extract_conclusion(report: str) -> str:
     """提取报告结论章节：最后命中的结论性标题（含编号式「六、基金经理决策」）起，
     到下一标题或文末；无标题时从尾部最近断句边界起（避免从句子中间切出半句话）。"""
@@ -108,35 +123,62 @@ def _format_claims(claims: list) -> str:
 def _rebuttal_coverage(history: list) -> str | None:
     """交锋覆盖率（D1 1.12）：各角色论点被对方回应的比例——零 token 确定性指标。
 
-    覆盖率 = 被对方 rebuttal_to 引用的论点数（并集）/ 该角色论点总数。
-    无 rebuttal_to 数据（历史 trace/首轮未开始）返回 None。
+    辩论图按轮扇出（route_to_debate_r1/r2 各派 bull/bear 并行）：同轮互不可见，
+    rebuttal_to 按 prompt 契约指向「对方上一轮」的论点编号。因此按 (role, round)
+    定位被回应方，而非「上一条发言」（扇出下历史顺序不确定，且同方连续发言会
+    互相记账——r1/r2 实证 8 条 trace 全「4/8」）。
+
+    分母只算「存在回应机会」的论点：对方出现过更后轮次，该轮论点才可被回应；
+    末轮论点在并行结构下永远无人可回应，计入分母会把上限压到 50%。
+
+    仅 bull/bear 两方辩论输出覆盖率；三方风险辩论对手不唯一、单轮辩论无人可
+    回应 → None。round 字段缺失时按该角色第几次发言兜底。
     """
-    total: dict[str, int] = {}
-    covered: dict[str, set] = {}
-    prev_role: str | None = None
-    prev_idx = -1
-    prev_n_args = 0
-    for idx, raw in enumerate(history):
+    messages: list[tuple[str, int, list[str], list]] = []
+    occurrence: dict[str, int] = {}
+    for raw in history:
         msg = _as_dict(raw)
         if not msg:
             continue
         role = str(msg.get("role", "?"))
+        occurrence[role] = occurrence.get(role, 0) + 1
+        try:
+            rnd = int(msg.get("round") or occurrence[role])
+        except (TypeError, ValueError):
+            rnd = occurrence[role]
         args = [str(a).strip() for a in (msg.get("key_arguments") or []) if str(a).strip()]
-        rebuttal = msg.get("rebuttal_to") or []
-        # 本条的 rebuttal_to 指向上一条发言（对方）的论点序号；被回应论点以
-        # 「哪条发言的第几条」为键——序号在每条发言内从 1 重新计数，只按序号去重
-        # 会把各轮的①合并，分子封顶在单轮论点数（r1 实证 8 条 trace 全「4/8」）
-        if prev_role and rebuttal:
-            covered.setdefault(prev_role, set()).update(
-                (prev_idx, n) for n in rebuttal if isinstance(n, int) and 1 <= n <= prev_n_args
-            )
-        prev_role, prev_idx, prev_n_args = role, idx, len(args)
-        total[role] = total.get(role, 0) + len(args)
-    lines = []
-    for role, cnt in total.items():
-        if cnt == 0:
+        messages.append((role, rnd, args, msg.get("rebuttal_to") or []))
+
+    roles = {role for role, _, _, _ in messages}
+    if roles != {"bull", "bear"}:
+        return None
+    opponent = {"bull": "bear", "bear": "bull"}
+    args_by: dict[tuple[str, int], list[str]] = {}
+    max_round: dict[str, int] = {}
+    for role, rnd, args, _ in messages:
+        args_by[(role, rnd)] = args
+        max_round[role] = max(max_round.get(role, 0), rnd)
+
+    covered: dict[str, set] = {}
+    rebuttable: dict[str, int] = dict.fromkeys(roles, 0)
+    for role, rnd, args, rebuttal in messages:
+        opp = opponent[role]
+        if max_round.get(opp, 0) > rnd:
+            rebuttable[role] += len(args)
+        if not rebuttal or rnd <= 1:
             continue
-        lines.append(f"{role} 论点被回应 {len(covered.get(role, set()))}/{cnt}")
+        target = args_by.get((opp, rnd - 1))
+        if target is None:
+            continue
+        # 被回应的是对方（opp）上一轮的论点
+        covered.setdefault(opp, set()).update(
+            (rnd - 1, n) for n in rebuttal if isinstance(n, int) and 1 <= n <= len(target)
+        )
+    lines = []
+    for role in ("bull", "bear"):
+        if rebuttable[role] == 0:
+            continue
+        lines.append(f"{role} 论点被回应 {len(covered.get(role, set()))}/{rebuttable[role]}")
     return "；".join(lines) if lines else None
 
 
@@ -252,7 +294,7 @@ def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
         "risk_metrics": _format_risk_metrics(state.get("risk_metrics") or {}),
         "risk_debate_history": _trunc(_summarize_debate(risk_debate)),
         "trade_decision": _trunc(decision_txt),
-        "risk_judgment": _trunc(decision_txt + ("\n" + risk_tail if risk_tail else "")),
+        "risk_judgment": _append_within_budget(decision_txt, risk_tail),
         # #111：FM 理由随决策进 judge 变量（consistency 维度可见否决依据）
         "fund_manager_decision": "\n".join(fm_parts),
     }

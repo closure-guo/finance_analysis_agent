@@ -186,24 +186,105 @@ class TestExtractJudgeVars:
         assert len(out.encode("utf-8")) <= 4096
         assert "truncated" in parsed["reasoning"]
 
-    def test_rebuttal_coverage_counts_each_round_separately(self):
-        """r1 实证 bug：去重键只用「角色 + 单条发言内序号」，bull 第 1 轮的①与第 2 轮的①
-        被当成同一条——分子封顶在单轮论点数，8 条 trace 全部报「4/8」。被回应的论点
-        须按「哪条发言的第几条」区分。"""
+    def test_risk_judgment_keeps_decision_json_intact(self):
+        """r2 三道关复盘：risk_judgment = 裁决 JSON + 风险辩论尾部，合计超 4096 后外层 _trunc
+        挖心把 JSON 闭合括号挖掉，consistency 材料的【Risk Judge 裁决】人读化失败 9/9。
+        裁决 JSON 须保持完整，辩论尾部只在剩余预算内追加。"""
+        import json as _json
+
+        state = {
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.55,
+                "reasoning": "理由" * 1500,
+                "evidence_refs": [
+                    {
+                        "claim": f"论据 {i}：ROE 3.4%、自由现金流持续为负、健康度 44 分",
+                        "source": "fundamental",
+                    }
+                    for i in range(12)
+                ],
+            },
+            "risk_debate_history": [
+                {
+                    "role": "conservative",
+                    "content": "保守" * 600,
+                    "key_arguments": ["保守论点：期限错配、VaR 不能为回撤背书"] * 6,
+                },
+                {
+                    "role": "neutral",
+                    "content": "中性" * 600,
+                    "key_arguments": ["中性论点：隐含 PE 约 25 倍、切换未完成"] * 6,
+                },
+            ],
+        }
+        out = extract_judge_vars(state)["risk_judgment"]
+        head = out.split("\n", 1)[0]
+        assert _json.loads(head)["action"] == "watch"
+        assert len(out.encode("utf-8")) <= 4096
+        assert "【conservative】" in out or "【neutral】" in out
+
+    def test_rebuttal_coverage_parallel_rounds_full_engagement(self):
+        """r1/r2 复盘：辩论图按轮扇出——bull_r1 与 bear_r1 并行、bull_r2 与 bear_r2 并行
+        （routing.route_to_debate_r1 返回两个 Send）。同轮互不可见，R2 只能回应对方 R1，
+        R2 论点无人可回应。旧实现按「上一条发言 = 对方」推断（历史顺序在扇出下不确定，
+        还会把同方连续发言互相记账），分母又把不可回应的末轮论点算进去——8 条 trace 全
+        「4/8」。新语义：rebuttal_to 指向对方上一轮（prompt 契约原文），分母只算「对方
+        存在更后轮次」的论点。"""
         from evals.extract import _rebuttal_coverage
 
-        def msg(role, args, rebuttal):
-            return {"role": role, "key_arguments": args, "rebuttal_to": rebuttal}
+        def msg(role, rnd, args, rebuttal):
+            return {"role": role, "round": rnd, "key_arguments": args, "rebuttal_to": rebuttal}
 
         history = [
-            msg("bull", ["a1", "a2", "a3", "a4"], []),
-            msg("bear", ["b1", "b2", "b3", "b4"], [1, 2, 3, 4]),
-            msg("bull", ["a5", "a6", "a7", "a8"], [1, 2, 3, 4]),
-            msg("bear", ["b5", "b6", "b7", "b8"], [1, 2, 3, 4]),
+            msg("bull", 1, ["a1", "a2", "a3", "a4"], []),
+            msg("bear", 1, ["b1", "b2", "b3", "b4"], []),
+            msg("bull", 2, ["a5", "a6", "a7", "a8"], [1, 2, 3, 4]),
+            msg("bear", 2, ["b5", "b6", "b7", "b8"], [1, 2, 3, 4]),
         ]
-        # bear 两轮各回应了 bull 当轮全部 4 条 → bull 8/8；bull 第 2 轮回应了 bear 第 1 轮
-        # 全部 4 条，bear 第 2 轮之后无人发言 → bear 4/8
-        assert _rebuttal_coverage(history) == "bull 论点被回应 8/8；bear 论点被回应 4/8"
+        assert _rebuttal_coverage(history) == "bull 论点被回应 4/4；bear 论点被回应 4/4"
+
+    def test_rebuttal_coverage_partial_and_order_independent(self):
+        from evals.extract import _rebuttal_coverage
+
+        def msg(role, rnd, args, rebuttal):
+            return {"role": role, "round": rnd, "key_arguments": args, "rebuttal_to": rebuttal}
+
+        bull1 = msg("bull", 1, ["a1", "a2", "a3", "a4"], [])
+        bear1 = msg("bear", 1, ["b1", "b2", "b3"], [])
+        bull2 = msg("bull", 2, ["a5"], [2])  # 只回应了 bear R1 的②
+        bear2 = msg("bear", 2, ["b4", "b5"], [1, 3, 9])  # 9 越界忽略
+        expected = "bull 论点被回应 2/4；bear 论点被回应 1/3"
+        assert _rebuttal_coverage([bull1, bear1, bull2, bear2]) == expected
+        # 扇出下 state 里的历史顺序不确定：乱序结果必须一致
+        assert _rebuttal_coverage([bull1, bear1, bear2, bull2]) == expected
+        assert _rebuttal_coverage([bear2, bull1, bull2, bear1]) == expected
+
+    def test_rebuttal_coverage_round_field_missing_falls_back_to_occurrence(self):
+        from evals.extract import _rebuttal_coverage
+
+        history = [
+            {"role": "bull", "key_arguments": ["a1", "a2"], "rebuttal_to": []},
+            {"role": "bear", "key_arguments": ["b1"], "rebuttal_to": []},
+            {"role": "bull", "key_arguments": ["a3"], "rebuttal_to": [1]},
+            {"role": "bear", "key_arguments": ["b2"], "rebuttal_to": [2]},
+        ]
+        assert _rebuttal_coverage(history) == "bull 论点被回应 1/2；bear 论点被回应 1/1"
+
+    def test_rebuttal_coverage_none_for_three_party_or_single_round(self):
+        """三方风险辩论对手不唯一、单轮辩论无人可回应 → 不产出覆盖率行。"""
+        from evals.extract import _rebuttal_coverage
+
+        three = [
+            {"role": r, "round": 1, "key_arguments": ["x"], "rebuttal_to": []}
+            for r in ("aggressive", "conservative", "neutral")
+        ]
+        assert _rebuttal_coverage(three) is None
+        single = [
+            {"role": "bull", "round": 1, "key_arguments": ["a"], "rebuttal_to": []},
+            {"role": "bear", "round": 1, "key_arguments": ["b"], "rebuttal_to": []},
+        ]
+        assert _rebuttal_coverage(single) is None
 
     def test_rebuttal_coverage_in_debate_variable(self):
         """D1（1.12）：交锋覆盖率进入 debate_history 变量——确定性指标（零 token），
@@ -220,9 +301,9 @@ class TestExtractJudgeVars:
                 {
                     "role": "bear",
                     "round": 1,
-                    "content": "回应甲和丙",
+                    "content": "开场",
                     "key_arguments": ["反论点一"],
-                    "rebuttal_to": [1, 3],
+                    "rebuttal_to": [],
                 },
                 {
                     "role": "bull",
@@ -230,6 +311,13 @@ class TestExtractJudgeVars:
                     "content": "回应反论点一",
                     "key_arguments": [],
                     "rebuttal_to": [1],
+                },
+                {
+                    "role": "bear",
+                    "round": 2,
+                    "content": "回应甲和丙",
+                    "key_arguments": [],
+                    "rebuttal_to": [1, 3],
                 },
             ],
         }

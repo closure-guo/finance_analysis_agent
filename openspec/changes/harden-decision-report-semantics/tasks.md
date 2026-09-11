@@ -42,6 +42,9 @@
 - [x] 3.9 失败测试 + 实现（r1 复盘）：decision_grounding v6——judge 变量新增 `risk_metrics`（人读一行）与 `risk_debate_history`（按消息截断），rubric 模板加【风控指标】【风险辩论记录】两节 + source 枚举加 risk_*；material DIMENSION_SECTIONS 同步。实证：8 条理由 5 条判风控数字无出处、3 条判中性方论据无出处，2 分置信度 ≤0.5
 - [x] 3.10 失败测试 + 实现（r1 复盘）：`_serialize_decision` 在对象内截断 reasoning（2400B），序列化保持合法 JSON——旧路径序列化后被 `_trunc` 挖心致 JSON 残缺，材料人读化失败（茅台 66009ecb）
 - [x] 3.11 失败测试 + 实现（r1 复盘）：`evals/run.py` 汇总行 `skipped` 取自 task 输出（旧硬编码 None，3 条有意跳过项显示成「跑了但没分」）
+- [x] 3.12 失败测试 + 实现（r2 三道关复盘）：`_rebuttal_coverage` 改为 (role, round) 语义——辩论图按轮扇出并行（route_to_debate_r1/r2 各派两个 Send），rebuttal_to 按 prompt 契约指向对方上一轮；分母只算「对方存在更后轮次」的可回应论点（末轮论点并行结构下永远无人可回应，旧分母把上限压到 50%）；三方/单轮 → None；乱序不变
+- [x] 3.13 失败测试 + 实现（r2 三道关复盘）：`risk_judgment` 变量裁决 JSON 保持完整、风险辩论尾部只在剩余预算内追加（旧整体 _trunc 挖掉闭合括号，consistency 材料【Risk Judge 裁决】9/9 残缺）
+- [x] 3.14 失败测试 + 实现（r2 三道关复盘）：材料人读化逐条列出 evidence_refs「[source] claim」——旧版压成来源分布，标注人看不到任何 claim 而 judge 所见 JSON 每条都在，decision_grounding 人/judge 材料不等价
 
 ## 4. 用户意图贯穿（D4/D5，user-intent-propagation）
 

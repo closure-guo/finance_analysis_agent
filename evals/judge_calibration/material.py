@@ -250,14 +250,14 @@ _DECISION_FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _humanize_decision_obj(obj: dict) -> str:
+def _humanize_decision_obj(obj: dict) -> str | None:
     """决策 dict → 人读多行文本（信息等价，仅格式变化）。"""
     lines: list[str] = []
     for key, label in _DECISION_FIELDS:
         val = obj.get(key)
         if val in (None, ""):
             continue
-        if key == "confidence":
+        if key == "confidence" and isinstance(val, (int, float, str)):
             lines.append(f"{label}: {float(val):.2f}")
         else:
             lines.append(f"{label}: {val}")
@@ -268,6 +268,11 @@ def _humanize_decision_obj(obj: dict) -> str:
         sources = Counter(str((r or {}).get("source", "?")) for r in refs if isinstance(r, dict))
         dist = ", ".join(f"{s}×{n}" for s, n in sources.most_common())
         lines.append(f"论据引用 {len(refs)} 条（{dist}）")
+        # 逐条列出：decision_grounding 的核心动作是逐条核对 claim——judge 所见 JSON 每条
+        # 都在，人读版只给来源分布则人与 judge 材料不等价（r2 三道关复盘）
+        for ref in refs:
+            if isinstance(ref, dict):
+                lines.append(f"  - [{ref.get('source', '?')}] {ref.get('claim', '')}")
     reasoning = str(obj.get("reasoning") or "").strip()
     if reasoning:
         lines.append(f"理由: {reasoning}")

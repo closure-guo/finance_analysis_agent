@@ -393,3 +393,26 @@ class TestXlsx:
         assert loaded[0].human_score == 3.0
         assert loaded[1].human_score is None
         assert loaded[0].dimension == "consistency"
+
+
+class TestHumanizeEvidenceRefsListed:
+    """r2 三道关复盘：人读化把 evidence_refs 压成「论据引用 N 条（来源分布）」，标注人
+    看不到任何 claim，而 judge 所见 JSON 每条 claim 都在——decision_grounding 的核心动作
+    是逐条核对 claim，人与 judge 材料在此维度不等价。每条引用须以「[source] claim」列出。"""
+
+    def test_each_evidence_ref_rendered(self):
+        from evals.judge_calibration.material import humanize_json_blocks
+
+        text = (
+            "【交易决策】\n"
+            '{"action": "sell", "confidence": 0.55, "reasoning": "偏空", '
+            '"evidence_refs": [{"claim": "ROE 仅 3.4%", "source": "fundamental"}, '
+            '{"claim": "MACD 零轴下死叉", "source": "technical"}, '
+            '{"claim": "隐含PE约25倍", "source": "risk_neutral"}]}'
+        )
+        out = humanize_json_blocks(text)
+        assert "论据引用 3 条" in out
+        assert "[fundamental] ROE 仅 3.4%" in out
+        assert "[technical] MACD 零轴下死叉" in out
+        assert "[risk_neutral] 隐含PE约25倍" in out
+        assert '{"action"' not in out
