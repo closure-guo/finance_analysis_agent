@@ -8,36 +8,36 @@
 
 ## 2. 阶段 1：校验器归一（灭 39 条误报）
 
-- [ ] 2.1 fixture 固化：r2 的 39 条 FAIL 逐条落为测试 fixture（每条注明归因类别：路径/单位/词表/方向）
-- [ ] 2.2 失败测试 + 实现：日期 `YYYY-MM-DD` ↔ `YYYYMMDD` 行键双向匹配
-- [ ] 2.3 失败测试 + 实现：`quarterly_trend` 季度标签 ↔ `quarters` 位置索引映射
-- [ ] 2.4 数据根键 `unit` 注册表（先核实 akshare 各表单位）+ 失败测试 + 实现：interpretation 单位词缩放、无单位词 1e4/1e8 比值兜底（`unit_inferred` 标记）
-- [ ] 2.5 失败测试 + 实现：报表域 metric_name 与真实列名一致即判一致；`metric_vocab` 补列名别名
-- [ ] 2.6 失败测试 + 实现：指标 `signed` 注册；符号校验仅对有符号量生效；`direction` prompt 注释（deploy_prompts）
-- [ ] 2.7 注入式故障演练：fixture 注入 ±10% 真值偏差 → 必须 FAIL 且阻断层置位（回归测试长期保留）
-- [ ] 2.8 39 条 fixture 全量重判：预期全部转 PASS/UNVERIFIABLE-verifier-limit，输出终裁对照表落 `tests/validation/`
+- [x] 2.1 fixture 固化：r2 的 39 条 FAIL 逐条落为测试 fixture（每条注明归因类别：路径/单位/词表/方向）
+- [x] 2.2 失败测试 + 实现：日期 `YYYY-MM-DD` ↔ `YYYYMMDD` 行键双向匹配
+- [x] 2.3 失败测试 + 实现：`quarterly_trend` 季度标签 ↔ `quarters` 位置索引映射
+- [x] 2.4 数据根键 `unit` 注册表（先核实 akshare 各表单位）+ 失败测试 + 实现：interpretation 单位词缩放、无单位词 1e4/1e8 比值兜底（`unit_inferred` 标记）
+- [x] 2.5 失败测试 + 实现：报表域 metric_name 与真实列名一致即判一致；`metric_vocab` 补列名别名
+- [x] 2.6 失败测试 + 实现：指标 `signed` 注册；符号校验仅对有符号量生效；`direction` prompt 注释（deploy_prompts）
+- [x] 2.7 注入式故障演练：fixture 注入 ±10% 真值偏差 → 必须 FAIL 且阻断层置位（回归测试长期保留）
+- [x] 2.8 39 条 fixture 全量重判：预期全部转 PASS/UNVERIFIABLE-verifier-limit，输出终裁对照表落 `tests/validation/`
 
 ## 3. 阶段 2：注册表补全（23 条 UNVERIFIABLE → 可验）
 
-- [ ] 3.1 失败测试 + 实现：`garp_result`、`anomalies`、空值比率字段注册重算/集合比对
-- [ ] 3.2 r2/r3 的 23 条 UNVERIFIABLE 逐条重判并并入终裁对照表
+- [x] 3.1 失败测试 + 实现：`garp_result`、`anomalies`、空值比率字段注册重算/集合比对
+- [x] 3.2 r2/r3 的 23 条 UNVERIFIABLE 逐条重判并并入终裁对照表
 
 ## 4. 阶段 3：文本 claim 分型 + 回声匹配（75 条）
 
-- [ ] 4.1 失败测试 + 实现：`claim_type ∈ {entity, regulatory}` 或 `source_type=event` 不进 FAIL 分母、不计覆盖缺口
-- [ ] 4.2 失败测试 + 实现：回声匹配（标题/事件子串归一命中 → PASS(echo)），未命中 → UNVERIFIABLE(text) 单独计数
-- [ ] 4.3 r2 的 75 条舆情 claim 重判，统计回声命中率，落终裁对照表
+- [x] 4.1 失败测试 + 实现：`claim_type ∈ {entity, regulatory}` 或 `source_type=event` 不进 FAIL 分母、不计覆盖缺口
+- [x] 4.2 失败测试 + 实现：回声匹配（标题/事件子串归一命中 → PASS(echo)），未命中 → UNVERIFIABLE(text) 单独计数
+- [x] 4.3 r2 的 75 条舆情 claim 重判，统计回声命中率，落终裁对照表
 
 ## 5. 阶段 4：auto-claim 补覆盖缺口
 
-- [ ] 5.1 失败测试 + 实现：正文数字唯一匹配 state 结构化条目时合成 claim（`auto=True`，含单位缩放）
+- [x] 5.1 失败测试 + 实现：正文数字唯一匹配 state 结构化条目时合成 claim（`auto=True`，含单位缩放）
 - [ ] 5.2 r2/r3 全量重扫：覆盖率 0.69–0.78 → 目标 ≥0.90（警告线）
 
 ## 6. 门禁三层分置 + 指标拆报
 
-- [ ] 6.1 失败测试 + 实现：`citation_blocked` / `citation_coverage_warn` / `citation_unverifiable_ratio`（分文本/未注册）；`citation_minor_fail` 退役
-- [ ] 6.2 失败测试 + 实现：`evals/run.py` 与 trace 元数据拆报（残余 FAIL / verifier_normalized_count / 文本与未注册 UNVERIFIABLE），`citation_pass` 语义变更并在报告注明基线切点（incident 026）
-- [ ] 6.3 前端/报告若呈现 citation_pass：核对展示语义，不适用则标注
+- [x] 6.1 失败测试 + 实现：`citation_blocked` / `citation_coverage_warn` / `citation_unverifiable_ratio`（分文本/未注册）；`citation_minor_fail` 退役
+- [x] 6.2 失败测试 + 实现：`evals/run.py` 与 trace 元数据拆报（残余 FAIL / verifier_normalized_count / 文本与未注册 UNVERIFIABLE），`citation_pass` 语义变更并在报告注明基线切点（incident 026）
+- [x] 6.3 前端/报告若呈现 citation_pass：核对展示语义，不适用则标注
 
 ## 7. 验证与收口
 

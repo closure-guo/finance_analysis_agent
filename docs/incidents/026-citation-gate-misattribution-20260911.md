@@ -1,7 +1,7 @@
 # Incident 026 — citation 门禁把校验器解析缺陷记成分析师引用错误，并据此自动重跑分析师
 
 - **日期**: 2026-09-11（r2 专项归因；现象自门禁上线起持续）
-- **状态**: 第 0 步已执行（自动重试默认停用 + 重写无进展保护 + 空准入集，delta `rework-citation-gate-attribution` 阶段 0）；第 1–4 步与门禁三层分置待执行
+- **状态**: 阶段 0–5 已实施（delta `rework-citation-gate-attribution`，commits `4de9d3f`/`15f65ef`/`04aa075`/`9229ea6`）：重试停用、校验器四类归一、派生字段注册、文本分型回声、auto-claim、门禁三层分置与拆报；137 条离线归因表落 `tests/validation/citation-r2-nonpass-归因对照表.md`（34 误报 / 82 结构不可验 / 22 待终裁——终裁待 owner）。效果验证待 r4
 - **影响面**: 全部 deep 分析；每次 deep 多烧约 4 次分析师 LLM 调用（r2 九条 deep 分析师生成 75 次，fundamental 25 次）；重跑用解析失败的降级版覆盖正常报告（r1 中芯，见 `docs/evals/2026-09-11-judge校准复盘-round5到r3问题发现链.md` §3-4）；实验报告中 `citation_pass` 1/9 被读作「引用可靠性」。
 
 ## 现象
