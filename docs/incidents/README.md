@@ -33,7 +33,7 @@
 | 023  | 2026-09-01 | [quick 通道迁移遗留三大共振 — 旧 spec 确定性全红 + 断连状态泄漏 running + 「flaky」错误归因](023-agui-channel-stale-specs-disconnect-leak.md) | 已修复 |
 | 024  | 2026-09-06 | [App.tsx 流状态所有权分散 — StreamStore 结构性重构根治竞态土壤](024-stream-store-refactor-20260906.md) | 已修复   |
 | 025  | 2026-09-07 | [opencode zen/go 网关强制 x-opencode-session 头 — 离线 judge 链路全挂约两周](025-opencode-session-header-20260907.md) | 已修复   |
-| 026  | 2026-09-11 | [citation 门禁把校验器解析缺陷记成分析师引用错误并自动重跑分析师 — 39 FAIL 抽样无一真错、重试 100% 打在误报桶](026-citation-gate-misattribution-20260911.md) | 第 0 步已执行，1–4 待执行 |
+| 026  | 2026-09-11 | [citation 门禁把校验器解析缺陷记成分析师引用错误并自动重跑分析师 — 39 FAIL 抽样无一真错、重试 100% 打在误报桶](026-citation-gate-misattribution-20260911.md) | 阶段 0–5 已实施，r4 验��通过，终裁待 owner |
 
 ---
 
