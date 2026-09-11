@@ -154,7 +154,9 @@ def _is_dataframe(obj: object) -> TypeGuard[pd.DataFrame]:
     return hasattr(obj, "columns") and hasattr(obj, "iloc")
 
 
-def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
+def _resolve_field_ref(
+    field_ref: str, state: dict, claim_period: str | None = None
+) -> object | None:
     """按 "." 分割路径（含 `[N]` 括号展开），逐层遍历 state dict / list / DataFrame。
 
     - 负索引（修 A）：list[-N] = 倒数第 N 个（-1 = 最新一期），与序列长度及
@@ -166,6 +168,7 @@ def _resolve_field_ref(field_ref: str, state: dict) -> object | None:
       时，若当前 part 不是该 dict 的键，先自动下钻 records 再解析，保持
       field_ref 语义（macro_indicators.cpi.0.<列>）不变。
     """
+    state = {**state, "_claim_period": claim_period} if claim_period else state
     parts = _normalize_quarter_segments(_expand_brackets(field_ref), state)
     current: object = state
     i = 0
@@ -223,6 +226,12 @@ def _normalize_quarter_segments(parts: list[str], state: dict) -> list[str]:
                 out.append(str(labels.index(label)))
                 continue
         out.append(seg)
+    # r4 残余：路径止于序列名（如 quarterly_trend.yoy）而 claim.period 携带季度标签
+    # → 追加位置段，等价于 claim 指向该季度的序列值
+    if isinstance(trend, dict) and len(out) >= 2 and out[-1] not in labels and out[-1] in trend:
+        period = str(state.get("_claim_period") or "").upper()
+        if _QUARTER_LABEL_RE.match(period) and period in labels:
+            out.append(str(labels.index(period)))
     return out
 
 
@@ -439,7 +448,7 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     field_ref 解析结果非数值（dict/list 等，LLM 偶发指到容器节点）时按
     FAIL 处理而非抛 TypeError 炸管线（baseline-v2 r3 回归）。
     """
-    ground_truth = _resolve_field_ref(claim.field_ref, state)
+    ground_truth = _resolve_field_ref(claim.field_ref, state, claim.period)
     if not isinstance(ground_truth, int | float | str):
         return CitationResult(
             status="FAIL",
@@ -474,7 +483,18 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     # ——不比符号，记覆盖缺口提示（歧义降级而非 FAIL）
     signed = _is_signed_claim(claim)
     direction_misapplied = declared_sign is not None and declared_sign != 0 and not signed
-    eff = sv_float * declared_sign if (declared_sign is not None and signed) else sv_float
+    # 阶段 1 r4 残余：stated 已带符号且与 direction 同向（-10.40 + negative）——
+    # 数值本身即事实，不翻号（否则双重否定判 direction_mismatch 误报）
+    double_signed = (
+        declared_sign is not None
+        and signed
+        and ((declared_sign == -1 and sv_float < 0) or (declared_sign == 1 and sv_float > 0))
+    )
+    eff = (
+        sv_float * declared_sign
+        if (declared_sign is not None and signed and not double_signed)
+        else sv_float
+    )
     eff_sign = 1 if eff > 0 else (-1 if eff < 0 else 0)
     gt_sign = 1 if gt_float > 0 else (-1 if gt_float < 0 else 0)
     if (

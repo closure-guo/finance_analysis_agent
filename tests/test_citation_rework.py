@@ -281,3 +281,39 @@ class TestInjectionDrill:
         )
         r = _one(c, {"income_statement": _income_df()})
         assert r.status == "FAIL" and r.bucket == "value_mismatch"
+
+
+class TestR4ResidualTolerances:
+    """r4 残余 FAIL 归因（tests/data/citation_r4_claims.json）：5 条 direction_mismatch 全为
+    「stated 已带负号 + direction=negative」的双重否定；8 条 path_unresolvable 中
+    quarterly_trend 序列缺季度段但 claim.period 携带季度标签。两者事实无歧义，校验器容忍。"""
+
+    def test_double_negative_declaration_is_sign_consistent(self):
+        c = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="growth_rates.profitability.营业收入",
+            stated_value=-10.397764,
+            interpretation="2025年营收同比下降10.40%",
+            metric_name="营业收入",
+            period="2025",
+            direction="negative",
+        )
+        r = _one(c, {"growth_rates": {"profitability": {"营业收入": -0.10397764}}})
+        assert r.status == "PASS", r
+        assert r.bucket is None
+
+    def test_quarter_series_without_segment_uses_claim_period(self):
+        c = Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref="quarterly_trend.yoy",
+            stated_value=6.9,
+            interpretation="2026Q2归母净利润同比下降6.9%",
+            metric_name="同比",
+            period="2026Q2",
+            direction="negative",
+        )
+        state = {"quarterly_trend": {"quarters": ["2026Q1", "2026Q2"], "yoy": [-55.38, -6.9]}}
+        r = _one(c, state)
+        assert r.status == "PASS", r
