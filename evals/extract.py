@@ -297,12 +297,22 @@ def _serialize_decision(decision: object) -> str:
     TradeDecision 为 pydantic 模型,json.dumps 直传会抛
     'Object of type TradeDecision is not JSON serializable'。
     pydantic 用 model_dump();dict 直传;其余 str() 兜底。
+    长 reasoning 在对象内截断（而非序列化后由 _trunc 挖心）——r1 实证茅台裁决被
+    挖掉 2349 字节后 JSON 残缺，材料人读化解析失败，标注人与 judge 看到原始残缺 JSON。
     """
     if not decision:
         return ""
     try:
-        if hasattr(decision, "model_dump"):
-            return json.dumps(decision.model_dump(), ensure_ascii=False)
-        return json.dumps(decision, ensure_ascii=False)
+        data = decision.model_dump() if hasattr(decision, "model_dump") else decision
+        if isinstance(data, dict) and isinstance(data.get("reasoning"), str):
+            data = {
+                **data,
+                "reasoning": truncate_for_trace(data["reasoning"], _DECISION_REASONING_MAX_BYTES),
+            }
+        return json.dumps(data, ensure_ascii=False)
     except (TypeError, ValueError):
         return str(decision)
+
+
+# 裁决 reasoning 上限：与 evidence_refs（十余条 claim ≈ 1KB）合计留在 _JUDGE_MAX_BYTES 之内
+_DECISION_REASONING_MAX_BYTES = 2400

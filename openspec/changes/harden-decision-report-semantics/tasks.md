@@ -40,6 +40,8 @@
 - [x] 3.7 失败测试 + 实现：标注材料人类可读渲染——【交易决策】等节的转义 JSON 解析为人读格式（action/置信度/仓位/论据来源分布/理由分行），解析失败保持原文；展示层渲染不改变信息内容（同口径保持）
 - [x] 3.8 report_relevance rubric 口径修订（v3）：「切题=回答了用户的问题」——覆盖维度但回避用户所问的直接决策问题 SHALL ≤3；Safety 约束下如实说明约束并给可行答案 SHALL 视为已回答；失败测试锁定新口径措辞 + decision_grounding 式全量重评报告验证分歧收敛
 - [x] 3.9 失败测试 + 实现（r1 复盘）：decision_grounding v6——judge 变量新增 `risk_metrics`（人读一行）与 `risk_debate_history`（按消息截断），rubric 模板加【风控指标】【风险辩论记录】两节 + source 枚举加 risk_*；material DIMENSION_SECTIONS 同步。实证：8 条理由 5 条判风控数字无出处、3 条判中性方论据无出处，2 分置信度 ≤0.5
+- [x] 3.10 失败测试 + 实现（r1 复盘）：`_serialize_decision` 在对象内截断 reasoning（2400B），序列化保持合法 JSON——旧路径序列化后被 `_trunc` 挖心致 JSON 残缺，材料人读化失败（茅台 66009ecb）
+- [x] 3.11 失败测试 + 实现（r1 复盘）：`evals/run.py` 汇总行 `skipped` 取自 task 输出（旧硬编码 None，3 条有意跳过项显示成「跑了但没分」）
 
 ## 4. 用户意图贯穿（D4/D5，user-intent-propagation）
 

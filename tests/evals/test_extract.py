@@ -165,6 +165,27 @@ class TestExtractJudgeVars:
         assert out["risk_metrics"] == ""
         assert out["risk_debate_history"] == ""
 
+    def test_long_reasoning_decision_stays_valid_json(self):
+        """r1 复盘（茅台 66009ecb）：_serialize_decision 先出 JSON 再被 _trunc 挖心 2349 字节，
+        残缺 JSON 人读化解析不了，标注人与 judge 都看到原始残缺 JSON。长 reasoning 须在
+        对象内截断，序列化结果保持合法 JSON。"""
+        import json as _json
+
+        state = {
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.55,
+                "reasoning": "理由" * 3000,
+                "evidence_refs": [{"claim": "beta 0.05", "source": "risk_metrics"}],
+            }
+        }
+        out = extract_judge_vars(state)["trade_decision"]
+        parsed = _json.loads(out)
+        assert parsed["action"] == "watch"
+        assert parsed["evidence_refs"][0]["source"] == "risk_metrics"
+        assert len(out.encode("utf-8")) <= 4096
+        assert "truncated" in parsed["reasoning"]
+
     def test_rebuttal_coverage_counts_each_round_separately(self):
         """r1 实证 bug：去重键只用「角色 + 单条发言内序号」，bull 第 1 轮的①与第 2 轮的①
         被当成同一条——分子封顶在单轮论点数，8 条 trace 全部报「4/8」。被回应的论点

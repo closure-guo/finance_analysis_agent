@@ -169,6 +169,25 @@ def all_evaluators() -> list:
     ] + [_judge_adapter(d) for d in _JUDGE_DIMS]
 
 
+def _rows_from_results(item_results: list) -> list[dict]:
+    """实验结果 → 汇总行。skipped 取自 task 输出（harness 有意跳过的项带原因），
+    此前硬编码 None 使跳过项在汇总表里显示成「跑了但没分」。"""
+    rows = []
+    for r in item_results:
+        output = getattr(r, "output", None) or {}
+        skipped = output.get("skipped") if isinstance(output, dict) else None
+        rows.append(
+            {
+                "item": str(r.item.input.get("query")),
+                "mode": r.item.input.get("mode"),
+                "skipped": skipped or None,
+                "scores": {e.name: e.value for e in r.evaluations if e.value is not None},
+                "judge_failures": sum(1 for e in r.evaluations if e.value is None),
+            }
+        )
+    return rows
+
+
 def _mean_rows(rows: list[dict]) -> dict:
     """各 Score 均值(None 不计入)+ judge 失败总数。"""
     buckets: dict[str, list[float]] = {}
@@ -274,16 +293,7 @@ def main() -> None:
         max_concurrency=1,  # 管线分钟级,禁高并发
         metadata={"prompt_versions": prompt_versions, "dataset": args.dataset},
     )
-    rows = [
-        {
-            "item": str(r.item.input.get("query")),
-            "mode": r.item.input.get("mode"),
-            "skipped": None,
-            "scores": {e.name: e.value for e in r.evaluations if e.value is not None},
-            "judge_failures": sum(1 for e in r.evaluations if e.value is None),
-        }
-        for r in result.item_results
-    ]
+    rows = _rows_from_results(result.item_results)
 
     means = _mean_rows(rows)
     _print_table(rows, means)
