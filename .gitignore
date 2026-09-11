@@ -283,3 +283,6 @@ tests/e2e/playwright/tmp_body.json
 
 # judge 端点切换前的本地备份（含 key，不入库）
 .env.bak-*
+
+# Excel 锁文件（标注表被打开时产生）
+~$*
