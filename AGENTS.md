@@ -63,6 +63,7 @@ cd frontend && npm test               # 前端测试
 - [ ] archive 前置条件：`tasks.md` 全勾 + verification 通过 + E2E 门禁通过（交互类适用）+ 人工验证报告落 `tests/validation/`
 - [ ] 排查 bug 必须同时查后端日志和 Langfuse trace
 - [ ] 系统性问题记录到 `docs/incidents/`（编号文档 + 更新 README 索引）
+- [ ] 指标低 ≠ 能力差：任何聚合指标进入处置（重试 / 改 prompt / 判定 agent 缺陷 / 写进报告结论）前，必须先分桶归因、逐条人工终裁；自动化处置只允许挂在终裁为「真错误」的桶上（incident 026）
 - [ ] Issue 一律用 `gh` CLI；标签规范见 `docs/agents/triage-labels.md`
 
 ---
@@ -72,3 +73,22 @@ cd frontend && npm test               # 前端测试
 - E2E（真实浏览器）和集成测试（直连 API）分工明确，详见 `project-workflow.md` §5.6
 - 产物位置：fixtures → `tests/fixtures/`｜脚本 → `scripts/`（部署类）与 `tests/scripts/`（测试辅助）｜验证报告 → `tests/validation/`｜E2E 输出 → `tests/e2e/`｜报告 → `reports/`
 - 提示词权威源：`src/finance_agent/prompts/*.md`（git 跟踪）是唯一权威源，Langfuse 为部署产物快照；修改 prompt 后必须执行 `uv run python scripts/deploy_prompts.py` 发布，否则 eval 门禁拒绝运行（见 openspec specs/prompt-deploy-consistency）
+
+---
+
+## 评估约束
+
+**指标存放**（唯一查询入口，不得另建副本）：
+
+- `docs/evals/metrics.md`：指标台账——口径定义（每个指标的定义 / 代码位置 / rubric 版本 / 基线切点）+ 每轮实验时间线 + 待终裁与待决策清单。**口径变更先改 §1 再动代码**
+- `docs/evals/metrics/runs.jsonl`：每轮实验一行的机器可读摘要（run / HEAD@启动 / means）
+- Langfuse Scores = 逐 trace 明细真源；`reports/evals/*.json` = 单次实验全量产物（本地，不入库）
+- 校准数据 → `evals/judge_calibration/data/`｜校准与复盘报告 → `docs/evals/`｜归因 / 终裁对照表 → `tests/validation/`
+
+**评估 SOP**（一次只动一个变量）：
+
+1. **先修 judge 输入，再标注**：交标注表前必须过三道关——①逐行通读材料（程序查在不在，人查可不可信）；②跨层一致性（每层看到的 = 上游产出的、judge 变量 = state、材料数字可溯源到上游章节）；③整齐得可疑的数字（全 5 分 / 全 0.55 / 全 4/8）先解释再放行。三关未过不得交表
+2. **指标异常先归因**：按桶分解 → 逐条人工终裁 → 处置对象必须匹配归因桶（契约病修契约、解析病修解析器、真幻觉才修分析师）；混合指标须拆报，不得把校验器误报读成分析师幻觉
+3. **实验收口**：健康检查（分数齐全度 / 解析失败率 / confidence 落库率）→ 契约抽验 → `metrics.md` 时间线加一行 + `runs.jsonl` 追加 → 校准报告落 `docs/evals/`
+4. **观测数据会撒谎**：根 span 元数据会被覆盖、兜底文案会谎称「数据缺失」——排查必须回到节点原始输入/输出，LLM 在理由里抱怨输入缺失是比分数更强的信号
+5. 人工标注是 judge 的终裁：judge 分零方差的维度不能算 Spearman，以 MAE / 方向一致率为主
