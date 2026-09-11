@@ -6,6 +6,7 @@ citation_pass 驱动 after_citation 路由：PASS -> 渲染，FAIL -> 重试。
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 
@@ -329,12 +330,35 @@ def verify_citations(state: dict) -> dict:
             level="WARNING",
         )
 
+    # 阶段 0 停滞保护（incident 026）：记录本轮重试目标的输出哈希；若上一轮已记录
+    # 且目标分析师重跑后哈希全部未变（重写文本不变），立即放行，不等失败率停滞判定
+    prev_hash: dict[str, str] = dict(state.get("citation_retry_prev_hash") or {})
+    cur_hash = {
+        agent: hashlib.md5(
+            _markdown_of(reports[agent]).encode("utf-8"), usedforsecurity=False
+        ).hexdigest()
+        for agent in retry_targets
+        if agent in reports
+    }
+    no_progress = (
+        bool(prev_hash)
+        and bool(cur_hash)
+        and all(prev_hash.get(a) == h for a, h in cur_hash.items())
+    )
+    if no_progress:
+        update_current_span(
+            metadata={"citation_retry_no_progress": True, "targets": sorted(cur_hash)},
+            level="WARNING",
+        )
+
     return {
         "citation_report": report.model_dump(),
         "citation_pass": report.all_passed,
         "iteration_count": iteration_count + 1,
         "citation_fail_rates": fail_rates,
         "citation_minor_fail": minor_fail,
+        "citation_retry_prev_hash": cur_hash or prev_hash,
+        "citation_retry_no_progress": no_progress,
         "citation_retry_targets": retry_targets,
         "citation_retry_feedback": retry_feedback,
         "citation_fail_buckets": fail_buckets,

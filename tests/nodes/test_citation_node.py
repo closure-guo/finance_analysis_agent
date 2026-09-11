@@ -802,7 +802,10 @@ class TestCoverageGapFeedbackD6:
 class TestAfterCitationCoverageGap:
     """D6：after_citation 对 coverage 缺口走重试（共享迭代上限）。"""
 
-    def test_coverage_gap_routes_retry(self):
+    def test_coverage_gap_routes_retry(self, monkeypatch):
+        from finance_agent import routing
+
+        monkeypatch.setattr(routing, "CITATION_AUTO_RETRY_ENABLED", True)
         from finance_agent.routing import after_citation
 
         assert (
@@ -1061,7 +1064,7 @@ class TestSurgicalRepairIntegration:
         ]
         state = {
             "analyst_reports": {"fundamental": _report("fundamental", claims, md)},
-            "solvency_metrics": {"资产负债率": {"2023": 38.0}},
+            "solvency_metrics": {"资产负债率": {"2021": 36.0, "2022": 37.0, "2023": 38.0}},
         }
 
         # 真实 repair_claims 的 LLM 输出契约：report 修正值 + 整句回填
@@ -1086,3 +1089,74 @@ class TestSurgicalRepairIntegration:
         rpt = out["analyst_reports"]["fundamental"]
         md2 = rpt.markdown if hasattr(rpt, "markdown") else rpt["markdown"]
         assert "38.0%" in md2 and "99.0%" not in md2
+
+
+class TestRetryNoProgress:
+    """阶段 0 停滞保护（incident 026）：重试启用态下，目标分析师重跑后输出内容
+    不变（哈希一致）→ 置 citation_retry_no_progress，路由立即放行，不等失败率
+    停滞判定——重跑分析师不改变表述时继续重跑纯属烧钱。"""
+
+    def _claims(self) -> list[Claim]:
+        # ≥3 处值级失败才进全量重试目标（<3 走 surgical 单点修复分流）
+        return [
+            Claim(
+                claim_type="numerical",
+                source_type="data",
+                field_ref=f"solvency_metrics.资产负债率.{year}",
+                stated_value=99.0,
+                interpretation=f"{year} 年资产负债率 99%",
+            )
+            for year in ("2021", "2022", "2023")
+        ]
+
+    def test_first_round_records_prev_hash(self):
+        report = _report("fundamental", self._claims(), "资产负债率 99%")
+        state = {
+            "analyst_reports": {"fundamental": report, "macro": _report("macro", [], "CPI 温和")},
+            "solvency_metrics": {"资产负债率": {"2021": 36.0, "2022": 37.0, "2023": 38.0}},
+        }
+        out = verify_citations(state)
+        import hashlib
+
+        expected = hashlib.md5(report.markdown.encode("utf-8"), usedforsecurity=False).hexdigest()
+        assert out["citation_retry_prev_hash"] == {"fundamental": expected}
+        assert out["citation_retry_no_progress"] is False
+
+    def test_unchanged_rerun_sets_no_progress(self):
+        import hashlib
+
+        report = _report("fundamental", self._claims(), "资产负债率 99%")
+        h = hashlib.md5(report.markdown.encode("utf-8"), usedforsecurity=False).hexdigest()
+        state = {
+            "analyst_reports": {"fundamental": report, "macro": _report("macro", [], "CPI 温和")},
+            "solvency_metrics": {"资产负债率": {"2021": 36.0, "2022": 37.0, "2023": 38.0}},
+            "citation_retry_prev_hash": {"fundamental": h},
+        }
+        out = verify_citations(state)
+        assert out["citation_retry_no_progress"] is True
+
+    def test_changed_rerun_keeps_retrying(self):
+        report = _report("fundamental", self._claims(), "改写后的资产负债率 99%")
+        state = {
+            "analyst_reports": {"fundamental": report, "macro": _report("macro", [], "CPI 温和")},
+            "solvency_metrics": {"资产负债率": {"2021": 36.0, "2022": 37.0, "2023": 38.0}},
+            "citation_retry_prev_hash": {"fundamental": "旧哈希"},
+        }
+        out = verify_citations(state)
+        assert out["citation_retry_no_progress"] is False
+
+    def test_no_progress_flag_renders_in_routing(self, monkeypatch):
+        from finance_agent import routing
+
+        monkeypatch.setattr(routing, "CITATION_AUTO_RETRY_ENABLED", True)
+        assert (
+            routing.after_citation(
+                {
+                    "citation_pass": False,
+                    "citation_retry_targets": ["fundamental"],
+                    "citation_retry_no_progress": True,
+                    "iteration_count": 1,
+                }
+            )
+            == "render"
+        )

@@ -114,6 +114,9 @@ class AnalysisState(TypedDict, total=False):
     citation_minor_fail: bool  # 轻微失败降级放行（skip-citation-retry-on-minor-failures）
     # harden-citation-semantic-coverage：FAIL 分桶与定向重试
     citation_retry_targets: list[str]  # 值级 FAIL 分析师（Send 定向重跑）
+    # 阶段 0 停滞保护（incident 026）：重试目标输出哈希与「重写无进展」标记
+    citation_retry_prev_hash: dict[str, str]
+    citation_retry_no_progress: bool
     citation_retry_feedback: dict[str, list[dict]]  # 每分析师失败明细（重试上下文注入）
     citation_fail_buckets: dict[str, int]  # 桶计数（value_mismatch/path_unresolvable/...）
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
