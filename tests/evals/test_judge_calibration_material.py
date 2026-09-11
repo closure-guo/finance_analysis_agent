@@ -451,3 +451,32 @@ class TestTailAnchorAndAllBlocks:
         out = humanize_json_blocks(text)
         assert '{"action"' not in out
         assert "action: buy" in out and "action: watch" in out
+
+
+class TestRulingDebateBoundary:
+    """round7 全量审计（9/9 consistency 行）：risk_judgment 变量 = 裁决 + 风险辩论尾部，
+    人读版裁决节直接粘连【conservative】等辩论正文，标注人易当作裁决内容。
+    尾部须加显式边界标签，信息等价。"""
+
+    def test_tail_gets_boundary_label(self):
+        from evals.judge_calibration.material import build_summary
+
+        rendered = _render(
+            "consistency",
+            {
+                "analyst_reports": "【technical】偏多",
+                "research_manager_decision": "评级: 中性（置信度 0.55）",
+                "risk_judgment": '{"action": "hold", "confidence": 0.5, "reasoning": "观望"}\n【conservative】论点: 需止损\n【neutral】论点: 等待确认',
+                "fund_manager_decision": "approve",
+                "report_conclusion": "综合观望。",
+            },
+        )
+        s = build_summary(rendered, "consistency")
+        assert "action: hold" in s
+        assert "【附：裁决所依据的风险辩论】" in s
+        assert (
+            s.index("action: hold")
+            < s.index("【附：裁决所依据的风险辩论】")
+            < s.index("【conservative】论点: 需止损")
+        )
+        assert "评分前必读" not in s

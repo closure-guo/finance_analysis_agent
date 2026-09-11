@@ -234,6 +234,8 @@ def build_summary(rendered: str | None, dimension: str, *, limit: int | None = N
         # 信息等价仅格式变化，解析失败保持原文。须在 limit 截断前执行（截断会
         # 切断 JSON 块导致解析失败）。
         text = humanize_json_blocks(text)
+        if label == "【Risk Judge 裁决】":
+            text = _label_ruling_debate_tail(text)
         if label not in _AGENT_SECTIONS and len(text) > limit:
             text = text[:limit] + "…"
         if label in _AGENT_SECTIONS and "【" in text:
@@ -245,6 +247,18 @@ def build_summary(rendered: str | None, dimension: str, *, limit: int | None = N
 
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+_RISK_DEBATE_HEAD_RE = re.compile(r"【(aggressive|conservative|neutral)】")
+_RULING_TAIL_LABEL = "【附：裁决所依据的风险辩论】"
+
+
+def _label_ruling_debate_tail(text: str) -> str:
+    """risk_judgment 变量 = 裁决 + 风险辩论尾部（judge 输入设计）；人读版在裁决之后、
+    首个风险辩论方标记之前插入边界标签，避免把辩论正文当裁决内容（round7 审计 9/9 行）。"""
+    m = _RISK_DEBATE_HEAD_RE.search(text)
+    if not m or _RULING_TAIL_LABEL in text:
+        return text
+    return text[: m.start()].rstrip() + "\n\n" + _RULING_TAIL_LABEL + "\n" + text[m.start() :]
+
 
 # 决策类 JSON 的人读字段顺序（出现的渲染，未出现的跳过）
 _DECISION_FIELDS: tuple[tuple[str, str], ...] = (

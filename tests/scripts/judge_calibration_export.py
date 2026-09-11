@@ -53,7 +53,7 @@ def _auth() -> str:
 
 
 def export_to_jsonl(
-    out: Path, limit: int, from_timestamp: str | None = None
+    out: Path, limit: int, from_timestamp: str | None = None, to_timestamp: str | None = None
 ) -> list[dict[str, Any]]:
     from evals.judge_calibration.measure import DEFAULT_DIMENSIONS
 
@@ -88,6 +88,9 @@ def export_to_jsonl(
     params_base: dict[str, Any] = {"limit": 100}
     if from_timestamp:
         params_base["fromTimestamp"] = from_timestamp
+    if to_timestamp:
+        # 上界：后续实验落库后，仅 fromTimestamp 会把新一轮的 trace 混进来（round7 v2 实测）
+        params_base["toTimestamp"] = to_timestamp
     while len(per_trace) < limit and page <= 30:
         resp = requests.get(
             f"{LANGFUSE_HOST}/api/public/scores",
@@ -210,6 +213,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="judge-人工校准标注抽样导出")
     parser.add_argument("--limit", type=int, default=30, help="抽样 trace 数（默认 30）")
     parser.add_argument(
+        "--to-timestamp",
+        default=None,
+        help="只抽该时刻之前的 judge 分数（ISO 8601）——与 --from-timestamp 组成单轮实验窗口",
+    )
+    parser.add_argument(
         "--from-timestamp",
         default=None,
         help="只抽该时刻之后的 judge 分数（ISO 8601，如 2026-09-10T13:13:00Z）——"
@@ -250,7 +258,9 @@ def main() -> None:
         "供 measure.py --judge-jsonl 合并计算一致性，非标注展示）",
     )
     args = parser.parse_args()
-    payload = export_to_jsonl(args.out, args.limit, from_timestamp=args.from_timestamp)
+    payload = export_to_jsonl(
+        args.out, args.limit, from_timestamp=args.from_timestamp, to_timestamp=args.to_timestamp
+    )
 
     if args.csv or args.xlsx or args.blind_xlsx or args.blind_judge:
         from evals.judge_calibration.material import to_csv, to_xlsx

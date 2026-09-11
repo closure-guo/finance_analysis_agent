@@ -189,7 +189,7 @@ def _summarize_debate(history: list) -> str:
     # 整体 head/tail 截断会把中间轮次连标签一起挖掉（judge 评「逐条交锋」时
     # 看不到交锋过程，2026-09-10 实测回归：2fd1ee6d 的【bear】标签被挖掉）。
     # 4 条发言 × 800 字节 ≈ 3200 < _JUDGE_MAX_BYTES(4096)，外层 _trunc 兜底不再命中。
-    _MESSAGE_MAX_BYTES = 6000
+    _MESSAGE_MAX_BYTES = 24000  # round7 审计：单条风险辩论消息达 20.9KB，6000 仍拦腰截断
     # 论点行上限：key_arguments 是每轮立场骨架（LLM 已结构化输出），截正文时骨架
     # 必须全数在场——judge 的「逐条回应对方论点」以论点行为对照锚点。
     _ARGUMENTS_MAX_BYTES = 2000
