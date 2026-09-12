@@ -383,9 +383,14 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
     }
 
     case 'done': {
-      const nextMessages = messages.map((m) =>
-        m.streaming ? { ...m, streaming: false } : m,
-      )
+      // 管线终态标记（fix-pipeline-timer）：done = 分析全流程结束，计时器据此停止
+      const nextMessages = messages.map((m) => {
+        let next = m.streaming ? { ...m, streaming: false } : m
+        if (next.type === 'pipeline') {
+          next = { ...next, terminated: true }
+        }
+        return next
+      })
       return { ...state, phase: 'done', messages: nextMessages }
     }
 
@@ -395,6 +400,10 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
         // 运行中管线收口提示（progress===1 的已完成时间轴不覆盖）
         if (next.type === 'pipeline' && next.progress !== 1) {
           next = { ...next, content: '输出已中断，可追问继续' }
+        }
+        // 管线终态标记（fix-pipeline-timer）：计时器据此停止
+        if (next.type === 'pipeline') {
+          next = { ...next, terminated: true }
         }
         return next
       })

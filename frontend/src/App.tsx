@@ -1829,8 +1829,13 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
   const isCompleted = progress === 1
   const [summaryExpanded, setSummaryExpanded] = useState(false)
 
-  // ETA 每秒刷新（仅管线运行中；完成后停止计时）
-  const pipelineDone = completed.includes('generate_file') || completed.includes('fund_manager')
+  // 计时器生命周期（fix-pipeline-timer，systematic-debugging 2026-09-12）：
+  // 以真实终态为准——terminated（done/interrupted 事件落的消息标记）或 progress===1
+  // （恢复的已完成会话，即上方 isCompleted）。旧判据「completedNodes 含
+  // fund_manager/generate_file」是节点代理，三处失真：中断/取消时节点永不完成
+  // （计时器永不停）；恢复会话 completedNodes 为空（永不停）；FM 退回时 backend
+  // 对 ≤FM 整体标记完成（提前停）。
+  const pipelineDone = isCompleted || msg.terminated === true
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     if (pipelineDone) return
@@ -1839,13 +1844,14 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
   }, [pipelineDone])
 
   const elapsedMs = msg.startedAt ? Math.max(0, nowMs - msg.startedAt) : 0
-  const estimatedTotalMs = estimateTotalMs(loadDurations())
-  const remainingMs = estimateRemainingMs(elapsedMs, progress, estimatedTotalMs)
-  const etaText = pipelineDone
-    ? `总耗时 ${formatDurationMs(elapsedMs)}`
-    : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
   // 完成摘要条总用时：重建路径 durationMs（报告耗时）优先，live 路径用 completedAt-startedAt
   const totalMs = msg.durationMs ?? (msg.completedAt && msg.startedAt ? msg.completedAt - msg.startedAt : elapsedMs)
+  const estimatedTotalMs = estimateTotalMs(loadDurations())
+  const remainingMs = estimateRemainingMs(elapsedMs, progress, estimatedTotalMs)
+  // 完成态显示 totalMs（恢复会话 startedAt 缺失，elapsedMs 恒 0，须回退 durationMs）
+  const etaText = pipelineDone
+    ? `总耗时 ${formatDurationMs(totalMs)}`
+    : `已用时 ${formatDurationMs(elapsedMs)} · 预计剩余 ~${formatDurationMs(remainingMs)}`
   // 阶段数：completedNodes 优先；重建会话该字段为空，从 layerTree 统计已完成子节点回退
   const completedCount =
     completed.length > 0
@@ -1899,7 +1905,7 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
                   <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{msg.content || '准备中...'}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
+                  <span data-testid="pipeline-eta" className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
                   {!isNarrow && (
                     <div data-testid="pipeline-view-toggle" className="flex rounded-md overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
                       <button
