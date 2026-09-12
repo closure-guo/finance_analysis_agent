@@ -385,6 +385,9 @@ export interface UIMessage {
   completedAt?: number
   // 分层时间轴状态树（redesign delta）：node_start/node_complete 驱动的 6 层→子节点状态
   layerTree?: import('./pipelineTree').LayerNode[]
+  // 节点启动次数（add-pipeline-graph-view）：node_id → node_start 累计次数，
+  // graph 视图迭代徽标数据源；与 layerTree 单调状态机独立
+  nodeStartCounts?: Record<string, number>
   // Report-specific
   reportMarkdown?: string
   chartData?: ChartData

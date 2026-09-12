@@ -115,6 +115,11 @@ function applyPipelineEvent(messages: UIMessage[], event: SSEEvent): UIMessage[]
         currentNode: event.node_id,
         content: `${event.layer}: ${event.desc}...`,
         layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
+        // 迭代计数（add-pipeline-graph-view）：重跑累计，graph 徽标数据源
+        nodeStartCounts: {
+          ...(pipelineMsg.nodeStartCounts ?? {}),
+          [event.node_id]: (pipelineMsg.nodeStartCounts?.[event.node_id] ?? 0) + 1,
+        },
       })
 
     case 'node_timing':
