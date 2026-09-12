@@ -3,10 +3,10 @@
 // 供 graphModel 迭代徽标使用；node_timing/node_complete 不累计。
 import { describe, expect, it } from 'vitest'
 import { reduce } from '../stores/streamStore/reduce'
-import { IDLE_STATE, resetMsgIdCounter } from '../stores/streamStore/types'
+import { IDLE_STATE, resetMsgIdCounter, type SessionStreamState } from '../stores/streamStore/types'
 import type { SSEEvent, UIMessage } from '../types'
 
-function stateWithPipeline() {
+function stateWithPipeline(): SessionStreamState {
   resetMsgIdCounter()
   const msg: UIMessage = {
     id: 'msg-1',

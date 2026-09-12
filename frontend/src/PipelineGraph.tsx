@@ -52,7 +52,7 @@ function formatDuration(ms?: number): string {
 // ── 自定义节点 ──
 
 function PipelineNode({ data }: NodeProps) {
-  const node = data as GraphNode
+  const node = data as unknown as GraphNode
   const running = node.status === 'running'
   return (
     <div
@@ -119,7 +119,6 @@ export function PipelineGraph({ tree, startCounts, onViewDetails }: PipelineGrap
     () => nodes.map((n) => ({ id: n.id, type: 'pipeline', position: n.position, data: n as unknown as Record<string, unknown> })),
     [nodes],
   )
-
   const rfEdges: Edge[] = useMemo(
     () =>
       edges.map((e) => ({
