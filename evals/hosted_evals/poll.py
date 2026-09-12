@@ -47,6 +47,15 @@ class ScoreRecord:
     trace_id: str
     config_id: str | None
     created_at: str
+    source: str | None = None
+
+
+def filter_eval_source(records: list[ScoreRecord]) -> list[ScoreRecord]:
+    """只保留 hosted evaluator 产出（source=EVAL）。
+
+    3.225.7 实证：hosted 分数 config_id=NULL，configId 不可作判别键；
+    API 写入的离线 judge 分 source=API。无 source 的旧记录按不可判别丢弃。"""
+    return [r for r in records if r.source == "EVAL"]
 
 
 @dataclass
@@ -112,6 +121,7 @@ def fetch_scores(
                     trace_id=str(r.get("traceId") or ""),
                     config_id=r.get("configId"),
                     created_at=str(r.get("createdAt") or ""),
+                    source=r.get("source"),
                 )
             )
         total_pages = (resp.json().get("meta") or {}).get("totalPages") or 1
@@ -192,7 +202,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("reports/hosted-eval-report.md"))
     args = parser.parse_args()
 
-    scores = fetch_scores(config_id=args.config_id, name=args.name)
+    scores = filter_eval_source(fetch_scores(config_id=args.config_id, name=args.name))
     agg = aggregate_window(scores)
     text = render_report(agg, align_offline(scores, {}))
     args.out.parent.mkdir(parents=True, exist_ok=True)

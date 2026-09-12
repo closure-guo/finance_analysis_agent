@@ -61,3 +61,36 @@ class TestAlignOffline:
         assert out["pairs"] == []
         assert out["mae"] is None
         assert out["drift"] is False
+
+
+class TestEvalSourceFilter:
+    """3.225.7 实证：hosted evaluator 分数 config_id=NULL、source=EVAL；
+    API 写入的离线 judge 分 source=API。configId 不可作判别键（r7 修复）。"""
+
+    def _rec(self, value, trace_id="t1", source="API", config_id=None):
+        return ScoreRecord(
+            score_id=f"s-{value}-{trace_id}-{source}",
+            name="debate_quality（辩论质量）",
+            value=value,
+            trace_id=trace_id,
+            config_id=config_id,
+            created_at="2026-09-08T11:09:38Z",
+            source=source,
+        )
+
+    def test_keeps_only_eval_source(self):
+        from evals.hosted_evals.poll import filter_eval_source
+
+        records = [self._rec(2, "t1", source="EVAL"), self._rec(5, "t2", source="API")]
+        out = filter_eval_source(records)
+        assert [r.trace_id for r in out] == ["t1"]
+
+    def test_missing_source_dropped(self):
+        from evals.hosted_evals.poll import filter_eval_source
+
+        records = [self._rec(4, "t3", source=None)]
+        assert filter_eval_source(records) == []
+
+    def test_score_record_has_source_field(self):
+        rec = self._rec(4, "t4", source="EVAL")
+        assert rec.source == "EVAL"
