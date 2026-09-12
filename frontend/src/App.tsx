@@ -12,6 +12,7 @@ import { nodeDisplayName } from './timeline'
 import { estimateTotalMs, estimateRemainingMs, formatDurationMs, loadDurations } from './eta'
 import { buildLayerTree } from './pipelineTree'
 import { PipelineTimeline } from './PipelineTimeline'
+import { PipelineGraph } from './PipelineGraph'
 import { TimelineRenderer, type TimelineBannerComponents } from './TimelineRenderer'
 import { useClickOutside } from './useClickOutside'
 import { usePathname, navigate } from './route'
@@ -1794,6 +1795,32 @@ function getFavicon(url: string) {
 // enhance-pipeline-progress：管线完成后时间线折叠为单行摘要条（阶段数 + 总用时），点击可再展开。
 export function PipelineCard({ msg }: { msg: UIMessage }) {
   const [showLog, setShowLog] = useState(false)
+  // 图/列表视图切换（add-pipeline-graph-view）：偏好持久化 fa_pipeline_view，窄屏强制列表
+  const [view, setView] = useState<'graph' | 'list'>(() => {
+    const stored = localStorage.getItem('fa_pipeline_view')
+    return stored === 'list' ? 'list' : 'graph'
+  })
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 768)
+  const [expandLayerId, setExpandLayerId] = useState<string | null>(null)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const onChange = () => setIsNarrow(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  const effectiveView: 'graph' | 'list' = isNarrow ? 'list' : view
+  const switchView = (v: 'graph' | 'list') => {
+    setView(v)
+    try {
+      localStorage.setItem('fa_pipeline_view', v)
+    } catch {
+      /* localStorage 不可用时仅会话内生效 */
+    }
+  }
+  const handleViewDetails = (layerId: string) => {
+    switchView('list')
+    setExpandLayerId(layerId)
+  }
   const completed = msg.completedNodes || []
   const current = msg.currentNode || ''
   const progress = msg.progress || 0
@@ -1865,12 +1892,41 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
             <>
             {/* Progress Pipeline */}
             <div className="px-5 pt-4 pb-2">
+              {/* 图/列表切换（add-pipeline-graph-view）：窄屏隐藏控件仅列表 */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>分析进度</span>
                   <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{msg.content || '准备中...'}</span>
                 </div>
-                <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>{etaText}</span>
+                  {!isNarrow && (
+                    <div data-testid="pipeline-view-toggle" className="flex rounded-md overflow-hidden" style={{ border: '1px solid var(--border-neutral-l1)' }}>
+                      <button
+                        type="button"
+                        data-testid="pipeline-view-graph"
+                        onClick={() => switchView('graph')}
+                        className="px-2 py-0.5 text-[11px]"
+                        style={effectiveView === 'graph'
+                          ? { background: 'var(--bg-brand)', color: '#fff' }
+                          : { background: 'transparent', color: 'var(--text-tertiary)' }}
+                      >
+                        图
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="pipeline-view-list"
+                        onClick={() => switchView('list')}
+                        className="px-2 py-0.5 text-[11px]"
+                        style={effectiveView === 'list'
+                          ? { background: 'var(--bg-brand)', color: '#fff' }
+                          : { background: 'transparent', color: 'var(--text-tertiary)' }}
+                      >
+                        列表
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-1 mb-2">
                 <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-overlay-l1)' }}>
@@ -1880,8 +1936,18 @@ export function PipelineCard({ msg }: { msg: UIMessage }) {
                   />
                 </div>
               </div>
-              {/* 分层时间轴：6 层 layer + 可展开子节点（替换原 6 阶段圆点） */}
-              <PipelineTimeline tree={layerTree} nowMs={nowMs} thinkingPreviewFor={thinkingPreviewFor} />
+              {/* 视图渲染（add-pipeline-graph-view）：graph DAG / 层级时间轴，同一状态树 */}
+              {effectiveView === 'graph' ? (
+                <div data-testid="pipeline-graph">
+                  <PipelineGraph
+                    tree={layerTree}
+                    startCounts={msg.nodeStartCounts ?? {}}
+                    onViewDetails={handleViewDetails}
+                  />
+                </div>
+              ) : (
+                <PipelineTimeline tree={layerTree} nowMs={nowMs} thinkingPreviewFor={thinkingPreviewFor} expandLayerId={expandLayerId} />
+              )}
             </div>
 
             {/* 各 agent 阶段的思考/工具调用时序：按 node 分组，阶段间用角色名标题分隔（非折叠框）。
