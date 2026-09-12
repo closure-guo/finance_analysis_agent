@@ -62,6 +62,6 @@
 
 - [x] 6.1 重跑 dataset 实验（baseline 池）：`baseline-decision-semantics-r1` 16/17 完成，37/37 judge 分落库、confidence 100% 落库（0.40–0.95）、judge_failures=0；1 条（`deep 分析平安`）因 FM 缺字段崩溃 → 1.13/1.14 修复。契约抽验全绿：无图片路径 13/13、论点编号+覆盖率+【bear】8/8、decision_grounding 四节 8/8、consistency 五节+RM 评级前置 8/8、【最终报告结论章节】已为聚焦摘要
 - [x] 6.1b 以修复版重跑 r2（00:16Z）与 r3（02:08Z，含预算放宽/覆盖率并行语义/JSON 完整/evidence 逐条）；r3 三道关 41/41 通过，复盘见 docs/evals/2026-09-11-judge校准复盘-round5到r3问题发现链.md：r1 的 FM 决策全部在看不到方案的前提下做出，consistency 维度的 judge 分与 round6 人工标注反映的是「盲审批」行为，非修复后行为
-- [ ] 6.2 consistency 与 decision_grounding 维度重评（FM 序列化 + report_conclusion 变更影响面）；report_relevance/debate_quality 无需重评（judge 变量未变）
-- [ ] 6.3 对照 round5 基线归档对比报告（tests/validation/ 或 docs/evals/），rubric v2「评分前必读」段的简化评估（可简化则 rubric 升 v3 走独立校准）
+- [x] 6.2 consistency 与 decision_grounding 维度重评（FM 序列化 + report_conclusion 变更影响面）；report_relevance/debate_quality 无需重评（judge 变量未变）——2026-09-12 以全量重跑 r5 执行（r3 trace 无 node 级 observations 无法重渲染，走 design.md 迁移计划路径）；健康检查 judge_failures=0、confidence 96% 落库（0.70–0.98）、契约抽验 3/3（FM action/辩论尾部标签/FM 理由）；收口报告 docs/evals/2026-09-12-decision-semantics-r5重评收口报告.md。东财数据源当日不可用为环境混淆，已注明
+- [x] 6.3 对照 round5 基线归档对比报告（tests/validation/ 或 docs/evals/），rubric v2「评分前必读」段的简化评估（可简化则 rubric 升 v3 走独立校准）——对比表见收口报告 §2（consistency r3 4.67→r5 5.00、dg 4.33→4.22，round5 盲标按 D6 不混合）；必读段评估结论「不简化不升版」（三行均对应 round5 实测病灶，<3% prompt 字节），见收口报告 §3
 - [ ] 6.4 round7 盲标：`evals/judge_calibration/data/judge-sample-round7-blind.xlsx`（41 行/14 trace，锁定 r3；round6/r1 表因 FM 盲审批作废）人工回填后 measure → 与 round5 对比；report_relevance/debate_quality judge 零方差，以 MAE/方向一致率为主
