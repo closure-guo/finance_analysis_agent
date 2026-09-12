@@ -13,7 +13,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { LayerNode, NodeStatus } from './pipelineTree'
-import { buildGraphModel, type GraphNode } from './graphModel'
+import { buildGraphModel, PIPELINE_NODE_SIZE, type GraphNode } from './graphModel'
 
 // ── 状态样式（与 PipelineTimeline.StatusIcon 同色系：CSS 变量，不做明暗硬编码）──
 
@@ -116,7 +116,23 @@ export function PipelineGraph({ tree, startCounts, onViewDetails }: PipelineGrap
   const { nodes, edges } = useMemo(() => buildGraphModel(tree, startCounts), [tree, startCounts])
 
   const rfNodes: Node[] = useMemo(
-    () => nodes.map((n) => ({ id: n.id, type: 'pipeline', position: n.position, data: n as unknown as Record<string, unknown> })),
+    () =>
+      nodes.map((n) => ({
+        id: n.id,
+        type: 'pipeline',
+        position: n.position,
+        // 显式尺寸 + 声明式 handles：React Flow 视为已测量/已定位，跳过 ResizeObserver。
+        // 渲染帧被冻结的环境（IAB 遮挡、后台窗口）RO 永不触发，否则节点永久 hidden、
+        // 边永久不渲染——2026-09-12 IAB 端到端实测发现；真实浏览器中 RO 测量到位后
+        // internals.handleBounds 优先生效，声明值仅作兜底。
+        width: PIPELINE_NODE_SIZE.width,
+        height: PIPELINE_NODE_SIZE.height,
+        handles: [
+          { type: 'source', position: Position.Bottom, x: PIPELINE_NODE_SIZE.width / 2 - 4, y: PIPELINE_NODE_SIZE.height, width: 8, height: 8 },
+          { type: 'target', position: Position.Top, x: PIPELINE_NODE_SIZE.width / 2 - 4, y: 0, width: 8, height: 8 },
+        ],
+        data: n as unknown as Record<string, unknown>,
+      })),
     [nodes],
   )
   const rfEdges: Edge[] = useMemo(
@@ -156,7 +172,7 @@ export function PipelineGraph({ tree, startCounts, onViewDetails }: PipelineGrap
         panOnScroll
         zoomOnScroll={false}
       >
-        {/* bg 色点阵仅装饰，@xyflow 默认即可，无需额外组件 */}
+        {/* 声明式 handles 使边渲染不依赖 RO 测量（见 rfNodes 注释） */}
       </ReactFlow>
 
       {selected && (

@@ -1,7 +1,7 @@
 // PipelineGraph 组件测试（add-pipeline-graph-view Task 3，TDD 先行）
 // 覆盖：节点渲染与状态着色、迭代徽标、点击节点悬浮卡片、查看详情回调
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { PipelineGraph } from '../PipelineGraph'
 import { buildLayerTree, applyNodeEvent, type LayerNode } from '../pipelineTree'
 
@@ -82,5 +82,15 @@ describe('PipelineGraph', () => {
     expect(() =>
       render(<PipelineGraph tree={tree} startCounts={{ trader: 2, fund_manager: 2 }} onViewDetails={() => {}} />),
     ).not.toThrow()
+  })
+})
+
+describe('PipelineGraph 边渲染（声明式 handles，不依赖 RO 测量）', () => {
+  it('渲染帧冻结环境（无 RO 触发）下边仍然出齐', async () => {
+    const { container } = render(<PipelineGraph tree={buildLayerTree()} startCounts={{}} onViewDetails={() => {}} />)
+    await waitFor(() => {
+      if (container.querySelectorAll('.react-flow__edge').length === 0) throw new Error('edges not ready')
+    }, { timeout: 3000, interval: 300 })
+    expect(container.querySelectorAll('.react-flow__edge').length).toBeGreaterThanOrEqual(28)
   })
 })
