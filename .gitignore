@@ -286,3 +286,6 @@ tests/e2e/playwright/tmp_body.json
 
 # Excel 锁文件（标注表被打开时产生）
 ~$*
+
+# clickhouse entrypoint 在挂载的 users.d 内生成（incident 027 挂载引入）
+docker/clickhouse/users.d/default-user.xml

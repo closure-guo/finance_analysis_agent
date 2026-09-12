@@ -57,6 +57,10 @@ const NODE_HEIGHT = 52
 const RANKSEP = 48
 const NODESEP = 28
 
+// 导出供 PipelineGraph 使用：节点对象携带显式 width/height 时 React Flow 视为
+// 已测量（跳过 ResizeObserver），渲染不再依赖页面渲染帧（IAB/遮挡环境实测 RO 冻结）
+export const PIPELINE_NODE_SIZE = { width: NODE_WIDTH, height: NODE_HEIGHT }
+
 // ── 模型 ──
 
 export interface GraphNode {
