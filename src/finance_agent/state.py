@@ -96,6 +96,16 @@ class AnalysisState(TypedDict, total=False):
     # Layer III: Trader
     trader_plan: dict  # TradeDecision 序列化
 
+    # 价位校验回路（toolize-price-levels；incident 027：以下键曾未声明，被图合并
+    # 静默丢弃——fail 打回 trader 与参考带价位修正在真实图中从未生效，路由恒读空）
+    price_check: dict  # {result: pass|fail|corrected, reason?, note?}
+    price_check_feedback: str  # fail 时打回 trader 的重出反馈
+    price_check_attempts: int  # 已校验次数（<1 fail 打回；>=1 二次失败走参考带修正）
+    price_level_corrected: bool  # 价位已按工具参考带修正（可观测）
+    price_level_correction_reason: str  # 修正原因（报告「价位修正」行）
+    # 派生风险指标（deterministic-derived-metrics）：validate 代码计算，辩论/裁决引用
+    derived_metrics: dict  # {stop_distance_pct, risk_reward_ratio, missing_reason}
+
     # Layer IV: Risk Management（3 辩论者 + Risk Judge）
     risk_debate_history: Annotated[list[dict], add]
     final_trade_decision: dict  # TradeDecision 序列化
@@ -131,6 +141,8 @@ class AnalysisState(TypedDict, total=False):
     auto_claims: int  # 阶段 4 自动合成 claim 数
     citation_retry_feedback: dict[str, list[dict]]  # 每分析师失败明细（重试上下文注入）
     citation_fail_buckets: dict[str, int]  # 桶计数（value_mismatch/path_unresolvable/...）
+    citation_coverage_gap: bool  # 覆盖率缺口（重试准入路由读取；incident 027 补声明）
+    value_mismatch_repaired: int  # 数值失配修复数（analyst_true_fail 口径组件；incident 027 补声明）
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──

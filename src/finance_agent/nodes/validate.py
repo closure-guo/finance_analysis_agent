@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from finance_agent.metrics.validate import validate_financials
 
 
@@ -177,7 +179,7 @@ def _compute_derived_metrics(action: str, entry: object, stop: object, target: o
             "risk_reward_ratio": None,
             "missing_reason": "；".join(missing),
         }
-    assert e is not None and s is not None and t is not None  # missing 守卫已排除 None
+    e, s, t = cast(float, e), cast(float, s), cast(float, t)  # missing 守卫已排除 None
     stop_distance = abs(e - s) / e
     if action == "sell":
         reward, risk = e - t, s - e

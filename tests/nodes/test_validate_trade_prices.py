@@ -214,3 +214,30 @@ class TestDerivedMetrics:
         e, s, t = corrected["entry_price"], corrected["stop_loss"], corrected["target_price"]
         assert dm["stop_distance_pct"] == abs(e - s) / e
         assert dm["risk_reward_ratio"] == abs(t - e) / abs(e - s)
+
+
+class TestStateChannelsDeclared:
+    """incident 027：validate 节点返回的 price_check 家族与 derived_metrics 曾未在
+    AnalysisState 声明 → 图合并静默丢弃，fail 打回 trader 与价位修正在真实图中
+    从未生效（路由恒读到空 dict，直接放行）。图通道契约测试锁死声明。"""
+
+    def test_graph_channels_declare_validate_keys(self):
+        from finance_agent.graph import build_5layer_graph
+
+        channels = set(build_5layer_graph().builder.channels)
+        for key in (
+            "price_check",
+            "price_check_feedback",
+            "price_check_attempts",
+            "price_level_corrected",
+            "price_level_correction_reason",
+            "derived_metrics",
+        ):
+            assert key in channels, f"AnalysisState 缺少声明: {key}"
+
+    def test_graph_channels_declare_citation_loop_keys(self):
+        from finance_agent.graph import build_5layer_graph
+
+        channels = set(build_5layer_graph().builder.channels)
+        for key in ("citation_coverage_gap", "value_mismatch_repaired"):
+            assert key in channels, f"AnalysisState 缺少声明: {key}"
