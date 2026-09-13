@@ -244,7 +244,7 @@ class TestInputMissingGuard:
 class TestDecisionGroundingRubricV3:
     def test_version_incremented(self):
         """rubric 变更递增版本号（evidence_refs 版为 v2，语义核对版为 v3，confidence 契约版为 v4）。"""
-        assert RUBRIC_VERSIONS["decision_grounding"] == 6  # v6 = 风控指标 + 风险辩论进材料
+        assert RUBRIC_VERSIONS["decision_grounding"] == 7  # v7 = 三层判法归属 + 解读失当强制核对
 
     def test_v6_material_covers_risk_judge_evidence_base(self):
         """r1 复盘：被评的是 Risk Judge 裁决，其理由建立在风控指标与三方风险辩论上，
@@ -258,9 +258,9 @@ class TestDecisionGroundingRubricV3:
 
     def test_other_rubrics_version_pinned(self):
         assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
-        assert RUBRIC_VERSIONS["debate_quality"] == 2
+        assert RUBRIC_VERSIONS["debate_quality"] == 3  # v3 = 5 分收紧（round7：judge 恒 5 宽松偏置）
         assert RUBRIC_VERSIONS["consistency"] == 3  # v3 = approve 语义(v2) + confidence 契约
-        assert RUBRIC_VERSIONS["decision_grounding"] == 6  # v6 = 补风控指标 + 风险辩论
+        assert RUBRIC_VERSIONS["decision_grounding"] == 7  # v7 = 三层判法归属 + 解读失当强制核对
 
     def test_rubric_includes_semantic_check(self):
         """语义核对条款：术语/期次/方向与所引数值一致；解读失当扣分。"""
@@ -268,3 +268,8 @@ class TestDecisionGroundingRubricV3:
         assert "语义一致" in rubric
         assert "期次" in rubric
         assert "行业领先" in rubric  # 反例锚点（垫底表述为领先）
+        # v7（round7 终裁）：归属层判法 + 解读失当强制动作 + 组合 claim 规则
+        assert "三层判法" in rubric
+        assert "归属" in rubric
+        assert "单向解读" in rubric
+        assert "组合 claim" in rubric

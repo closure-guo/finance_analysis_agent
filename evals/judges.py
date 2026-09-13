@@ -48,15 +48,19 @@ _JSON_TAIL = (
 )
 
 # rubric 版本（变更递增，校准门禁按版本重校准；decision_grounding：
-# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对；
+# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对 →
+# v6 补风控指标+风险辩论进材料（round5 校准）→ v7 来源归属三层判法 +
+# 组合 claim 归属规则 + 解读失当强制核对（round7 校准，2026-09-13 owner 终裁）；
+# debate_quality：v1 初版 → v2 逐条回应+具体证据（round5）→ v3 5 分收紧
+# （round7 校准：judge 恒 5 宽松偏置，个别论点纯定性应降 4）；
 # consistency：v1 初版 → v2 approve 批准对象语义定义，消除「watch+approve=
 # 冲突」误判——round5 实测 11 条中 7 条被误打 1-3 分；
 # 全维度最新一版 = 输出契约加 confidence（材料依据不充分 MUST 降低，
 # 使残缺输入上的幻觉可从低置信暴露），评分档位语义未变）
 RUBRIC_VERSIONS: dict[str, int] = {
     "report_relevance": 3,
-    "debate_quality": 2,
-    "decision_grounding": 6,
+    "debate_quality": 3,
+    "decision_grounding": 7,
     "consistency": 3,
 }
 
@@ -78,11 +82,14 @@ RUBRICS: dict[str, str] = {
     "debate_quality": """你是投资辩论质量评审专家。
 【多空辩论记录】{{debate_history}}
 评估辩论的实质交锋程度:
-5 = 双方逐条回应对方论点且引用具体证据(数据/事实)
+5 = 双方逐条回应对方论点且引用具体证据(数据/事实)，且所有论点均有数据或
+  事实支撑——只要存在个别纯定性论点（如仅凭「护城河」「周期位置」表态而无
+  数据/事实），降 4
 4 = 有实质交锋,证据基本充分,个别论点空泛
 3 = 有交锋但多为立场声明,证据引用不足
 2 = 交锋形式化,双方自说自话
 1 = 单方输出或内容空洞,无实质辩论
+回应覆盖率（交锋覆盖 4/4）是形式指标：全回应但答非所问、避重就轻，不算实质交锋。
 """
     + _JSON_TAIL,
     "decision_grounding": (
@@ -94,13 +101,27 @@ RUBRICS: dict[str, str] = {
 【风险辩论记录】{{risk_debate_history}}
 【交易决策】{{trade_decision}}
 评估交易决策的论据是否有前文支撑:
-若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对：
-- claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager/risk_aggressive/risk_conservative/risk_neutral/risk_metrics）的结论中找到出处，
+若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对。
+核对口径（v7 三层判法，round7 校准 owner 终裁确定）：
+- ①事实层：claim 的数值/事实对全材料为真；
+- ②归属层：source 标签 = 主张内容的真实来源（数字真实存在于材料的其它来源
+  不豁免归属错安）；
+- ③指认层：claim 句内自称的归属（如「激进方紧止损（36.5-37.0）」）也要对。
+评分：
+- 三层全过：claim 的数值/事实能在对应 source（technical/macro/fundamental/
+  sentiment/debate_bull/debate_bear/research_manager/risk_aggressive/
+  risk_conservative/risk_neutral/risk_metrics）的结论中找到出处，
   且 reasoning 的主要论据都能在 evidence_refs 中找到对应项 → 4-5 分；
-- 语义一致性核对：论据表述的指标术语、期次、方向须与所引数值语义一致——
-  数值有出处但术语张冠李戴（毛利率写成净利率）、期次错位（年报值说成季度值）、
-  方向失当（数值下降表述为「改善」、行业垫底表述为「行业领先」）属解读失当，
-  不得仅因数值有出处给高分 → 降至 2-3 分；
+- 逐条强制核对动作（防解读失当漏检——round7 终裁：judge 曾只核数值在不在、
+  漏检单向解读给 5 分）：对每条 evidence_ref，先复述所标 source 中的原文
+  （数值/原话），再与 claim 比对——数值在但方向/语气被拔高（「托底」升格
+  「支撑」）、只取有利证据忽略反向证据（单向解读）、术语张冠李戴（毛利率写成
+  净利率、行业垫底表述为「行业领先」）、期次错位（年报值说成季度值）均属
+  解读失当，不得仅因数值有出处判语义一致 → 降至 2-3 分；
+- 归属层错安（claim 内容在所标 source 中不存在、而存在于其它来源；或解读为
+  主张重心却未按解读来源标注）→ 扣 1 分，档位不高于 4；
+- 组合 claim（数字取自 A + 解读取自 B）：句内注明解读出处即属忠实拼装，按
+  三层判法不扣，标签可取数字来源；解读为主张重心且实际出自他方时按归属层错安处理；
 - source 与论据对不上、claim 数值在来源中不存在（无中生有）、或 evidence_refs 缺失
   reasoning 中大量论据的引用 → 1-2 分。
 无 evidence_refs 时按以下原规则从自由文本推断（不因缺字段报错）:
