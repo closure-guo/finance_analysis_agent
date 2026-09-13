@@ -99,6 +99,10 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "peer_financials": None,
         "macro_indicators": {},
         "news_list": [],
+        "announcements": [],
+        "research_reports": [],
+        "share_unlock": [],
+        "block_trades": [],
     }
 
 
@@ -133,6 +137,10 @@ def _set_optional_fallback(result: dict, label: str) -> None:
         "quarterly_income": None,
         "macro_indicators": {},
         "news_list": [],
+        "announcements": [],
+        "research_reports": [],
+        "share_unlock": [],
+        "block_trades": [],
     }
     result[label] = fallbacks.get(label)
 
@@ -185,6 +193,11 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
         futures[pool.submit(ak.fetch_quarterly_income, code)] = "quarterly_income"
         futures[pool.submit(ak.fetch_macro_indicators)] = "macro_indicators"
         futures[pool.submit(ak.fetch_news, code)] = "news_list"
+        # add-analyst-data-coverage：公告/研报/解禁/大宗（非必需，失败降级空列表）
+        futures[pool.submit(ak.fetch_announcements, code)] = "announcements"
+        futures[pool.submit(ak.fetch_research_reports, code)] = "research_reports"
+        futures[pool.submit(ak.fetch_share_unlock, code)] = "share_unlock"
+        futures[pool.submit(ak.fetch_block_trades, code)] = "block_trades"
 
         # ── 收集结果（每个调用带 Langfuse span 追踪）──
         for future in as_completed(futures):
@@ -253,6 +266,18 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
             elif label == "news_list":
                 c.set(f"{code}:news", value, ttl_seconds=3600)
                 result["news_list"] = value
+            elif label == "announcements":
+                c.set(f"{code}:announcements", value, ttl_seconds=3600)
+                result["announcements"] = value
+            elif label == "research_reports":
+                c.set(f"{code}:research_reports", value, ttl_seconds=3600)
+                result["research_reports"] = value
+            elif label == "share_unlock":
+                c.set(f"{code}:share_unlock", value, ttl_seconds=3600)
+                result["share_unlock"] = value
+            elif label == "block_trades":
+                c.set(f"{code}:block_trades", value, ttl_seconds=3600)
+                result["block_trades"] = value
 
     # ── Step 2: 依赖 industry_info 的串行调用 ──
     # 关键非财务事件（需要股票名称）
