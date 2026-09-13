@@ -96,7 +96,6 @@ TBD - created by archiving change fix-citation-contract-diseases. Update Purpose
 - **WHEN** Agent 报告含 `garp_result`、`anomalies` 等快照派生字段的 claim
 - **THEN** 校验 SHALL 经注册的重算/集合比对得出 PASS/FAIL，SHALL NOT 恒为 UNVERIFIABLE
 
-## ADDED Requirements
 ### Requirement: UNVERIFIABLE 占比监控
 
 系统 SHALL 在每次引用校验完成后向 Langfuse 上报 Score `citation_unverifiable_ratio`（UNVERIFIABLE 占全部 claim 比例），关联 `langfuse_trace_id`。该指标 SHALL 作为数据层退化（数据源接口变更、事件管线降级、注册表覆盖缺口扩大）的先行监控信号。

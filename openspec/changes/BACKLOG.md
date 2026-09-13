@@ -37,6 +37,8 @@
 4. **judge-sample 数据文件入库规矩**：round5-8 盲标/标注样本 xlsx/jsonl 目前未跟踪，
    仅 round1 jsonl 在库——要么统一入库（可审计优先），要么 .gitignore 统一排除（本地
    报告已引用路径），待定。
-5. **round9 + v8 候选**（2026-09-13 立项，见 openspec/changes/）：consistency/dg 材料补
-   【Trader 方案】节 + 辩论收敛信号；rubric v8 两条——debate 5 分档 few-shot 判例、dg 归属层
-   「多来源同判任一真实来源即合法」判例。
+5. ~~round9 + v8 候选~~ **已闭合（2026-09-14）**：delta `upgrade-judge-material-v8-rubric`
+   实施+归档（consistency 补 Trader 方案节、debate 收敛骨架行、rubric v8 两判例）；
+   round9 实验 + 审计完成——dg 多来源归属判例达标、Trader→RJ 静默推翻核对首次可判、
+   debate 5 分档判例未达标（v9 候选：强制枚举论点标头，已登记 metrics.md 待决策）。
+   见 docs/evals/2026-09-14-round9-v8审计.md。
