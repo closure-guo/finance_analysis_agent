@@ -43,4 +43,4 @@
 
 - [x] 7.1 全量门禁（pytest -m "not live" + ruff + mypy）
 - [x] 7.2 重跑一轮 dataset 实验（r4），产出拆报指标与终裁对照表合并报告，落 `docs/evals/`
-- [ ] 7.3 archive 前置核对（待 owner 终裁 22 条后）：tasks 全勾 + 验证记录 + 规范 sync
+- [x] 7.3 archive 前置核对（2026-09-13 维护者终裁 22 条全部非幻觉，依据：r4 同族重判 + 组件数字对账 + 结构不可验分桶；词表别名修复落地）：tasks 全勾 + 验证记录（citation-22条待终裁决策单.md）+ 规范 sync

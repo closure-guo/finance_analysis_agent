@@ -317,3 +317,22 @@ class TestR4ResidualTolerances:
         state = {"quarterly_trend": {"quarters": ["2026Q1", "2026Q2"], "yoy": [-55.38, -6.9]}}
         r = _one(c, state)
         assert r.status == "PASS", r
+
+
+class TestColumnAliasResolution:
+    """incident 附带发现：分析师手写 field_ref 用「加权每股收益」，真实列名
+    「加权每股收益(元)」——路径解析需按 metric_vocab 词表做列名别名回退
+    （r4-1/r4-2 决策单实测缺口）。"""
+
+    def test_resolve_eps_column_with_unit_suffix(self):
+        import pandas as pd
+
+        state = {
+            "financial_indicators": pd.DataFrame(
+                {"报告日": ["20251231"], "加权每股收益(元)": [2.07]}
+            )
+        }
+        assert _resolve_field_ref("financial_indicators.加权每股收益", state) == 2.07
+        assert (
+            _resolve_field_ref("financial_indicators.20251231.加权每股收益", state) == 2.07
+        )

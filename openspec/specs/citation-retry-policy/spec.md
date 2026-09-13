@@ -5,43 +5,43 @@ TBD - created by archiving change improve-analyst-throughput. Update Purpose aft
 ## Requirements
 ### Requirement: 引用校验重试降级
 
-系统 SHALL 对引用校验（citation）失败后的分析师重试实施降级控制：当最新一轮校验失败率不低于上一轮失败率的 80%（无显著改善）时，系统 SHALL 提前终止重试并放行渲染（render），不再派发下一轮分析师。重试总轮数上限 SHALL 保持 3（iteration_count < 3），降级判定 SHALL 不放宽该上限。降级触发 SHALL 在 trace 观测中留下可判读标记。
-(Previously: 同前句，未覆盖轻微失败场景)
+自动重试默认停用：`CITATION_AUTO_RETRY_ENABLED = False` 时，引用校验非 PASS 状态 SHALL 直接放行渲染，SHALL NOT 派发分析师重跑轮；fail_buckets / retry_targets / fail_rates 的计算与 trace 观测 SHALL 保留。重试启用时，既有降级控制继续生效：失败率不低于上一轮 80% 提前终止、轮数上限 3 不放宽、轻微失败（FAIL ≤ 1 且失败率 ≤ 5%）直接放行。重试触发 SHALL 仅来自「重试准入桶」（`CITATION_RETRY_ADMITTED_BUCKETS`，当前为空集）——桶进入准入集合的前提是有逐条人工终裁记录确认其为真错误。重试启用且目标分析师在重跑后输出内容不变时，系统 SHALL 立即放行渲染并在 trace 留下可判读标记（不等待失败率停滞判定）。
+(Previously: value_mismatch/direction_mismatch 桶与 coverage-gap 自动触发定向重试；incident 026 终裁两桶 100% 误报，r2 九条 deep 分析师生成 75 次、fundamental 25 次，零收益且以降级版覆盖正常报告)
 
-系统 SHALL 在单轮引用校验失败**轻微**时直接放行渲染，不启动分析师重试轮：**FAIL 数 ≤ 1 且失败率 ≤ 5%**。校验器为确定性纯函数，同 claim 重跑必复现该 FAIL（incident 022 实测：1/46=2.2% FAIL 触发 1–2 轮全量重跑，零收益）；轻微失败直接放行的决策 SHALL 与既有降级一样在 trace 观测中留下可判读标记。
-(Previously: 无此条款——任一 FAIL（citation_pass=false）即触发重试，单点失败引发全量重跑空转)
+#### Scenario: 停用状态下非 PASS 直接放行
 
-#### Scenario: 失败率无改善提前放行
+- **WHEN** 引用校验存在 FAIL 或覆盖缺口，且 `CITATION_AUTO_RETRY_ENABLED = False`（默认）
+- **THEN** `after_citation` SHALL 返回 `render`，SHALL NOT 派发任何分析师重跑轮
 
-- GIVEN 第一轮分析师后引用校验失败率为 35%，触发重试
-- WHEN 第二轮分析师后失败率为 31%（≥ 35% × 80%）
-- THEN 系统 SHALL 不派发第三轮分析师，直接放行渲染
+#### Scenario: 停用状态下观测不退化
 
-#### Scenario: 失败率显著改善保留重试
+- **WHEN** 停用状态下的任意一轮校验
+- **THEN** fail_buckets / retry_targets / fail_rates / 覆盖缺口 SHALL 照常计算并写入 state 与 trace
 
-- GIVEN 第一轮分析师后引用校验失败率为 60%，触发重试
-- WHEN 第二轮分析师后失败率为 20%（< 60% × 80%）
-- THEN 系统 SHALL 按既有上限（iteration_count < 3）继续重试
+#### Scenario: 既有失败率无改善提前放行
 
-#### Scenario: 轮数上限不因降级放宽
+- **WHEN** 重试启用且最新一轮失败率 ≥ 上一轮 × 80%
+- **THEN** 系统 SHALL 提前终止重试并放行渲染，轮数上限 3 不放宽，trace 留可判读标记
 
-- GIVEN 任意失败率序列
-- WHEN 引用校验连续失败
-- THEN 分析师执行总轮数 SHALL NOT 超过 3
+#### Scenario: 既有轻微失败免除重试
 
-#### Scenario: 轻微失败免除重试
+- **WHEN** 重试启用且单轮 FAIL 数 ≤ 1 且失败率 ≤ 5%
+- **THEN** 系统 SHALL 直接放行渲染并留可判读标记
 
-- GIVEN 第一轮分析师后引用校验结果（如 46 条 claim 中 1 条 FAIL，失败率 2.2%）
-- WHEN FAIL 数 ≤ 1 且失败率 ≤ 5%
-- THEN 系统 SHALL 直接放行渲染，SHALL NOT 派发第二轮分析师
-- AND 该放行决策 SHALL 在 trace 观测中留下可判读标记
+#### Scenario: 未准入桶不触发重试
 
-#### Scenario: 非轻微失败仍走既有路径
+- **WHEN** 重试启用且 FAIL 仅落在 `CITATION_RETRY_ADMITTED_BUCKETS` 之外的桶（如 value_mismatch / direction_mismatch / path_unresolvable）
+- **THEN** 系统 SHALL 放行渲染；桶 SHALL 照常计入观测指标
 
-- GIVEN 第一轮分析师后引用校验失败数为 13/24（失败率 54.2%）
-- WHEN FAIL 数 > 1 且失败率 > 5%
-- THEN 系统 SHALL 按既有规则重试（停滞降级 / 轮数上限约束）
+#### Scenario: 准入条件
 
+- **WHEN** 拟将某失败桶加入 `CITATION_RETRY_ADMITTED_BUCKETS`
+- **THEN** SHALL 先存在该桶逐条人工终裁记录（incidents 或 tests/validation）确认桶内为真错误，方可加入
+
+#### Scenario: 重写无进展立即停
+
+- **WHEN** 重试启用且目标分析师重跑后 markdown 哈希与重跑前一致
+- **THEN** 系统 SHALL 立即放行渲染并在 trace 留下可判读标记（`citation_retry_no_progress`），SHALL NOT 等待失败率停滞判定
 ### Requirement: 定向重试反馈携带 direction 申报提示
 
 校验失败触发的定向重试反馈（value_mismatch / direction_mismatch 桶）与 coverage 打回（coverage_gap）SHALL 在反馈条目中携带 direction 申报提示：未申报 direction 的覆盖缺口 SHALL 提示「补登记时同步申报 direction」；direction_mismatch 的重试反馈 SHALL 携带校验器解析的真值符号，分析师 SHALL 据此修正 stated_value 与 direction 的组合而非仅改数值。

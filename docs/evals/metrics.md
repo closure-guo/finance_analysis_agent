@@ -87,6 +87,8 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 **待 owner 终裁（round7 校准，2026-09-13）**：~~已完成~~——4 行 judge source 归属扣分成立（人工改 4）、1 行 judge 误判（维持人工 5）、1 行灰区（维持 5）、1caf1f7b 单向解读成立（维持 3）、7e6bc8bc 改 4、5f41a49a 补填 5。终值：整体 MAE 0.342 / 方向一致率 97.6%。rubric v7 四项改动清单已定稿（见校准报告）。
 
+**校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型 claim（「MA5 较 MA20 低约 X」）重算注册——现为 UNVERIFIABLE 不计缺口，组件数字可推导；② quarterly_trend 期段定位补全（quarterly_trend.yoy/qoq 单季路径 path_unresolvable）。
+
 **待决策**：
 - #2 surgical 单点修复（<3 处失败真值回填）与重试准入的关系：回填算「分析师真错已修复」，须保留在 analyst_true_fail 中
 - #4 置信度锚定（RM/RJ/FM 扎堆示例值 0.50–0.60；r3 FM 动作已有多样性，确认后改示例或加校准指令）

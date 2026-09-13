@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Literal, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pydantic import BaseModel
 
@@ -154,6 +154,19 @@ def _is_dataframe(obj: object) -> TypeGuard[pd.DataFrame]:
     return hasattr(obj, "columns") and hasattr(obj, "iloc")
 
 
+def _resolve_column_alias(col_name: str, columns: Any) -> str | None:
+    """列名别名回退：词表 canonical 归一后匹配真实列（如「加权每股收益」→
+    「加权每股收益(元)」）。分析师手写 field_ref 常省略单位后缀，路径解析
+    与术语检查必须同一套归一口径。"""
+    canonical = canonical_metric(col_name)
+    if canonical is None:
+        return None
+    for col in columns:
+        if canonical_metric(str(col)) == canonical:
+            return str(col)
+    return None
+
+
 def _resolve_field_ref(
     field_ref: str, state: dict, claim_period: str | None = None
 ) -> object | None:
@@ -184,17 +197,26 @@ def _resolve_field_ref(
             except (ValueError, IndexError):
                 return None
         elif _is_dataframe(current):
-            if i + 1 >= len(parts):
+            if i + 1 < len(parts):
+                col_name = parts[i + 1]
+                if col_name not in current.columns:
+                    col = _resolve_column_alias(col_name, current.columns)
+                    if col is None:
+                        return None
+                    col_name = col
+                mask = _dataframe_row_mask(current, part)
+                if mask is None:
+                    return None
+                current = current[mask].iloc[0][col_name]
+                i += 2
+                continue
+            # 路径止于列名（分析师省略行键）：取最新一行（与负索引「最新一期」
+            # 约定一致），列名同样走别名回退（r4-1 实测缺口）
+            col = _resolve_column_alias(part, current.columns)
+            if col is None:
                 return None
-            col_name = parts[i + 1]
-            if col_name not in current.columns:
-                return None
-            mask = _dataframe_row_mask(current, part)
-            if mask is None:
-                return None
-            current = current[mask].iloc[0][col_name]
-            i += 2
-            continue
+            value: object = current.iloc[-1][col]
+            return value
         else:
             return None
         i += 1
