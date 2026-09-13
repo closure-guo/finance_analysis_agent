@@ -8,4 +8,4 @@
 - [x] 6. prompt 实现与 deploy_prompts
 - [x] 7. 失败测试：citation 回声匹配含四新源标题；实现转绿
 - [x] 8. 全量门禁（pytest -m "not live" + ruff + mypy 改动文件）
-- [ ] 9. 真实链路验证（接口可用时跑 deep 分析人工核对四源落库与分析师引用）
+- [x] 9. 真实链路验证（接口可用时跑 deep 分析人工核对四源落库与分析师引用）——**已闭合（2026-09-14）**：round9 实验 9 条 deep 真实分析四源结论齐全（analyst 章节 + claims 引用经 citation 链路校验，coverage 0.73-0.95）+ 今日 3 次 E2E 全管线运行（宁德/平安×2）四源落库正常

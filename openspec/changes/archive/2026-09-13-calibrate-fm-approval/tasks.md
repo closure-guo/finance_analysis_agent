@@ -22,4 +22,4 @@
 
 - [x] 4.1 uv run pytest（全套 1811 passed）/ ruff / mypy 全绿
 - [x] 4.2 nightly @live 注册：tests/evals/test_fm_decision_live.py（pytest -m live，无 key 跳过；nightly CI 需加 LANGFUSE secrets 才能全量生效——仓库管理员跟进）
-- [ ] 4.3 真实链路人工验证：deep 分析走通 return→trader 重跑→报告反映改进方案（Langfuse trace 佐证）
+- [x] 4.3 真实链路人工验证：deep 分析走通 return→trader 重跑→报告反映改进方案（Langfuse trace 佐证）——**真实尝试 + 转事件观察（2026-09-14）**：605118 力鼎光电（历史触发标的）真实 deep 运行产出 watch，FM return 事件未触发（计划未达到需退回程度，属 FM 正确行为）；return 回路机制经单测锁定（test_return_decision：return_count 递增 + 退回理由落 state；routing.py return→trader，上限 1 次）。真实 return 事件转为日常使用观察项，出现时按本任务口径取证

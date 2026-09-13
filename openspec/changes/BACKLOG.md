@@ -17,10 +17,15 @@
 | add-judge-human-calibration | 标注导出 CLI + Spearman/MAE/方向一致率 + 校准触发 | 同上 |
 | enable-hosted-evaluator | 降级方案：scores 轮询 + 告警 + 口径对齐 + 模板快照 | 同上 |
 
-## 遗留待人工/待资源（2026-09-13 更新）
+## 遗留待人工/待资源（2026-09-14 更新）
 
-> 前版「已实施」8 条 delta 全部归档；四类实时验证（FM 回路/数据排序/harden/langfuse-trace）
-> 已随 ehr-style/surgical 同步归档；prompt direction 纪律已发布。以下为当前真实遗留。
+> **2026-09-14 大扫除**：历史 sprint 的 8 个未归档 delta（settings-center/analyst-coverage/
+> judge-calibration/latency-regression/news-topic-search/pipeline-graph-view/calibrate-fm/
+> hosted-evaluator）全部清收归档——spec 冲突逐个核对（3 个陈旧 delta 经 9 条 requirement/
+> scenario 比对确认主规范为超集后 skip-specs 归档；settings-center 的 llm-config 场景名
+> 对齐主规范后正常 sync，主规范净增 20 条）。同日完成：round8 代裁收口、@live 切方舟修复、
+> v8 delta 实施+round9 审计+归档、debate rubric v5+round10 离线重判、价位必填化 delta
+> 实施+真实链路闭环实证+归档。changes/ 目录现仅剩本索引。以下为当前真实遗留。
 
 1. ~~judge 人工校准标注~~ **已闭合（2026-09-13）**：round7 盲标 41 对 + owner 终裁达标（整体
    MAE 0.342 / 方向一致率 97.6%），rubric v7 定稿；round8 基线重建轮经维护者代裁审计无虚高
@@ -42,3 +47,12 @@
    round9 实验 + 审计完成——dg 多来源归属判例达标、Trader→RJ 静默推翻核对首次可判、
    debate 5 分档判例未达标（v9 候选：强制枚举论点标头，已登记 metrics.md 待决策）。
    见 docs/evals/2026-09-14-round9-v8审计.md。
+6. **debate 5 分边界可靠性**：v5 强制枚举离线重判（round10）准确率 2/8→6/8 但仍漏判
+   宁德、招行回归——prompt 机制到顶；候选=judge 输出结构化枚举字段 + 程序封顶
+   （需开 delta 改 judge 输出契约），见 metrics.md 待决策。
+7. **价位必填化已落地**：delta `require-trade-price-declaration` 实施+归档（2026-09-14），
+   E2E 实证完整闭环（trader 申报 62/57/74 → 辩论 6/6 同源引用代码值 → 报告参数行渲染）；
+   validation 报告 tests/validation/2026-09-14-require-trade-price-declaration-validation.md。
+8. **事件观察项（不构成任务）**：① FM return 真实事件取证（calibrate-fm-approval 4.3 转观察，
+   出现时按口径取证）；② news-topic-search 引导生效性日常观察；③ latency 趋势告警启用
+   依赖 Windows 计划任务挂载 nightly。

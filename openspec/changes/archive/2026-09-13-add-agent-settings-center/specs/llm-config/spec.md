@@ -6,10 +6,10 @@
 
 系统 SHALL 在前端提供设置面板（LLM 配置），允许用户配置 model（模型名称）、base_url（API 端点）、api_key（API 密钥）、thinking（思考模式开关）等 LLM 参数，配置持久化到浏览器 localStorage。设置面板 SHALL 位于设置中心页 `/settings` 的「LLM 配置」分区内（由 SettingsModal 弹窗整体迁移而来），通过左侧垂直导航访问；配置字段、Provider 预设、模型自动发现、连通性测试与多 profile 管理行为语义不变。
 
-#### Scenario: 设置面板展示配置字段
+#### Scenario: 设置面板展示四项配置字段
 
-- **GIVEN** 用户进入设置中心页「LLM 配置」分区
-- **THEN** 面板 SHALL 展示配置项：API Key（密码输入框）、模型名称（文本输入框）、API Base URL（文本输入框）、思考模式（Toggle 开关，enabled/disabled）等
+- **GIVEN** 用户进入设置中心页「LLM 配置」分区（原 SettingsModal 弹窗整体迁移至此，header 齿轮/侧栏入口改为跳转设置页）
+- **THEN** 面板 SHALL 展示四个配置项：API Key（密码输入框）、模型名称（文本输入框）、API Base URL（文本输入框）、思考模式（Toggle 开关，enabled/disabled）
 
 #### Scenario: 配置持久化到 localStorage
 

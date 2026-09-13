@@ -21,3 +21,7 @@
 
 - [x] 3.1 uv run pytest / ruff / mypy 全绿
 - [x] 3.2 真实流量监控验证（依赖 2.2 的 UI evaluator 上线后）——2026-09-12 通过（poll 报告 + 端到端落分）；口径对齐 32 对 MAE=1.0312 超 1.0 标 drift，归因=hosted 模板落后于离线 rubric（consistency 缺 v2 语义 / decision_grounding v3≠v6），处置（UI 模板升级）待 owner 拍板，见验证报告 §3
+
+## 归档注记（2026-09-14）
+
+本 delta 的 spec 内容已在此前 agent-evaluation-suite 主规范的归档同步中先行落库（9 条 requirement/scenario 比对：主规范为超集，零缺失），故本次归档使用 --skip-specs，无内容丢失。

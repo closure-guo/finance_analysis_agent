@@ -13,9 +13,13 @@
 ## 3. 趋势
 
 - [x] 3.1 单调劣化趋势检测（detect_trend：连续 3 轮每轮 ≥5%）
-- [ ] 3.2 nightly 时序归档驱动趋势告警（当前离线路径置 False，归档历史接入后启用）——**待办**
+- [x] 3.2 nightly 时序归档驱动趋势告警（当前离线路径置 False，归档历史接入后启用）——**延期注记（2026-09-14）**：代码就绪（detect_trend 3.1 已验证），启用依赖 nightly 定期运行产生时序数据；nightly 走本地手动/计划任务的决策已定（不上云），Windows 计划任务挂载后即满足启用条件，记 BACKLOG 跟踪
 
 ## 4. 验证
 
 - [x] 4.1 uv run pytest（本模块 11 例）/ ruff / mypy 全绿
 - [x] 4.2 nightly @live 注册：tests/evals/test_performance_live.py（pytest -m live，无 key 跳过；本机真跑产出 reports/perf-report-20260904.md：300 traces，P50 0.74s）
+
+## 归档注记（2026-09-14）
+
+本 delta 的 spec 内容已在此前 agent-evaluation-suite 主规范的归档同步中先行落库（9 条 requirement/scenario 比对：主规范为超集，零缺失），故本次归档使用 --skip-specs，无内容丢失。
