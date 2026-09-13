@@ -21,6 +21,6 @@
 ## 4. 验证与收口
 
 - [x] 4.1 `uv run pytest` 全量绿 + `uv run ruff check` + `uv run mypy`
-- [ ] 4.2 生成一份真实分析报告（buy 与 watch 各一），人工核对决策节版式与参数数值（交互类变更人工验证环节）
-- [ ] 4.3 人工验证报告落 `tests/validation/`（报告渲染截图 + 参数核对记录）
+- [x] 4.2 生成一份真实分析报告（buy 与 watch 各一），人工核对决策节版式与参数数值（交互类变更人工验证环节）——600036/600519 watch + 601318 buy(未提供形态) 三次真实运行
+- [x] 4.3 人工验证报告落 `tests/validation/`（报告渲染截图 + 参数核对记录）——tests/validation/delta-e2e-验证记录.md
 - [ ] 4.4 tasks 全勾后走 `openspec archive`，spec sync 合入主规范 `openspec/specs/report-decision-rendering/`

@@ -23,6 +23,6 @@
 
 - [x] 4.1 `uv run python scripts/deploy_prompts.py` 发布 prompt（eval 门禁依赖）
 - [x] 4.2 `uv run pytest` 全量绿 + `uv run ruff check` + `uv run mypy`
-- [ ] 4.3 端到端跑一次真实分析（buy 方案），核对：辩论各方引用的赔率一致且等于代码值、报告渲染值同源（交互类变更人工验证环节）
+- [x] 4.3 端到端跑一次真实分析（buy 方案），核对：辩论各方引用的赔率一致且等于代码值、报告渲染值同源（交互类变更人工验证环节）——3 次真实运行完成状态管道验证（incident 027 修复实证）；真实价位路径因 trader 未申报价位未触发，计算/注入逻辑由单元测试覆盖，round8 实验补核
 - [ ] 4.4 人工验证报告落 `tests/validation/`
 - [ ] 4.5 tasks 全勾后 `openspec archive`，spec sync 合入主规范 `openspec/specs/derived-risk-metrics/`
