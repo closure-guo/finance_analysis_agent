@@ -81,6 +81,15 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 收口动作：健康检查 → 契约抽验（v7 生效：judge 是否开始扣归属层/解读失当）→ 导出盲标表 → ~~owner 标注 → measure 合并~~（**实际路径**：owner 拒绝标注，改为维护者代裁审计，见上）
 - 附加观察：trader 价位申报率（E2E 3/3 次 None，价位为 buy/sell 承重参数，考虑必填化评估）；derived_metrics 真实数据路径补核（E2E 未覆盖）
 
+## 2.3 round9 预登记（混合变量轮，2026-09-13 立项，delta upgrade-judge-material-v8-rubric）
+
+- **变量声明（混合轮，按桶归因，不把差异单一归因）**：① judge 材料升级——consistency 加【Trader 方案】节（trader_plan，Trader 原始方案 ≠ final_trade_decision）、debate 材料加收敛信号骨架行（确定性统计，标注「供参考」）；② rubric v8 三版本递增（debate 3→4 论点标头定性判例 / dg 7→8 多来源归属判例 / consistency 3→4 静默推翻核对）
+- 对照基线：round8（judge 分 + 代裁 41 行审计，非盲口径见代裁报告）
+- **定向验证点（round8 代裁误判样本是否被 v8 纠正）**：① 比亚迪 3e316c01 型「多来源同判归属」不再误扣（dg 4 分档是否上移）；② 美的 41a90c99 / 宁德 6b3d5e05 型「论点标头纯定性论点」是否被降 4（debate 5 分是否收敛至 ≤1 条/9）
+- 预期方向：dg 均值小幅上移（4 分档收窄）、debate 均值小幅下移（5 分档收紧）、consistency 材料完整性提升后均值不变或微调——三者均为 rubric 判例的预期效果，非能力变化
+- 收口动作：健康检查 → 契约抽验（判例生效证据）→ runs.jsonl + 时间线 → 代裁审计（重点两条判例）→ metrics.md 记录
+- 排除项：材料骨架行升级（辩论收敛 + Trader 方案）与 rubric v8 不改变 5 层流水线行为，citation 链路与 golden gate 不受影响
+
 ## 3. 待终裁 / 待决策
 
 **待 owner 终裁**：r2 非 PASS 137 条归因对照表 `tests/validation/citation-r2-nonpass-归因对照表.md`——34 条机器归因为校验器误报、82 条结构不可验（分型/注册处理），**22 条标「待终裁」必须人工过目**（16 条空值申报类、6 条无日期/季度形态的路径失败）。

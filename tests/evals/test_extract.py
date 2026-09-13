@@ -38,6 +38,7 @@ class TestExtractJudgeVars:
             "analyst_reports",
             "debate_history",
             "research_manager_decision",
+            "trader_plan",
             "risk_metrics",
             "risk_debate_history",
             "trade_decision",
@@ -46,6 +47,45 @@ class TestExtractJudgeVars:
         }
         assert set(vars_.keys()) == expected_keys
         assert all(isinstance(v, str) for v in vars_.values())
+
+    def test_trader_plan_var_from_state(self):
+        """v8：trader_plan 变量 = Trader 原始方案（Layer III），非 Risk Judge 裁决——
+        consistency 材料据此核对「Trader 方案 → Risk Judge 裁决」是否静默推翻。"""
+        state = _state()
+        state["trader_plan"] = {"action": "buy", "confidence": 0.7, "reasoning": "突破确认"}
+        vars_ = extract_judge_vars(state, query="q")
+        assert "buy" in vars_["trader_plan"]
+        assert "突破确认" in vars_["trader_plan"]
+        # 无 trader_plan（旧会话/quick 模式）→ 空串，不报错
+        state2 = _state()
+        state2.pop("trader_plan", None)
+        assert extract_judge_vars(state2, query="q")["trader_plan"] == ""
+
+    def test_convergence_skeleton_in_debate_variable(self):
+        """v8：debate 材料骨架行——发言轮数/论点数/让步与坚持语计数，
+        强制标注「程序统计，供参考」，置于原始发言之前。"""
+        state = _state()
+        state["debate_history"] = [
+            {
+                "role": "bull",
+                "content": "确实基本面在改善，我方坚持看多",
+                "key_arguments": ["论点甲", "论点乙"],
+            },
+            {
+                "role": "bear",
+                "content": "不同意，估值恰恰相反地偏贵",
+                "key_arguments": ["反论点一"],
+            },
+        ]
+        vars_ = extract_judge_vars(state, query="q")
+        debate = vars_["debate_history"]
+        assert "收敛信号(程序统计，供参考)" in debate
+        assert "发言 2 轮" in debate
+        assert "论点共 3 条" in debate
+        assert "让步语 1 处" in debate  # 「确实」
+        assert "坚持/反驳语 2 处" in debate  # 「不同意」「恰恰相反」
+        # 骨架行在原始发言之前
+        assert debate.index("收敛信号") < debate.index("确实基本面")
 
     def test_values_mapped_from_state(self):
         vars_ = extract_judge_vars(_state(), query="分析茅台")

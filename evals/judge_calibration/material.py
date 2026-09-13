@@ -48,6 +48,7 @@ DIMENSION_SECTIONS: dict[str, tuple[str, ...]] = {
     ),
     "consistency": (
         "【分析师章节结论】",
+        "【Trader 方案】",
         "【Research Manager 结论】",
         "【Risk Judge 裁决】",
         "【Fund Manager 最终决策】",

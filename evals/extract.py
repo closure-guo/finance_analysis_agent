@@ -184,6 +184,35 @@ def _rebuttal_coverage(history: list) -> str | None:
     return "；".join(lines) if lines else None
 
 
+def _convergence_skeleton(history: list) -> str:
+    """收敛信号骨架行（v8，确定性统计）：发言轮数/各方论点数/让步与坚持语计数。
+
+    正则启发式有假阳/假阴，强制标注「程序统计，供参考」——judge 仍以原文为准；
+    置于原始发言之前（spec：judge 不必从原始发言自行推断交锋收敛情况）。
+    """
+    if not history:
+        return ""
+    roles: dict[str, int] = {}
+    args_count = 0
+    concede = 0
+    persist = 0
+    for msg in history:
+        msg = _as_dict(msg)
+        if not msg:
+            continue
+        role = str(msg.get("role", "?"))
+        roles[role] = roles.get(role, 0) + 1
+        args_count += len(msg.get("key_arguments") or [])
+        content = str(msg.get("content") or "")
+        concede += len(re.findall(r"确实|(?<!不)同意|部分接受|有道理|合理性", content))
+        persist += len(re.findall(r"不同意|反驳|恰恰相反|无法认同|不成立", content))
+    role_line = "/".join(f"{role}×{n}" for role, n in roles.items())
+    return (
+        f"收敛信号(程序统计，供参考): 发言 {len(history)} 轮({role_line})；"
+        f"论点共 {args_count} 条；让步语 {concede} 处、坚持/反驳语 {persist} 处"
+    )
+
+
 def _summarize_debate(history: list) -> str:
     # 每条发言上限（字节）：多轮【bull】【bear】交替时保证全部轮次可见——
     # 整体 head/tail 截断会把中间轮次连标签一起挖掉（judge 评「逐条交锋」时
@@ -195,6 +224,9 @@ def _summarize_debate(history: list) -> str:
     _ARGUMENTS_MAX_BYTES = 2000
 
     parts: list[str] = []
+    skeleton = _convergence_skeleton(history)
+    if skeleton:
+        parts.append(skeleton)
     for msg in history:
         msg = _as_dict(msg)
         if not msg:
@@ -291,6 +323,9 @@ def extract_judge_vars(state: dict, query: str = "") -> dict[str, str]:
         "analyst_reports": _trunc(_summarize_analyst_reports(state.get("analyst_reports") or {})),
         "debate_history": _trunc(_summarize_debate(state.get("debate_history") or [])),
         "research_manager_decision": _trunc(state.get("research_manager_conclusion") or ""),
+        # v8：Trader 原始方案（Layer III 输出）进 consistency 材料——
+        # Trader 方案 → Risk Judge 裁决是否静默推翻此前无法核对（round8 代裁报告）
+        "trader_plan": _trunc(_serialize_decision(state.get("trader_plan") or {})),
         # decision_grounding v6：被评的是 Risk Judge 裁决，其证据基础含风控指标与三方
         # 风险辩论——r1 复盘 8 条理由里 5 条抱怨风控数字无出处、3 条抱怨中性方论据无出处
         "risk_metrics": _format_risk_metrics(state.get("risk_metrics") or {}),

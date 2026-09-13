@@ -76,8 +76,8 @@ class TestRubricContract:
         assert "批准观望" in rubric
 
     def test_consistency_rubric_version_incremented(self):
-        """rubric 语义修复递增版本号（v2 = approve 语义定义版）。"""
-        assert RUBRIC_VERSIONS["consistency"] == 3
+        """rubric 语义修复递增版本号（v2 = approve 语义定义版，v4 = Trader 方案节 + 静默推翻核对）。"""
+        assert RUBRIC_VERSIONS["consistency"] == 4
 
     def test_decision_grounding_rubric_mentions_evidence_refs(self):
         rubric = RUBRICS["decision_grounding"]
@@ -243,8 +243,8 @@ class TestInputMissingGuard:
 
 class TestDecisionGroundingRubricV3:
     def test_version_incremented(self):
-        """rubric 变更递增版本号（evidence_refs 版为 v2，语义核对版为 v3，confidence 契约版为 v4）。"""
-        assert RUBRIC_VERSIONS["decision_grounding"] == 7  # v7 = 三层判法归属 + 解读失当强制核对
+        """rubric 变更递增版本号（v7 = 三层判法归属 + 解读失当强制核对，v8 = 多来源归属判例）。"""
+        assert RUBRIC_VERSIONS["decision_grounding"] == 8  # v8 = 多来源同判任一真实来源即合法
 
     def test_v6_material_covers_risk_judge_evidence_base(self):
         """r1 复盘：被评的是 Risk Judge 裁决，其理由建立在风控指标与三方风险辩论上，
@@ -258,9 +258,9 @@ class TestDecisionGroundingRubricV3:
 
     def test_other_rubrics_version_pinned(self):
         assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
-        assert RUBRIC_VERSIONS["debate_quality"] == 3  # v3 = 5 分收紧（round7：judge 恒 5 宽松偏置）
-        assert RUBRIC_VERSIONS["consistency"] == 3  # v3 = approve 语义(v2) + confidence 契约
-        assert RUBRIC_VERSIONS["decision_grounding"] == 7  # v7 = 三层判法归属 + 解读失当强制核对
+        assert RUBRIC_VERSIONS["debate_quality"] == 4  # v4 = 5 分档定性论点判例（round8 代裁）
+        assert RUBRIC_VERSIONS["consistency"] == 4  # v4 = approve 语义(v2) + Trader 方案节(v4)
+        assert RUBRIC_VERSIONS["decision_grounding"] == 8  # v8 = 三层判法(v7) + 多来源归属判例
 
     def test_rubric_includes_semantic_check(self):
         """语义核对条款：术语/期次/方向与所引数值一致；解读失当扣分。"""
@@ -273,3 +273,14 @@ class TestDecisionGroundingRubricV3:
         assert "归属" in rubric
         assert "单向解读" in rubric
         assert "组合 claim" in rubric
+        # v8（round9）：多来源同判判例——claim 在多来源均有原话时引任一真实来源即合法
+        assert "判例(v8)" in rubric
+        assert "任一真实来源即合法" in rubric
+        # debate_quality v8 判例：论点标头纯定性论点（「历史上……」类）降 4
+        debate_rubric = RUBRICS["debate_quality"]
+        assert "判例(v4)" in debate_rubric
+        assert "无样本" in debate_rubric
+        # consistency v4：Trader 方案节 + 静默推翻核对
+        consistency_rubric = RUBRICS["consistency"]
+        assert "【Trader 方案】{{trader_plan}}" in consistency_rubric
+        assert "静默推翻" in consistency_rubric
