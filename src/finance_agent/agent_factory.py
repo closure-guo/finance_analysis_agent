@@ -129,7 +129,11 @@ def _make_web_search_with_collector(collector: list[dict]):
     """创建 web_search 工具，同时将搜索结果收集到 collector 用于引用溯源。"""
 
     async def web_search(query: str) -> str:
-        """搜索网页获取实时信息
+        """搜索单个关键词，获取实时网页信息。适用于明确、单一的事实型查询。
+
+        新闻、舆情、热点等时间敏感的多面话题，应改用 batch_web_search
+        一次从 2-3 个不同角度发问（信息面实测约 3 倍）。个股行情/报价/资金
+        流向类查询的搜索结果多为行情页，信息量低，慎用搜索。
 
         Args:
             query: 搜索关键词
@@ -167,11 +171,13 @@ def _make_batch_web_search(collector: list[dict]):
     async def batch_web_search(queries: list[str]) -> str:
         """并行批量搜索多个关键词，获取更全面的信息
 
-        适用于需要从多个维度搜集信息的场景，如分析一只股票时同时搜索
-        最新新闻、财务数据、行业对比、分析师观点等。
+        适用于新闻、舆情等多面话题：一次从 2-3 个不同角度发问
+        （如事件本身 / 业绩与财务 / 资金与股价动向），信息面实测约为
+        单 query 的 3 倍。角度选择比数量重要——个股行情/报价类关键词
+        召回的多为行情页，不建议作为搜索角度。
 
         Args:
-            queries: 搜索关键词列表，建议 2-5 个不同维度的查询
+            queries: 搜索关键词列表，建议 2-3 个不同角度的查询
         """
         from finance_agent.web_search import (
             batch_tavily_search,

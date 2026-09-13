@@ -144,3 +144,27 @@ class TestTavilySearchTopicPassthrough:
         ):
             web_search.tavily_search("贵州茅台 最新消息", topic="general")
         assert client.search.call_args.kwargs.get("topic") == "general"
+
+
+class TestMultiAngleGuidance:
+    """多角度检索引导契约（add-news-topic-search 扩展，TDD 先行）。
+
+    实测（2026-09-12，3 场景）：多角度 query 有效信息 ~3 倍（6.5→25 条中有效数），
+    但角度选择 > 数量（行情类 query 5 条全为行情页 0 有效）。引导写入工具描述。
+    """
+
+    def test_batch_web_search_description_guides_2_3_angles(self):
+        from finance_agent.agent_factory import _make_batch_web_search
+
+        tool = _make_batch_web_search([])
+        doc = tool.__doc__ or ""
+        assert "2-3 个不同角度" in doc
+        assert "行情" in doc  # 行情报价类召回多为行情页，不作搜索角度
+
+    def test_web_search_description_redirects_news_to_batch(self):
+        from finance_agent.agent_factory import _make_web_search_with_collector
+
+        tool = _make_web_search_with_collector([])
+        doc = tool.__doc__ or ""
+        assert "batch_web_search" in doc  # 新闻/舆情多角度引导
+        assert "行情" in doc

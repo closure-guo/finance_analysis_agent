@@ -9,6 +9,7 @@
 - `tavily_search` 增加 topic 自动判别：query 命中新闻意图词表（新闻/最新/消息/动态/近期…）时自动以 `topic='news'` 调用 Tavily；显式传入 topic 参数时以显式值为准；未命中保持 general（现状）
 - 纯函数 `detect_search_topic` 承载词表判别（可测、词表可演进）
 - 不改变结果条数（max_results 维持 5）、不改变批量搜索去重逻辑
+- 工具描述引导（2026-09-12 扩展）：实测多角度 batch 有效信息 ~3 倍（25/40 vs 6.5/15），但角度选择>数量（行情类 query 0 有效）——web_search 描述引导新闻/舆情话题改用 batch_web_search，batch 描述改为「2-3 个不同角度」并注明行情类不宜作搜索角度；执行层零改动（batch 工具已存在）
 
 ## Capabilities
 
