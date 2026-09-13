@@ -101,6 +101,59 @@ class TestValidateTradePrices:
         assert corrected["stop_loss"] < corrected["entry_price"] < corrected["target_price"]
 
 
+class TestPriceDeclarationRequired:
+    """require-trade-price-declaration：buy/sell 价位必填——任一缺失（None/≤0）不再
+    静默 pass，首次 fail 打回要求申报；已打回仍缺失放行+如实标注（连续 4 轮真实
+    运行 0 申报的根因就是「schema 可选，跳过校验」的静默分支）。"""
+
+    def test_buy_all_missing_fails_first_attempt(self):
+        plan = TradeDecision(action="buy", confidence=0.8, reasoning="r")
+        out = validate_trade_prices(_state(plan))
+        pc = out["price_check"]
+        assert pc["result"] == "fail"
+        for key in ("entry_price", "stop_loss", "target_price"):
+            assert key in (pc.get("reason") or ""), key
+        assert "申报" in (out.get("price_check_feedback") or "")
+        assert out["price_check_attempts"] == 1
+
+    def test_partial_missing_lists_only_missing(self):
+        plan = TradeDecision(action="buy", confidence=0.8, reasoning="r", entry_price=100.0)
+        out = validate_trade_prices(_state(plan))
+        pc = out["price_check"]
+        assert pc["result"] == "fail"
+        reason = pc.get("reason") or ""
+        assert "stop_loss" in reason and "target_price" in reason
+        missing_part = reason.split("：")[-1]
+        assert "entry_price" not in missing_part
+
+    def test_sell_zero_counts_as_missing(self):
+        """0 是 LLM 实际输出的「未提供」形态（比亚迪 sell 0/0），计为缺失。"""
+        plan = TradeDecision(
+            action="sell",
+            confidence=0.8,
+            reasoning="r",
+            entry_price=100.0,
+            stop_loss=0.0,
+            target_price=0.0,
+        )
+        out = validate_trade_prices(_state(plan))
+        assert out["price_check"]["result"] == "fail"
+
+    def test_second_attempt_still_missing_released_with_note(self):
+        plan = TradeDecision(action="buy", confidence=0.8, reasoning="r")
+        out = validate_trade_prices(_state(plan, attempts=1))
+        pc = out["price_check"]
+        assert pc["result"] == "pass"
+        assert "已打回仍未申报" in (pc.get("note") or "")
+        assert out["price_check_attempts"] == 1  # 不再递增
+        assert "price_check_feedback" not in out
+
+    def test_watch_still_passes_through(self):
+        plan = TradeDecision(action="watch", confidence=0.5, reasoning="r")
+        out = validate_trade_prices(_state(plan))
+        assert out["price_check"]["result"] == "pass"
+
+
 class TestCorrectPrices:
     def test_long_correction_from_bands(self):
         corrected = correct_prices(
@@ -172,6 +225,25 @@ class TestDerivedMetrics:
         assert dm["stop_distance_pct"] == abs(100.0 - 95.0) / 100.0
         assert dm["risk_reward_ratio"] == abs(108.0 - 100.0) / abs(100.0 - 95.0)
         assert dm["missing_reason"] is None
+
+    def test_levels_unavailable_still_computes_derived_metrics(self):
+        """派生指标只依赖申报价格，与参考带无关——price_levels 不可用跳过 band 校验
+        时 MUST 照常计算，否则风险辩论拿不到代码值退回 LLM 心算（E2E 601318 实测）。"""
+        state = _state(_plan(entry=100.0, stop=95.0, target=108.0))
+        state["price_levels"] = {"available": False, "reason": "unknown"}
+        result = validate_trade_prices(state)
+        assert result["price_check"]["result"] == "pass"
+        assert "跳过校验" in (result["price_check"].get("note") or "")
+        dm = result["derived_metrics"]
+        assert dm["stop_distance_pct"] == abs(100.0 - 95.0) / 100.0
+        assert dm["risk_reward_ratio"] == abs(108.0 - 100.0) / abs(100.0 - 95.0)
+
+    def test_kline_missing_still_computes_derived_metrics(self):
+        state = _state(_plan(entry=100.0, stop=95.0, target=108.0))
+        state["kline"] = None
+        result = validate_trade_prices(state)
+        assert result["price_check"]["result"] == "pass"
+        assert result["derived_metrics"]["stop_distance_pct"] == 0.05
 
     def test_corrected_uses_corrected_prices(self):
         result = validate_trade_prices(_state(_plan()))

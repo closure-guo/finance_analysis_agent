@@ -49,6 +49,20 @@ def _plan_direction(action: str) -> str | None:
     return None
 
 
+def _is_missing_price(v: object) -> bool:
+    """价位缺失判定（require-trade-price-declaration）：None / ≤0 / 非数值均为缺失。
+
+    0 是 LLM 实际输出的「未提供」形态（比亚迪 sell 0/0 已在报告按未提供渲染），
+    与 None 同等对待。
+    """
+    if v is None:
+        return True
+    try:
+        return float(v) <= 0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return True
+
+
 def validate_trade_prices(state: dict) -> dict:
     """校验 trader 价位：价格关系 / entry 距现价偏差 / 工具参考带。
 
@@ -67,21 +81,54 @@ def validate_trade_prices(state: dict) -> dict:
     entry = plan.get("entry_price")
     stop = plan.get("stop_loss")
     target = plan.get("target_price")
-    if entry is None:
-        return {"price_check": {"result": "pass", "note": "价位缺失（schema 可选），跳过校验"}}
+    # buy/sell 价位必填（require-trade-price-declaration）：任一缺失（None/≤0）不再
+    # 静默跳过——连续 4 轮真实运行 0 申报的根因即旧「schema 可选，跳过校验」分支。
+    # 首次 fail 打回要求申报；已打回仍缺失 → 放行+如实标注（缺失无数值可修，不进
+    # 参考带修正路径），报告端按「未提供」渲染，不虚构数值。
+    labels = (("entry_price", entry), ("stop_loss", stop), ("target_price", target))
+    missing = [label for label, v in labels if _is_missing_price(v)]
+    if missing:
+        attempts = int(state.get("price_check_attempts") or 0)
+        if attempts < 1:
+            reason = f"buy/sell 决策必须申报数值价位，缺失/无效：{'、'.join(missing)}"
+            return {
+                "price_check": {"result": "fail", "reason": reason},
+                "price_check_feedback": (
+                    f"价位 sanity 校验未通过：{reason}。"
+                    "请按最新收盘与风险逻辑申报全部三价数值"
+                    "（entry_price/stop_loss/target_price），watch/hold 才可豁免。"
+                ),
+                "price_check_attempts": attempts + 1,
+            }
+        return {
+            "price_check": {
+                "result": "pass",
+                "note": "已打回仍未申报价位（buy/sell 必填），放行——报告按「未提供」渲染，不虚构数值",
+            },
+            "price_check_attempts": attempts,
+        }
 
+    # missing 检查后 entry 必然齐备（mypy 无法从列表推导窄化，显式 cast）
+    entry = cast(float, entry)
     levels = state.get("price_levels") or {}
+    # 派生指标只依赖申报价格，与参考带/行情无关——跳过 band 校验也 MUST 计算，
+    # 否则风险辩论拿不到代码值、退回 LLM 心算（delta 核心承诺）
+    derived = _compute_derived_metrics(action, entry, stop, target)
     if not levels.get("available"):
         return {
             "price_check": {
                 "result": "pass",
                 "note": f"price_levels 不可用（{levels.get('reason', 'unknown')}），跳过校验",
-            }
+            },
+            "derived_metrics": derived,
         }
 
     kline = state.get("kline")
     if kline is None or len(kline) == 0:
-        return {"price_check": {"result": "pass", "note": "无行情数据，跳过校验"}}
+        return {
+            "price_check": {"result": "pass", "note": "无行情数据，跳过校验"},
+            "derived_metrics": derived,
+        }
     close = float(kline["收盘"].iloc[-1])
 
     reasons: list[str] = []
