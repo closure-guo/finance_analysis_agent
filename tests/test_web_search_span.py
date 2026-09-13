@@ -34,7 +34,8 @@ class TestSearchApiCallSpan:
         # 验证 open_span 被调用创建 search_api_call span
         mockOpenSpan.assert_called_once_with(
             name="search_api_call",
-            input={"query": "测试查询", "max_results": 3},
+            # add-news-topic-search：input 记录判别后的 topic（None=general 通道）
+            input={"query": "测试查询", "max_results": 3, "topic": None},
         )
         # 验证 output 记录了结果数量
         mockObs.update.assert_called_once_with(output={"count": 1})

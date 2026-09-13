@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from pydantic import BaseModel
 
 from finance_agent.langfuse_tracing import open_span
+
+# 新闻意图词表（add-news-topic-search）：命中即以 Tavily topic='news' 检索。
+# 实测（2026-09-12）：「最新消息」类 query 走 general 通道召回的全是行情页/导航页
+# （18 条中 0 条真实新闻），news 通道才是对症解。年份（如尾部拼的「2026」）不构成意图。
+_NEWS_INTENT_PATTERN = re.compile(r"新闻|最新|消息|动态|近期|近日|今天|昨日|昨天|本周|上周|本月|突发")
+
+
+def detect_search_topic(query: str) -> str | None:
+    """新闻意图判别：命中词表返回 'news'，否则 None（general 通道，现状不变）。"""
+    if _NEWS_INTENT_PATTERN.search(query):
+        return "news"
+    return None
 
 
 class SearchResult(BaseModel):
@@ -49,12 +62,14 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
 }
 
 
-def tavily_search(query: str, max_results: int = 5) -> SearchResponse:
+def tavily_search(query: str, max_results: int = 5, topic: str | None = None) -> SearchResponse:
     """Execute Tavily web search.
 
     Args:
         query: Search query string
         max_results: Max number of results (default 5)
+        topic: 显式检索通道；缺省时按新闻意图词表自动判别
+            （detect_search_topic，add-news-topic-search）。显式值优先于自动判别。
 
     Returns:
         SearchResponse with results
@@ -67,20 +82,25 @@ def tavily_search(query: str, max_results: int = 5) -> SearchResponse:
     if not api_key:
         raise ValueError("TAVILY_API_KEY not configured")
 
+    if topic is None:
+        topic = detect_search_topic(query)
+
     from tavily import TavilyClient
 
     # 用 open_span 包裹搜索调用，创建 search_api_call span
     # 作为调用方 span（tool:web_search 或规则 pre_search）的子 span
     with open_span(
         name="search_api_call",
-        input={"query": query, "max_results": max_results},
+        input={"query": query, "max_results": max_results, "topic": topic},
     ) as _searchObs:
         client = TavilyClient(api_key=api_key)
+        # 未命中新闻意图时不传 topic，保持 Tavily general 默认（现状不变）
         response = client.search(
             query=query,
             max_results=max_results,
             search_depth="basic",
             include_answer=True,
+            **({"topic": topic} if topic else {}),
         )
 
         results: list[SearchResult] = []

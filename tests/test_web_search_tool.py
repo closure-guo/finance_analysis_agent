@@ -71,3 +71,76 @@ class TestWebSearchTool:
             result = await _web_search("不存在的关键词")
 
         assert result == "" or result.strip() == ""
+
+
+class TestDetectSearchTopic:
+    """新闻意图词表判别（add-news-topic-search，TDD 先行）。"""
+
+    def test_news_intent_keywords_hit(self):
+        from finance_agent.web_search import detect_search_topic
+
+        for q in ("贵州茅台 最新消息", "央行 近期 货币政策动态", "今天 A股 大跌新闻", "本周 央行动向"):
+            assert detect_search_topic(q) == "news", q
+
+    def test_non_news_query_stays_general(self):
+        from finance_agent.web_search import detect_search_topic
+
+        for q in ("贵州茅台 股价", "A股 2026年 降准 货币政策", "600519 市盈率"):
+            assert detect_search_topic(q) is None, q
+
+    def test_year_alone_is_not_news_intent(self):
+        """react_agent 会在 query 尾部拼年份（如「... 2026」），年份本身不构成新闻意图。"""
+        from finance_agent.web_search import detect_search_topic
+
+        assert detect_search_topic("贵州茅台 财务分析 2026") is None
+
+
+class TestTavilySearchTopicPassthrough:
+    """tavily_search 按 topic 透传 TavilyClient（mock 层验证）。"""
+
+    def _mock_client(self):
+        from unittest.mock import MagicMock
+
+        client = MagicMock()
+        client.search.return_value = {"results": [], "answer": None}
+        return client
+
+    def test_news_intent_query_uses_news_topic(self):
+        from unittest.mock import patch
+
+        from finance_agent import web_search
+
+        client = self._mock_client()
+        with (
+            patch("finance_agent.web_search.has_tavily_key", return_value=True),
+            patch("tavily.TavilyClient", return_value=client),
+        ):
+            web_search.tavily_search("贵州茅台 最新消息")
+        assert client.search.call_args.kwargs.get("topic") == "news"
+
+    def test_general_query_passes_no_topic(self):
+        from unittest.mock import patch
+
+        from finance_agent import web_search
+
+        client = self._mock_client()
+        with (
+            patch("finance_agent.web_search.has_tavily_key", return_value=True),
+            patch("tavily.TavilyClient", return_value=client),
+        ):
+            web_search.tavily_search("贵州茅台 股价")
+        # general 走现状：不传 topic（Tavily 默认 general）
+        assert client.search.call_args.kwargs.get("topic") is None
+
+    def test_explicit_topic_overrides_detection(self):
+        from unittest.mock import patch
+
+        from finance_agent import web_search
+
+        client = self._mock_client()
+        with (
+            patch("finance_agent.web_search.has_tavily_key", return_value=True),
+            patch("tavily.TavilyClient", return_value=client),
+        ):
+            web_search.tavily_search("贵州茅台 最新消息", topic="general")
+        assert client.search.call_args.kwargs.get("topic") == "general"
