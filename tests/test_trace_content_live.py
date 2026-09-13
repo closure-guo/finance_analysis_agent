@@ -79,10 +79,12 @@ def test_live_tool_calls_returned():
         }
     ]
 
-    # 请求级 llm_config：复刻 legacy._request_config_dict 语义（baseUrl 回退 env）
+    # 请求级 llm_config：resolver 请求分支要求 baseUrl 齐备（网关迁移后 deepseek/*
+    # 不再由 resolver 隐式补官方端点——测试显式补，与 judges._call_judge_llm 同款）
     llm_config: dict = {"model": _LIVE_MODEL, "apiKey": os.environ["DEEPSEEK_API_KEY"]}
-    if os.environ.get("LLM_BASE_URL"):
-        llm_config["baseUrl"] = os.environ["LLM_BASE_URL"]
+    llm_config["baseUrl"] = os.environ.get("LLM_BASE_URL") or (
+        "https://api.deepseek.com/v1" if _LIVE_MODEL.startswith("deepseek/") else ""
+    )
 
     resp = complete_with_tools(
         [{"role": "user", "content": "贵州茅台（600519）现在多少钱？请调用工具查询。"}],
