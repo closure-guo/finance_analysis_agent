@@ -73,12 +73,12 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 | r8 09-13 21:32Z | cdca5b1+027+v7 | 基线重建轮（三变量：v7 rubric / 派生指标喂回 / 027 价位校验回路激活）；dg 3.56 系 v7 归属+解读失当扣分生效（契约抽验 4 条低分全中 v7 规则）；blocked 4/9 | 5.0 | 4.22 | 3.56 | 4.89 | 0.556（blocked 4/9） | 0.835 | 4/9｜1.22/条｜5.33/条 | 0 |
 
-人工校准：round8（41 行盲标表 v7 口径卡已导出，待 owner 标注后 measure 与 round7 合并判 n=9 维度）。
+人工校准：round8 盲标环节改为**维护者代裁**（owner 拒绝再投入标注时间；非盲审计口径，不能当独立 MAE）——41 行逐条核对：36 行一致、5 行分歧全部 ±1 档且方向均为 judge 偏严/规则执行不一致、无虚高，维护者口径 MAE 0.122 / 方向一致率 100%。**judge 自 round7 起可用结论维持**；两条 v8 候选改动见下方待决策。详见 [2026-09-13-round8-维护者代裁报告.md](2026-09-13-round8-维护者代裁报告.md)。
 ## 2.2 round8 预登记（基线重建轮，2026-09-13 启动）
 
 - 实验：`round8-v7-rubric`（dataset a-share-analysis-v1），HEAD 含 rubric v7 + 两个 delta 实现 + incident 027 修复
 - **三变量混合轮（不可纯归因 v7）**：① rubric v7（dg 三层判法归属/组合claim规则/解读失当强制核对 + debate 5 分收紧）；② 派生指标喂回风险辩论 context（deterministic-derived-metrics）；③ incident 027 修复激活价位校验 fail→打回回路（trader 行为可能变化）。对比 round7 时按桶归因，不把任何差异直接记到 v7 头上
-- 收口动作：健康检查 → 契约抽验（v7 生效：judge 是否开始扣归属层/解读失当）→ 导出盲标表（round8 材料，v7 口径卡自动带入）→ owner 标注 → measure 与 round7 合并判 n=9 维度
+- 收口动作：健康检查 → 契约抽验（v7 生效：judge 是否开始扣归属层/解读失当）→ 导出盲标表 → ~~owner 标注 → measure 合并~~（**实际路径**：owner 拒绝标注，改为维护者代裁审计，见上）
 - 附加观察：trader 价位申报率（E2E 3/3 次 None，价位为 buy/sell 承重参数，考虑必填化评估）；derived_metrics 真实数据路径补核（E2E 未覆盖）
 
 ## 3. 待终裁 / 待决策
@@ -96,4 +96,5 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 分析师节点独立 span（根 span 元数据覆盖的根治方案，当前以 `degradation.{agent}.r{n}` 键止血）
 - 覆盖率指标在「逐条回应成常态」后无区分度（r3 全 4/4、5/5），是否保留进 judge 材料
 - consistency / decision_grounding 材料缺【Trader 方案】节——Trader→Risk Judge 的转向是否静默推翻无法核对（round8 材料版本落地，本轮 round7 口径：只评 RM→RJ→FM→报告四层）
+- **v8 候选（round8 代裁发现，2026-09-13）**：① debate 5 分档执行不稳定——「个别定性论点降 4」在 4 分档执行严格，但美的/宁德两行漏判纯定性论点给 5，建议 5 分判例进 rubric few-shot；② dg 归属层对「同一评判在多来源出现」判定偏机械——claim 在 debate_bear 与 research_manager 均有原话时 judge 只认单源（比亚迪 ref7 误扣），v8 补「任一真实来源即合法」判例
 - mypy 全仓 75 个既有错误（本次触碰文件为 0），是否立清理任务
