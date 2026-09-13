@@ -59,7 +59,7 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 ² 拆报四项自 r4 起记录：verifier_normalized 5.22/条（echo 34+percent 13，校验器解析债）、unverifiable text 3.11 + unregistered 4.0（每条 deep）。r4 收口详见 [2026-09-11-citation门禁整改r4收口报告.md](2026-09-11-citation门禁整改r4收口报告.md)。
 ¹ r4 coverage 0.837 为重试停用后的真实首轮值（r2/r3 的 0.92 含 2–3 轮补 claim 重跑），不可直接对比。
 
-人工校准：round5（53 行）全线未达标（整体 Spearman -0.36 / MAE 1.81 / 方向一致率 32%）→ 材料与 rubric 修复多轮 → round7（41 行，r3）待 owner 标注。
+人工校准：round5（53 行）全线未达标（整体 Spearman -0.36 / MAE 1.81 / 方向一致率 32%）→ 材料与 rubric 修复多轮 → **round7（40 对，r3）全维度达标：整体 MAE 0.475 / 方向一致率 95%，judge 自 round7 起可用**（详见 [2026-09-13-round7-judge校准报告.md](2026-09-13-round7-judge校准报告.md)；dg Spearman -0.43 不具结论力——judge 仅 {4,5} 两档 + n=9，预登记已声明不单独下结论；待终裁三桶见报告，终裁结果决定 rubric v7 是否三处合并改动）。
 
 ---
 
@@ -74,6 +74,8 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 ## 3. 待终裁 / 待决策
 
 **待 owner 终裁**：r2 非 PASS 137 条归因对照表 `tests/validation/citation-r2-nonpass-归因对照表.md`——34 条机器归因为校验器误报、82 条结构不可验（分型/注册处理），**22 条标「待终裁」必须人工过目**（16 条空值申报类、6 条无日期/季度形态的路径失败）。
+
+**待 owner 终裁（round7 校准，2026-09-13）**：① dg source 归因 6 行（d7e48a92/d477972f/ce66d316/8bbe659a/5e9b09e3/4758fdb7——judge 扣 source 标错节，核是否真错安）；② dg 1caf1f7b（judge5/human3，单向解读扣分是否成立）；③ report_relevance 7e6bc8bc（judge5/human3，宁德时代查询切题归属）；④ 5f41a49a report_relevance 补填后重跑 measure。逐条过目后更新 [round7 校准报告](2026-09-13-round7-judge校准报告.md)。
 
 **待决策**：
 - #2 surgical 单点修复（<3 处失败真值回填）与重试准入的关系：回填算「分析师真错已修复」，须保留在 analyst_true_fail 中
