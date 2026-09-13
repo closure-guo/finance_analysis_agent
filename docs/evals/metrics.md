@@ -92,6 +92,16 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 排除项：材料骨架行升级（辩论收敛 + Trader 方案）与 rubric v8 不改变 5 层流水线行为，citation 链路与 golden gate 不受影响
 - **收口结果（2026-09-14）**：17/17 行齐、judge_failures=0。定向验证：① dg 多来源归属判例达标（比亚迪 dg=3 三处扣分逐条复核全为真错安，判例无误放；平安 dg=5 干净证据链正常给满）；② consistency Trader 方案节达标（茅台 d46e0942 首次核出「RJ 将 Trader light 修正为 none 且已说明」，宁德/中芯参数演进被正确定性）；③ debate 5 分档判例**未达标**——4 分档严格引用判例语言，但 5 分档抽查 3 行（宁德/美的/平安银行）论点标头均含纯定性论点被漏判，与 round8 同构 → v9 候选。详见 [2026-09-14-round9-v8审计.md](2026-09-14-round9-v8审计.md)。citation_pass 0.556→0.333（blocked 6/9）为新生成方差（citation 链路无变更），follow-up 观察不处置
 
+## 2.4 round10 预登记（debate rubric v5 单变量离线重判，2026-09-14）
+
+- **单变量**：仅 debate_quality rubric v4→v5（加强制枚举动作：评分前逐条标注论点标头「数据/事实」或「纯定性」，任一纯定性即封顶 4）。dg/consistency/report_relevance rubric 与全部 judge 材料、5 层流水线均不变
+- **方法（纯归因，不重跑管线）**：对 round9 的 9 条 deep trace，从 Langfuse 取落库的 debate judge 输入材料（同一批辩论内容），用 v5 rubric 离线 run_judge 重评（tests/scripts/rejudge_debate_v5.py）。同内容 + 仅 rubric 变 = 分数差异可纯归因到 v5
+- **定向验证点（round9 审计漏判样本是否被 v5 纠正）**：宁德 04baff5c / 美的 20712f2a / 平安银行 a163494e 三行 v4=5（标头含纯定性论点被漏判）→ v5 应降 4；其余 6 行 v4 分应基本稳定（4 分档已正确执行判例，不应因 v5 进一步下压）
+- 判定：v5 满分行数 ≤1/9 且三条漏判样本全部降 4 → 判例达标；若仍漏判 → 强制枚举模式对 debate 无效，需换机制（如 judge 输出结构化枚举字段后程序校验）
+- 收口：重判结果落 jsonl + 本节追加结果 + runs.jsonl（标记 offline-rejudge，非全量实验）
+- 排除项：不重跑 pipeline、不写业务 score（dry-run），Langfuse 仅可选 --write 落 v5 对照分
+- **收口结果（2026-09-14，8/9 行）**：茅台现金流 5f179e87 因 Docker Desktop 停机未能拉取材料（其 v4=4，不影响判定）。**未达预登记达标线**（满分 2 行 >1；宁德 04baff5c v5 仍 5——「价格战加速产能出清利好龙头份额集中」漏判），但净效果显著正向：对照审计 ground truth（8 行全应得 4），准确率 v4 2/8 → v5 6/8（美的/比亚迪/平安银行/中芯/茅台 5 行 5→4 纠正），均值 4.75→4.25（方向=收紧）。**一个回归**：招行 53448e4b v4=4（曾正确抓住「银行股破位速度快」定性论断）→ v5=5 漏判——LLM 自我枚举是随机的，不是确定性的。**结论**：prompt 内强制枚举降低但不消除 5 分边界漏判，触发预登记 fallback——后续候选=judge 输出结构化枚举字段 + 程序封顶（代码强制 cap，不依赖 LLM 自律），已登记待决策。v5 保留（当前最优版），残留漏判如实记录
+
 ## 3. 待终裁 / 待决策
 
 **待 owner 终裁**：r2 非 PASS 137 条归因对照表 `tests/validation/citation-r2-nonpass-归因对照表.md`——34 条机器归因为校验器误报、82 条结构不可验（分型/注册处理），**22 条标「待终裁」必须人工过目**（16 条空值申报类、6 条无日期/季度形态的路径失败）。
@@ -108,5 +118,5 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 覆盖率指标在「逐条回应成常态」后无区分度（r3 全 4/4、5/5），是否保留进 judge 材料
 - consistency / decision_grounding 材料缺【Trader 方案】节——Trader→Risk Judge 的转向是否静默推翻无法核对（round8 材料版本落地，本轮 round7 口径：只评 RM→RJ→FM→报告四层）
 - **v8 候选（round8 代裁发现，2026-09-13）**：① debate 5 分档执行不稳定——「个别定性论点降 4」在 4 分档执行严格，但美的/宁德两行漏判纯定性论点给 5，建议 5 分判例进 rubric few-shot；② dg 归属层对「同一评判在多来源出现」判定偏机械——claim 在 debate_bear 与 research_manager 均有原话时 judge 只认单源（比亚迪 ref7 误扣），v8 补「任一真实来源即合法」判例
-- **v9 候选（round9 审计发现，2026-09-14）**：debate 5 分档判例执行不稳定（4 分档严格、5 分边界漏判 ≥3 行）——rubric 加强制枚举动作：评分前 MUST 逐条列出论点标头并标注「数据/事实」或「纯定性」，任一纯定性即封顶 4（dg v7 逐条强制核对已验证该模式有效）
+- **debate 5 分边界可靠性（round9 审计发现 → round10 验证，2026-09-14）**：v4 判例 4 分档严格但 5 分档漏判 ≥3 行 → v5 强制枚举（prompt 内逐条标注）离线重判 8 行：准确率 2/8→6/8 但仍漏判宁德、且招行回归（LLM 自我枚举随机）→ **prompt 机制已到顶，候选换机制**：judge 输出结构化枚举字段（每条论点标注 data/qualitative）+ 代码强制封顶 4，不依赖 LLM 自律——需开新 delta 改 judge 输出契约
 - mypy 全仓 75 个既有错误（本次触碰文件为 0），是否立清理任务

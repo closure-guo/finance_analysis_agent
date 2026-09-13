@@ -258,7 +258,9 @@ class TestDecisionGroundingRubricV3:
 
     def test_other_rubrics_version_pinned(self):
         assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
-        assert RUBRIC_VERSIONS["debate_quality"] == 4  # v4 = 5 分档定性论点判例（round8 代裁）
+        assert (
+            RUBRIC_VERSIONS["debate_quality"] == 5
+        )  # v5 = 强制枚举论点标头（round9 审计：v4 判例 5 分档仍漏判）
         assert RUBRIC_VERSIONS["consistency"] == 4  # v4 = approve 语义(v2) + Trader 方案节(v4)
         assert RUBRIC_VERSIONS["decision_grounding"] == 8  # v8 = 三层判法(v7) + 多来源归属判例
 
@@ -276,10 +278,15 @@ class TestDecisionGroundingRubricV3:
         # v8（round9）：多来源同判判例——claim 在多来源均有原话时引任一真实来源即合法
         assert "判例(v8)" in rubric
         assert "任一真实来源即合法" in rubric
-        # debate_quality v8 判例：论点标头纯定性论点（「历史上……」类）降 4
+        # debate_quality v4 判例：论点标头纯定性论点（「历史上……」类）降 4
         debate_rubric = RUBRICS["debate_quality"]
         assert "判例(v4)" in debate_rubric
         assert "无样本" in debate_rubric
+        # debate_quality v5（round10）：强制枚举动作——评分前逐条标注论点标头，
+        # 任一纯定性即封顶 4（round9 审计：v4 判例 5 分档仍漏判，照搬 dg v7 强制核对模式）
+        assert "强制枚举动作" in debate_rubric
+        assert "逐条列出" in debate_rubric
+        assert "封顶 4" in debate_rubric
         # consistency v4：Trader 方案节 + 静默推翻核对
         consistency_rubric = RUBRICS["consistency"]
         assert "【Trader 方案】{{trader_plan}}" in consistency_rubric

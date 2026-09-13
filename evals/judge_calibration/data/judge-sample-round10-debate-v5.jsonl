@@ -1,0 +1,8 @@
+{"trace_id": "04baff5c1aeb94b9284d66a2ef893475", "query": "全面分析宁德时代(300750)的投资价值", "dimension": "debate_quality", "v4_score": 5, "v5_score": 5, "v5_reason": "双方论点均以具体数据/事实支撑，且各自对对方逐条回应，交锋实质充分，无纯定性论点。"}
+{"trace_id": "20712f2af6b537442e060766bbc516bb", "query": "全面分析美的集团(000333)的投资价值", "dimension": "debate_quality", "v4_score": 5, "v5_score": 4, "v5_reason": "双方论点有实质交锋且多数引用技术指标、宏观数据及回购金额等证据，但低利率估值逻辑、GARP动态收敛、负债率风险等个别论点为纯定性断言，按规则封顶4分。"}
+{"trace_id": "4fda4b196829b688aa93c34ed27b5c92", "query": "分析平安", "dimension": "debate_quality", "v4_score": 4, "v5_score": 4, "v5_reason": "双方论点覆盖率高且引用多项数据，但存在多条纯定性论点（如宏观利好主导、技术指标滞后等），按规则封顶4分。"}
+{"trace_id": "53448e4bf0493393c7f2715c095debcd", "query": "全面分析招商银行(600036)的投资价值", "dimension": "debate_quality", "v4_score": 4, "v5_score": 5, "v5_reason": "双方论点均有数据/事实支撑，且逐条回应对方论点，交锋实质充分，证据引用具体，无纯定性论断。"}
+{"trace_id": "9f4d576d823da51f750553616b5dcd06", "query": "全面分析比亚迪(002594)的投资价值", "dimension": "debate_quality", "v4_score": 5, "v5_score": 4, "v5_reason": "双方有实质交锋且证据较充分，但bull首轮含“历史经验表明”这类无样本经验论断，按规则封顶4分。"}
+{"trace_id": "a163494e5b4f5e8343cb58b62992028d", "query": "全面分析平安银行(000001)的投资价值", "dimension": "debate_quality", "v4_score": 5, "v5_score": 4, "v5_reason": "双方逐条回应且引用数据，但bull含‘宽信用传导率先受益’等纯定性表态，按规则封顶4分。"}
+{"trace_id": "b344d9371019ac45d1eb8b477ac1ffd5", "query": "全面分析中芯国际(688981)的投资价值", "dimension": "debate_quality", "v4_score": 5, "v5_score": 4, "v5_reason": "双方逐条回应且引用ROE、FCF、技术指标等具体证据，交锋充分；但个别论点如“半导体独立产业周期”“左侧布局即接刀”属定性断言，故封顶4分。"}
+{"trace_id": "d46e0942420277e8b1c5a40ab606bf3a", "query": "全面分析贵州茅台(600519)的投资价值", "dimension": "debate_quality", "v4_score": 5, "v5_score": 4, "v5_reason": "双方实质交锋充分、多轮逐条回应，但多头论点含宏观出清/龙头份额/弹性最大等纯定性表述，按规则封顶4分。"}
