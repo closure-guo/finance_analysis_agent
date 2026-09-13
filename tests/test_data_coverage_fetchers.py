@@ -125,3 +125,48 @@ class TestFetchBlockTrades:
         """_call_ak 失败语义为返回 None（非抛异常），fetcher 降级空列表。"""
         with patch("finance_agent.data.akshare_client._call_ak", return_value=None):
             assert AKShareClient().fetch_block_trades("600519") == []
+
+
+class TestCitationEchoSources:
+    """四新信源标题进回声匹配源集合（Task 7，TDD 先行）。"""
+
+    def test_announcement_title_echo_pass(self):
+        from finance_agent.citation import Claim, _verify_textual
+
+        state = {
+            "announcements": [{"title": "2026年半年度报告", "date": "2026-08-15"}],
+            "research_reports": [],
+            "share_unlock": [],
+            "block_trades": [],
+        }
+        claim = Claim(
+            claim_type="entity", source_type="data", field_ref="announcements.0.title",
+            stated_value="2026年半年度报告", interpretation="公司发布中报",
+            metric_name=None, period=None, direction=None,
+        )
+        result = _verify_textual(claim, state)
+        assert result.status == "PASS"
+
+    def test_unlock_date_echo(self):
+        from finance_agent.citation import Claim, _verify_textual
+
+        state = {"announcements": [], "research_reports": [], "share_unlock": [{"date": "2026-10-09"}], "block_trades": []}
+        claim = Claim(
+            claim_type="entity", source_type="data", field_ref="share_unlock.0.date",
+            stated_value="2026-10-09 限售解禁", interpretation="存在解禁压力",
+            metric_name=None, period=None, direction=None,
+        )
+        result = _verify_textual(claim, state)
+        assert result.status == "PASS"
+
+    def test_unmatched_is_unverifiable_text(self):
+        from finance_agent.citation import Claim, _verify_textual
+
+        state = {"announcements": [], "research_reports": [], "share_unlock": [], "block_trades": []}
+        claim = Claim(
+            claim_type="entity", source_type="data", field_ref="announcements.0.title",
+            stated_value="凭空捏造的公告标题", interpretation="x",
+            metric_name=None, period=None, direction=None,
+        )
+        result = _verify_textual(claim, state)
+        assert result.status == "UNVERIFIABLE"

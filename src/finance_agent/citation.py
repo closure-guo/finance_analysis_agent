@@ -642,6 +642,18 @@ def _verify_textual(claim: Claim, state: dict) -> CitationResult:
     if isinstance(events, list):
         for e in events:
             sources.append(str(e.get("title") or "") if isinstance(e, dict) else str(e))
+    # add-analyst-data-coverage：公告/研报标题与解禁/大宗日期进回声源集合
+    for key, fields in (
+        ("announcements", ("title",)),
+        ("research_reports", ("title",)),
+        ("share_unlock", ("date",)),
+        ("block_trades", ("date", "buyer", "seller")),
+    ):
+        items = state.get(key) or []
+        if isinstance(items, list):
+            sources += [
+                str(i.get(f) or "") for i in items if isinstance(i, dict) for f in fields if i.get(f)
+            ]
     resolved = _resolve_field_ref(claim.field_ref, state)
     if isinstance(resolved, str):
         sources.append(resolved)

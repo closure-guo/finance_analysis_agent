@@ -224,3 +224,18 @@ class TestClaimDirectionDiscipline:
         text = _load(f"{name}.md")
         assert "下滑 X%" in text
         assert "direction=negative" in text
+
+
+class TestCoverageSourcesPrompts:
+    """新信源消费契约（add-analyst-data-coverage Task 5）。"""
+
+    def test_fundamental_consumes_announcements_and_reports(self):
+        text = _load("fundamental_analyst.md")
+        assert "公司公告列表" in text
+        assert "券商研报列表" in text
+        assert "不得直接作为你的结论依据" in text  # 防锚定条款
+
+    def test_sentiment_consumes_unlock_and_blocks(self):
+        text = _load("sentiment_analyst.md")
+        assert "限售解禁" in text
+        assert "大宗交易" in text

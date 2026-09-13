@@ -513,6 +513,39 @@ def _build_fundamental_context(state: dict) -> str:
     if hint:
         sections.append(hint)
 
+    # 公告与研报（add-analyst-data-coverage）
+    announcements = state.get("announcements") or []
+    if announcements:
+        trimmed_ann = [
+            {"title": a.get("title", ""), "date": a.get("date", ""), "category": a.get("category", "")}
+            for a in announcements[:10]
+        ]
+        sections.append(
+            f"公司公告（state 键 announcements，最近{len(trimmed_ann)}条）:\n"
+            f"{json.dumps(trimmed_ann, ensure_ascii=False, default=str)}"
+        )
+    else:
+        sections.append("公司公告（state 键 announcements）: 暂无数据")
+    reports = state.get("research_reports") or []
+    if reports:
+        trimmed_rep = [
+            {
+                "title": r.get("title", ""),
+                "org": r.get("org", ""),
+                "rating": r.get("rating", ""),
+                "target_price": r.get("target_price"),
+                "date": r.get("date", ""),
+            }
+            for r in reports[:8]
+        ]
+        sections.append(
+            f"券商研报（state 键 research_reports，最近{len(trimmed_rep)}条）:\n"
+            f"{json.dumps(trimmed_rep, ensure_ascii=False, default=str)}"
+            "\n注意：评级与目标价是卖方机构观点，存在立场偏差，不得直接作为你的结论依据，仅作市场预期参照。"
+        )
+    else:
+        sections.append("券商研报（state 键 research_reports）: 暂无数据")
+
     # 三大报表（近 3 年，减少 token）——财报降序（最新在前），head = 最新 3 年
     for name, key in [
         ("资产负债表", "balance_sheet"),
@@ -700,5 +733,21 @@ def _build_sentiment_context(state: dict) -> str:
         sections.append(
             f"关键事件（state 键 key_events）:\n{json.dumps(events[:10], ensure_ascii=False, default=str)}"
         )
+
+    # 解禁与大宗事件面（add-analyst-data-coverage）
+    unlock = state.get("share_unlock") or []
+    if unlock:
+        sections.append(
+            f"限售解禁排队（state 键 share_unlock）:\n{json.dumps(unlock[:8], ensure_ascii=False, default=str)}"
+        )
+    else:
+        sections.append("限售解禁排队（state 键 share_unlock）: 暂无数据")
+    blocks = state.get("block_trades") or []
+    if blocks:
+        sections.append(
+            f"大宗交易明细（state 键 block_trades，近30天）:\n{json.dumps(blocks[:10], ensure_ascii=False, default=str)}"
+        )
+    else:
+        sections.append("大宗交易明细（state 键 block_trades）: 暂无数据")
 
     return "\n\n".join(sections)

@@ -603,3 +603,45 @@ class TestDegradationKeysNamespaced:
         state = {**TestAnalystDegradationObservability._STATE, "iteration_count": 2}
         technical_analyst(state)
         assert any("degradation.technical.r2" in (c["metadata"] or {}) for c in captured)
+
+
+class TestCoverageSourcesContext:
+    """新信源上下文装配（add-analyst-data-coverage Task 5，TDD 先行）。"""
+
+    def test_fundamental_context_includes_announcements_and_reports(self):
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "announcements": [
+                {"title": "2026年半年度报告", "date": "2026-08-15", "category": "财务报告", "url": "http://a/1"},
+                {"title": "关于回购股份的公告", "date": "2026-07-01", "category": "股份回购", "url": ""},
+            ],
+            "research_reports": [
+                {"title": "中报点评", "org": "浙商证券", "rating": "买入", "target_price": 1600.0, "date": "2026-08-20"}
+            ],
+        }
+        ctx = _build_fundamental_context(state)
+        assert "公告" in ctx and "2026年半年度报告" in ctx
+        assert "研报" in ctx and "买入" in ctx and "1600" in ctx
+        assert "不得" in ctx  # 防锚定条款
+
+    def test_fundamental_context_empty_sources(self):
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        ctx = _build_fundamental_context({"stock_name": "x", "stock_code": "y"})
+        assert "暂无" in ctx  # 空态显式声明，不静默消失
+
+    def test_sentiment_context_includes_events(self):
+        from finance_agent.nodes.analysts import _build_sentiment_context
+
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "share_unlock": [{"date": "2026-10-09", "shares": 120000000, "market_value": 14300000000}],
+            "block_trades": [{"date": "2026-09-10", "price": 1270.0, "premium": -0.5}],
+        }
+        ctx = _build_sentiment_context(state)
+        assert "解禁" in ctx and "2026-10-09" in ctx
+        assert "大宗" in ctx and "1270" in ctx

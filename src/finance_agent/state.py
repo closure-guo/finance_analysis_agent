@@ -78,6 +78,10 @@ class AnalysisState(TypedDict, total=False):
     risk_metrics: dict  # calc_risk() 输出
     macro_indicators: dict  # CPI/PMI/M2/LPR
     news_list: list[dict]  # 新闻列表
+    announcements: list[dict]  # 公司公告列表（add-analyst-data-coverage）
+    research_reports: list[dict]  # 券商研报列表（含评级/目标价）
+    share_unlock: list[dict]  # 限售解禁排队
+    block_trades: list[dict]  # 大宗交易明细（近 30 天）
 
     # Layer I: Analyst Team（4 个并行分析师）
     analyst_reports: Annotated[dict[str, dict], merge_dicts]
