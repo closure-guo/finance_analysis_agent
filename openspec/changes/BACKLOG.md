@@ -28,9 +28,10 @@
    round7 结果为准判定通过。
 2. **nightly @live 门禁**（已决策 2026-09-08：不暴露本地 Langfuse、不上云）：
    CI secrets **不配置**，GitHub Actions 侧 @live 维持跳过。live 验证走本地手动
-   （`uv run pytest -m live`，本机 Langfuse+LLM 环境就绪），或未来愿开电脑时挂
-   Windows 计划任务在收盘后定时跑——不引入公网暴露与数据上云。
-   **当前阻断**：DEEPSEEK_API_KEY 已 401 失效，@live 用例 3 个红，待 owner 换 key。
+   （`uv run pytest -m live`），或未来愿开电脑时挂 Windows 计划任务在收盘后定时跑。
+   **2026-09-13 修复**：@live 用例硬编码 DeepSeek 直连（模型/key/端点）已切方舟生产栈
+   （LLM_MODEL/LLM_API_KEY/LLM_BASE_URL，Agent Plan），幻觉率用例同步修 report_chunk
+   事件抽取 + data_map source 契约；3 用例本机实测全绿，无 DEEPSEEK_API_KEY 依赖。
 3. ~~docker 后端重建~~（2026-09-13 执行）：`docker compose up -d --build` 已刷新，
    FM state 修复/根 span output/session 头/incident 027 修复入镜像。
 4. **judge-sample 数据文件入库规矩**：round5-8 盲标/标注样本 xlsx/jsonl 目前未跟踪，

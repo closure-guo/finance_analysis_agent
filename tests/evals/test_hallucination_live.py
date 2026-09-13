@@ -7,6 +7,7 @@
 import json
 import os
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -64,11 +65,17 @@ def _latest_deep_report(db_path: Path) -> tuple[str, str] | None:
             "SELECT event_json FROM session_events WHERE session_id=?",
             (r["session_id"],),
         ).fetchall()
-        text = "".join(
-            (json.loads(e["event_json"]).get("token") or "")
-            for e in events
-            if json.loads(e["event_json"]).get("type") == "chat_token"
-        )
+        # 深度分析会话的报告按 report_chunk（text 字段）流式落库；chat 会话为
+        # chat_token（token 字段）。事件 schema 演进：2026-09 起分析报告走 report_chunk
+        parts: list[str] = []
+        for e in events:
+            j = json.loads(e["event_json"])
+            etype = j.get("type")
+            if etype == "chat_token":
+                parts.append(j.get("token") or "")
+            elif etype == "report_chunk":
+                parts.append(j.get("text") or "")
+        text = "".join(parts)
         if len(text) > 200:
             conn.close()
             return text, str(r["stock_code"] or "")
@@ -100,6 +107,10 @@ def test_hallucination_live_report(live_env: bool):
             data_map["pb"] = float(quote["PB"])
     except Exception as e:  # noqa: BLE001 - 行情失败降级为无数据源
         print(f"[HALLUCINATION] 行情拉取失败（数据源缺失，claim 归 unverifiable）: {e}")
+
+    # measure.py 契约：data_map 必须带 source（独立快照来源与时点，与报告生成管道解耦）
+    if data_map:
+        data_map["source"] = f"snapshot:akshare-{date.today().isoformat()}"
 
     # ROE 数据源：fetch_indicators 最新期净资产收益率（财务比率校验）
     if stock_code:
