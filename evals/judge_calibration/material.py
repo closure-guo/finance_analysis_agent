@@ -115,8 +115,14 @@ def detect_dimension(rendered: str | None) -> str | None:
 
 
 def _clean(text: str) -> str:
-    """压缩空白（含换行）为单个空格，摘要紧凑。"""
-    return " ".join(_SPACE_RE.split(text or "")).strip()
+    """段内空白压成单个空格；含换行的空白串保留为单个换行。
+
+    换行不能压：辩论记录的发言人边界（【role】行）与论点/正文分层全靠换行
+    承载，压平后所有辩论方内容挤成一段，人审无法定位发言归属（2026-09-12
+    round7 标注实测回归）。"""
+    text = re.sub(r"[^\S\n]+", " ", text or "")
+    text = re.sub(r"\s*\n\s*", "\n", text)
+    return text.strip()
 
 
 def extract_sections(rendered: str, dimension: str) -> dict[str, str]:

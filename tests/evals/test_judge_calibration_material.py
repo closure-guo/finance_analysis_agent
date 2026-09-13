@@ -47,6 +47,32 @@ class TestPromptParsing:
         assert "【technical】MA5 走强" in sections.get("【分析师章节结论】")
         assert "【fundamental】ROE 32%" in sections.get("【分析师章节结论】")
 
+    def test_debate_sections_preserve_speaker_line_breaks(self):
+        """回归（2026-09-12 标注实测）：_clean 曾把换行压成空格，导致风险辩论记录
+        所有发言方内容挤成一段，人审无法分辨发言人边界。段内空白可压缩，
+        换行必须保留。"""
+        rendered = _render(
+            "decision_grounding",
+            {
+                "analyst_reports": "【technical】均线空头\n【fundamental】ROE 13%",
+                "debate_history": "【bull】论点: 超卖反弹\n各位评委，看多。\n【bear】论点: 趋势偏空\n看空陈述。",
+                "research_manager_decision": "RM 看空",
+                "risk_metrics": "最大回撤 16.2%",
+                "risk_debate_history": "【aggressive】论点: 应加仓\n激进方正文。\n【conservative】论点: 应减仓\n保守方正文。",
+                "trade_decision": "action: watch",
+            },
+        )
+        sections = extract_sections(rendered, "decision_grounding")
+        risk = sections.get("【风险辩论记录】", "")
+        # 发言人之间的换行保留（不再压成空格）
+        assert "\n【conservative】" in risk
+        # 论点行与正文分层保留
+        assert "【aggressive】论点: 应加仓\n激进方正文。" in risk
+        # 多空辩论记录同病同修（2026-09-12 标注实测：熊牛辩论同样被压成一段）
+        debate = sections.get("【多空辩论记录】", "")
+        assert "\n【bear】" in debate
+        assert "【bull】论点: 超卖反弹\n各位评委，看多。" in debate
+
     def test_sections_for_dimension_covers_all_dims(self):
         for dim in ("report_relevance", "debate_quality", "decision_grounding", "consistency"):
             assert sections_for_dimension(dim)  # 每个维度至少一个小节
