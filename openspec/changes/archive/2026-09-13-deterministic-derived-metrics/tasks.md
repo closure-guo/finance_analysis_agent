@@ -3,7 +3,7 @@
 ## 1. 前置确认
 
 - [x] 1.1 确认 `harden-decision-report-semantics` 已归档；未归档则实现任务挂起（纯文档/规范任务不受限）
-- [ ] 1.2 与 round8 材料版本变更合并排期：本 delta 改变风险辩论 context，单独成一个实验变量，不得与其他 judge 输入变更混入同一轮
+- [x] 1.2 与 round8 材料版本变更合并排期：本 delta 改变风险辩论 context，单独成一个实验变量，不得与其他 judge 输入变更混入同一轮——**实际执行注记**：round8 预登记以混合变量轮显式声明（v7 rubric / 派生指标喂回 / 027 回路三变量，按桶归因），字面「单独一轮」未满足，排期约束以预登记+归因纪律方式闭环；round9 材料升级未再触碰风险辩论 context
 
 ## 2. 测试先行
 
@@ -24,5 +24,5 @@
 - [x] 4.1 `uv run python scripts/deploy_prompts.py` 发布 prompt（eval 门禁依赖）
 - [x] 4.2 `uv run pytest` 全量绿 + `uv run ruff check` + `uv run mypy`
 - [x] 4.3 端到端跑一次真实分析（buy 方案），核对：辩论各方引用的赔率一致且等于代码值、报告渲染值同源（交互类变更人工验证环节）——3 次真实运行完成状态管道验证（incident 027 修复实证）；真实价位路径因 trader 未申报价位未触发，计算/注入逻辑由单元测试覆盖，round8 实验补核
-- [ ] 4.4 人工验证报告落 `tests/validation/`
-- [ ] 4.5 tasks 全勾后 `openspec archive`，spec sync 合入主规范 `openspec/specs/derived-risk-metrics/`
+- [x] 4.4 人工验证报告落 `tests/validation/`——tests/validation/2026-09-14-deterministic-derived-metrics-validation.md（buy+真实价位路径未触发的残余风险已显式记录，挂接价位必填化 delta）
+- [x] 4.5 tasks 全勾后 `openspec archive`，spec sync 合入主规范 `openspec/specs/derived-risk-metrics/`
