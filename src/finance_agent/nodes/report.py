@@ -455,22 +455,83 @@ def _format_analyst_report(name: str, report: AnalystReport | dict, star: bool =
     return "\n".join(lines)
 
 
+def _fmt_price(value: object) -> str:
+    """价位渲染：0/None/负值一律「未提供」（report-render-operational-params：
+    不以占位数据冒充有效价位；正常价位不可能 ≤0，做空语义由 action 表达）。"""
+    try:
+        v = float(value) if value is not None else None  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "未提供"
+    if v is None or v <= 0:
+        return "未提供"
+    return f"{v:g}"
+
+
+def _fmt_derived_metrics(action: str, entry: object, stop: object, target: object) -> str:
+    """派生指标行（buy/sell）：止损距离与赔率由代码按参数原值计算。
+
+    MUST NOT 采用 reasoning 中 LLM 自算数值（round7 校准：心算值无校验，
+    代码计算是唯一真源）。任一参与数缺失/为 0/除零 → 对应指标省略。
+    """
+    try:
+        e = float(entry) if entry is not None else None  # type: ignore[arg-type]
+        s = float(stop) if stop is not None else None  # type: ignore[arg-type]
+        t = float(target) if target is not None else None  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if not e or not s or e == s:
+        return ""
+    stop_pct = abs(e - s) / e
+    parts = [f"止损距离 {stop_pct:.1%}"]
+    if t and t > 0:
+        # buy：赚 t-e / 亏 e-s；sell：赚 e-t / 亏 s-e（合法价位关系下均为正）
+        reward = (t - e) if action == "buy" else (e - t)
+        risk = (e - s) if action == "buy" else (s - e)
+        if risk > 0:
+            parts.append(f"赔率 {abs(reward) / risk:.2f}:1")
+    return "- **派生指标**（代码计算）: " + "、".join(parts)
+
+
 def _format_trade_decision(decision: TradeDecision | dict) -> str:
-    """格式化交易决策。"""
+    """格式化交易决策（report-render-operational-params：渲染完整操作参数）。
+
+    buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）；watch/hold 语义上
+    无建仓参数，不渲染硬价格行，注明再评估触发条件见理由。
+    """
     if isinstance(decision, TradeDecision):
         action = decision.action
         confidence = decision.confidence
         reasoning = decision.reasoning
+        position = getattr(decision, "position_size", None)
+        entry = getattr(decision, "entry_price", None)
+        stop = getattr(decision, "stop_loss", None)
+        target = getattr(decision, "target_price", None)
         corrected = getattr(decision, "price_level_corrected", False)
         correction_reason = getattr(decision, "price_level_correction_reason", "") or ""
     else:
         action = decision.get("action", "N/A")
         confidence = decision.get("confidence", 0)
         reasoning = decision.get("reasoning", "")
+        position = decision.get("position_size")
+        entry = decision.get("entry_price")
+        stop = decision.get("stop_loss")
+        target = decision.get("target_price")
         corrected = decision.get("price_level_corrected", False)
         correction_reason = decision.get("price_level_correction_reason", "") or ""
 
-    lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}", f"- **理由**: {reasoning}"]
+    lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
+    if position:
+        lines.append(f"- **仓位**: {position}")
+    if action in ("buy", "sell"):
+        lines.append(f"- **入场价**: {_fmt_price(entry)}")
+        lines.append(f"- **止损价**: {_fmt_price(stop)}")
+        lines.append(f"- **目标价**: {_fmt_price(target)}")
+        derived = _fmt_derived_metrics(action, entry, stop, target)
+        if derived:
+            lines.append(derived)
+    else:
+        lines.append("- **再评估触发条件**: 见理由")
+    lines.append(f"- **理由**: {reasoning}")
     if corrected:
         # toolize-price-levels：价位经工具参考带修正（可观测，不静默）
         lines.append(

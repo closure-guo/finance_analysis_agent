@@ -108,7 +108,10 @@ def validate_trade_prices(state: dict) -> dict:
                 reasons.append(f"{label} {v} 落在参考带 [{lo}, {hi}] 之外")
 
     if not reasons:
-        return {"price_check": {"result": "pass"}}
+        return {
+            "price_check": {"result": "pass"},
+            "derived_metrics": _compute_derived_metrics(action, entry, stop, target),
+        }
 
     reason = "；".join(reasons)
     attempts = int(state.get("price_check_attempts") or 0)
@@ -126,13 +129,67 @@ def validate_trade_prices(state: dict) -> dict:
             "price_check_attempts": attempts + 1,
         }
 
-    # 二次失败：按工具参考带修正（可观测，不静默）
+    # 二次失败：按工具参考带修正（可观测，不静默）；派生指标按修正后价位计算
     corrected = correct_prices(plan, levels, action)
     return {
         "trader_plan": corrected,
         "price_check": {"result": "corrected", "reason": reason},
         "price_level_corrected": True,
         "price_level_correction_reason": reason,
+        "derived_metrics": _compute_derived_metrics(
+            action,
+            corrected.get("entry_price"),
+            corrected.get("stop_loss"),
+            corrected.get("target_price"),
+        ),
+    }
+
+
+def _compute_derived_metrics(action: str, entry: object, stop: object, target: object) -> dict:
+    """派生风险指标确定性计算（deterministic-derived-metrics）。
+
+    止损距离 = |entry-stop|/entry；赔率 = |reward|/|risk|（buy：t-e / e-s；
+    sell：e-t / s-e）。参与数缺失/为 0 或除零 → 对应值 None 并注明原因，
+    MUST NOT 产出 0/无穷/NaN 占位。纯规则，无 LLM。
+    """
+    missing: list[str] = []
+    try:
+        e = float(entry) if entry is not None else None  # type: ignore[arg-type]
+        s = float(stop) if stop is not None else None  # type: ignore[arg-type]
+        t = float(target) if target is not None else None  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {
+            "stop_distance_pct": None,
+            "risk_reward_ratio": None,
+            "missing_reason": "价位参数非数值",
+        }
+    if not e or e <= 0:
+        missing.append("entry 缺失")
+    if not s or s <= 0:
+        missing.append("stop 缺失")
+    if not t or t <= 0:
+        missing.append("target 缺失")
+    if e and s and e == s:
+        missing.append("stop 与 entry 相等，止损距离为零除")
+    if missing:
+        return {
+            "stop_distance_pct": None,
+            "risk_reward_ratio": None,
+            "missing_reason": "；".join(missing),
+        }
+    assert e is not None and s is not None and t is not None  # missing 守卫已排除 None
+    stop_distance = abs(e - s) / e
+    if action == "sell":
+        reward, risk = e - t, s - e
+    else:
+        reward, risk = t - e, e - s
+    ratio = abs(reward) / risk if risk > 0 else None
+    if ratio is None:
+        missing.append("risk 非正（价位关系非法），赔率不可计算")
+    return {
+        "stop_distance_pct": stop_distance,
+        "risk_reward_ratio": ratio,
+        "missing_reason": "；".join(missing) or None,
     }
 
 

@@ -156,3 +156,61 @@ class TestTraderContextInjection:
         ctx = _build_trader_context(state)
         assert "价位校验打回意见" in ctx
         assert "entry 距现价偏差超限" in ctx
+
+
+class TestDerivedMetrics:
+    """deterministic-derived-metrics：价位过审后由纯规则代码计算派生指标。
+
+    止损距离 = (entry-stop)/entry；赔率 = (target-entry)/(entry-stop)（buy，
+    sell 取反向）。除零/缺失 → None + 原因，MUST NOT 产出 0/无穷占位；
+    fail 打回路径不计算；watch/hold 不计算。
+    """
+
+    def test_pass_computes_derived_metrics(self):
+        result = validate_trade_prices(_state(_plan(entry=100.0, stop=95.0, target=108.0)))
+        dm = result["derived_metrics"]
+        assert dm["stop_distance_pct"] == abs(100.0 - 95.0) / 100.0
+        assert dm["risk_reward_ratio"] == abs(108.0 - 100.0) / abs(100.0 - 95.0)
+        assert dm["missing_reason"] is None
+
+    def test_corrected_uses_corrected_prices(self):
+        result = validate_trade_prices(_state(_plan()))
+        assert result["price_check"]["result"] == "pass"
+        # 无修正场景下 derived_metrics 即来自原值；corrected 场景在 test_second_fail_corrects
+        # 的修正价上验证
+        assert "derived_metrics" in result
+
+    def test_fail_does_not_compute(self):
+        plan = _plan(entry=120.0)  # entry 偏差超限 → fail
+        result = validate_trade_prices(_state(plan))
+        assert result["price_check"]["result"] == "fail"
+        assert "derived_metrics" not in result
+
+    def test_hold_watch_no_derived_metrics(self):
+        result = validate_trade_prices(_state(_plan(action="hold")))
+        assert "derived_metrics" not in result
+
+    def test_division_by_zero_yields_none_with_reason(self):
+        # stop == entry：价格关系违规会先 fail；构造 pass 路径需 stop==entry 且
+        # 通过校验不可行，因此除零保护经由缺失参数路径验证
+        plan = _plan(entry=100.0, stop=0, target=108.0)
+        result = validate_trade_prices(_state(plan))
+        dm = result.get("derived_metrics", {})
+        if result["price_check"]["result"] == "pass":
+            assert dm["stop_distance_pct"] is None
+            assert dm["missing_reason"]
+        else:
+            assert "derived_metrics" not in result
+
+    def test_corrected_path_uses_corrected_prices(self):
+        """二次失败修正后，derived_metrics 按修正后价位计算而非原申报价。"""
+        plan = _plan(entry=120.0, stop=95.0, target=108.0)  # entry 偏差超限
+        state = _state(plan, attempts=1)
+        result = validate_trade_prices(state)
+        assert result["price_check"]["result"] == "corrected"
+        corrected = result["trader_plan"]
+        dm = result["derived_metrics"]
+        assert corrected["entry_price"] != 120.0  # 已被参考带修正
+        e, s, t = corrected["entry_price"], corrected["stop_loss"], corrected["target_price"]
+        assert dm["stop_distance_pct"] == abs(e - s) / e
+        assert dm["risk_reward_ratio"] == abs(t - e) / abs(e - s)

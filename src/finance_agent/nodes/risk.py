@@ -99,6 +99,16 @@ def _build_risk_context(state: dict) -> str:
     if risk:
         sections.append(f"风控指标: {json.dumps(risk, ensure_ascii=False)}")
 
+    # 派生指标（deterministic-derived-metrics）：validate 节点代码计算的
+    # 止损距离/赔率随 context 下发，辩论方与裁决直接引用，不自行重算
+    dm = state.get("derived_metrics") or {}
+    if dm.get("stop_distance_pct") is not None and dm.get("risk_reward_ratio") is not None:
+        sections.append(
+            f"派生指标（代码计算）: 止损距离 {dm['stop_distance_pct']:.1%}、"
+            f"赔率 {dm['risk_reward_ratio']:.2f}:1"
+            "（算术已由代码完成，直接引用，MUST NOT 自行重算或改写）"
+        )
+
     # 风险辩论历史（第 2 轮参考第 1 轮）
     history = state.get("risk_debate_history") or []
     if history:
