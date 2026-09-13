@@ -17,17 +17,25 @@
 | add-judge-human-calibration | 标注导出 CLI + Spearman/MAE/方向一致率 + 校准触发 | 同上 |
 | enable-hosted-evaluator | 降级方案：scores 轮询 + 告警 + 口径对齐 + 模板快照 | 同上 |
 
-## 遗留待人工/待资源（2026-09-08 更新）
+## 遗留待人工/待资源（2026-09-13 更新）
 
 > 前版「已实施」8 条 delta 全部归档；四类实时验证（FM 回路/数据排序/harden/langfuse-trace）
 > 已随 ehr-style/surgical 同步归档；prompt direction 纪律已发布。以下为当前真实遗留。
 
-1. **judge 人工校准标注**：首轮跨模型代理门禁已归档（deepseek/qwen/k3 90 对），spec 要求的人工
-   ≥80% 一致性校验仍开放——标注工具链就绪（exporter 抽样直链可用），回填 human_score 重跑
-   measure.py 即闭合。
+1. ~~judge 人工校准标注~~ **已闭合（2026-09-13）**：round7 盲标 41 对 + owner 终裁达标（整体
+   MAE 0.342 / 方向一致率 97.6%），rubric v7 定稿；round8 基线重建轮经维护者代裁审计无虚高
+   （见 docs/evals/2026-09-13-round8-维护者代裁报告.md）。spec 的人工 ≥80% 一致性校验以
+   round7 结果为准判定通过。
 2. **nightly @live 门禁**（已决策 2026-09-08：不暴露本地 Langfuse、不上云）：
    CI secrets **不配置**，GitHub Actions 侧 @live 维持跳过。live 验证走本地手动
    （`uv run pytest -m live`，本机 Langfuse+LLM 环境就绪），或未来愿开电脑时挂
    Windows 计划任务在收盘后定时跑——不引入公网暴露与数据上云。
-3. **docker 后端重建**：8000 端口 docker 镜像基于修复前代码（FM state 修复/根 span output/
-   session 头等未入镜像）——`docker compose up -d --build` 刷新。
+   **当前阻断**：DEEPSEEK_API_KEY 已 401 失效，@live 用例 3 个红，待 owner 换 key。
+3. ~~docker 后端重建~~（2026-09-13 执行）：`docker compose up -d --build` 已刷新，
+   FM state 修复/根 span output/session 头/incident 027 修复入镜像。
+4. **judge-sample 数据文件入库规矩**：round5-8 盲标/标注样本 xlsx/jsonl 目前未跟踪，
+   仅 round1 jsonl 在库——要么统一入库（可审计优先），要么 .gitignore 统一排除（本地
+   报告已引用路径），待定。
+5. **round9 + v8 候选**（2026-09-13 立项，见 openspec/changes/）：consistency/dg 材料补
+   【Trader 方案】节 + 辩论收敛信号；rubric v8 两条——debate 5 分档 few-shot 判例、dg 归属层
+   「多来源同判任一真实来源即合法」判例。
