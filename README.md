@@ -34,15 +34,15 @@
 - **会话管理**：侧边栏新建/切换/搜索/重命名/删除会话，后端 SQLite 持久化；刷新或切换会话后流式断点续传
 - **引用校验与展示**：Claim 6 类分类法 + computational 公式重算 + 术语/期次一致性校验，检测 LLM 幻觉（见 [citation.py](src/finance_agent/citation.py)）；前端行内引用上标 + hover 预览卡（校验状态三态配色）
 - **报告导出与下载中心**：Markdown 渲染 + ECharts 交互图表 + Word/PPT/PDF 导出；`/downloads` 独立页集中管理导出文件（类型筛选/搜索/增量加载）
-- **决策结果跟踪**：交易决策自动落库，工作日收盘后日批结算（止损/目标/超期规则），APScheduler 进程内调度
+- **决策结果跟踪**：交易决策自动落库（价位申报必填——Trader 方案缺失 entry/stop/target 数值时校验打回重报），工作日收盘后日批结算（止损/目标/超期规则），APScheduler 进程内调度
 - **LLM 设置面板**：多 profile 管理 + 模型能力探测门禁（tool_call/json_output/stream 不满足时禁用对应模式入口并提示原因）
 - **深色模式与效率操作**：浅色/深色/跟随系统三态主题，Cmd/Ctrl+K 命令面板（会话搜索 + 快捷动作），全局快捷键（新建会话/折叠侧边栏/聚焦输入）
 - **Langfuse 可观测性**：LLM 调用链路追踪、Prompt 版本管理、引用校验评分上报
 
 ## 质量保障
 
-- 后端 180+ 个 pytest 测试文件（含 `tests/llm_contracts/` provider 合同套件）、前端 50+ 个 Vitest 测试文件、34 个 Playwright E2E spec（stub 套件为 CI 门禁，`@live` 真模型套件 nightly 防漂移）
-- `evals/` 评估框架（详见下节「评估体系」）：judge 评分 / 版本对比 / 消融实验 / claim 验证基准 / 决策回放显著性检验
+- 后端 229 个 pytest 测试文件（2,319 个用例，含 `tests/llm_contracts/` provider 合同套件）、前端 74 个 Vitest 测试文件（581 个用例）、28 个 Playwright E2E spec / 64 个用例（stub 套件为 CI 门禁，`@live` 真模型套件 nightly 防漂移）
+- `evals/` 评估框架（详见下节「评估体系」）：judge 评分与人工校准 / 版本对比 / 消融实验 / claim 验证基准 / golden set / 决策回放显著性检验
 
 ## 评估体系
 
@@ -52,12 +52,13 @@
 
 - **对抗基准集**：`evals/claim_benchmark/data/benchmark_v12.jsonl`（81 条，构造即标签、免 LLM 标注）——含容差边界近失配（±{0.3,0.5,0.7,1}% 四档）、语义错位对抗子集、v3 新校验路径样本（取整感知容差 / comparative 双端）
 - **CI 回归门禁**（`ci.yml`）：F1 ≥ 0.90 且相对冻结基线退步 > 0.02 即阻断合并；注入式故障演练验证（容差 0.5%→5% → F1 1.0→0.58、exit 1、还原全绿）
+- **golden set v1.0**（13 条，已冻结）：assertion 级 deterministic 判定（拒答声明 / 合规红线 / 事故回归 claim 对照），零 token 进 CI（`evals/golden/gates.py`）
 - 校准故事：61% 契约病误诊 → 分桶归因 → 修复四类契约 → 三标的 FAIL 3.5%/0%/0%
 
 ### 2. 产出质量层（LLM 实验回归）
 
 - Langfuse 实验追踪 + `evals/compare.py` 配对 bootstrap（B=10,000）显著性门禁（CI 含 0 只写「无显著差异」）
-- judge 评分体系（relevance/debate_quality/decision_grounding/consistency）+ 跨模型校准（含评分者漂移披露）
+- judge 评分体系（relevance/debate_quality/decision_grounding/consistency）+ 跨模型校准（含评分者漂移披露）；**人工校准闭环**——round5 未达标 → 材料/rubric 多轮修复 → round7 盲标 41 对全维度达标（MAE 0.342 / 方向一致率 97.6%）→ round8 维护者代裁审计无虚高（MAE 0.122 / 方向 100%），judge 判可用
 
 ### 3. 决策回测层（防前视偏差的历史回放）
 
@@ -66,10 +67,9 @@
 
 ### 4. 架构归因层（数据对齐消融）
 
-- `evals/ablation.py`：三变体（analysts / +辩论 / 完整五层）× 同 state 快照 × 配对 bootstrap
-- 已产出第一份真实数据（见 `evals/ablation/results/pilot.md`）；judge 维度按变体适用性过滤（避免评「不存在的层」）
+- `evals/ablation.py`：三变体（analysts / +辩论 / 完整五层）× 同 state 快照 × 配对 bootstrap；n=10 权威版 90 run（1,788 次调用 / 1,260 万 token）——辩论层与完整层增量 95% CI 全含 0（未获统计支持），据此裁剪管线省 ≈29% token（见 [消融 n10 权威结果](docs/evals/2026-09-03-消融n10权威结果.md)）；judge 维度按变体适用性过滤（避免评「不存在的层」）
 
-> **诚实边界**：消融/回测为通路验证级初步证据（n=3 标的）；judge 维度结论因评分者漂移 + 管线缺陷（已修复）暂不作为定论，确定性指标（citation_pass/coverage/门禁）全程可信。基线说明见 [docs/evals/](docs/evals/)。
+> **诚实边界**：消融/回测为通路验证级初步证据（3 标的 × 10 重复）；pilot 的「完整层 decision_grounding 显著退步」在修复评估缺陷（#111/#112）后证实为评估伪影；确定性指标（citation_pass/coverage/门禁）全程可信。基线说明见 [docs/evals/](docs/evals/)。
 
 ## 快速开始
 
@@ -269,7 +269,7 @@ frontend/src/
 - [x] **P8 Langfuse 可观测性** - LLM 追踪 + Prompt 管理 + 评分上报 (ADR-0015/0016)
 - [x] **P9 意图澄清对话流** - 标的不明确时 Agent 反问澄清 (ADR-0017)
 
-> P9 之后的演进以 OpenSpec delta 为单位管理（`openspec/changes/archive/` 已归档 39 个变更）。近期主题：LLM Provider Gateway 防腐层、Kimi 风格前端 UX（命令面板/下载中心/深色模式/报告侧栏）、引用校验语义覆盖强化（术语/期次一致性 + 分桶定向重试）、决策结果跟踪。
+> P9 之后的演进以 OpenSpec delta 为单位管理（`openspec/changes/archive/` 已归档 108 个变更）。近期主题：LLM Provider Gateway 防腐层、Kimi 风格前端 UX（命令面板/下载中心/深色模式/报告侧栏）、引用校验语义覆盖强化（术语/期次一致性 + 分桶定向重试）、决策结果跟踪与价位申报必填化、评估体系 judge 人工校准与 rubric 判例迭代。
 
 ## 文档
 
@@ -281,9 +281,9 @@ frontend/src/
 - [专题设计](docs/design/) - LLM Provider Gateway、E2E 方案、评估体系等专项设计档案
 - [评估体系](evals/) - 评估框架（judge/对比/消融/claim 基准），基线说明见 [docs/evals/](docs/evals/)
 - [项目工作流](docs/project-workflow.md) - OpenSpec + Superpowers 双框架实施指南
-- [事故记录](docs/incidents/) - 系统性问题与解决方案（001-025）
+- [事故记录](docs/incidents/) - 系统性问题与解决方案（001-027，28 份）
 - [AGENTS.md](AGENTS.md) - Agent 工作指南（任务路由、契约红线、测试约束）
-- [OpenSpec](openspec/specs/) - 系统行为规范（唯一真相来源，28 个 capability）
+- [OpenSpec](openspec/specs/) - 系统行为规范（唯一真相来源，53 个 capability）
 
 ## 思路来源
 
