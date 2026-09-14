@@ -82,6 +82,8 @@ test.describe('切换会话恢复管线（resume-pipeline-across-sessions）', (
       localStorage.setItem('fa_api_key', 'stub-key-for-testing')
       localStorage.setItem('fa_user_id', 'user-test-resume')
       localStorage.removeItem('financeAgent.pipelineDurations')
+      // 本 spec 断言列表时间轴 DOM（pipeline-timeline）；默认视图为 graph，显式预置 list
+      localStorage.setItem('fa_pipeline_view', 'list')
     })
     await page.reload()
 

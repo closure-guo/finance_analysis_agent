@@ -31,6 +31,9 @@ export default defineConfig({
     // 视觉基线截图采集（会话页/报告渲染态）同依赖 8002/5175 管线环境，
     // 由 playwright.timeline.config.ts 运行（未设 BASELINE_DIR 时自跳过），默认 config 排除
     'visual-baseline-report.spec.ts',
+    // 管线卡视图切换（graph 默认 / 列表可切）同依赖 8002/5175 管线环境，
+    // 由 playwright.timeline.config.ts 运行，默认 config 排除
+    'pipeline-view-toggle.spec.ts',
     // 以下为前置技术债：使用 waitForTimeout 的时序依赖测试，在 CI 上不稳定，
     // 需专属 STUB_SCENARIO 或在 timeline config 内运行。
     // 2026-09-04 技术债清偿：

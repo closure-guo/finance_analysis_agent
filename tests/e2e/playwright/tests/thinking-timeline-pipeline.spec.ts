@@ -28,6 +28,8 @@ test.describe('管线模式 PipelineCard 按 agent 阶段分组', () => {
     await page.evaluate(() => {
       localStorage.setItem('fa_api_key', 'stub-key-for-testing')
       localStorage.setItem('fa_user_id', 'user-test-pipeline')
+      // 本 spec 断言 PipelineCard 列表视图的 agent 分组；默认视图为 graph，显式预置 list
+      localStorage.setItem('fa_pipeline_view', 'list')
     })
     await page.reload()
 
