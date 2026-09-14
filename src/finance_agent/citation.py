@@ -167,6 +167,19 @@ def _resolve_column_alias(col_name: str, columns: Any) -> str | None:
     return None
 
 
+# 根键别名归一（前缀契约一致性）：analysts context 提示 LLM「field_ref 前缀 derived.」，
+# 而 state 根键是 `derived_series`——图通道修复后该 context 节首次真正渲染，LLM 照提示
+# 写 `derived.chg_5d` 时正确数值会被判 path_unresolvable 误 FAIL（2026-09-14 实测）。
+# 归一后两种前缀都合法；别名只做根段替换，不改其余路径语义。
+_ROOT_ALIASES: dict[str, str] = {"derived": "derived_series"}
+
+
+def _apply_root_alias(parts: list[str]) -> list[str]:
+    if parts and parts[0] in _ROOT_ALIASES:
+        return [_ROOT_ALIASES[parts[0]], *parts[1:]]
+    return parts
+
+
 def _resolve_field_ref(
     field_ref: str, state: dict, claim_period: str | None = None
 ) -> object | None:
@@ -182,7 +195,7 @@ def _resolve_field_ref(
       field_ref 语义（macro_indicators.cpi.0.<列>）不变。
     """
     state = {**state, "_claim_period": claim_period} if claim_period else state
-    parts = _normalize_quarter_segments(_expand_brackets(field_ref), state)
+    parts = _normalize_quarter_segments(_apply_root_alias(_expand_brackets(field_ref)), state)
     current: object = state
     i = 0
     while i < len(parts):
@@ -326,7 +339,7 @@ def _recompute_snapshot(state: dict, key: str) -> object:
 
 def _verify_computational(claim: Claim, state: dict) -> CitationResult:
     """计算型 claim：从原始数据重算指标，用相对容差 0.5% 比对。"""
-    parts = claim.field_ref.split(".")
+    parts = _apply_root_alias(claim.field_ref.split("."))
     root = parts[0]
     sub_path = parts[1:]
 

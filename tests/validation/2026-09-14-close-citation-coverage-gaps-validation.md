@@ -84,6 +84,19 @@ MA5=1295.30、MA20=1298.32、差值 -3.02：
   - `trader` generation input 命中「**价位参考**」×1 —— 修复前该节因 `price_levels` 被图丢弃而**从未渲染**；
   - `technical_analyst` generation input 命中「**常用派生值**」×1 —— 修复前同样不存在。
 
+## 验证期发现并修复：`derived.` 前缀契约缺口（micro-delta `normalize-derived-root-alias`）
+
+**发现**：analysts context 提示 LLM「field_ref 前缀 `derived.`」，而 state 根键是 `derived_series`——图通道修好前该 context 节从未渲染（死文案），修好后**首次真正渲染**，照提示写就会被误判：
+
+```
+derived.chg_5d          → FAIL path_unresolvable   （值正确，前缀简写）
+derived_series.chg_5d   → PASS
+```
+
+**处置**：`_ROOT_ALIASES = {"derived": "derived_series"}` 统一接入普通解析与计算型注册表查找；context 提示改规范前缀 `derived_series.`；spec「路径形态归一」增补条款（delta `2026-09-14-normalize-derived-root-alias` 已归档 + sync，主规范 53/53）。TDD：`TestDerivedRootAlias`（2 例）+ `TestComputationalRegistryCoverage::test_alias_root_recomputes`（先红后绿）。
+
+**真实运行核对**：本次端到端 run 的 citations 实际写作 `technical_indicators.MA.5.-1`（规范路径），未踩该坑；缺口为**潜在**误报源，随本 PR 一并消除。
+
 ## 回归
 
 - 受影响模块：`tests/test_citation.py` / `tests/test_graph_5layer.py` / `tests/test_pipeline_stub.py` / `tests/nodes/test_validate_trade_prices.py` 全绿

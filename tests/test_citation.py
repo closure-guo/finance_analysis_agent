@@ -396,6 +396,24 @@ class TestComputationalRegistryCoverage:
         missing = produced - set(_COMPUTATIONAL_RECALC) - set(_UNREGISTERED_EXEMPT)
         assert not missing, f"未注册且未豁免的派生键：{sorted(missing)}"
 
+    def test_alias_root_recomputes(self, balance_sheet, income_statement, cash_flow, indicators):
+        """别名根在计算型路径同样生效（注册表查找走归一后的根，否则 UNVERIFIABLE）。"""
+        from finance_agent.citation import Claim, verify_claims
+        from finance_agent.nodes.compute import compute_metrics
+
+        state = self._full_state(balance_sheet, income_statement, cash_flow, indicators)
+        truth = compute_metrics(state)["derived_series"]["chg_5d"]
+        claim = Claim(
+            claim_type="computational",
+            source_type="data",
+            field_ref="derived.chg_5d",
+            stated_value=float(truth),
+            # 解读须回声申报值（_check_internal_echo：含数值则必须有一个能对上）
+            interpretation=f"近 5 日涨跌幅 {float(truth):.4f}",
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS", r
+
     def test_newly_registered_key_recomputes_pass_and_fail(
         self, balance_sheet, income_statement, cash_flow, indicators
     ):
@@ -688,6 +706,37 @@ class TestComparativeDifferenceRecompute:
         (r,) = verify_claims([self._claim(stated_value_b=28.0)], self._STATE)
         assert r.status == "FAIL"
         assert r.bucket == "value_mismatch"
+
+
+class TestDerivedRootAlias:
+    """前缀契约一致性：context 提示 LLM 用 `derived.`，state 根键是 `derived_series`。
+
+    回归（close-citation-coverage-gaps 随同发现）：图通道修好后「常用派生值」节首次
+    真正渲染（此前 derived_series 被图静默丢弃），LLM 照提示写 `derived.chg_5d` 时
+    正确数值会被判 path_unresolvable 误 FAIL。别名归一后两种前缀都合法。
+    """
+
+    _STATE = {"derived_series": {"chg_5d": -0.0412}}
+
+    def _claim(self, ref: str):
+        return Claim(
+            claim_type="numerical",
+            source_type="data",
+            field_ref=ref,
+            stated_value=-0.0412,
+            interpretation="近 5 日涨跌幅 -4.12%",
+            metric_name="chg_5d",
+            period="2026-09-14",
+            direction="negative",
+        )
+
+    def test_alias_root_resolves_and_passes(self):
+        (r,) = verify_claims([self._claim("derived.chg_5d")], self._STATE)
+        assert r.status == "PASS", r
+
+    def test_canonical_root_unchanged(self):
+        (r,) = verify_claims([self._claim("derived_series.chg_5d")], self._STATE)
+        assert r.status == "PASS", r
 
 
 class TestClaimDirectionField:
