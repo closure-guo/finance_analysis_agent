@@ -17,10 +17,11 @@ from evals.run import (
 
 
 class TestEvaluatorAssembly:
-    def test_thirteen_evaluators(self):
-        """4 确定性 + 4 judge + 阶段 5 拆报 5 项（blocked/真错数/归一计数/文本与未注册 UNVERIFIABLE）。"""
+    def test_fourteen_evaluators(self):
+        """4 确定性 + 4 judge + 阶段 5 拆报 5 项 + 单点修复计数 1 项
+        （blocked/真错数/归一计数/文本与未注册 UNVERIFIABLE/修复回填数）。"""
         evals = all_evaluators()
-        assert len(evals) == 13
+        assert len(evals) == 14
         names = {e.__name__ for e in evals}
         assert {
             "eval_citation_blocked",
@@ -28,6 +29,7 @@ class TestEvaluatorAssembly:
             "eval_citation_verifier_normalized",
             "eval_citation_unverifiable_text",
             "eval_citation_unverifiable_unregistered",
+            "eval_citation_surgical_repaired",
         } <= names
 
     def test_deterministic_evaluator_shape(self):

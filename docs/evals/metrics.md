@@ -36,6 +36,7 @@
 | citation_verifier_normalized | 跟踪 | 归一后由 FAIL 转 PASS 的计数（unit/percent/echo）＝校验器此前解析债的量化 |
 | citation_unverifiable_text | 跟踪 | 文本 claim（entity/regulatory/event）分型排除，不计阻断分母 |
 | citation_unverifiable_unregistered | 跟踪 | 未注册/空值 UNVERIFIABLE（目标：注册后趋零） |
+| citation_surgical_repaired | 跟踪 | 单点修复成功回填条数（稀疏 value_mismatch，同一分析师同轮 <3 处触发）；已计入 `analyst_true_fail`，单独计数用于观测修复触发/成功率——修复失败时无重试回退（自动重试已关），失败即标记阻断 |
 | citation_coverage_warn | 警告 | coverage < 0.90 报警不阻断 |
 | auto_claims | 跟踪 | 正文数字唯一匹配 state 条目自动合成的 claim 数 |
 
@@ -104,14 +105,14 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 ## 3. 待终裁 / 待决策
 
-**待 owner 终裁**：r2 非 PASS 137 条归因对照表 `tests/validation/citation-r2-nonpass-归因对照表.md`——34 条机器归因为校验器误报、82 条结构不可验（分型/注册处理），**22 条标「待终裁」必须人工过目**（16 条空值申报类、6 条无日期/季度形态的路径失败）。
+**r2 非 PASS 137 条归因**：~~待终裁~~ **已闭合（2026-09-13，维护者代裁，证据链齐备）**。对照表 `tests/validation/citation-r2-nonpass-归因对照表.md` 机器分桶：81 结构不可验→分型 + 34 校验器误报 + 22 待终裁；22 条决策单 `tests/validation/citation-22条待终裁决策单.md`（✅ 终裁完成）：**全部「非幻觉」**——13 行 r4 同族全 PASS（新规则吸收）、8 行混合族残余全落已知结构不可验形态（比较/解读句 + quarterly_trend 期段路径）、2 条列名单位后缀缺口已修复（metric_vocab 补「加权每股收益(元)」别名）。owner 如需可对决策单抽查；副产品 follow-up 两条见下段。
 
 **待 owner 终裁（round7 校准，2026-09-13）**：~~已完成~~——4 行 judge source 归属扣分成立（人工改 4）、1 行 judge 误判（维持人工 5）、1 行灰区（维持 5）、1caf1f7b 单向解读成立（维持 3）、7e6bc8bc 改 4、5f41a49a 补填 5。终值：整体 MAE 0.342 / 方向一致率 97.6%。rubric v7 四项改动清单已定稿（见校准报告）。
 
-**校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型 claim（「MA5 较 MA20 低约 X」）重算注册——现为 UNVERIFIABLE 不计缺口，组件数字可推导；② quarterly_trend 期段定位补全（quarterly_trend.yoy/qoq 单季路径 path_unresolvable）。
+**校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型 claim（「MA5 较 MA20 低约 X」）重算注册——**仍开放**：`_verify_comparative` 对数值差值申报（非 greater/less/equal 枚举）返回 UNVERIFIABLE、不计缺口，组件数字可从 state 推导，尚未注册重算；② quarterly_trend 期段定位补全（quarterly_trend.yoy/qoq 单季路径 path_unresolvable）——**已落地**（ff26b71：路径止于序列名时按 claim.period 季度标签补位置段）。
 
 **待决策**：
-- #2 surgical 单点修复（<3 处失败真值回填）与重试准入的关系：回填算「分析师真错已修复」，须保留在 analyst_true_fail 中
+- ~~#2 surgical 单点修复（<3 处失败真值回填）与重试准入的关系~~ **已落地（2026-09-14）**：真错口径含修复回填（`citation_analyst_true_fail = 残余 FAIL + value_mismatch_repaired`，`citation_node.py:411`）；修复数单独入拆报 `citation_surgical_repaired`；授权与三条护栏固化进规范（`citation-verification`「单点修复的自动处置授权与边界」，delta `2026-09-14-document-surgical-repair-policy`）
 - #4 置信度锚定（RM/RJ/FM 扎堆示例值 0.50–0.60；r3 FM 动作已有多样性，确认后改示例或加校准指令）
 - #6 「风险提示」章：报告加顶层章 vs 改 must_cover 期望
 - 分析师节点独立 span（根 span 元数据覆盖的根治方案，当前以 `degradation.{agent}.r{n}` 键止血）
