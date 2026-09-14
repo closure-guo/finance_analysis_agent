@@ -40,6 +40,8 @@
 | citation_coverage_warn | 警告 | coverage < 0.90 报警不阻断 |
 | auto_claims | 跟踪 | 正文数字唯一匹配 state 条目自动合成的 claim 数 |
 
+**口径注（2026-09-14，delta `infer-period-for-unindexed-series`）**：解析/术语层收口后，三类此前计入 `citation_blocked`/`analyst_true_fail` 的 FAIL 迁移为 UNVERIFIABLE（计入 `citation_unverifiable_unregistered`）——① 未索引序列且期次不可知；② 真值 NaN（未披露/不适用）；③ 术语/列名形态归一覆盖后的残留。同时三处真实误判不再产生 FAIL（脚本体边界术语包含、quarterly_trend 根域净利润、列名单位后缀）。含义：**跨此切点的 `citation_analyst_true_fail` 与 `citation_unverifiable_unregistered` 不可直接比较**（前者应下降、后者小幅上升，属归因口径修正而非行为退化）；未索引序列引用若正文写明确期次，仍按严格定位校验（不降级）。
+
 ### 1.4 校准指标（`evals/judge_calibration/measure.py`）
 
 Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥0.5、MAE≤1.0、方向一致率≥0.7。judge 分零方差的维度 Spearman 不可计算，以 MAE/方向一致率为主。
