@@ -197,6 +197,10 @@ def all_evaluators() -> list:
         eval_citation_counter(
             "citation_unverifiable_unregistered", "未注册/空值 UNVERIFIABLE（跟踪指标）"
         ),
+        eval_citation_counter(
+            "citation_surgical_repaired",
+            "单点修复成功回填数（稀疏 value_mismatch；已计入真错，单独计数观测触发/成功率）",
+        ),
     ] + [_judge_adapter(d) for d in _JUDGE_DIMS]
 
 
