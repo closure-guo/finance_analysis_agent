@@ -139,7 +139,12 @@ class TestTaskCitationOutputs:
 
         class _FakeGraph:
             def invoke(self, state, config=None):
-                return {"final_report": "r", "citation_pass": True, "citation_coverage": 0.92}
+                return {
+                    "final_report": "r",
+                    "citation_pass": True,
+                    "citation_coverage": 0.92,
+                    "value_mismatch_repaired": 2,
+                }
 
         monkeypatch.setattr(task_mod, "build_5layer_graph", lambda: _FakeGraph())
         monkeypatch.setattr(task_mod, "extract_judge_vars", lambda state, query="": {})
@@ -147,3 +152,5 @@ class TestTaskCitationOutputs:
         out = task_mod._run_deep({"stock_code": "600519", "query": "q"})
         assert out["citation_pass"] == 1.0
         assert out["citation_coverage"] == 0.92
+        # 单点修复计数进拆报（观测修复触发/成功率；同时仍计入 analyst_true_fail）
+        assert out["citation_surgical_repaired"] == 2.0
