@@ -94,8 +94,17 @@ def _stub_pipeline_answer(node_name: str) -> str:
         return json.dumps(_STUB_TRADE_DECISION, ensure_ascii=False)
     if node_name == "fund_manager":
         # 固定 approve：保证管线确定走 generate_report（return 会回退 trader 引入不确定性）
+        # action/confidence：harden-decision-report-semantics 起 approve 必填，
+        # 缺失会被 FundManagerDecision 校验拒绝并中断管线（契约同步由
+        # tests/nodes/test_stub_contract_sync.py 护栏）
         return json.dumps(
-            {"decision": "approve", "reasoning": "STUB 审批通过（测试数据）"}, ensure_ascii=False
+            {
+                "decision": "approve",
+                "reasoning": "STUB 审批通过（测试数据）",
+                "action": "hold",
+                "confidence": 0.6,
+            },
+            ensure_ascii=False,
         )
     # research_manager 输出纯文本结论；未知节点兜底纯文本
     return f"STUB {node_name or 'unknown'} 结论（测试数据）"
