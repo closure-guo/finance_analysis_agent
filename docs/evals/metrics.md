@@ -103,6 +103,17 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 排除项：不重跑 pipeline、不写业务 score（dry-run），Langfuse 仅可选 --write 落 v5 对照分
 - **收口结果（2026-09-14，8/9 行）**：茅台现金流 5f179e87 因 Docker Desktop 停机未能拉取材料（其 v4=4，不影响判定）。**未达预登记达标线**（满分 2 行 >1；宁德 04baff5c v5 仍 5——「价格战加速产能出清利好龙头份额集中」漏判），但净效果显著正向：对照审计 ground truth（8 行全应得 4），准确率 v4 2/8 → v5 6/8（美的/比亚迪/平安银行/中芯/茅台 5 行 5→4 纠正），均值 4.75→4.25（方向=收紧）。**一个回归**：招行 53448e4b v4=4（曾正确抓住「银行股破位速度快」定性论断）→ v5=5 漏判——LLM 自我枚举是随机的，不是确定性的。**结论**：prompt 内强制枚举降低但不消除 5 分边界漏判，触发预登记 fallback——后续候选=judge 输出结构化枚举字段 + 程序封顶（代码强制 cap，不依赖 LLM 自律），已登记待决策。v5 保留（当前最优版），残留漏判如实记录
 
+## 2.5 round11 预登记（debate rubric v6 程序封顶单变量离线重判，2026-09-14）
+
+- **单变量**：仅 debate_quality rubric v5→v6（输出契约加 `points` 结构化枚举字段 + `run_judge` 按枚举由代码封顶 ≤4）。dg/consistency/report_relevance rubric、judge 材料、5 层流水线均不变；实现随 delta `judge-enumeration-cap-and-ablation-materials` 落地
+- **方法（纯归因，不重跑管线）**：对 round9 的同一批 deep trace（round10 已重判的 8 行 + 若可拉取则补 5f179e87），用**同一份 debate 材料**（Langfuse 反解，与 round10 同源）以 v6 离线重判（tests/scripts/rejudge_debate_v6.py），与 round10 落库的 v5 分逐行对比
+- **定向验证点**：① round10 漏判样本宁德 04baff5c（v5=5）→ v6 应因枚举出纯定性论点被程序封顶 4；② round10 回归样本招行 53448e4b（v4=4 → v5=5）→ v6 分数与封顶证据须可解释（若枚举出纯定性标头则应 ≤4）；③ 其余 4 分档行不因封顶继续下压（封顶只压 >4，`min(score,4)`）
+- 判定：满分（5 分）行数 ≤1/8 且宁德降 4 → **机制达标**（判据由代码承担）；若 `enumeration_missing` 行数 ≥2（judge 未遵 points 契约）→ 机制未生效，需换实现（强制 JSON schema / 两段调用），如实记录
+- **追加协议（实测发现后定）**：单次调用在 5/4 边界**双峰翻转**（宁德同材料 n=13 次：4 分 7 次 / 5 分 6 次）→ 重判与消融判分统一改为 **K 次均值**（`run_judge_mean`，K 经 CLI 传入；均值而非中位：p≈0.5 双峰下中位不降翻转概率），每次分数与极差随行落盘
+- **收口结果（2026-09-14，8/8 行，K=3 均值）**：**预登记判定达标**——① 满分（5 分）行数 v5 2 行 → v6 **0 行**（≤1/8 ✓）；② 漏判样本宁德 04baff5c v5=5 → **v6=4.333**（scores [4,5,4]），理由原文引用「价格战加速产能出清利好龙头份额集中」并判为纯定性（与 round9 审计 ground truth 一致）✓；③ `enumeration_missing` **0/8**（judge 遵守 points 契约，机制生效）✓。8 行 v6 分布：4.333×5 / 4.0×3（对照审计 ground truth「8 行全应得 4」，平均偏差 ≈0.17）。**两个副作用如实记录**：(a) **取值域压缩**——v6 后 debate 分数全部落在 4.0–4.333，5 分档在实际样本中近乎不可达（真实辩论几乎总有个别纯定性标头）→ 该维度对消融的**分辨力受限**，debate 层增量预期≈0，读数须与「纯定性条数 + 封顶理由」并读；(b) **调用级噪声普遍**——K=3 中极差>0 的行 **5/8**（不止宁德），即单次调用抽样在 5/4 边界普遍会翻，K 次均值是必要而非保险。产物 `evals/judge_calibration/data/judge-sample-round11-debate-v6.jsonl`（逐行含 scores/spread/纯定性标头）+ 验证报告 `tests/validation/2026-09-14-judge-enumeration-cap-and-ablation-materials-validation.md`
+- 收口：重判结果落 `evals/judge_calibration/data/judge-sample-round11-debate-v6.jsonl` + 本节追加结果 + runs.jsonl（标记 offline-rejudge，非全量实验）
+- 排除项：不重跑 pipeline、不写业务 score（dry-run 默认）；`--write` 仅在需要 Langfuse 对照分时使用
+
 ## 3. 待终裁 / 待决策
 
 **r2 非 PASS 137 条归因**：~~待终裁~~ **已闭合（2026-09-13，维护者代裁，证据链齐备）**。对照表 `tests/validation/citation-r2-nonpass-归因对照表.md` 机器分桶：81 结构不可验→分型 + 34 校验器误报 + 22 待终裁；22 条决策单 `tests/validation/citation-22条待终裁决策单.md`（✅ 终裁完成）：**全部「非幻觉」**——13 行 r4 同族全 PASS（新规则吸收）、8 行混合族残余全落已知结构不可验形态（比较/解读句 + quarterly_trend 期段路径）、2 条列名单位后缀缺口已修复（metric_vocab 补「加权每股收益(元)」别名）。owner 如需可对决策单抽查；副产品 follow-up 两条见下段。
@@ -119,5 +130,5 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 覆盖率指标在「逐条回应成常态」后无区分度（r3 全 4/4、5/5），是否保留进 judge 材料
 - consistency / decision_grounding 材料缺【Trader 方案】节——Trader→Risk Judge 的转向是否静默推翻无法核对（round8 材料版本落地，本轮 round7 口径：只评 RM→RJ→FM→报告四层）
 - **v8 候选（round8 代裁发现，2026-09-13）**：① debate 5 分档执行不稳定——「个别定性论点降 4」在 4 分档执行严格，但美的/宁德两行漏判纯定性论点给 5，建议 5 分判例进 rubric few-shot；② dg 归属层对「同一评判在多来源出现」判定偏机械——claim 在 debate_bear 与 research_manager 均有原话时 judge 只认单源（比亚迪 ref7 误扣），v8 补「任一真实来源即合法」判例
-- **debate 5 分边界可靠性（round9 审计发现 → round10 验证，2026-09-14）**：v4 判例 4 分档严格但 5 分档漏判 ≥3 行 → v5 强制枚举（prompt 内逐条标注）离线重判 8 行：准确率 2/8→6/8 但仍漏判宁德、且招行回归（LLM 自我枚举随机）→ **prompt 机制已到顶，候选换机制**：judge 输出结构化枚举字段（每条论点标注 data/qualitative）+ 代码强制封顶 4，不依赖 LLM 自律——需开新 delta 改 judge 输出契约
+- **debate 5 分边界可靠性（round9 审计 → round10 v5 → round11 v6）**：~~待决策（v6 机制换装）~~ **已落地（2026-09-14）**：delta `judge-enumeration-cap-and-ablation-materials` —— ① judge 输出契约加 `points` 结构化枚举（data/qualitative）+ 代码按枚举封顶（不依赖 LLM 自律），枚举缺失 fail-open 但标 `enumeration_missing` 落库；② 判分协议改 **K 次均值**（`run_judge_mean`，K 经 CLI 声明），每次分数与极差随 run/重判行落盘；③ 消融材料（judge_vars）按 run 落盘 + 标的/重复次数参数化 → rubric 变更可离线重判。round11 判定达标（见 §2.5 收口结果）。**遗留（新登记）**：v6 取值域压缩到 4.0–4.333 → 该维度对消融层增量的分辨力受限；如需恢复区分度，候选=（a）把「纯定性论点条数」作为连续指标入消融（当前枚举粒度在「子句 vs 整行」间不稳，需先在 rubric 里钉死粒度），（b）改用成对比较（pairwise）替代 1-5 绝对刻度，（c）把定性/定量判定前移到辩论节点（结构化输出 key_arguments 时自带 data 锚点，确定性输入信号）——三者均需新 delta 与人工标注对照
 - mypy 全仓 75 个既有错误（本次触碰文件为 0），是否立清理任务

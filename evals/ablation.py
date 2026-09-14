@@ -34,7 +34,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from evals.extract import extract_judge_vars
-from evals.judges import run_judge
+from evals.judges import run_judge_mean
 from evals.stats import paired_bootstrap_ci
 from finance_agent.nodes.analysts import (
     fundamental_analyst,
@@ -333,13 +333,17 @@ def run_ablation(
     tickers: Sequence[str],
     *,
     repeats: int = 3,
+    judge_repeats: int = 3,
     snapshot_builder: Callable[[str], dict] | None = None,
     query: str = "综合评估投资价值",
 ) -> dict:
     """消融主流程：每标的一次快照 → 3 变体 × repeats 次 → 聚合报告。
 
-    实际跑批消耗 LLM token（10 标的 × 3 变体 × 3 次 ≈ 90 次深度分析），
-    属人工触发的评估动作；本函数不做静默降级。
+    判分走 K 次均值（`run_judge_mean(judge_repeats)`）：round11 实测单次 judge 调用
+    在 5/4 边界双峰翻转（σ≈0.5，与待测层增量同阶），单次调用不足以支撑层间比较。
+
+    实际跑批消耗 LLM token（3 标的 × 3 变体 × 3 次 ≈ 27 次深度分析），属人工触发的
+    评估动作；本函数不做静默降级。
     """
     builder = snapshot_builder or build_snapshot
     runs: list[dict] = []
@@ -355,7 +359,7 @@ def run_ablation(
                     if dim not in _applicable_dims(variant):
                         judge_scores[dim] = None  # 该变体无对应层，维度不适用（#112）
                         continue
-                    result = run_judge(dim, out["judge_vars"])
+                    result = run_judge_mean(dim, out["judge_vars"], repeats=judge_repeats)
                     judge_scores[dim] = (
                         float(result["score"]) if result["score"] is not None else None
                     )
@@ -385,8 +389,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="数据对齐消融实验")
     parser.add_argument("--tickers", nargs="+", required=True)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--judge-repeats",
+        type=int,
+        default=3,
+        help="judge 每维度重复次数（取均值，降 5/4 边界噪声）",
+    )
     args = parser.parse_args()
-    report = run_ablation(list(args.tickers), repeats=args.repeats)
+    report = run_ablation(
+        list(args.tickers), repeats=args.repeats, judge_repeats=args.judge_repeats
+    )
     out_dir = Path("reports/ablation")
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"ablation-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"

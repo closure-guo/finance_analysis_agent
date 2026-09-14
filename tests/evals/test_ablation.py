@@ -110,3 +110,44 @@ class TestJudgeDimApplicability:
             "decision_grounding",
             "consistency",
         }
+
+
+class TestAblationJudgeMeanProtocol:
+    """库侧（run_ablation）与驱动侧（ablation_pilot）必须用同一判分协议。
+
+    回归背景：驱动侧通过注入假件测试，真模块是否暴露 `run_judge_mean` 一度未被覆盖
+    ——lint 把 `evals/ablation.py` 里未使用的 re-export 删掉后，真模块上该属性消失，
+    假件却仍通过（mock 缺口）。本用例钉住「库侧确实用 K 次均值判分」。
+    """
+
+    def test_run_ablation_uses_mean_judge(self, monkeypatch):
+        import evals.ablation as ablation
+
+        calls: list[tuple[str, int]] = []
+
+        def fake_mean(dimension, variables, *, repeats=3):
+            calls.append((dimension, repeats))
+            return {"name": dimension, "score": 4.0, "scores": [4, 4], "score_spread": 0}
+
+        monkeypatch.setattr(ablation, "run_judge_mean", fake_mean, raising=True)
+        monkeypatch.setattr(ablation, "build_snapshot", lambda ticker: {"stock_code": ticker})
+        monkeypatch.setattr(ablation, "snapshot_digest", lambda state: "d")
+        monkeypatch.setattr(ablation, "build_variant_graph", lambda variant: _FakeGraph())
+        monkeypatch.setattr(
+            ablation,
+            "run_variant_once",
+            lambda variant, snapshot, query: {
+                "final_report": "r",
+                "citation_pass": True,
+                "judge_vars": {"debate_history": "x"},
+            },
+        )
+        report = ablation.run_ablation(["600519"], repeats=1, judge_repeats=2)
+        assert calls, "库侧未调用均值判分"
+        assert all(k == 2 for _, k in calls), f"judge_repeats 未透传: {calls}"
+        assert report["variants"]["full"]["n_runs"] == 1
+
+
+class _FakeGraph:
+    def invoke(self, state):
+        return {}
