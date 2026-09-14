@@ -26,6 +26,17 @@
 
 > L2 Agent 5 层：4 分析师并行 -> Bull/Bear 辩论 -> Trader -> Risk Management 辩论 -> Fund Manager（详见 [ADR-0011](docs/adr/0011-five-layer-architecture.md)）
 
+节点级完整链路（LangGraph，14 节点 / 16 边）：
+
+<a href="docs/assets/pipeline-workflow.html">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/pipeline-workflow.dark.png">
+    <img src="docs/assets/pipeline-workflow.png" alt="五层 Agent 节点级链路图（LangGraph）">
+  </picture>
+</a>
+
+> 链路图由 [Archify](https://github.com/tt-a1i/archify) 生成（图源 [pipeline-workflow.json](docs/assets/pipeline-workflow.json)），按泳道分组（数据准备 / Layer I–II 分析与辩论 / Layer III–IV 决策与风控 / Layer V 审批与产出）：fetch_data → validate_financials → compute_metrics → 四分析师并行 → verify_citations → 多空辩论×2 轮 → research_manager → trader → validate_trade_prices → 风控辩论×2 轮 → risk_judge → fund_manager → generate_report → END；克隆仓库后本地打开 [pipeline-workflow.html](docs/assets/pipeline-workflow.html) 可交互浏览。
+
 ## 功能特性
 
 - **三模式设计**：深度分析（5 层完整管线 -> 10 章报告）/ 快速搜索（Tavily Web 搜索，精简回答）/ 追问（基于已有报告的上下文问答）；标的不明确时 Agent 反问澄清（ADR-0017）
