@@ -72,6 +72,7 @@ def _run_deep(inp: dict) -> dict:
     return {
         "report": state.get("final_report"),
         "ticker": inp["stock_code"],
+        "focus_summary": state.get("focus_summary") or "",
         "judge_vars": extract_judge_vars(state, query=inp.get("query", "")),
         "mode": "deep",
         "skipped": None,
@@ -83,6 +84,31 @@ def _run_deep(inp: dict) -> dict:
         "citation_coverage": (
             float(state["citation_coverage"])
             if state.get("citation_coverage") is not None
+            else None
+        ),
+        # rework-citation-gate-attribution 阶段 5：拆报指标（incident 026——
+        # 混合 citation_pass 会被读作分析师引用质量）
+        "citation_blocked": (
+            float(state["citation_blocked"]) if state.get("citation_blocked") is not None else None
+        ),
+        "citation_analyst_true_fail": (
+            float(state["citation_analyst_true_fail"])
+            if state.get("citation_analyst_true_fail") is not None
+            else None
+        ),
+        "citation_verifier_normalized": (
+            float(state["citation_verifier_normalized"])
+            if state.get("citation_verifier_normalized") is not None
+            else None
+        ),
+        "citation_unverifiable_text": (
+            float(state["citation_unverifiable_text"])
+            if state.get("citation_unverifiable_text") is not None
+            else None
+        ),
+        "citation_unverifiable_unregistered": (
+            float(state["citation_unverifiable_unregistered"])
+            if state.get("citation_unverifiable_unregistered") is not None
             else None
         ),
     }

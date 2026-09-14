@@ -24,6 +24,7 @@
 {
   "agent_name": "macro",
   "summary": "一句话总结宏观环境对股票的影响",
+"plain_conclusion": "一句普通人可读的宏观结论（含多空方向与关键依据，非黑话堆砌）",
   "key_findings": ["关键发现1", "关键发现2"],
   "claims": [
   "markdown": "## 宏观分析\n详细分析内容..."
@@ -45,7 +46,8 @@
 1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径（宏观序列为降序：index 0=最新一期，如 macro_indicators.cpi.0.全国-同比增长）
 2. 如果宏观数据缺失，仍需基于已有信息给出分析
 3. markdown 中包含完整的宏观分析章节
-4. data 型 claim 必填 metric_name 与 period：metric_name 取指标词表规范名（CPI/PMI/M2/LPR），须与 field_ref 的指标段一致；period 填该值对应的月份（YYYY-MM，见 context 序列语义头的最新期标注）。词表无对应规范名或不确定时 metric_name 置 null（计覆盖缺口，不判 FAIL，严禁编造词表外名称）。数值型 claim 还须申报 direction（positive/negative/flat）：direction 修饰 stated_value 的符号语义——正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；正文直接写 signed 值（如 -X%）→ direction=positive；无方向语义 → flat。缺 direction 计覆盖缺口，申报方向与真值符号冲突判 direction_mismatch 打回
+- 输出纪律：`plain_conclusion` 为必填，必须是普通人可直接读懂的一句话结论+解释（明确多空方向与关键依据，禁止纯黑话堆砌），供审计与评估材料直接展示
+4. data 型 claim 必填 metric_name 与 period：metric_name 取指标词表规范名（CPI/PMI/M2/LPR），须与 field_ref 的指标段一致；period 填该值对应的月份（YYYY-MM，见 context 序列语义头的最新期标注）。词表无对应规范名或不确定时 metric_name 置 null（计覆盖缺口，不判 FAIL，严禁编造词表外名称）。数值型 claim 还须申报 direction（positive/negative/flat）：direction 修饰 stated_value 的**符号**语义（不是高于/低于阈值：「PMI 49.8 低于荣枯线」是水平判断，direction 填 flat）——正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；正文直接写 signed 值（如 -X%）→ direction=positive；无方向语义 → flat。缺 direction 计覆盖缺口，申报方向与真值符号冲突判 direction_mismatch 打回
 5. 覆盖纪律：markdown 正文中每个关键数值（百分比/金额/倍数）都必须与某条 claim 的 stated_value 一致——未被 claim 认领的数字会被覆盖率审计计为黑数字
 6. context 中每个序列块开头的「# 序列语义」声明了排序方向与最新期位置，引用数值前先核对该声明
 9. 输出 JSON 的所有字段均为必填（含 markdown，完整章节正文写在其中），不得省略任何字段

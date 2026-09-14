@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from finance_agent.models import DebateMessage, TradeDecision
-from finance_agent.nodes._llm_utils import call_llm_for_json
+from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -82,6 +82,11 @@ def _build_risk_context(state: dict) -> str:
     """构建风险辩论的 LLM context。"""
     sections = []
 
+    # 用户关注点（D5）：风险谱向用户期限/关注维度倾斜
+    hint = focus_hint(state)
+    if hint:
+        sections.append(hint)
+
     # Trader 方案
     plan = state.get("trader_plan") or {}
     if hasattr(plan, "model_dump"):
@@ -93,6 +98,16 @@ def _build_risk_context(state: dict) -> str:
     risk = state.get("risk_metrics") or {}
     if risk:
         sections.append(f"风控指标: {json.dumps(risk, ensure_ascii=False)}")
+
+    # 派生指标（deterministic-derived-metrics）：validate 节点代码计算的
+    # 止损距离/赔率随 context 下发，辩论方与裁决直接引用，不自行重算
+    dm = state.get("derived_metrics") or {}
+    if dm.get("stop_distance_pct") is not None and dm.get("risk_reward_ratio") is not None:
+        sections.append(
+            f"派生指标（代码计算）: 止损距离 {dm['stop_distance_pct']:.1%}、"
+            f"赔率 {dm['risk_reward_ratio']:.2f}:1"
+            "（算术已由代码完成，直接引用，MUST NOT 自行重算或改写）"
+        )
 
     # 风险辩论历史（第 2 轮参考第 1 轮）
     history = state.get("risk_debate_history") or []

@@ -77,6 +77,22 @@ class TestFundManagerSemantics:
         assert "reject" in text
         assert "return" in text
 
+    def test_action_confidence_contract(self):
+        """D1：approve 必含操作定性（action）与置信度（confidence）的格式与语义说明。"""
+        text = _load("fund_manager.md")
+        assert '"action"' in text and '"confidence"' in text
+        assert "操作定性" in text
+        # approve 的对象是最终方案而非对裁决的赞成票（round5 误判根因）
+        assert "最终交易方案" in text
+
+    def test_reasoning_boundary_clause(self):
+        """D2：审批理由职责边界——限定范围 + 禁止方向性投资背书（含反例锚点）。"""
+        text = _load("fund_manager.md")
+        assert "职责边界" in text
+        assert "风控结论的一致性" in text
+        assert "长期价值投资" in text  # 反例锚点
+        assert "MUST NOT" in text
+
 
 class TestResearchManagerStance:
     def test_has_stance_section(self):
@@ -208,3 +224,18 @@ class TestClaimDirectionDiscipline:
         text = _load(f"{name}.md")
         assert "下滑 X%" in text
         assert "direction=negative" in text
+
+
+class TestCoverageSourcesPrompts:
+    """新信源消费契约（add-analyst-data-coverage Task 5）。"""
+
+    def test_fundamental_consumes_announcements_and_reports(self):
+        text = _load("fundamental_analyst.md")
+        assert "公司公告列表" in text
+        assert "券商研报列表" in text
+        assert "不得直接作为你的结论依据" in text  # 防锚定条款
+
+    def test_sentiment_consumes_unlock_and_blocks(self):
+        text = _load("sentiment_analyst.md")
+        assert "限售解禁" in text
+        assert "大宗交易" in text

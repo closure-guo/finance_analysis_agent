@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from typing import Any
+
+from pydantic import ValidationError
 
 # ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
 #
@@ -69,6 +72,7 @@ def _stub_pipeline_answer(node_name: str) -> str:
             {
                 "agent_name": agent_name,
                 "summary": f"STUB {agent_name} 分析摘要（测试数据）",
+                "plain_conclusion": f"STUB {agent_name} 分析结论（测试数据）",
                 "key_findings": [f"STUB 发现：{agent_name} 指标正常"],
                 "claims": [],
                 "markdown": f"## {agent_name} 分析\n\nSTUB 分析正文（测试数据）。",
@@ -124,6 +128,18 @@ _JSON_RETRY_SUFFIX = (
 )
 
 
+def _validation_retry_suffix(exc: ValidationError) -> str:
+    """把 pydantic 校验错误压成一行摘要，作为重试时的修正指令。"""
+    problems = "；".join(
+        f"{'.'.join(str(p) for p in e.get('loc', ())) or '整体'}: {e.get('msg', '')}"
+        for e in exc.errors()
+    )
+    return (
+        f"\n\n[系统提示] 上一次输出的 JSON 未通过字段校验：{problems}。"
+        "请按输出格式补齐所有必填字段后重新输出完整 JSON，不要输出 JSON 以外的任何文字。"
+    )
+
+
 def call_llm_for_json(
     prompt: str,
     system: str = "",
@@ -133,6 +149,7 @@ def call_llm_for_json(
     prompt_name: str | None = None,
     prompt_version: str | int | None = None,
     stock_code: str | None = None,
+    validate: Callable[[dict], Any] | None = None,
 ) -> dict:
     """call_llm_streaming + parse_json_response 收口：坏输出带强化指令重试一次。
 
@@ -143,6 +160,9 @@ def call_llm_for_json(
 
     重试一次后仍失败向上抛 JSONDecodeError：保留 fund_manager
     「非法输出中断管线、不静默降级」的既有设计（重试 ≠ 降级）。
+
+    validate：可选字段校验钩子（典型为 pydantic Model.model_validate）。JSON 合法
+    但校验抛 ValidationError 时，带错误摘要重试一次；仍不过向上抛 ValidationError。
     其余参数与 call_llm_streaming 一致，原样透传。
     """
     kwargs: dict = {
@@ -160,10 +180,19 @@ def call_llm_for_json(
         # 服务瞬时故障（方舟偶发 500 / 流式中断，r4 实测）重试一次
         response = call_llm_streaming(prompt, **kwargs)
     try:
-        return parse_json_response(response)
+        data = parse_json_response(response)
     except json.JSONDecodeError:
         response = call_llm_streaming(prompt + _JSON_RETRY_SUFFIX, **kwargs)
-        return parse_json_response(response)
+        data = parse_json_response(response)
+    if validate is None:
+        return data
+    try:
+        validate(data)
+    except ValidationError as exc:
+        response = call_llm_streaming(prompt + _validation_retry_suffix(exc), **kwargs)
+        data = parse_json_response(response)
+        validate(data)
+    return data
 
 
 def focus_hint(state: dict) -> str:

@@ -26,7 +26,9 @@ class TestTraceCapture:
 
     @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_approve_captures_trace_id(self, mock_llm):
-        mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
+        mock_llm.return_value = (
+            '{"decision": "approve", "action": "watch", "confidence": 0.6, "reasoning": "ok"}'
+        )
         mock_client = MagicMock()
         mock_client.get_current_trace_id.return_value = "trace-xyz"
         with patch.object(fm_mod, "get_langfuse", return_value=mock_client):
@@ -36,7 +38,7 @@ class TestTraceCapture:
 
     @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_reject_no_trace_capture(self, mock_llm):
-        mock_llm.return_value = '{"decision": "reject", "feedback": "no"}'
+        mock_llm.return_value = '{"decision": "reject", "reasoning": "no"}'
         with patch.object(fm_mod, "get_langfuse") as mock_get:
             update = self._run_fund_manager()
         assert update["fund_manager_decision"] == "reject"
@@ -45,7 +47,9 @@ class TestTraceCapture:
 
     @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_langfuse_unconfigured_no_key(self, mock_llm):
-        mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
+        mock_llm.return_value = (
+            '{"decision": "approve", "action": "watch", "confidence": 0.6, "reasoning": "ok"}'
+        )
         with patch.object(fm_mod, "get_langfuse", return_value=None):
             update = self._run_fund_manager()
         assert "langfuse_trace_id" not in update  # 降级:不写键
@@ -53,7 +57,9 @@ class TestTraceCapture:
     @patch.object(_llm_utils_mod, "call_llm_streaming")
     def test_trace_id_exception_still_returns_decision(self, mock_llm):
         """旁路铁律:get_current_trace_id 抛异常不阻断节点,仅 WARNING,不写键。"""
-        mock_llm.return_value = '{"decision": "approve", "feedback": "ok"}'
+        mock_llm.return_value = (
+            '{"decision": "approve", "action": "watch", "confidence": 0.6, "reasoning": "ok"}'
+        )
         mock_client = MagicMock()
         mock_client.get_current_trace_id.side_effect = RuntimeError("otel weird")
         with patch.object(fm_mod, "get_langfuse", return_value=mock_client):

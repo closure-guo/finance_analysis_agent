@@ -23,6 +23,7 @@ class TestMarkdownFieldMissingFallback:
 
         resp = (
             '```json\n{"agent_name": "technical", "summary": "中期下行", '
+            '"plain_conclusion": "技术面偏空：均线空头排列", '
             '"key_findings": ["均线空头"], "claims": [], '
             '"markdown": "## 技术面\\n均线空头排列"}\n```'
         )

@@ -3,9 +3,7 @@
 ## Purpose
 
 定义各 Agent 节点对 LLM 结构化输出的契约校验与降级行为：Fund Manager 决策枚举强校验与状态类型标注、报告决策中文标注、分析师解析失败降级可观测、prompt 枚举一致性、辩论角色与置信度约束，以及异常路径的测试覆盖要求。
-
 ## Requirements
-
 ### Requirement: Fund Manager Decision Enum Validation
 
 Layer V Fund Manager 节点 SHALL 对 LLM 输出的 `decision` 字段做枚举强校验，合法值为 `approve`、`reject`、`return` 三者之一。校验前 SHALL 对原始值做归一化（去首尾空白 + 转小写），归一化后仍不在合法集内的 SHALL 抛出验证异常中断管线，SHALL NOT 降级为任何默认决策语义。
@@ -159,3 +157,149 @@ Prompt 模板中声明的枚举取值 SHALL 与代码中的合法值集合保持
 
 - **WHEN** 运行分析师节点测试
 - **THEN** 测试 SHALL 覆盖坏 JSON 触发降级、以及 `claim_type` / `source_type` 非法值改写两类场景
+
+### Requirement: 分析师报告可读结论字段
+
+每个分析师节点输出的 `AnalystReport` 对象 SHALL 包含 `plain_conclusion` 字段：普通人可直接看懂的一句话结论+简短解释（非纯技术黑话，如「技术面偏空：MACD 死叉、反弹动能存疑，不宜右侧追入」）。该字段 SHALL 非空；LLM 输出解析失败走降级路径时 SHALL 以可读占位回填（如「技术面数据缺失，无法给出结论」），且 `parse_degraded` 照常置位。
+
+#### Scenario: 正常输出可读结论
+
+- **GIVEN** 分析师节点成功解析 LLM 结构化输出
+- **WHEN** 产出 `AnalystReport`
+- **THEN** `plain_conclusion` SHALL 为非空字符串且面向普通人可读
+- **AND** `summary`（面向 RM 的精简语言）行为保持不变
+
+#### Scenario: 解析失败降级回填
+
+- **GIVEN** LLM 响应无法解析为合法分析师报告结构（坏 JSON 或 schema 不符）
+- **WHEN** 分析师节点走降级路径产出报告
+- **THEN** `plain_conclusion` SHALL 为可读占位（非空）
+- **AND** `parse_degraded` SHALL 为 True，下游可识别降级来源
+
+#### Scenario: 空值或缺失被拒绝
+
+- **WHEN** `AnalystReport` 校验时 `plain_conclusion` 缺失或为空串
+- **THEN** 校验失败（ValidationError），不得静默产出无可读结论的分析师报告
+
+### Requirement: Fund Manager 操作性结论字段
+
+`FundManagerDecision` SHALL 新增 `action`（枚举同 `TradeDecision.action`）与 `confidence`（0-1 浮点）可选字段；`decision` 为 `"approve"` 时两者 SHALL 必填（模型校验；节点带校验错误摘要重试一次，仍缺失则中断管线），`"reject"`/`"return"` 时 SHALL 允许为 None。FM 的 action 是对 Risk Judge 裁决后最终方案的操作定性，MUST NOT 被硬拦截为管线异常（与裁决方向相悖时交由报告展示与一致性评估披露）。FM 的 LLM 上下文 SHALL 包含其审批对象 `final_trade_decision` 的完整字段，无论 state 中该值是 `TradeDecision` 对象还是 dict。
+
+#### Scenario: approve 决策必含操作定性与置信度
+
+- **WHEN** FM 输出 `decision` 为 `"approve"` 但缺少 `action` 或 `confidence`
+- **THEN** 节点 SHALL 携带校验错误摘要重新调用一次 LLM
+- **AND** 重试输出仍不通过校验时 SHALL 抛出 ValidationError 中断管线（重试 ≠ 降级，不静默降级）
+
+#### Scenario: 审批对象进 FM 上下文
+
+- **WHEN** state 中 `final_trade_decision` 为 `TradeDecision` 对象（risk_judge 原样写入，与 `trader_plan` 同惯例）或其 dict 序列化
+- **THEN** FM 的 LLM 上下文 SHALL 包含「交易决策」段（action/confidence/仓位/理由等字段），FM MUST NOT 在看不到方案的情况下审批
+
+#### Scenario: reject/return 允许无操作定性
+
+- **WHEN** FM 输出 `decision` 为 `"reject"` 或 `"return"` 且不含 `action`/`confidence`
+- **THEN** 校验 SHALL 通过（字段为 None），管线照常路由
+
+#### Scenario: approve 的 action 与裁决方向相悖不硬拦截
+
+- **WHEN** FM `decision` 为 `"approve"` 且 `action` 与 `final_trade_decision.action` 方向不同
+- **THEN** 管线 SHALL 正常继续（保留 FM 仲裁权）
+- **AND** 报告与 judge 材料中 SHALL 并排展示 FM action 与裁决 action，使矛盾可见
+
+#### Scenario: FM 决策进 judge 变量
+
+- **WHEN** `extract_judge_vars` 序列化 FM 决策
+- **THEN** 变量文本 SHALL 包含 `action` 与 `confidence`（存在时），使 judge 与标注人无需从理由推断操作定性
+
+### Requirement: 报告基金经理决策章节展示操作定性
+
+report 节点拼装「基金经理决策」章节时，SHALL 在决策标注旁展示 FM 的 `action` 与 `confidence`（存在时），与裁决 action 并排，使「批准的是什么方案」直接可见。
+
+#### Scenario: 报告展示 approve 的操作定性
+
+- **WHEN** FM approve 且 `action`/`confidence` 非空
+- **THEN** 「基金经理决策」章节 SHALL 同时呈现 FM action/confidence 与最终裁决 action
+- **AND** 审批标注（审批通过/未通过审批/退回重评）SHALL 保留（ADR-0011 语义不变）
+
+### Requirement: Research Manager 结构化评级输出
+
+Research Manager SHALL 输出结构化 JSON：`reasoning`（多空概括与判断依据）、`rating`（看多/看空/中性枚举）、`confidence`（0-1）。JSON 键序 SHALL 为 reasoning 在前、rating 在后（保持「先推理后结论」的生成顺序）；消费端（state 结论字符串、报告章节、judge 变量）SHALL 由代码把 rating/confidence 前置到 reasoning 之前（倒金字塔展示）。JSON 解析失败时 SHALL 降级为现行自由文本行为（原文作 conclusion，rating/confidence 置 None），MUST NOT 中断管线。
+
+#### Scenario: RM 结构化输出与结论前置
+
+- **WHEN** RM 正常输出结构化 JSON
+- **THEN** `state["research_manager_conclusion"]` SHALL 以「评级：<rating>（置信度 <confidence>）」行开头，reasoning 全文随后
+- **AND** `state` SHALL 另存 `research_manager_rating` / `research_manager_confidence` 供战绩结算与 judge 变量直取
+
+#### Scenario: 生成顺序保持先推理后结论
+
+- **WHEN** RM prompt 模板定义 JSON 输出
+- **THEN** reasoning 键 SHALL 位于 rating 键之前（LLM 按键序生成，推理先于结论）
+
+#### Scenario: 解析失败降级不中断
+
+- **WHEN** RM 输出无法解析为结构化 JSON
+- **THEN** 管线 SHALL 以自由文本原文作为 conclusion 继续（rating/confidence 为 None）
+- **AND** 降级 SHALL 可观测（parse_degraded 类标记，对齐分析师降级语义）
+
+#### Scenario: Trader 上下文与 judge 变量自动前置
+
+- **WHEN** Trader context 或 judge 变量 `research_manager_decision` 引用 RM 结论
+- **THEN** 所见文本 SHALL 为评级前置后的拼装（无需各自解析原文）
+
+### Requirement: 辩论交锋结构化引用
+
+Bull/Bear 辩论 SHALL 以既有 `key_arguments` 为编号锚点建立显式交锋引用：辩论 context 中各历史发言 SHALL 以编号列出对方论点（如「对方(R1) 论点: ①…②…」）；`DebateMessage` SHALL 新增可选字段 `rebuttal_to: list[int]`（本轮回应的对方上一轮论点编号，首轮开场为空），辩论 prompt 要求 content 中逐条标注「回应对方N」；交锋覆盖率（被回应论点并集 / 对方论点总数）SHALL 可由代码直接计算（确定性指标，不依赖 judge）。风险辩论三方为同构扩展，SHALL 在 Bull/Bear 落地验证后跟进。
+
+#### Scenario: context 呈现对方论点编号
+
+- **WHEN** 构建第 2 轮辩论 context
+- **THEN** 对方第 1 轮发言 SHALL 以「论点: ①…②…」编号形式呈现（取自 key_arguments）
+- **AND** 辩论历史仍保留发言正文（编号行前置）
+
+#### Scenario: rebuttal_to 结构化引用
+
+- **WHEN** 辩论方输出第 2 轮及以后发言
+- **THEN** `DebateMessage` SHALL 支携带 `rebuttal_to`（回应的对方论点编号列表）；`rebuttal_to` 为空 SHALL 不视为解析失败（首轮开场/纯补充立场时合法）
+
+#### Scenario: 交锋覆盖率代码可算
+
+- **WHEN** 一场辩论结束
+- **THEN** 「对方论点被回应的比例」SHALL 可由各轮 `rebuttal_to` 并集直接计算（零 LLM 调用）
+- **AND** 该覆盖率 SHALL 进入 debate_quality 的 judge 材料与评估记录（作为 judge 打分的确定性对照锚点）
+
+#### Scenario: 覆盖率按发言逐条计数
+
+- **WHEN** 辩论有多轮，各轮 `rebuttal_to` 序号均在当轮对方发言内从 1 起计
+- **THEN** 被回应论点 SHALL 以「哪条发言的第几条」为键去重，不同轮次的同序号论点 MUST NOT 合并（否则分子封顶在单轮论点数，r1 实证 8 条 trace 全报「4/8」）
+
+### Requirement: 分析师解析降级保真
+
+分析师 LLM 输出解析失败走降级路径时，SHALL 保证降级产物如实反映失败原因且不破坏既有正常结果。
+
+#### Scenario: 字符串内未转义引号可解析
+
+- **WHEN** LLM 输出的 JSON 字符串值内含未转义的成对引号（如 `"呈"低盈利+高扩张"格局"`）
+- **THEN** 解析器 SHALL 将其识别为内嵌引号并成功解析（终止引号之后的首个非空白字符只能是结构字符或文本末尾）
+
+#### Scenario: 降级占位如实说明解析失败
+
+- **WHEN** 解析仍然失败进入降级
+- **THEN** `plain_conclusion` 占位 SHALL 表述为「输出解析失败」，MUST NOT 表述为「数据缺失」（r1 实证：judge 与最终报告据此误判分析师无数据）
+- **AND** 原始文本中已闭合的 `summary` / `plain_conclusion` 字段 SHALL 被尽力打捞回填
+
+#### Scenario: 重跑降级不覆盖正常报告
+
+- **WHEN** 引用重试重跑某分析师，本次结果 `parse_degraded=True`，而 state 中该分析师已有 `parse_degraded=False` 的报告
+- **THEN** 节点 SHALL 保留既有正常报告（不覆盖），并记录 WARNING
+
+#### Scenario: 降级标记可区分 agent 与轮次
+
+- **WHEN** 多个分析师或同一分析师多轮重跑发生降级，标记落到同一父 span
+- **THEN** 标记键 SHALL 含 agent 名与重试轮次（如 `degradation.fundamental.r2`），不同降级 MUST NOT 互相覆盖；legacy `degradation`/`agent` 键保留
+
+#### Scenario: 引用曲解可检测
+
+- **WHEN** 某轮发言的 content 标注「回应对方N」但所述与对方论点 N 原文明显不符（曲解/弱化）
+- **THEN** judge 材料中 SHALL 并排呈现论点 N 原文与该轮回应，使曲解可被人工/judge 识别

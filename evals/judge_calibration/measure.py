@@ -229,15 +229,101 @@ def load_labeled_rows(path: Path) -> list[LabeledRow]:
     return rows
 
 
+def _num(v: Any) -> float | None:
+    """CSV 单元格 → float；空白/非法 → None（未标注行跳过）。"""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def load_labeled_csv(path: Path) -> list[LabeledRow]:
+    """读取 CSV 标注表（export 脚本产出，含表头；human_score 空白 → None）。"""
+    import csv as _csv
+
+    rows: list[LabeledRow] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        for d in _csv.DictReader(fh):
+            rows.append(
+                LabeledRow(
+                    trace_id=str(d.get("trace_id") or ""),
+                    dimension=str(d.get("dimension") or ""),
+                    judge_score=_num(d.get("judge_score")),
+                    human_score=_num(d.get("human_score")),
+                )
+            )
+    return rows
+
+
+def load_labeled_xlsx(path: Path) -> list[LabeledRow]:
+    """读取 xlsx 标注表（export 脚本 --xlsx 产出，表头行与 CSV 同构；human_score 空 → None）。"""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb.active
+    header = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    idx = {name: i for i, name in enumerate(header)}
+    rows: list[LabeledRow] = []
+    for vals in ws.iter_rows(min_row=2, values_only=True):
+        d = {name: vals[i] if i < len(vals) else None for name, i in idx.items()}
+        rows.append(
+            LabeledRow(
+                trace_id=str(d.get("trace_id") or ""),
+                dimension=str(d.get("dimension") or ""),
+                judge_score=_num(d.get("judge_score")),
+                human_score=_num(d.get("human_score")),
+            )
+        )
+    wb.close()
+    return rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="judge-人工一致性")
     parser.add_argument(
-        "--labeled", type=Path, required=True, help="标注 JSONL（每行含 human_score）"
+        "--labeled", type=Path, default=None, help="标注 JSONL（每行含 human_score）"
+    )
+    parser.add_argument(
+        "--csv", type=Path, default=None, help="标注 CSV（export 脚本产出，含表头）"
+    )
+    parser.add_argument(
+        "--xlsx", type=Path, default=None, help="标注 xlsx（export 脚本 --xlsx 产出）"
+    )
+    parser.add_argument(
+        "--judge-jsonl",
+        type=Path,
+        default=None,
+        help="盲标模式下的 judge 分参考（export --blind-judge 产出）；与盲标 xlsx 合并计算一致性",
     )
     parser.add_argument("--out", type=Path, default=Path("reports/judge-calibration-report.md"))
     args = parser.parse_args()
+    given = [flag for flag in ("--labeled", "--csv", "--xlsx") if getattr(args, flag.lstrip("-"))]
+    if len(given) != 1:
+        parser.error(f"必须且只能指定 {'/'.join(given)} 之一：--labeled、--csv、--xlsx")
 
-    rows = load_labeled_rows(args.labeled)
+    if args.xlsx:
+        rows = load_labeled_xlsx(args.xlsx)
+        if args.judge_jsonl:
+            _judge_map: dict[tuple[str, str], float] = {}
+            for line in args.judge_jsonl.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                _judge_map[(str(d["trace_id"]), str(d["dimension"]))] = float(d["judge_score"])
+            for r in rows:
+                j = _judge_map.get((r.trace_id, r.dimension))
+                if j is not None:
+                    r.judge_score = j
+    elif args.csv:
+        rows = load_labeled_csv(args.csv)
+    else:
+        rows = load_labeled_rows(args.labeled)
+
     result = consistency(rows)
     text = render_report(result)
     args.out.parent.mkdir(parents=True, exist_ok=True)

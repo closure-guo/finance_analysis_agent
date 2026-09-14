@@ -61,3 +61,41 @@ class TestParseErrorsStillRaise:
         """空输出（reasoning 吃满配额场景）抛 JSONDecodeError 而非返回垃圾。"""
         with pytest.raises(json.JSONDecodeError):
             parse_json_response("")
+
+
+class TestUnescapedInnerQuotes:
+    """r1 实验实证（中芯 fundamental 第 3 代）：GLM 在字符串值里输出未转义的成对引号
+    `"summary": "中芯国际基本面呈"低盈利+高扩张"格局…"` → 解析炸 → 分析师降级兜底
+    覆盖了前两代好报告。字符串内的引号若后面紧跟的不是结构字符（, } ] :），
+    就不是终止符，应视作内嵌引号转义后再解析。
+    """
+
+    def test_inner_quotes_in_string_value(self):
+        text = '{"agent_name": "fundamental", "summary": "中芯国际基本面呈"低盈利+高扩张"格局：营收增长16.5%", "n": 1}'
+        result = parse_json_response(text)
+        assert result["summary"] == '中芯国际基本面呈"低盈利+高扩张"格局：营收增长16.5%'
+        assert result["n"] == 1
+
+    def test_real_shape_fenced_multiline_mixed_escaping(self):
+        """同一响应里既有未转义内嵌引号也有正确转义的 \\"（r1 原样形态）。"""
+        text = (
+            "```json\n{\n"
+            '  "agent_name": "fundamental",\n'
+            '  "summary": "中芯国际基本面呈"低盈利+高扩张"格局：ROE仅3.4%。",\n'
+            '  "plain_conclusion": "偏中性谨慎",\n'
+            '  "key_findings": ["本质是\\"重投入、低回报\\"模式"],\n'
+            '  "claims": [],\n'
+            '  "markdown": "## 基本面"\n'
+            "}\n```"
+        )
+        result = parse_json_response(text)
+        assert result["summary"].startswith('中芯国际基本面呈"低盈利+高扩张"格局')
+        assert result["key_findings"] == ['本质是"重投入、低回报"模式']
+        assert result["plain_conclusion"] == "偏中性谨慎"
+
+    def test_escaped_quotes_and_valid_json_unaffected(self):
+        assert parse_json_response('{"a": "he said \\"hi\\"", "b": 2}') == {
+            "a": 'he said "hi"',
+            "b": 2,
+        }
+        assert parse_json_response('{"a": "x, y", "b": [1, 2]}') == {"a": "x, y", "b": [1, 2]}

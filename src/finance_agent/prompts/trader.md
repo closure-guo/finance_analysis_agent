@@ -29,6 +29,11 @@ technical / macro / fundamental / sentiment / debate_bull / debate_bear /
 research_manager；每条论据中的数值必须与对应来源报告一致，禁止引用来源中
 不存在的数值。
 
+价位申报是 buy/sell 的强制字段：action 为 buy 或 sell 时，entry_price / stop_loss /
+target_price 三项 MUST 全部给出数值价位（以报告中的现价为锚，stop/target 须与
+风险逻辑自洽），禁止置 null 或 0——系统会校验价位并打回缺失申报的方案。
+action 为 hold 或 watch 时无需价位（可省略或置 null）。
+
 ## 决策语义
 
 - buy：强信念建仓/加仓；sell：强信念退出/减仓；hold：维持现有仓位；watch：观望，等待更多信号

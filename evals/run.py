@@ -109,6 +109,26 @@ def eval_citation_pass(*, input, output, expected_output, metadata):
     return make_evaluation({"name": "citation_pass", "value": float(value), "comment": None})
 
 
+def eval_citation_counter(name: str, comment: str):
+    def _eval(*, input, output, expected_output, metadata):
+        value = (output or {}).get(name)
+        if value is None:
+            return None
+        return make_evaluation({"name": name, "value": float(value), "comment": comment})
+
+    _eval.__name__ = f"eval_{name}"
+    return _eval
+
+
+def eval_citation_blocked(*, input, output, expected_output, metadata):
+    """阻断层：归一后残余 FAIL > 0（incident 026 拆报——此前的 citation_pass 把
+    校验器误报算在分析师头上）。"""
+    value = (output or {}).get("citation_blocked")
+    if value is None:
+        return None
+    return make_evaluation({"name": "citation_blocked", "value": float(value), "comment": None})
+
+
 def eval_citation_coverage(*, input, output, expected_output, metadata):
     """citation_coverage（正文数字普查覆盖率，harden-citation-semantic-coverage）。"""
     value = (output or {}).get("citation_coverage")
@@ -146,8 +166,14 @@ def _judge_adapter(dimension: str):
             # score=null:解析失败,记入失败率(已实测 langfuse 4.13
             # Evaluation.value 接受 None,无需 _failed 占位 fallback)
             return make_evaluation({"name": dimension, "value": None, "comment": result["reason"]})
+        # confidence 随 comment 落库（round5 校准实证：残缺输入上 judge 幻觉高分
+        # 无信号可辨——置信度使「高分+低置信」组合可识别）
+        conf = result.get("confidence")
+        comment = result["reason"]
+        if conf is not None:
+            comment = f"[conf={conf:.2f}] {comment}"
         return make_evaluation(
-            {"name": dimension, "value": float(result["score"]), "comment": result["reason"]}
+            {"name": dimension, "value": float(result["score"]), "comment": comment}
         )
 
     _eval.__name__ = f"eval_{dimension}"
@@ -160,7 +186,37 @@ def all_evaluators() -> list:
         eval_ticker_match,
         eval_citation_pass,
         eval_citation_coverage,
+        eval_citation_blocked,
+        eval_citation_counter(
+            "citation_analyst_true_fail", "分析师真错数（残余 FAIL + 单点修复回填）"
+        ),
+        eval_citation_counter(
+            "citation_verifier_normalized", "归一后由 FAIL 转 PASS（校验器解析债的量化）"
+        ),
+        eval_citation_counter("citation_unverifiable_text", "文本 claim 分型排除（不进阻断分母）"),
+        eval_citation_counter(
+            "citation_unverifiable_unregistered", "未注册/空值 UNVERIFIABLE（跟踪指标）"
+        ),
     ] + [_judge_adapter(d) for d in _JUDGE_DIMS]
+
+
+def _rows_from_results(item_results: list) -> list[dict]:
+    """实验结果 → 汇总行。skipped 取自 task 输出（harness 有意跳过的项带原因），
+    此前硬编码 None 使跳过项在汇总表里显示成「跑了但没分」。"""
+    rows = []
+    for r in item_results:
+        output = getattr(r, "output", None) or {}
+        skipped = output.get("skipped") if isinstance(output, dict) else None
+        rows.append(
+            {
+                "item": str(r.item.input.get("query")),
+                "mode": r.item.input.get("mode"),
+                "skipped": skipped or None,
+                "scores": {e.name: e.value for e in r.evaluations if e.value is not None},
+                "judge_failures": sum(1 for e in r.evaluations if e.value is None),
+            }
+        )
+    return rows
 
 
 def _mean_rows(rows: list[dict]) -> dict:
@@ -230,6 +286,11 @@ def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="evals 实验回归")
     parser.add_argument("name", help="实验名(如 baseline-v1)")
+    parser.add_argument(
+        "--dataset",
+        default=DATASET_NAME,
+        help=f"评估 dataset 名(默认 {DATASET_NAME}；rotating 轮换池用 seed 建库后的独立名)",
+    )
     args = parser.parse_args()
 
     # run_experiment 是实验唯一执行入口(spec「实验回归工作流」Scenario「无 Langfuse 时显式报错」):
@@ -255,24 +316,15 @@ def main() -> None:
             "拒绝运行实验（防测错版本）:\n  - " + "\n  - ".join(mismatched) + "\n" + hint
         )
 
-    dataset = client.get_dataset(DATASET_NAME)
+    dataset = client.get_dataset(args.dataset)
     result = dataset.run_experiment(
         name=args.name,
         task=run_task,
         evaluators=all_evaluators(),
         max_concurrency=1,  # 管线分钟级,禁高并发
-        metadata={"prompt_versions": prompt_versions},
+        metadata={"prompt_versions": prompt_versions, "dataset": args.dataset},
     )
-    rows = [
-        {
-            "item": str(r.item.input.get("query")),
-            "mode": r.item.input.get("mode"),
-            "skipped": None,
-            "scores": {e.name: e.value for e in r.evaluations if e.value is not None},
-            "judge_failures": sum(1 for e in r.evaluations if e.value is None),
-        }
-        for r in result.item_results
-    ]
+    rows = _rows_from_results(result.item_results)
 
     means = _mean_rows(rows)
     _print_table(rows, means)

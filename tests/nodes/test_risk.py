@@ -120,3 +120,53 @@ class TestRiskContextCarriesTraderPlan:
         assert "交易方案" in context
         assert "evidence_refs" in context
         assert "fundamental" in context
+
+
+class TestDerivedMetricsInjection:
+    """deterministic-derived-metrics：派生指标行注入风险辩论/裁决 context。
+
+    代码计算的止损距离与赔率随 context 下发，辩论方直接引用不重算；
+    指标缺失（None）或 state 无该键时不注入（watch/hold、参数缺失形态）。
+    """
+
+    def _plan(self):
+        from finance_agent.models import TradeDecision
+
+        return TradeDecision.model_validate(
+            {"action": "buy", "confidence": 0.75, "reasoning": "理由"}
+        )
+
+    def test_context_contains_derived_metrics_line(self):
+        from finance_agent.nodes.risk import _build_risk_context
+
+        state = {
+            "trader_plan": self._plan(),
+            "derived_metrics": {
+                "stop_distance_pct": 0.05,
+                "risk_reward_ratio": 1.6,
+                "missing_reason": None,
+            },
+        }
+        ctx = _build_risk_context(state)
+        assert "派生指标（代码计算）" in ctx
+        assert "止损距离 5.0%" in ctx
+        assert "赔率 1.60:1" in ctx
+        assert "MUST NOT 自行重算或改写" in ctx
+
+    def test_missing_values_not_injected(self):
+        from finance_agent.nodes.risk import _build_risk_context
+
+        state = {
+            "trader_plan": self._plan(),
+            "derived_metrics": {
+                "stop_distance_pct": None,
+                "risk_reward_ratio": None,
+                "missing_reason": "stop 缺失",
+            },
+        }
+        assert "派生指标" not in _build_risk_context(state)
+
+    def test_no_key_not_injected(self):
+        from finance_agent.nodes.risk import _build_risk_context
+
+        assert "派生指标" not in _build_risk_context({"trader_plan": self._plan()})

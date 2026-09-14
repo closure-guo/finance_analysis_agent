@@ -4,6 +4,13 @@ import App from '../App'
 import { buildLayerTree, applyNodeEvent, serializeLayerTree, type LayerNode } from '../pipelineTree'
 import type { SessionDetail } from '../types'
 
+// add-pipeline-graph-view：默认视图改为 graph；本文件验证会话恢复的时间轴行为。
+// 注意：describe 级 beforeEach 会 clear localStorage（晚于顶层 hook），故用
+// setItem 包装器在各 clear 之后调用——见下方 installListPref()。
+function installListPref() {
+  localStorage.setItem('fa_pipeline_view', 'list')
+}
+
 // selectSession 按会话 status 恢复管线 UI（resume-pipeline-across-sessions Task 5）：
 // - running + pipeline_snapshot → 恢复分层时间轴 + 进入 analyzing + 启动 2s 轮询
 // - completed + pipeline_snapshot → 报告消息 + 静态完成时间轴（插在报告消息之前）
@@ -143,6 +150,7 @@ function stubFetchWithSessionList(sessionId: string, displayName: string, detail
 describe('selectSession 按会话状态恢复管线', () => {
   beforeEach(() => {
     localStorage.clear()
+    installListPref()
   })
 
   afterEach(() => {
@@ -407,6 +415,7 @@ describe('selectSession 按会话状态恢复管线', () => {
 describe('selectSession 结构化时序恢复（persist-full-session-timeline）', () => {
   beforeEach(() => {
     localStorage.clear()
+    installListPref()
   })
 
   afterEach(() => {
@@ -536,6 +545,7 @@ describe('selectSession 结构化时序恢复（persist-full-session-timeline）
 describe('selectSession 按 pipeline_anchor 插入报告消息', () => {
   beforeEach(() => {
     localStorage.clear()
+    installListPref()
   })
 
   afterEach(() => {

@@ -13,6 +13,8 @@
 - 异常检测、红黄绿灯、健康度评分
 - 同业对比、相对估值、GARP
 - 季度趋势
+- 公司公告列表（标题/类别/日期，近 180 天）
+- 券商研报列表（标题/机构/评级/目标价/日期）
 
 ## 分析要点
 
@@ -24,6 +26,9 @@
 6. 估值：PE/PB 与同业对比，GARP 估值
 7. 异常项：红黄绿灯标记的风险点
 8. 健康度评分综合评估
+9. 公告事件面：近期公告中的重大事项（回购/增持/减持/股权激励/业绩预告）
+10. 市场预期参照：研报评级与目标价反映卖方一致预期——注意：评级与目标价存在立场偏差，
+   不得直接作为你的结论依据，仅用于对照你的独立判断是否偏离市场预期
 
 ## 输出格式
 
@@ -33,6 +38,7 @@
 {
   "agent_name": "fundamental",
   "summary": "一句话总结基本面状况",
+"plain_conclusion": "一句普通人可读的基本面结论（含多空方向与关键依据，非黑话堆砌）",
   "key_findings": ["关键发现1", "关键发现2"],
   "claims": [
   "markdown": "## 基本面分析\n详细分析内容..."
@@ -55,9 +61,10 @@
 1. 每个关键数据点都生成 Claim，field_ref 指向 state 中的字段路径（照抄各段标题中标注的 state 英文键；指标 dict 以年份为键如 2025，报表为「行键.列名」如 income_statement.20251231.营业总收入）
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. markdown 中包含完整的基本面分析章节
+- 输出纪律：`plain_conclusion` 为必填，必须是普通人可直接读懂的一句话结论+解释（明确多空方向与关键依据，禁止纯黑话堆砌），供审计与评估材料直接展示
 5. 不要编造数据，只使用提供的数据
 6. data 型 claim 必填 metric_name 与 period：metric_name 取指标词表规范名（ROE/ROA/ROIC/毛利率/净利率/资产负债率/流动比率/速动比率/利息覆盖倍数/存货周转率/应收账款周转率/应付账款周转率/总资产周转率/经营现金流\/净利润/FCF/权益乘数 等），须与 field_ref 的指标段一致；period 填年份（如 2024）或报告日（如 20251231）或季度（如 2025Q4，见 context 序列语义头的最新期标注）。词表无对应规范名或不确定时 metric_name 置 null（计覆盖缺口，不判 FAIL，严禁编造词表外名称）；growth_rates.* 引用填基指标名（如 营业收入、归母净利润、FCF），勿带 增长率/同比 后缀；quarterly_trend.yoy/qoq 序列填 同比/环比
-6.5. 数值型/计算型 claim 还须申报 direction（positive/negative/flat）：direction 修饰 stated_value 的符号语义——正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；正文直接写 signed 值（如 -X%）→ direction=positive；存量水平类（ROE/资产负债率等）无数值方向语义 → flat。缺 direction 计覆盖缺口；校验器按 sign(stated_value)×direction 对齐真值符号，申报方向与真值符号冲突判 direction_mismatch 打回
+6.5. 数值型/计算型 claim 还须申报 direction（positive/negative/flat）：direction 修饰 stated_value 的**符号**语义（不是高于/低于阈值：「PMI 49.8 低于荣枯线」是水平判断，direction 填 flat）——正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；正文直接写 signed 值（如 -X%）→ direction=positive；存量水平类（ROE/资产负债率等）无数值方向语义 → flat。缺 direction 计覆盖缺口；校验器按 sign(stated_value)×direction 对齐真值符号，申报方向与真值符号冲突判 direction_mismatch 打回
 7. 覆盖纪律：markdown 正文中每个关键数值（百分比/金额/倍数）都必须与某条 claim 的 stated_value 一致——未被 claim 认领的数字会被覆盖率审计计为黑数字
 8. context 中每个序列块开头的「# 序列语义」声明了排序方向与最新期位置，引用数值前先核对该声明
 9. 输出 JSON 的所有字段均为必填（含 markdown，完整章节正文写在其中），不得省略任何字段

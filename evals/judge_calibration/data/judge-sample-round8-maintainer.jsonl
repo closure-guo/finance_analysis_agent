@@ -1,0 +1,41 @@
+{"trace_id": "04e99a747bd99622b5e20ab54446379f", "dimension": "consistency", "judge_score": 4, "human_score": 5, "annotator": "maintainer-adjudicated", "note": "judge 理由自述『各层方向一致、无静默推翻』即 5 分事实；『看多+watch』张力已在报告显式解释，数字全可溯源"}
+{"trace_id": "04e99a747bd99622b5e20ab54446379f", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "04e99a747bd99622b5e20ab54446379f", "dimension": "decision_grounding", "judge_score": 3, "human_score": 3, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "04e99a747bd99622b5e20ab54446379f", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3a98645feca9ee6755e5577c74275045", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3a98645feca9ee6755e5577c74275045", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3a98645feca9ee6755e5577c74275045", "dimension": "decision_grounding", "judge_score": 3, "human_score": 3, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3a98645feca9ee6755e5577c74275045", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3e316c01f3e9c4b297ef3a6b56682846", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3e316c01f3e9c4b297ef3a6b56682846", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "3e316c01f3e9c4b297ef3a6b56682846", "dimension": "decision_grounding", "judge_score": 4, "human_score": 5, "annotator": "maintainer-adjudicated", "note": "ref7 归属 debate_bear 真实成立（bear R2『尚无任何同比转正的证据』原话），judge 判错安依据不足；其余 11 条全可溯源"}
+{"trace_id": "3e316c01f3e9c4b297ef3a6b56682846", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "41a90c99c133965fea7dedcf7e830421", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "41a90c99c133965fea7dedcf7e830421", "dimension": "debate_quality", "judge_score": 5, "human_score": 4, "annotator": "maintainer-adjudicated", "note": "bull R2『ToB 占比持续提升』『历史上死叉多为洗盘』、bear R2『历史上宽松周期白马估值中枢不升反降』均为纯定性论点，v7 5 分档要求所有论点有数据/事实支撑"}
+{"trace_id": "41a90c99c133965fea7dedcf7e830421", "dimension": "decision_grounding", "judge_score": 3, "human_score": 3, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "41a90c99c133965fea7dedcf7e830421", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "6b3d5e0554379d570425d9f09038af3d", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "6b3d5e0554379d570425d9f09038af3d", "dimension": "debate_quality", "judge_score": 5, "human_score": 4, "annotator": "maintainer-adjudicated", "note": "bear R2『历史上大量回购护盘的公司并未改变下行趋势』为纯定性历史论断，严格口径降 4；其余论点数据密度为九条之最，边界案例"}
+{"trace_id": "6b3d5e0554379d570425d9f09038af3d", "dimension": "decision_grounding", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "6b3d5e0554379d570425d9f09038af3d", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "6b40421affbf10ad324af3d4377d4260", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "6b40421affbf10ad324af3d4377d4260", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "6b40421affbf10ad324af3d4377d4260", "dimension": "decision_grounding", "judge_score": 4, "human_score": 5, "annotator": "maintainer-adjudicated", "note": "10 条 refs 全可溯源；『限制深度下行空间』为 technical 中期多头的合法推论性拼装，风控数字与原文一致，judge 扣分依据薄弱"}
+{"trace_id": "6b40421affbf10ad324af3d4377d4260", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "7f032e436d18100eee96a4810ed6b48b", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "8931592f22db899cf747c5f2bc51fb0b", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "8bd73ef120d193155b407db6920ed395", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "8cdaa3a5cb38330899922f763816e4d0", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "8cdaa3a5cb38330899922f763816e4d0", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "8cdaa3a5cb38330899922f763816e4d0", "dimension": "decision_grounding", "judge_score": 2, "human_score": 2, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "8cdaa3a5cb38330899922f763816e4d0", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "ad43f690eba7c815f94ef961682deebd", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "ad43f690eba7c815f94ef961682deebd", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "ad43f690eba7c815f94ef961682deebd", "dimension": "decision_grounding", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "ad43f690eba7c815f94ef961682deebd", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "b7c4ca84442fb2ce804a78e11106b5b2", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "d1a4d47eb133ebea476b8e6feb962e39", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "e8baf2c3ab0cd4773cc1cbf333263176", "dimension": "consistency", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "e8baf2c3ab0cd4773cc1cbf333263176", "dimension": "debate_quality", "judge_score": 4, "human_score": 4, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "e8baf2c3ab0cd4773cc1cbf333263176", "dimension": "decision_grounding", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}
+{"trace_id": "e8baf2c3ab0cd4773cc1cbf333263176", "dimension": "report_relevance", "judge_score": 5, "human_score": 5, "annotator": "maintainer-adjudicated", "note": ""}

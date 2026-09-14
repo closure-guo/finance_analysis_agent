@@ -151,6 +151,7 @@ class TestReportNodeMigration:
                 "fundamental": AnalystReport(
                     agent_name="fundamental",
                     summary="基本面强劲",
+                    plain_conclusion="结论：基本面强劲",
                     key_findings=["ROE 28.33%"],
                     claims=[],
                     markdown="## 基本面分析\n...",

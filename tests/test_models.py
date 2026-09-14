@@ -13,6 +13,39 @@ from finance_agent.models import (
 )
 
 
+class TestAnalystReportPlainConclusion:
+    """add-agent-readable-conclusion：分析师报告普通人可读结论字段。"""
+
+    def test_plain_conclusion_required_nonblank(self):
+        """缺失 / 空串 / 纯空白 → 校验失败（同 reasoning 强校验模式）。"""
+        import pytest
+
+        base = {
+            "agent_name": "technical",
+            "summary": "技术面偏空",
+            "key_findings": [],
+            "claims": [],
+            "markdown": "## 分析\n内容",
+        }
+        with pytest.raises(ValueError):
+            AnalystReport(**base)  # 缺 plain_conclusion
+        with pytest.raises(ValueError):
+            AnalystReport(**base, plain_conclusion="")
+        with pytest.raises(ValueError):
+            AnalystReport(**base, plain_conclusion="   ")
+
+    def test_plain_conclusion_accepted(self):
+        report = AnalystReport(
+            agent_name="technical",
+            summary="技术面偏空",
+            key_findings=[],
+            claims=[],
+            markdown="## 分析\n内容",
+            plain_conclusion="技术面偏空：MACD 死叉、反弹动能存疑，不宜右侧追入",
+        )
+        assert report.plain_conclusion.startswith("技术面偏空")
+
+
 class TestAnalystReport:
     """Layer I 分析师输出模型。"""
 
@@ -21,6 +54,7 @@ class TestAnalystReport:
         report = AnalystReport(
             agent_name="fundamental",
             summary="基本面分析",
+            plain_conclusion="结论：基本面分析",
             key_findings=["ROE 28.33%", "资产负债率 40%"],
             claims=[
                 Claim(
@@ -160,14 +194,40 @@ class TestFundManagerDecision:
     """Layer V 基金经理审批决策模型（harden-llm-output-validation）。"""
 
     def test_legal_decisions_accepted(self):
-        for decision in ("approve", "reject", "return"):
+        # approve 须带操作定性（D1）；reject/return 可缺 action/confidence
+        approve = FundManagerDecision(
+            decision="approve", action="watch", confidence=0.55, reasoning="理由"
+        )
+        assert approve.action == "watch"
+        for decision in ("reject", "return"):
             model = FundManagerDecision(decision=decision, reasoning="理由")
             assert model.decision == decision
+            assert model.action is None and model.confidence is None
+
+    def test_approve_without_action_or_confidence_rejected(self):
+        """D1：approve 缺 action/confidence 任一即 ValidationError（操作性结论必填）。"""
+        import pytest
+
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve", reasoning="缺 action")
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve", action="watch", reasoning="缺 confidence")
+
+    def test_confidence_out_of_range_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve", action="buy", confidence=1.5, reasoning="理由")
 
     def test_normalizes_case_and_whitespace(self):
         """大小写与首尾空白归一化。"""
-        assert FundManagerDecision(decision=" Approve ").decision == "approve"
-        assert FundManagerDecision(decision="REJECT").decision == "reject"
+        assert (
+            FundManagerDecision(
+                decision=" Approve ", action="watch", confidence=0.5, reasoning="理由"
+            ).decision
+            == "approve"
+        )
+        assert FundManagerDecision(decision="REJECT", reasoning="理由").decision == "reject"
 
     def test_invalid_decision_rejected(self):
         """非法值被拒绝，不做同义词映射。"""
@@ -175,11 +235,18 @@ class TestFundManagerDecision:
 
         for illegal in ("revise", "拒绝", "maybe", ""):
             with pytest.raises(ValueError):
-                FundManagerDecision(decision=illegal)
+                FundManagerDecision(decision=illegal, reasoning="理由")
 
-    def test_reasoning_optional(self):
-        """reasoning 缺省为空串，不阻塞校验。"""
-        assert FundManagerDecision(decision="approve").reasoning == ""
+    def test_reasoning_required(self):
+        """reasoning 必填且非空（spec「否决理由完整」：决策必须带理由，供审计/一致性核对）。"""
+        import pytest
+
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="approve")  # 缺 reasoning
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="reject", reasoning="")  # 空 reasoning
+        with pytest.raises(ValueError):
+            FundManagerDecision(decision="return", reasoning="   ")  # 纯空白 reasoning
 
 
 class TestTradeDecisionEvidenceRefs:
@@ -258,3 +325,60 @@ class TestTradeDecisionEvidenceRefs:
         )
         assert [r.claim for r in decision.evidence_refs] == ["正常"]
         assert decision.evidence_refs[0].source == "fundamental"
+
+
+class TestRiskEvidenceSources:
+    """Risk Judge 的论据来源 = Trader 来源 + 三方风险辩论 + 风控指标（r1 复盘：
+    裁决理由通篇引用「中性方/激进方/beta 1.96」，evidence_refs 却只能标 Trader 那套来源，
+    judge 必然判「关键论据未列入引用」）。"""
+
+    def test_risk_sources_superset_of_trade_sources(self):
+        from finance_agent.models import RISK_EVIDENCE_SOURCES, TRADE_EVIDENCE_SOURCES
+
+        assert TRADE_EVIDENCE_SOURCES < RISK_EVIDENCE_SOURCES
+        assert {
+            "risk_aggressive",
+            "risk_conservative",
+            "risk_neutral",
+            "risk_metrics",
+        } <= RISK_EVIDENCE_SOURCES
+
+    def test_risk_role_aliases_normalize(self):
+        from finance_agent.models import TradeDecision
+
+        d = TradeDecision.model_validate(
+            {
+                "action": "sell",
+                "confidence": 0.55,
+                "reasoning": "r",
+                "evidence_refs": [
+                    {"claim": "隐含PE约25倍", "source": "neutral"},
+                    {"claim": "beta 1.96", "source": "risk_metrics"},
+                    {"claim": "左侧建仓被否", "source": "Aggressive"},
+                ],
+            }
+        )
+        assert [e.source for e in d.evidence_refs] == [
+            "risk_neutral",
+            "risk_metrics",
+            "risk_aggressive",
+        ]
+
+    def test_risk_bull_bear_alias_to_debate_sources(self):
+        """r2 实证：Risk Judge 输出 risk_bull / risk_bear 两个枚举外标签（把多空辩论误挂到风险层前缀），
+        应归一为 debate_bull / debate_bear。"""
+        from finance_agent.models import TradeDecision
+
+        d = TradeDecision.model_validate(
+            {
+                "action": "watch",
+                "confidence": 0.5,
+                "reasoning": "r",
+                "evidence_refs": [
+                    {"claim": "x", "source": "risk_bull"},
+                    {"claim": "y", "source": "risk_bear"},
+                    {"claim": "z", "source": "RISK_METRICS"},
+                ],
+            }
+        )
+        assert [e.source for e in d.evidence_refs] == ["debate_bull", "debate_bear", "risk_metrics"]

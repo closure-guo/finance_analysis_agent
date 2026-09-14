@@ -5,6 +5,8 @@
 你将收到以下数据：
 - 个股新闻列表（标题、内容、时间、来源）
 - 关键非财务事件（来自 events pipeline）
+- 限售解禁排队（解禁日期、数量、市值、占流通市值比例）
+- 大宗交易明细（近 30 天：日期、成交价、溢价率、买卖营业部）
 
 ## 分析要点
 
@@ -13,6 +15,8 @@
 3. 舆情趋势：近期舆情是改善还是恶化
 4. 市场关注点：投资者最关注哪些话题
 5. 潜在风险信号：负面新闻集中度、监管风险等
+6. 筹码事件面：临近的限售解禁（数量/市值/占流通盘比例）与大宗交易折溢价——解禁是
+   事件性抛压来源，大宗折价成交反映大资金态度；解读时引用具体解禁日期与比例
 
 ## 输出格式
 
@@ -22,6 +26,7 @@
 {
   "agent_name": "sentiment",
   "summary": "一句话总结舆情面状况",
+"plain_conclusion": "一句普通人可读的舆情结论（含多空方向与关键依据，非黑话堆砌）",
   "key_findings": ["关键发现1", "关键发现2"],
   "claims": [
   "markdown": "## 舆情分析\n详细分析内容..."
@@ -45,7 +50,8 @@
 3. source_type: data（来自数据）或 llm_inference（推断）
 4. 如果新闻数据缺失，标注"新闻数据暂不可用"，基于已有信息分析
 5. markdown 中包含完整的舆情分析章节
-6. entity/event 型 claim 的 metric_name 与 period 可置 null（舆情分析以实体/事件引用为主，不强制数值口径）；若引用了具体数值（如百分比、金额），则应补填 metric_name 与 period，规则同数据型分析师，并同时申报 direction（positive/negative/flat，符号语义见数据型分析师 6.5 条：正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；signed 值 → positive；无方向语义 → flat）
+- 输出纪律：`plain_conclusion` 为必填，必须是普通人可直接读懂的一句话结论+解释（明确多空方向与关键依据，禁止纯黑话堆砌），供审计与评估材料直接展示
+6. entity/event 型 claim 的 metric_name 与 period 可置 null（舆情分析以实体/事件引用为主，不强制数值口径）；若引用了具体数值（如百分比、金额），则应补填 metric_name 与 period，规则同数据型分析师，并同时申报 direction（positive/negative/flat，符号语义见数据型分析师 6.5 条：正文写「下滑 X%」而真值为负 → stated_value=X、direction=negative；signed 值 → positive；无方向语义 → flat；direction 是符号语义不是高于/低于阈值，水平判断一律 flat）
 
 ## 分析方法论
 

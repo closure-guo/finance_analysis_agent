@@ -1,5 +1,8 @@
 """TDD tests for routing.py — 条件路由函数。"""
 
+import pytest
+
+from finance_agent import routing
 from finance_agent.routing import (
     after_check_cache,
     after_citation,
@@ -7,6 +10,14 @@ from finance_agent.routing import (
     after_validate,
     route_to_analysts,
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_auto_retry(request, monkeypatch):
+    """既有重试语义测试在显式开启标志下运行——默认停用是 r2 归因后的新默认
+    （rework-citation-gate-attribution 阶段 0，incident 026）。"""
+    if request.cls is not None and request.cls.__name__.startswith("TestAfterCitation"):
+        monkeypatch.setattr(routing, "CITATION_AUTO_RETRY_ENABLED", True)
 
 
 class TestAfterCheckCache:
@@ -239,3 +250,51 @@ class TestTargetedRetryDispatch:
         )
         assert len(sends) == 1
         assert sends[0].node == "fundamental_analyst"
+
+
+class TestAutoRetryDisabledByDefault:
+    """阶段 0（incident 026）：自动重试默认停用——value_mismatch / direction_mismatch
+    两桶终裁 100% 误报、coverage-gap 重试不收敛，r2 九条 deep 分析师生成 75 次
+    （fundamental 25 次）且以降级版覆盖正常报告。桶统计与 retry_targets 仍计算，
+    观测不退化；变更开关须经 delta，不允许运行时静默开启。"""
+
+    def test_fail_with_targets_returns_render_by_default(self):
+        state = {
+            "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
+            "iteration_count": 1,
+        }
+        assert after_citation(state) == "render"
+
+    def test_coverage_gap_returns_render_by_default(self):
+        state = {
+            "citation_pass": False,
+            "citation_coverage_gap": True,
+            "citation_retry_targets": ["technical"],
+            "iteration_count": 0,
+        }
+        assert after_citation(state) == "render"
+
+    def test_no_progress_returns_render_even_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(routing, "CITATION_AUTO_RETRY_ENABLED", True)
+        state = {
+            "citation_pass": False,
+            "citation_retry_targets": ["fundamental"],
+            "citation_retry_no_progress": True,
+            "iteration_count": 1,
+        }
+        assert after_citation(state) == "render"
+
+    def test_retry_admitted_buckets_empty(self):
+        """准入集合当前为空集——任何桶都不构成重试依据，直到有人工终裁记录。"""
+        assert frozenset() == routing.CITATION_RETRY_ADMITTED_BUCKETS
+
+    def test_disabled_state_routes_all_analysts(self):
+        """停用态下 route_to_analysts 若被调用，必须派发全部分析师（防御性）。"""
+        sends = route_to_analysts({"citation_retry_targets": ["fundamental"], "iteration_count": 1})
+        assert [s.node for s in sends] == [
+            "technical_analyst",
+            "macro_analyst",
+            "fundamental_analyst",
+            "sentiment_analyst",
+        ]

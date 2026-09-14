@@ -2,7 +2,7 @@
 // - 管线完成后时间线折叠为单行摘要条（阶段数 + 总用时），点击可再展开（Task 2.2）
 // - 刷新重建时计时源取快照 pipeline_start_ts，不归零（Task 1.3/3.1）
 // - 完成时刻 completedAt 落在消息上（live 路径总用时数据源）
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { reduce } from '../stores/streamStore/reduce'
 import { getStreamStore, resetStreamStore } from '../stores/streamStore'
@@ -11,6 +11,12 @@ import type { SessionStreamState } from '../stores/streamStore/types'
 import { IDLE_STATE } from '../stores/streamStore/types'
 import { PipelineCard } from '../App'
 import { buildLayerTree } from '../pipelineTree'
+
+// add-pipeline-graph-view：默认视图改为 graph；本文件验证的是时间轴行为，
+// 预置 list 偏好保留原断言语义（视图默认值由 PipelineCardViewToggle 测试覆盖）
+beforeEach(() => {
+  localStorage.setItem('fa_pipeline_view', 'list')
+})
 
 function completedDetail(over: Partial<SessionDetail> = {}): SessionDetail {
   return {

@@ -29,6 +29,8 @@ def fund_manager(state: dict) -> dict:
         stock_code=state.get("stock_code"),
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
+        # approve 缺 action/confidence 带错误摘要重试一次；仍缺向上抛（重试 ≠ 降级）
+        validate=FundManagerDecision.model_validate,
     )
     # 枚举强校验：非法值/缺键抛 ValidationError 中断管线，不静默降级为 approve
     # （加固前为 data["decision"] 裸取键，非法值经 routing 的 else 分支被当作批准放行）
@@ -39,6 +41,8 @@ def fund_manager(state: dict) -> dict:
     result: dict = {
         "fund_manager_decision": decision,
         "fund_manager_decision_reasoning": parsed.reasoning,
+        "fund_manager_action": parsed.action,
+        "fund_manager_confidence": parsed.confidence,
     }
     if decision == "return":
         result["return_count"] = state.get("return_count", 0) + 1
@@ -64,9 +68,13 @@ def _build_fund_manager_context(state: dict) -> str:
     if hint:
         sections.append(hint)
 
-    # 最终交易决策
-    decision = state.get("final_trade_decision") or {}
-    if isinstance(decision, dict):
+    # 最终交易决策（审批对象）。risk_judge 与 trader 同惯例：TradeDecision 对象原样
+    # 进 state，此处必须接受对象——曾用 isinstance(dict) 守卫致对象被静默跳过，
+    # FM 在看不到方案的情况下审批
+    decision = state.get("final_trade_decision")
+    if decision is not None and hasattr(decision, "model_dump"):
+        decision = decision.model_dump()
+    if isinstance(decision, dict) and decision:
         sections.append(f"交易决策: {json.dumps(decision, ensure_ascii=False)}")
 
     # 风控指标

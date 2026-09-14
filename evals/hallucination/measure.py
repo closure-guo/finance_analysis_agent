@@ -242,11 +242,26 @@ def render_report(result: HallucinationResult) -> str:
     return "\n".join(lines)
 
 
+def require_data_source(data_map: dict | None) -> None:
+    """真值须带独立快照来源（harden-eval-implementation-decoupling）。
+
+    缺 source 拒绝测量——防止「报告 vs 自己抓的数据」同源自证：
+    data_map 的 source 应指向与报告生成管道解耦的独立快照（如 snapshot:akshare-2026-08-25）。
+    """
+    if not data_map:
+        return
+    if not str(data_map.get("source") or "").strip():
+        raise ValueError(
+            "data_map 必须携带 source 字段（独立快照来源与时点，如 snapshot:akshare-2026-08-25）"
+        )
+
+
 def run_offline(
     report_text: str,
     data_map: dict[str, float] | None = None,
     llm: Any = None,
 ) -> HallucinationResult:
+    require_data_source(data_map)
     claims = extract_claims(report_text) + extract_factual_claims(report_text, llm=llm)
     verdicts = verify_claims(claims, data_map or {})
     return hallucination_rate(verdicts)

@@ -78,16 +78,33 @@ class AnalysisState(TypedDict, total=False):
     risk_metrics: dict  # calc_risk() 输出
     macro_indicators: dict  # CPI/PMI/M2/LPR
     news_list: list[dict]  # 新闻列表
+    announcements: list[dict]  # 公司公告列表（add-analyst-data-coverage）
+    research_reports: list[dict]  # 券商研报列表（含评级/目标价）
+    share_unlock: list[dict]  # 限售解禁排队
+    block_trades: list[dict]  # 大宗交易明细（近 30 天）
 
     # Layer I: Analyst Team（4 个并行分析师）
     analyst_reports: Annotated[dict[str, dict], merge_dicts]
 
     # Layer II: Researcher Team（Bull/Bear 辩论）
     debate_history: Annotated[list[dict], add]
-    research_manager_conclusion: str
+    focus_summary: str  # 研究聚焦摘要（report 节点无条件生成，judge report_conclusion 直取源）
+    research_manager_conclusion: str  # 评级前置拼装（RM 结构化输出的人读渲染）
+    research_manager_rating: str | None  # 看多/看空/中性（战绩结算与 judge 变量直取）
+    research_manager_confidence: float | None
 
     # Layer III: Trader
     trader_plan: dict  # TradeDecision 序列化
+
+    # 价位校验回路（toolize-price-levels；incident 027：以下键曾未声明，被图合并
+    # 静默丢弃——fail 打回 trader 与参考带价位修正在真实图中从未生效，路由恒读空）
+    price_check: dict  # {result: pass|fail|corrected, reason?, note?}
+    price_check_feedback: str  # fail 时打回 trader 的重出反馈
+    price_check_attempts: int  # 已校验次数（<1 fail 打回；>=1 二次失败走参考带修正）
+    price_level_corrected: bool  # 价位已按工具参考带修正（可观测）
+    price_level_correction_reason: str  # 修正原因（报告「价位修正」行）
+    # 派生风险指标（deterministic-derived-metrics）：validate 代码计算，辩论/裁决引用
+    derived_metrics: dict  # {stop_distance_pct, risk_reward_ratio, missing_reason}
 
     # Layer IV: Risk Management（3 辩论者 + Risk Judge）
     risk_debate_history: Annotated[list[dict], add]
@@ -96,6 +113,8 @@ class AnalysisState(TypedDict, total=False):
     # Layer V: Fund Manager
     fund_manager_decision: Literal["approve", "reject", "return"]
     fund_manager_decision_reasoning: str  # FM 退回/批准理由（回路契约：未声明则被图合并丢弃）
+    fund_manager_action: str | None  # FM 操作定性（approve 必有；reject/return 为 None）
+    fund_manager_confidence: float | None  # FM 对操作定性的把握（approve 必有）
     return_count: int  # 退回次数（上限 1）
     langfuse_trace_id: str  # fund_manager approve 时捕获,decision_log 反向上报用
 
@@ -109,8 +128,23 @@ class AnalysisState(TypedDict, total=False):
     citation_minor_fail: bool  # 轻微失败降级放行（skip-citation-retry-on-minor-failures）
     # harden-citation-semantic-coverage：FAIL 分桶与定向重试
     citation_retry_targets: list[str]  # 值级 FAIL 分析师（Send 定向重跑）
+    # 阶段 0 停滞保护（incident 026）：重试目标输出哈希与「重写无进展」标记
+    citation_retry_prev_hash: dict[str, str]
+    citation_retry_no_progress: bool
+    # 阶段 5 门禁三层分置 + 指标拆报（incident 026）
+    citation_blocked: bool  # 阻断层：归一后残余 FAIL > 0
+    citation_analyst_true_fail: int  # 分析师真错数 = 残余 FAIL + 单点修复回填数
+    citation_coverage_warn: bool  # 警告线：coverage < 0.90
+    citation_unverifiable_text: int  # 跟踪：文本 claim UNVERIFIABLE（分型排除，不进阻断分母）
+    citation_unverifiable_unregistered: int  # 跟踪：未注册/空值 UNVERIFIABLE
+    citation_verifier_normalized: int  # 归一后由 FAIL 转 PASS 的计数（unit/percent/echo）
+    auto_claims: int  # 阶段 4 自动合成 claim 数
     citation_retry_feedback: dict[str, list[dict]]  # 每分析师失败明细（重试上下文注入）
     citation_fail_buckets: dict[str, int]  # 桶计数（value_mismatch/path_unresolvable/...）
+    citation_coverage_gap: bool  # 覆盖率缺口（重试准入路由读取；incident 027 补声明）
+    value_mismatch_repaired: (
+        int  # 数值失配修复数（analyst_true_fail 口径组件；incident 027 补声明）
+    )
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──

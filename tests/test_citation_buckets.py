@@ -100,7 +100,7 @@ class TestFailBuckets:
         assert r.status == "FAIL"
         assert r.bucket == "value_mismatch"
 
-    def test_event_not_found_is_path_unresolvable(self):
+    def test_event_not_found_is_unverifiable_text(self):
         claim = Claim(
             claim_type="temporal",
             source_type="event",
@@ -109,5 +109,7 @@ class TestFailBuckets:
             interpretation="x",
         )
         (r,) = verify_claims([claim], {"key_events": []})
-        assert r.status == "FAIL"
-        assert r.bucket == "path_unresolvable"
+        # rework-citation-gate-attribution 阶段 3：文本/事件 claim 未命中判 UNVERIFIABLE(text)，
+        # 不进 FAIL 分母、不计覆盖缺口（incident 026：key_events 14/14 曾恒为不可验/误 FAIL）
+        assert r.status == "UNVERIFIABLE"
+        assert r.bucket is None and r.coverage_gap is False

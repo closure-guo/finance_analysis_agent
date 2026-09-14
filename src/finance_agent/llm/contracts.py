@@ -25,10 +25,47 @@ from finance_agent.llm.errors import OutputContractError
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL)
 # 尾逗号：`,]` / `,}`（含空白/换行）→ 删逗号
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+_STRUCTURAL_AFTER_STRING = frozenset(",}]:")
+
+
+def _escape_inner_quotes(text: str) -> str:
+    """转义字符串值内未转义的成对引号（r1 实证：GLM 输出 `"呈"低盈利"格局"`）。
+
+    合法 JSON 里字符串结束引号之后的首个非空白字符只能是结构字符（, } ] :）
+    或文本末尾；否则该引号在字符串内部，应转义。已转义的 `\\"` 原样跳过。
+    纯扫描，对已合法的文本无副作用。
+    """
+    out: list[str] = []
+    in_str = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if not in_str:
+            out.append(c)
+            if c == '"':
+                in_str = True
+        elif c == "\\":
+            out.append(c)
+            if i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j >= n or text[j] in _STRUCTURAL_AFTER_STRING:
+                out.append(c)
+                in_str = False
+            else:
+                out.append('\\"')
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def extract_json(text: str) -> dict:
-    """从 LLM 响应提取 JSON：fence/噪声/尾逗号全兼容。
+    """从 LLM 响应提取 JSON：fence/噪声/尾逗号/内嵌引号全兼容。
 
     失败抛 JSONDecodeError（调用方决定是否 repair——见 parse_with_contract）。
     """
@@ -51,6 +88,11 @@ def extract_json(text: str) -> dict:
         cleaned = _TRAILING_COMMA_RE.sub(r"\1", text[idx:])
         try:
             obj, _ = decoder.raw_decode(cleaned)
+            return cast(dict, obj)
+        except json.JSONDecodeError:
+            pass
+        try:
+            obj, _ = decoder.raw_decode(_escape_inner_quotes(cleaned))
             return cast(dict, obj)
         except json.JSONDecodeError:
             pass

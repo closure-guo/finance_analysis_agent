@@ -1,26 +1,38 @@
-"""@live 用例：真实 DeepSeek 链路，验证 reasoning / tool_calls 内容真实产生（防漂移）。
+"""@live 用例：真实方舟 Agent Plan 链路，验证 reasoning / tool_calls 内容真实产生（防漂移）。
 
 单测（mock）锁定的是埋点逻辑——Langfuse generation output 结构 {answer, reasoning,
 tool_calls}、prompt 元数据挂载、降级不阻断；但「真实 LLM 是否真的下发
 reasoning_content / tool_calls」只有真实调用能验证。本文件即 ADR-0015 要求的
 @live 防漂移用例，nightly 跑，不进 PR 门禁（ci.yml -m "not live"）。
 
-前置：DEEPSEEK_API_KEY 环境变量；无 key 时整文件 skip。
-可选：LLM_LIVE_MODEL 覆盖模型名（默认 deepseek/deepseek-chat）。
+前置：LLM_API_KEY（方舟，与生产同栈）环境变量；无 key 时整文件 skip。
+可选：LLM_LIVE_MODEL 覆盖模型名（默认生产 LLM_MODEL）。
+历史：DeepSeek 直连时代硬编码 deepseek/deepseek-chat + DEEPSEEK_API_KEY，
+2026-09-13 随生产切方舟同步（Agent Plan 端点不支持直连 DeepSeek 官方模型）。
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
+
+# 模块级读 env 前必须先加载 .env（conftest 不保证 import 时序）
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+_LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+_LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 
 pytestmark = [
     pytest.mark.live,
-    pytest.mark.skipif(not os.getenv("DEEPSEEK_API_KEY"), reason="需 DEEPSEEK_API_KEY"),
+    pytest.mark.skipif(
+        not (_LLM_API_KEY and _LLM_BASE_URL), reason="需 LLM_API_KEY + LLM_BASE_URL（方舟）"
+    ),
 ]
 
-_LIVE_MODEL = os.getenv("LLM_LIVE_MODEL", "deepseek/deepseek-chat")
+_LIVE_MODEL = os.getenv("LLM_LIVE_MODEL") or os.getenv("LLM_MODEL") or "openai/glm-5.3"
 
 
 @pytest.mark.asyncio
@@ -79,10 +91,9 @@ def test_live_tool_calls_returned():
         }
     ]
 
-    # 请求级 llm_config：复刻 legacy._request_config_dict 语义（baseUrl 回退 env）
-    llm_config: dict = {"model": _LIVE_MODEL, "apiKey": os.environ["DEEPSEEK_API_KEY"]}
-    if os.environ.get("LLM_BASE_URL"):
-        llm_config["baseUrl"] = os.environ["LLM_BASE_URL"]
+    # 请求级 llm_config：resolver 请求分支要求 baseUrl 齐备（网关迁移后不再由
+    # resolver 隐式补端点——测试显式补生产栈变量，与 judges._call_judge_llm 同款）
+    llm_config: dict = {"model": _LIVE_MODEL, "apiKey": _LLM_API_KEY, "baseUrl": _LLM_BASE_URL}
 
     resp = complete_with_tools(
         [{"role": "user", "content": "贵州茅台（600519）现在多少钱？请调用工具查询。"}],

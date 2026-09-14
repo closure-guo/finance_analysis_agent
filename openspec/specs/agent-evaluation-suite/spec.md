@@ -14,7 +14,20 @@ TBD - created by archiving change add-toolcall-evaluation. Update Purpose after 
 
 ### Requirement: 工具调用评估维度
 
-评估体系 SHALL 覆盖：工具选择正确性（合法集合断言，非唯一序列）、参数合法性、调用效率（冗余/循环检测）、失败恢复（失败后换策略）。
+工具选择正确性维度的合法工具集合 SHALL 从权威工具注册（`finance_agent.tool_registry.AGENT_TOOL_NAMES`）派生，评估器 SHALL NOT 各自硬编码一份允许集；`agent_factory` 注册工具名 SHALL 引用同一注册表常量。允许集 SHALL 仍可被评估调用方覆盖（如历史快照评估），但默认值 SHALL 与当前注册表一致。
+
+(Previously: 允许集在 `evals/toolcall/measure.py` 硬编码 `DEFAULT_ALLOWED_TOOLS`，与 agent 实际工具注册可能漂移。)
+
+#### Scenario: 默认与注册表一致
+
+- **WHEN** 评估器使用默认允许集
+- **THEN** 默认允许集 SHALL 等于 `tool_registry.AGENT_TOOL_NAMES`
+- **AND** agent_factory 注册的工具名 SHALL 均 ∈ 注册表（注册表为准，防止评估漏注册）
+
+#### Scenario: 覆盖保留
+
+- **WHEN** 调用方显式传入 allowed 集合（历史快照/特定场景）
+- **THEN** 以显式值生效，覆盖不改变注册表
 
 #### Scenario: 合法集合断言
 
@@ -147,4 +160,159 @@ judge prompt 变更后 SHALL 必跑一致性校准；校准结论归档至 docs/
 
 - **WHEN** judge prompt 经部署管线发布新版本
 - **THEN** 下一轮评测强制附带一致性校准，结论归档
+
+### Requirement: 评估材料优先展示分析师可读结论
+
+评估材料（judge 输入变量 `analyst_reports` 的拼装、人工标注导出表的 agent 摘要）SHALL 优先使用分析师报告的 `plain_conclusion`（普通人可读的结论+解释）；旧 trace 报告对象无该字段时 SHALL 回退现状（`summary` 拼贴），不得报错或中断评估。评估材料 SHALL NOT 以「正文前 N 字符」截取的方式充当该层摘要（与原文重复、无信息量）。
+
+#### Scenario: 新报告展示可读结论
+
+- **GIVEN** 分析师报告对象含非空 `plain_conclusion`
+- **WHEN** 拼装 analyst_reports judge 变量或生成标注材料 agent 摘要
+- **THEN** 该 agent 的展示文本 SHALL 取自 `plain_conclusion`
+- **AND** `summary` 不再作为该 agent 的默认展示文本
+
+#### Scenario: 旧 trace 回退
+
+- **GIVEN** 分析师报告对象缺 `plain_conclusion`（旧版本产出）
+- **WHEN** 拼装评估材料
+- **THEN** SHALL 回退使用 `summary`（或 `conclusion`），不报错、不中断评估
+
+#### Scenario: 禁止截取式摘要
+
+- **WHEN** 生成人工标注材料
+- **THEN** 评估材料 SHALL NOT 用「正文前 N 字符」充当该层摘要
+- **AND** 分析师节以「各 agent 的 plain_conclusion（或回退 summary）」分行展示
+
+### Requirement: 报告结论 judge 变量取分析综合
+
+judge 变量 `report_conclusion` SHALL 优先取 `state["focus_summary"]`（report 节点无条件生成的研究聚焦综合摘要）；该字段缺失时（历史 trace）SHALL 回退现有 `extract_conclusion(final_report)` 提取。consistency 维度材料中【最终报告结论章节】的语义 SHALL 因此为「分析综合结论」，而非「基金经理审批复述」。
+
+#### Scenario: 新 trace 取研究聚焦
+
+- **WHEN** trace 的 state 含非空 `focus_summary` 且构建 consistency judge 变量
+- **THEN** `report_conclusion` SHALL 等于 `focus_summary` 文本
+- **AND** SHALL NOT 为「基金经理决策」章节的复述
+
+#### Scenario: 历史 trace 无 focus_summary 时回退
+
+- **WHEN** trace 的 state 无 `focus_summary` 字段
+- **THEN** `report_conclusion` SHALL 回退为 `extract_conclusion(final_report)` 的提取结果（现行行为）
+
+### Requirement: 研究聚焦无条件生成
+
+report 节点 SHALL 无条件生成研究聚焦综合摘要（LLM），写入 `state["focus_summary"]`；focus 为空时 SHALL 使用固定提示词（不带关注点引导）综合各层产出。研究聚焦的生成 SHALL NOT 依赖 focus 是否非空。
+
+#### Scenario: focus 为空仍生成聚焦摘要
+
+- **WHEN** 用户未提供 focus 且 report 节点运行
+- **THEN** state SHALL 含非空 `focus_summary`（基于各层产出的通用综合摘要）
+- **AND** final_report SHALL 含「研究聚焦」章节
+
+#### Scenario: 聚焦摘要仅基于各层材料
+
+- **WHEN** 生成研究聚焦摘要
+- **THEN** 提示词 SHALL 约束摘要仅基于所提供各层材料组织，不引入材料外数值或推测（与现行 `_build_focus_summary` 约束一致）
+
+### Requirement: report judge 变量结构化拼装
+
+deep 报告的 judge 变量 `report` SHALL 由结构化拼装构成（研究聚焦 + 各分析师摘要 + RM 结论 + 交易决策要点 + FM 决策），SHALL NOT 对 final_report 全文做整体 head/tail 截断；拼装内容 SHALL 剔除图片 markdown 引用（judge 无法读取本地图片，路径为纯噪声）。历史实证：报告全文约 2 万字符，4096 字节头尾截断后 judge 仅见图表路径与审批章（18933 字节分析内容被挖），judge 从章节标题幻觉推断「全面覆盖」恒给 5 分——report_relevance 恒 5 分天花板由此而来。
+
+#### Scenario: 拼装变量含可读分析内容
+
+- **WHEN** deep 管线构建 report_relevance 的 judge 变量
+- **THEN** 变量 SHALL 包含研究聚焦与各分析师摘要的可读文本
+- **AND** 变量 SHALL NOT 包含 `![…](本地路径)` 形式的图片引用
+
+#### Scenario: 幻觉评分输入条件消除
+
+- **WHEN** judge 评估 report_relevance
+- **THEN** 其输入 SHALL 含足够判断「是否回答用户查询」的实质分析文本（非标题与路径集合）
+
+### Requirement: decision_grounding judge 变量含辩论记录
+
+decision_grounding 的 judge 输入 SHALL 包含多空辩论记录（`{{debate_history}}`，按消息边界截断）：`TradeDecision.evidence_refs` 的 source 枚举包含 `debate_bull`/`debate_bear`，rubric 要求逐条核对 claim 在对应 source 中找到出处——要求核对一个未提供的材料自相矛盾。material 标注配置（DIMENSION_SECTIONS）SHALL 同步补充【多空辩论记录】节。rubric 变更 SHALL 递增版本号并对 decision_grounding 已评 trace 重评。
+
+#### Scenario: debate 来源的 claim 可核对
+
+- **WHEN** 交易决策的 evidence_refs 含 `source: "debate_bear"` 的 claim 且 judge 评估 decision_grounding
+- **THEN** judge 输入中 SHALL 存在该轮辩论发言的内容（含论点骨架），使 claim 出处可核对
+
+#### Scenario: 标注材料同步含辩论节
+
+- **WHEN** 导出 decision_grounding 维度的标注材料
+- **THEN** 材料小节 SHALL 含【多空辩论记录】（与 judge 输入同口径）
+
+### Requirement: decision_grounding judge 变量含裁决证据基础
+
+decision_grounding 评估的交易决策取 `final_trade_decision`（Risk Judge 裁决，回退 `trader_plan`）。Risk Judge 在三方风险辩论之后裁决，其理由建立在风控指标与风险辩论上——judge 输入 SHALL 包含【风控指标】（`{{risk_metrics}}`，人读格式：最大回撤/年化波动率/VaR(95%)/beta 等）与【风险辩论记录】（`{{risk_debate_history}}`，按消息边界截断，含 aggressive/conservative/neutral 标签）；rubric 的 source 枚举 SHALL 含 `risk_aggressive`/`risk_conservative`/`risk_neutral`/`risk_metrics`。material 标注配置 SHALL 同步补充两节。rubric 变更 SHALL 递增版本号（v6）。
+
+依据：r1 复盘 8 条 decision_grounding 理由中 5 条判「风控数字（beta/VaR/回撤）无出处」、3 条判「中性方/保守方论据无出处」，四个 2 分的 judge 置信度均 ≤0.5——是材料缺口而非决策缺陷。
+
+#### Scenario: 风控指标与风险辩论进入 judge 输入
+
+- **WHEN** state 含 `risk_metrics` 与 `risk_debate_history` 且 judge 评估 decision_grounding
+- **THEN** judge 输入 SHALL 含【风控指标】一行人读文本与【风险辩论记录】各方发言，使裁决中「beta 1.96」「中性方指出…」类论据可核对
+- **AND** 二者缺失时变量为空串，维度不因此记 input_missing（核心变量仍是分析师结论与 RM 结论）
+
+#### Scenario: 标注材料同步含两节
+
+- **WHEN** 导出 decision_grounding 维度的标注材料
+- **THEN** 材料小节 SHALL 含【风控指标】与【风险辩论记录】（与 judge 输入同口径）
+
+### Requirement: RM 决策分布追踪
+
+评估链路 SHALL 从 Langfuse trace 聚合基金经理节点（fund_manager）的决策分布（approve/return/reject）并输出报告，含按时间分桶趋势。分布 SHALL 不设硬性占比下限（对高风险标的的否决是职责所需），仅 nightly 记录供防漂移比对。
+
+#### Scenario: 分布统计
+
+- **WHEN** nightly 评估运行且存在 fund_manager trace
+- **THEN** 报告输出 approve/return/reject 计数与占比、按日分桶
+- **AND** 分布变化仅作为趋势记录，不直接判决失败
+
+#### Scenario: 无 trace
+
+- **GIVEN** 无任何 fund_manager trace
+- **WHEN** 运行分布统计
+- **THEN** SHALL 返回空分布并在报告中标注「样本不足」，不报错
+
+### Requirement: 风控否决召回门禁
+
+对回撤或波动率超过配置阈值的对抗样本，FM SHALL 必须否决（approve 即门禁失败）；随机真实样本的否决率 SHALL 同步上报。本门禁防「无脑批准」反向漂移，与「不设占比下限」互为约束。
+
+#### Scenario: 高风险样本必须否决
+
+- **GIVEN** 对抗样本的风控指标（max_drawdown / volatility）超过阈值
+- **WHEN** FM 输出 approve
+- **THEN** 门禁失败并输出该样本
+
+#### Scenario: 正常样本上报否决率
+
+- **WHEN** 随机真实样本集上 FM 输出分布已知
+- **THEN** 报告上报样本级否决率，不设判决阈值
+
+### Requirement: 否决理由完整门禁
+
+FM 的 approve/return/reject 决策 SHALL 附带 reasoning；理由缺失或为空 SHALL 判门禁失败，防止「退回后未改进即拒绝」等无理由退化。
+
+#### Scenario: 缺理由拒绝
+
+- **WHEN** FM 输出 decision 但 reasoning 缺失或空白
+- **THEN** 门禁失败并输出对应 trace/样本
+
+### Requirement: return 回路反馈
+
+系统 SHALL 在 FM 返回 `return` 后路由回 trader 重跑时，把 `fund_manager_decision_reasoning` 并入 trader 的 LLM context，使 Trader 能针对退回理由改进方案；最终报告 SHALL 反映重跑后的方案而非原始方案。
+
+#### Scenario: 退回后重跑携带反馈
+
+- **GIVEN** FM 首次评估产出 return 且带 reasoning
+- **WHEN** 管线路由回 trader 节点重跑
+- **THEN** trader 的 LLM context 包含该退回理由
+
+#### Scenario: 无退回时不注入
+
+- **GIVEN** FM 首次评估产出 approve 或 reject
+- **WHEN** trader 节点运行
+- **THEN** context 不包含基金经理退回意见段落
 

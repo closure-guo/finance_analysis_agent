@@ -190,11 +190,14 @@ export function PipelineTimeline({
   tree,
   nowMs,
   thinkingPreviewFor,
+  expandLayerId,
 }: {
   tree: LayerNode[]
   nowMs: number
   // 当前运行节点的实时思考单行预览（由父组件从 nodeTimelines 提取）
-  thinkingPreviewFor?: (nodeId: string) => string | undefined
+  thinkingPreviewFor?: (nodeId: string) => undefined | string
+  // 外控展开（add-pipeline-graph-view）：graph 视图「查看详情」指定的 layer 强制展开
+  expandLayerId?: string | null
 }) {
   const running = findRunningNode(tree)
   const runningNodeId = running?.nodeId ?? null
@@ -227,6 +230,8 @@ export function PipelineTimeline({
   }, [runningNodeId])
 
   const isExpanded = (layer: LayerNode): boolean => {
+    // 外控展开（graph「查看详情」）优先于手动覆盖
+    if (expandLayerId && layer.id === expandLayerId) return true
     if (layer.id in expandedOverride) return expandedOverride[layer.id]
     return layer.status !== 'pending'
   }

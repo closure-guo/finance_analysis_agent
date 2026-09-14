@@ -32,10 +32,52 @@ class TestRubricContract:
             assert '{"score"' in rubric, f"{dim} rubric 缺 JSON 输出约束"
             assert "不以篇幅长短论优劣" in rubric, f"{dim} rubric 缺「不以篇幅长短论优劣」"
 
+    def test_rubrics_require_confidence_with_material_groundedness(self):
+        """round5 校准实证（4f58faf7 幻觉 5 分）：judge 输入残缺（图表路径+审批章）
+        仍无任何不确定性信号、「全面覆盖」地打高分——输出缺 confidence 字段使幻觉
+        无法从分数表面识别。rubric 输出契约 SHALL 含 confidence（0-1），且须定义
+        其语义：对评分依据充分性的把握，材料缺失/截断/不足时 MUST 降低。"""
+        for dim, rubric in RUBRICS.items():
+            assert '"confidence"' in rubric, f"{dim} rubric 输出契约缺 confidence 字段"
+            assert "置信" in rubric, f"{dim} rubric 缺 confidence 语义说明（依据不充分须降低）"
+
+    def test_run_judge_returns_confidence(self):
+        result = run_judge("report_relevance", {"query": "q", "report": "r"})
+        assert "confidence" in result, "run_judge 返回缺 confidence"
+        assert result["confidence"] is None or 0 <= result["confidence"] <= 1
+
+    def test_run_judge_tolerates_missing_confidence(self):
+        """旧格式（无 confidence）容错：score 正常解析，confidence 为 None。"""
+        with patch(_GATEWAY) as mock_llm:
+            mock_llm.return_value = _mock_completion('{"score": 3, "reason": "一般"}')
+            result = run_judge("report_relevance", {"query": "q", "report": "r"})
+        assert result == {
+            "name": "report_relevance",
+            "score": 3,
+            "reason": "一般",
+            "confidence": None,
+        }
+
     def test_consistency_rubric_checks_fund_vs_risk(self):
         # spec consistency Scenario「特别检查 Fund Manager 与 Risk Judge 一致性」
         assert "Fund Manager" in RUBRICS["consistency"]
         assert "Risk Judge" in RUBRICS["consistency"]
+
+    def test_consistency_rubric_defines_approve_semantics(self):
+        """回归（2026-09-09 实测 round5）：judge 把「Risk watch + FM approve」系统性
+        误判为冲突（11 条 consistency 中 7 条打 1-3 分，人工复核多为 4-5 分）。
+        根因：rubric 未定义 approve 的批准对象——FM 的 approve/reject 针对的是
+        Risk Judge 修正后的交易方案（裁决 JSON 的 action/position_size），不是
+        对裁决本身投票；watch 方案被 approve 属于一致。rubric 须显式写出该语义。
+        """
+        rubric = RUBRICS["consistency"]
+        assert "针对的是 Risk Judge 裁决后的最终交易方案" in rubric
+        assert "watch(观望)而 FM approve" in rubric  # watch 方案被 approve 不算冲突
+        assert "批准观望" in rubric
+
+    def test_consistency_rubric_version_incremented(self):
+        """rubric 语义修复递增版本号（v2 = approve 语义定义版，v4 = Trader 方案节 + 静默推翻核对）。"""
+        assert RUBRIC_VERSIONS["consistency"] == 4
 
     def test_decision_grounding_rubric_mentions_evidence_refs(self):
         rubric = RUBRICS["decision_grounding"]
@@ -48,7 +90,12 @@ class TestRunJudge:
     def test_score_parsed(self, mock_llm):
         mock_llm.return_value = _mock_completion('{"score": 4, "reason": "基本切题"}')
         result = run_judge("report_relevance", {"query": "q", "report": "r"})
-        assert result == {"name": "report_relevance", "score": 4, "reason": "基本切题"}
+        assert result == {
+            "name": "report_relevance",
+            "score": 4,
+            "reason": "基本切题",
+            "confidence": None,
+        }
         # 统一入口:purpose=judge + temperature=0
         _, kwargs = mock_llm.call_args
         assert kwargs["purpose"] == "judge"
@@ -196,13 +243,26 @@ class TestInputMissingGuard:
 
 class TestDecisionGroundingRubricV3:
     def test_version_incremented(self):
-        """rubric 变更递增版本号（evidence_refs 版为 v2，语义核对版为 v3）。"""
-        assert RUBRIC_VERSIONS["decision_grounding"] == 3
+        """rubric 变更递增版本号（v7 = 三层判法归属 + 解读失当强制核对，v8 = 多来源归属判例）。"""
+        assert RUBRIC_VERSIONS["decision_grounding"] == 8  # v8 = 多来源同判任一真实来源即合法
+
+    def test_v6_material_covers_risk_judge_evidence_base(self):
+        """r1 复盘：被评的是 Risk Judge 裁决，其理由建立在风控指标与三方风险辩论上，
+        但 v5 材料只有分析师/多空辩论/RM——judge 按 rubric 只能判「无中生有」（8 条里
+        5 条抱怨风控数字无出处、3 条抱怨中性方/保守方论据无出处，置信度 0.4）。"""
+        rubric = RUBRICS["decision_grounding"]
+        assert "【风控指标】{{risk_metrics}}" in rubric
+        assert "【风险辩论记录】{{risk_debate_history}}" in rubric
+        for src in ("risk_aggressive", "risk_conservative", "risk_neutral", "risk_metrics"):
+            assert src in rubric, src
 
     def test_other_rubrics_version_pinned(self):
-        assert RUBRIC_VERSIONS["report_relevance"] == 1
-        assert RUBRIC_VERSIONS["debate_quality"] == 1
-        assert RUBRIC_VERSIONS["consistency"] == 1
+        assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
+        assert (
+            RUBRIC_VERSIONS["debate_quality"] == 5
+        )  # v5 = 强制枚举论点标头（round9 审计：v4 判例 5 分档仍漏判）
+        assert RUBRIC_VERSIONS["consistency"] == 4  # v4 = approve 语义(v2) + Trader 方案节(v4)
+        assert RUBRIC_VERSIONS["decision_grounding"] == 8  # v8 = 三层判法(v7) + 多来源归属判例
 
     def test_rubric_includes_semantic_check(self):
         """语义核对条款：术语/期次/方向与所引数值一致；解读失当扣分。"""
@@ -210,3 +270,24 @@ class TestDecisionGroundingRubricV3:
         assert "语义一致" in rubric
         assert "期次" in rubric
         assert "行业领先" in rubric  # 反例锚点（垫底表述为领先）
+        # v7（round7 终裁）：归属层判法 + 解读失当强制动作 + 组合 claim 规则
+        assert "三层判法" in rubric
+        assert "归属" in rubric
+        assert "单向解读" in rubric
+        assert "组合 claim" in rubric
+        # v8（round9）：多来源同判判例——claim 在多来源均有原话时引任一真实来源即合法
+        assert "判例(v8)" in rubric
+        assert "任一真实来源即合法" in rubric
+        # debate_quality v4 判例：论点标头纯定性论点（「历史上……」类）降 4
+        debate_rubric = RUBRICS["debate_quality"]
+        assert "判例(v4)" in debate_rubric
+        assert "无样本" in debate_rubric
+        # debate_quality v5（round10）：强制枚举动作——评分前逐条标注论点标头，
+        # 任一纯定性即封顶 4（round9 审计：v4 判例 5 分档仍漏判，照搬 dg v7 强制核对模式）
+        assert "强制枚举动作" in debate_rubric
+        assert "逐条列出" in debate_rubric
+        assert "封顶 4" in debate_rubric
+        # consistency v4：Trader 方案节 + 静默推翻核对
+        consistency_rubric = RUBRICS["consistency"]
+        assert "【Trader 方案】{{trader_plan}}" in consistency_rubric
+        assert "静默推翻" in consistency_rubric

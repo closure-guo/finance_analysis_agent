@@ -18,7 +18,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import akshare as ak
 import pandas as pd
@@ -662,3 +662,108 @@ class AKShareClient:
             r.setdefault("datetime", "")
             r.setdefault("source", "")
         return records
+
+    def fetch_announcements(self, stock_code: str, days: int = 180) -> list[dict]:
+        """拉取个股公告列表（巨潮 cninfo，近 days 天）。
+
+        返回 list[dict]：title/date/category/url。失败或空返回 []（降级语义同 fetch_news）。
+        """
+        end = date.today()
+        start = end - timedelta(days=days)
+        df = _call_ak(
+            ak.stock_zh_a_disclosure_report_cninfo,
+            symbol=stock_code,
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+        )
+        if df is None or df.empty:
+            logger.error("公告列表拉取失败/返回空（公告信源缺失）: %s", stock_code)
+            return []
+        rows: list[dict] = []
+        for _, row in df.head(10).iterrows():
+            rows.append(
+                {
+                    "title": str(row.get("公告标题") or ""),
+                    "date": str(row.get("公告日期") or ""),
+                    "category": str(row.get("公告类型") or ""),
+                    "url": str(row.get("网址") or ""),
+                }
+            )
+        return rows
+
+    def fetch_research_reports(self, stock_code: str) -> list[dict]:
+        """拉取个股券商研报列表（东财）。
+
+        返回 list[dict]：title/org/rating/target_price/date。目标价缺失为 None。
+        失败或空返回 []。
+        """
+        df = _call_ak(ak.stock_research_report_em, symbol=stock_code)
+        if df is None or df.empty:
+            logger.error("券商研报拉取失败/返回空（研报信源缺失）: %s", stock_code)
+            return []
+        rows: list[dict] = []
+        for _, row in df.head(8).iterrows():
+            target = row.get("目标价")
+            rows.append(
+                {
+                    "title": str(row.get("报告名称") or ""),
+                    "org": str(row.get(" research机构") or row.get("research机构") or ""),
+                    "rating": str(row.get("东财评级") or ""),
+                    "target_price": float(target) if pd.notna(target) else None,
+                    "date": str(row.get("报告日期") or ""),
+                }
+            )
+        return rows
+
+    def fetch_share_unlock(self, stock_code: str) -> list[dict]:
+        """拉取个股限售解禁排队（东财）。
+
+        返回 list[dict]：date/shares/market_value/pct_float。失败或空返回 []。
+        """
+        df = _call_ak(ak.stock_restricted_release_queue_em, symbol=stock_code)
+        if df is None or df.empty:
+            logger.error("限售解禁拉取失败/返回空（解禁信源缺失）: %s", stock_code)
+            return []
+        rows: list[dict] = []
+        for _, row in df.head(8).iterrows():
+            rows.append(
+                {
+                    "date": str(row.get("解禁时间") or ""),
+                    "shares": row.get("解禁数量"),
+                    "market_value": row.get("实际解禁市值"),
+                    "pct_float": row.get("占解禁前流通市值比例"),
+                }
+            )
+        return rows
+
+    def fetch_block_trades(self, stock_code: str, days: int = 30) -> list[dict]:
+        """拉取个股大宗交易明细（东财按日期区间拉全市场后过滤，近 days 天）。
+
+        返回 list[dict]：date/price/volume/amount/premium/buyer/seller。失败或空返回 []。
+        """
+        end = date.today()
+        start = end - timedelta(days=days)
+        df = _call_ak(
+            ak.stock_dzjy_mrmx,
+            symbol="A股",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+        )
+        if df is None or df.empty:
+            logger.error("大宗交易拉取失败/返回空（大宗信源缺失）: %s", stock_code)
+            return []
+        df = df[df["股票代码"].astype(str) == stock_code]
+        rows: list[dict] = []
+        for _, row in df.head(10).iterrows():
+            rows.append(
+                {
+                    "date": str(row.get("交易日期") or ""),
+                    "price": row.get("成交价格"),
+                    "volume": row.get("成交量"),
+                    "amount": row.get("成交金额"),
+                    "premium": row.get("溢价率"),
+                    "buyer": str(row.get("买方营业部") or ""),
+                    "seller": str(row.get("卖方营业部") or ""),
+                }
+            )
+        return rows

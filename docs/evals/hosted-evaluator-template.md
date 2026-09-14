@@ -112,7 +112,7 @@
   模型: <judge 使用的模型>
   模板: <与上方一致则注「同模板 N」；有改动则粘贴 UI 实际内容>
 
-### 已上线配置快照（2026-09-07，端到端验证通过）
+### 已上线配置快照（2026-09-07，端到端验证通过；2026-09-12 判别键修订）
 
 四个 evaluator 已配置并真实打分（report_relevance 实证 score=4，见 tests/validation/2026-09-07-hosted-evaluator-e2e-validation.md）。
 
@@ -127,6 +127,8 @@
 - **输出键名**: 模板/Score output prompt 均用 `reasoning`（Langfuse output_schema 只认 `score`+`reasoning`）
 - **模型参数**: Additional options = `{"providerOptions": {"thinking": {"type": "disabled"}}}`（注：字段存为单层，勿再包一层）
 - 变量映射见上文各模板「映射」说明；数据源为 deep_analysis 根 span 的 `input.query` + `metadata.report_markdown`/`analyst_reports`/`debate_history`/`research_manager_decision`/`risk_judgment` + `output.final_trade_decision`/`fund_manager_decision`
+
+**判别键修订（2026-09-12，3.225.7 实证）**：hosted 分数落库 `configId=NULL`（分数名带中文后缀、`source=EVAL`），原「UI evaluator 分数带 configId」假设不成立，`poll.py` 已改为 `source=EVAL` 过滤（commit 5e6008a）。configId 仅保留作 evaluator 配置标识，不再用于分数过滤。
 ```
 
 ## 口径对齐

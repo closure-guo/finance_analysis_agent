@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from finance_agent.citation import Claim
 
@@ -22,6 +22,7 @@ class AnalystReport(BaseModel):
 
     agent_name: str  # "macro" | "fundamental" | "technical" | "sentiment"
     summary: str
+    plain_conclusion: str = Field(..., min_length=1)
     key_findings: list[str]
     claims: list[Claim]  # 用于确定性引用校验
     markdown: str  # 完整章节 Markdown，用于最终报告渲染
@@ -29,6 +30,14 @@ class AnalystReport(BaseModel):
     # 「解析失败导致的零 claim」与「LLM 正常输出的零 claim」
     # （零 claim 会使引用校验 all_passed=True，见 citation.py 的 failed == 0）
     parse_degraded: bool = False
+
+    @field_validator("plain_conclusion")
+    @classmethod
+    def _plain_conclusion_not_blank(cls, v: str) -> str:
+        """add-agent-readable-conclusion：普通人可读结论必填非空（纯空白等同缺失）。"""
+        if not v.strip():
+            raise ValueError("plain_conclusion 不得为空或纯空白")
+        return v
 
 
 class DebateMessage(BaseModel):
@@ -50,6 +59,10 @@ class DebateMessage(BaseModel):
     round: int = Field(ge=1)
     content: str
     key_arguments: list[str]
+    # 交锋结构化引用（harden-decision-report-semantics 1.11）：本轮回应的对方
+    # 上一轮论点编号（1-based，对应对方 key_arguments 序号）。首轮开场为空。
+    # 使「对方论点被回应的比例」可由代码直接计算（零 token 确定性指标）。
+    rebuttal_to: list[int] = Field(default_factory=list)
 
 
 # TradeDecision.evidence_refs 的 source 规范枚举（improve-decision-grounding）
@@ -74,7 +87,23 @@ _SOURCE_ALIASES = {
     "bull": "debate_bull",
     "bear": "debate_bear",
     "research_manager_conclusion": "research_manager",
+    "aggressive": "risk_aggressive",
+    "conservative": "risk_conservative",
+    "neutral": "risk_neutral",
+    "aggressive_debater": "risk_aggressive",
+    "conservative_debater": "risk_conservative",
+    "neutral_debater": "risk_neutral",
+    # r2 实证：Risk Judge 把多空辩论误挂风险层前缀
+    "risk_bull": "debate_bull",
+    "risk_bear": "debate_bear",
 }
+
+# Risk Judge 的论据来源：Trader 来源 + 三方风险辩论 + 风控指标（Risk Judge 在风险
+# 辩论之后裁决，其理由建立在这两样上；只给 Trader 那套来源会使「中性方/beta」
+# 类论据无法列入 evidence_refs，judge 必然判「关键论据未引用」）
+RISK_EVIDENCE_SOURCES = TRADE_EVIDENCE_SOURCES | frozenset(
+    {"risk_aggressive", "risk_conservative", "risk_neutral", "risk_metrics"}
+)
 
 
 class TradeEvidenceRef(BaseModel):
@@ -143,7 +172,30 @@ class FundManagerDecision(BaseModel):
     """
 
     decision: Literal["approve", "reject", "return"]
-    reasoning: str = ""
+    reasoning: str = Field(..., min_length=1)
+    # 操作性结论（harden-decision-report-semantics D1）：FM 对最终方案的操作定性
+    # 与把握度——approve 时必填（缺失中断管线），reject/return 时可缺
+    # （reject 是终止无操作可定，return 方案将重做定性无意义）。
+    action: str | None = None
+    confidence: float | None = None
+
+    @field_validator("reasoning")
+    @classmethod
+    def _reasoning_not_blank(cls, v: str) -> str:
+        """spec「否决理由完整」：决策必须带理由（审批/退回/否决依据），纯空白等同缺失。"""
+        if not v.strip():
+            raise ValueError("reasoning 不得为空或纯空白")
+        return v
+
+    @model_validator(mode="after")
+    def _approve_requires_action_and_confidence(self) -> FundManagerDecision:
+        """approve 必须给出操作定性（action）与置信度——消除「approve 同意了什么」
+        需通读理由推断的歧义（round5 校准实证 consistency rubric v1 因此误判）。"""
+        if self.decision == "approve" and (self.action is None or self.confidence is None):
+            raise ValueError("approve 决策必须包含 action 与 confidence（操作性结论）")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ValueError(f"confidence 越界: {self.confidence}（须 0-1）")
+        return self
 
     @field_validator("decision", mode="before")
     @classmethod

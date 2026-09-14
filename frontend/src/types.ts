@@ -385,6 +385,13 @@ export interface UIMessage {
   completedAt?: number
   // 分层时间轴状态树（redesign delta）：node_start/node_complete 驱动的 6 层→子节点状态
   layerTree?: import('./pipelineTree').LayerNode[]
+  // 节点启动次数（add-pipeline-graph-view）：node_id → node_start 累计次数，
+  // graph 视图迭代徽标数据源；与 layerTree 单调状态机独立
+  nodeStartCounts?: Record<string, number>
+  // 管线终态标记（fix-pipeline-timer）：收到 done/interrupted 终态事件时置 true。
+  // 计时器据此停止——节点完成集合在「中断/恢复/退回」三场景都会失真（缺节点或超前），
+  // 不能作为生命周期判据（systematic-debugging 2026-09-12）
+  terminated?: boolean
   // Report-specific
   reportMarkdown?: string
   chartData?: ChartData

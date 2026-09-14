@@ -37,15 +37,42 @@ def _judge_api_key() -> str:
 
 JUDGE_ENV = "langfuse-llm-as-a-judge"
 
-_JSON_TAIL = '只输出 JSON: {"score": <1-5>, "reason": "<一句话理由>"}\n不以篇幅长短论优劣。'
+# 输出契约含 confidence（0-1）：round5 校准实证 judge 对残缺输入（图表路径+审批章）
+# 仍「全面覆盖」打 5 分无任何不确定性信号（幻觉不可从分面识别）——置信度定义为
+# 「对评分依据充分性的把握」，材料缺失/截断/不足时 MUST 降低，使幻觉可从低置信暴露。
+_JSON_TAIL = (
+    '只输出 JSON: {"score": <1-5>, "confidence": <0-1>, "reason": "<一句话理由>"}\n'
+    "不以篇幅长短论优劣。\n"
+    "置信度语义: confidence 是你对本次评分依据充分性的把握;输入材料缺失、截断或不足以"
+    "支撑判断时 MUST 降低置信度(如 <0.5),依据完整充分才给高置信度。"
+)
 
 # rubric 版本（变更递增，校准门禁按版本重校准；decision_grounding：
-# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对）
+# v1 初版 → v2 evidence_refs 结构化核对 → v3 interpretation 语义核对 →
+# v6 补风控指标+风险辩论进材料（round5 校准）→ v7 来源归属三层判法 +
+# 组合 claim 归属规则 + 解读失当强制核对（round7 校准，2026-09-13 owner 终裁）；
+# debate_quality：v1 初版 → v2 逐条回应+具体证据（round5）→ v3 5 分收紧
+# （round7 校准：judge 恒 5 宽松偏置，个别论点纯定性应降 4）；
+# consistency：v1 初版 → v2 approve 批准对象语义定义，消除「watch+approve=
+# 冲突」误判——round5 实测 11 条中 7 条被误打 1-3 分；v3 无；
+# v4（round9）材料加【Trader 方案】节 + 核对「Risk Judge 裁决相对 Trader 方案
+# 是否有未说明的方向/参数推翻」；
+# debate_quality v4（round9）：5 分档判例具体化——round8 代裁实测 judge 对
+# 「论点标头」里的纯定性论点（「历史上……」类无样本经验论断）视而不见，
+# 美的/宁德两行数据密集正文掩盖标头定性论点仍给满分；
+# v5（round10）：加强制枚举动作——评分前 MUST 逐条列出论点标头并标注
+# 「数据/事实」或「纯定性」，任一纯定性即封顶 4（round9 审计：v4 判例在
+# 4 分档生效但 5 分档仍漏判 ≥3 行，照搬 dg v7 逐条强制核对的有效模式）；
+# decision_grounding v8（round9）：归属层判例——round8 代裁实测 judge 对
+# 「同一评判在多来源出现」判定偏机械（比亚迪 ref7 归 debate_bear 被误扣，
+# 该评判 bear R2 与 RM 结论均有原话）；
+# 全维度最新一版 = 输出契约加 confidence（材料依据不充分 MUST 降低，
+# 使残缺输入上的幻觉可从低置信暴露），评分档位语义未变）
 RUBRIC_VERSIONS: dict[str, int] = {
-    "report_relevance": 1,
-    "debate_quality": 1,
-    "decision_grounding": 3,
-    "consistency": 1,
+    "report_relevance": 3,
+    "debate_quality": 5,
+    "decision_grounding": 8,
+    "consistency": 4,
 }
 
 RUBRICS: dict[str, str] = {
@@ -53,6 +80,9 @@ RUBRICS: dict[str, str] = {
 【用户查询】{{query}}
 【分析报告】{{report}}
 评估报告对查询的切题度:
+口径必读:「切题」指回答了用户的问题——覆盖再多相关维度但回避用户所问的
+直接决策问题(如问「能不能买」而不给出买/不买/观望的结论),SHALL ≤3;
+因合规或数据约束无法直接回答时,如实说明约束并给出约束下的可行分析,视为已回答。
 5 = 完全切题,紧扣查询意图展开
 4 = 基本切题,少量无关内容
 3 = 部分切题,有显著偏离或答非所需的段落
@@ -63,26 +93,61 @@ RUBRICS: dict[str, str] = {
     "debate_quality": """你是投资辩论质量评审专家。
 【多空辩论记录】{{debate_history}}
 评估辩论的实质交锋程度:
-5 = 双方逐条回应对方论点且引用具体证据(数据/事实)
+评分前强制枚举动作（v5，防 5 分档漏判——round9 审计：judge 在 4 分档能指认
+纯定性论点，但 5 分档对论点标头的定性表述视而不见，宁德/美的/平安银行三行
+标头含纯定性论点仍被给满分）：
+- 先逐条列出双方每一轮的「论点:」标头行，对每条标注【数据/事实】或【纯定性】
+  （纯定性 = 无数据、无事实出处的断言，含「历史上……」类无样本经验论断、
+  「护城河」「周期位置」「率先受益」类表态）；
+- 枚举结果存在任一【纯定性】→ 封顶 4 分，不得给 5；
+- 全部论点均为【数据/事实】且逐条回应对方 → 方可进入 5 分档。
+5 = 双方逐条回应对方论点且引用具体证据(数据/事实)，且所有论点均有数据或
+  事实支撑——只要存在个别纯定性论点（如仅凭「护城河」「周期位置」表态而无
+  数据/事实），降 4
+判例(v4)：论点列表（【bull】/【bear】标头的「论点:」行）中任一条为纯定性
+  表述——含「历史上……」类无样本、无出处的经验论断——即降 4，即使该回应
+  正文数据密集（round8 代裁实测：美的/宁德两行正文掩盖标头定性论点被误给满分）。
 4 = 有实质交锋,证据基本充分,个别论点空泛
 3 = 有交锋但多为立场声明,证据引用不足
 2 = 交锋形式化,双方自说自话
 1 = 单方输出或内容空洞,无实质辩论
+回应覆盖率（交锋覆盖 4/4）是形式指标：全回应但答非所问、避重就轻，不算实质交锋。
 """
     + _JSON_TAIL,
     "decision_grounding": (
         """你是投资决策依据评审专家。
 【分析师结论】{{analyst_reports}}
+【多空辩论记录】{{debate_history}}
 【Research Manager 结论】{{research_manager_decision}}
+【风控指标】{{risk_metrics}}
+【风险辩论记录】{{risk_debate_history}}
 【交易决策】{{trade_decision}}
 评估交易决策的论据是否有前文支撑:
-若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对：
-- claim 的数值/事实能在对应 source（technical/macro/fundamental/sentiment/debate_bull/debate_bear/research_manager）的结论中找到出处，
+若交易决策含 evidence_refs（结构化论据引用，每项含 claim 与 source），逐条核对。
+核对口径（v7 三层判法，round7 校准 owner 终裁确定）：
+- ①事实层：claim 的数值/事实对全材料为真；
+- ②归属层：source 标签 = 主张内容的真实来源（数字真实存在于材料的其它来源
+  不豁免归属错安）；
+- ③指认层：claim 句内自称的归属（如「激进方紧止损（36.5-37.0）」）也要对。
+评分：
+- 三层全过：claim 的数值/事实能在对应 source（technical/macro/fundamental/
+  sentiment/debate_bull/debate_bear/research_manager/risk_aggressive/
+  risk_conservative/risk_neutral/risk_metrics）的结论中找到出处，
   且 reasoning 的主要论据都能在 evidence_refs 中找到对应项 → 4-5 分；
-- 语义一致性核对：论据表述的指标术语、期次、方向须与所引数值语义一致——
-  数值有出处但术语张冠李戴（毛利率写成净利率）、期次错位（年报值说成季度值）、
-  方向失当（数值下降表述为「改善」、行业垫底表述为「行业领先」）属解读失当，
-  不得仅因数值有出处给高分 → 降至 2-3 分；
+- 逐条强制核对动作（防解读失当漏检——round7 终裁：judge 曾只核数值在不在、
+  漏检单向解读给 5 分）：对每条 evidence_ref，先复述所标 source 中的原文
+  （数值/原话），再与 claim 比对——数值在但方向/语气被拔高（「托底」升格
+  「支撑」）、只取有利证据忽略反向证据（单向解读）、术语张冠李戴（毛利率写成
+  净利率、行业垫底表述为「行业领先」）、期次错位（年报值说成季度值）均属
+  解读失当，不得仅因数值有出处判语义一致 → 降至 2-3 分；
+- 归属层错安（claim 内容在所标 source 中不存在、而存在于其它来源；或解读为
+  主张重心却未按解读来源标注）→ 扣 1 分，档位不高于 4；
+- 判例(v8)：同一评判在多个来源（如 debate_bear 与 research_manager）均有原话
+  时，引用任一真实来源即合法，不因未选「最早」或「主要」来源扣分；仅当 claim
+  在所有被标来源中均无原话时才按归属错安处理（round8 代裁实测：比亚迪 ref7
+  归 debate_bear 被误扣，该评判 bear R2 与 RM 结论均有原话）。
+- 组合 claim（数字取自 A + 解读取自 B）：句内注明解读出处即属忠实拼装，按
+  三层判法不扣，标签可取数字来源；解读为主张重心且实际出自他方时按归属层错安处理；
 - source 与论据对不上、claim 数值在来源中不存在（无中生有）、或 evidence_refs 缺失
   reasoning 中大量论据的引用 → 1-2 分。
 无 evidence_refs 时按以下原规则从自由文本推断（不因缺字段报错）:
@@ -96,17 +161,27 @@ RUBRICS: dict[str, str] = {
     ),
     "consistency": """你是投资报告一致性评审专家。
 【分析师章节结论】{{analyst_reports}}
+【Trader 方案】{{trader_plan}}
 【Research Manager 结论】{{research_manager_decision}}
 【Risk Judge 裁决】{{risk_judgment}}
 【Fund Manager 最终决策】{{fund_manager_decision}}
 【最终报告结论章节】{{report_conclusion}}
+先明确决策语义(评分前必读):
+- Fund Manager 的 approve/reject/return 针对的是 Risk Judge 裁决后的最终交易方案
+  (即裁决 JSON 中的 action/position_size),不是对裁决本身的赞成/否决票;
+- approve = 同意执行该方案:裁决为 watch(观望)而 FM approve,表示批准观望,方向一致,
+  不是冲突;裁决为 buy/hold/sell 而 FM approve 同理;
+- 真正的冲突是:FM 批准了与裁决方向相反的行动(如裁决 sell 而 FM 批准买入建仓)、
+  FM 理由与裁决逻辑相悖、或报告结论章节与决策方向不一致。
 评估各层结论的一致性:
 5 = 各层结论完全一致,无静默推翻
 4 = 基本一致,个别表述差异但不影响方向
 3 = 存在不一致但已显式说明理由
 2 = 存在未说明的结论冲突
-1 = 明显自相矛盾(如 Fund Manager 批准与 Risk Judge 否决相悖)
-特别关注:Fund Manager 结论是否与 Risk Judge 裁决一致;报告结论章节是否与分析师章节一致。
+1 = 明显自相矛盾(如 FM 批准与 Risk Judge 裁决方向相悖的行动)
+特别关注:Risk Judge 裁决相对【Trader 方案】是否有未说明的方向/参数推翻(方向相反、
+仓位/价位/触发条件被改写而无理由说明);Fund Manager 结论是否与 Risk Judge 裁决后的
+方案方向一致;报告结论章节是否与分析师章节一致。
 """
     + _JSON_TAIL,
 }
@@ -189,11 +264,18 @@ def run_judge(dimension: str, variables: dict[str, str]) -> dict:
     输入合同：维度关键变量缺失 → score=None + reason="input_missing"
     （不调 LLM、不评分），保证评估结果不被空输入污染。
 
-    Returns: {"name": dimension, "score": int 1-5 | None, "reason": str}
+    Returns: {"name", "score": int 1-5 | None, "reason": str,
+              "confidence": float 0-1 | None}——confidence 缺失/非法时为 None
+    （旧格式容错，不阻塞评分）。
     """
     missing = _input_missing(dimension, variables)
     if missing is not None:
-        return {"name": dimension, "score": None, "reason": f"input_missing:{missing}"}
+        return {
+            "name": dimension,
+            "score": None,
+            "reason": f"input_missing:{missing}",
+            "confidence": None,
+        }
     prompt = _render(dimension, variables)
     for _attempt in range(2):
         try:
@@ -201,7 +283,16 @@ def run_judge(dimension: str, variables: dict[str, str]) -> dict:
             score = int(data["score"])
             if not 1 <= score <= 5:
                 raise ValueError(f"score 越界: {score}")
-            return {"name": dimension, "score": score, "reason": str(data.get("reason", ""))}
+            confidence: float | None = None
+            raw_conf = data.get("confidence")
+            if isinstance(raw_conf, (int, float)) and 0 <= float(raw_conf) <= 1:
+                confidence = float(raw_conf)
+            return {
+                "name": dimension,
+                "score": score,
+                "reason": str(data.get("reason", "")),
+                "confidence": confidence,
+            }
         except Exception:  # noqa: S112 -- 故意静默重试;解析失败已通过最终 judge_parse_failed 记录
             continue
-    return {"name": dimension, "score": None, "reason": "judge_parse_failed"}
+    return {"name": dimension, "score": None, "reason": "judge_parse_failed", "confidence": None}

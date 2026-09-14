@@ -30,6 +30,12 @@ from finance_agent.harness.context import ContextBudget
 from finance_agent.llm import LLMConfig
 from finance_agent.outcome.track_record.ingest import persist_prediction_from_accumulated
 from finance_agent.prompts.loader import PromptInfo, load_prompt_with_meta
+from finance_agent.tool_registry import (
+    TOOL_BATCH_WEB_SEARCH,
+    TOOL_RUN_DEEP_ANALYSIS,
+    TOOL_SEARCH_STOCK,
+    TOOL_WEB_SEARCH,
+)
 
 logger = logging.getLogger("finance_agent.agent_factory")
 
@@ -123,7 +129,11 @@ def _make_web_search_with_collector(collector: list[dict]):
     """创建 web_search 工具，同时将搜索结果收集到 collector 用于引用溯源。"""
 
     async def web_search(query: str) -> str:
-        """搜索网页获取实时信息
+        """搜索单个关键词，获取实时网页信息。适用于明确、单一的事实型查询。
+
+        新闻、舆情、热点等时间敏感的多面话题，应改用 batch_web_search
+        一次从 2-3 个不同角度发问（信息面实测约 3 倍）。个股行情/报价/资金
+        流向类查询的搜索结果多为行情页，信息量低，慎用搜索。
 
         Args:
             query: 搜索关键词
@@ -161,11 +171,13 @@ def _make_batch_web_search(collector: list[dict]):
     async def batch_web_search(queries: list[str]) -> str:
         """并行批量搜索多个关键词，获取更全面的信息
 
-        适用于需要从多个维度搜集信息的场景，如分析一只股票时同时搜索
-        最新新闻、财务数据、行业对比、分析师观点等。
+        适用于新闻、舆情等多面话题：一次从 2-3 个不同角度发问
+        （如事件本身 / 业绩与财务 / 资金与股价动向），信息面实测约为
+        单 query 的 3 倍。角度选择比数量重要——个股行情/报价类关键词
+        召回的多为行情页，不建议作为搜索角度。
 
         Args:
-            queries: 搜索关键词列表，建议 2-5 个不同维度的查询
+            queries: 搜索关键词列表，建议 2-3 个不同角度的查询
         """
         from finance_agent.web_search import (
             batch_tavily_search,
@@ -788,7 +800,7 @@ def _make_run_deep_analysis(
                         content=_timeout_note,
                         tool_result=ToolResult(
                             tool_call_id="",
-                            name="run_deep_analysis",
+                            name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_timeout_note,
                             metadata={"pipeline_timeout": True},
                         ),
@@ -819,7 +831,7 @@ def _make_run_deep_analysis(
                         content=_error_note,
                         tool_result=ToolResult(
                             tool_call_id="",
-                            name="run_deep_analysis",
+                            name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_error_note,
                             metadata={"pipeline_error": True},
                         ),
@@ -907,7 +919,7 @@ def _make_run_deep_analysis(
                         content=llm_output,
                         tool_result=ToolResult(
                             tool_call_id="",
-                            name="run_deep_analysis",
+                            name=TOOL_RUN_DEEP_ANALYSIS,
                             output=llm_output,
                             metadata=metadata,
                         ),
@@ -1232,8 +1244,8 @@ def build_agent(
         from finance_agent.api import TESTING
 
         agent.tools.register(
-            _trace_tool("web_search")(_stub_web_search if TESTING else _web_search),
-            name="web_search",
+            _trace_tool(TOOL_WEB_SEARCH)(_stub_web_search if TESTING else _web_search),
+            name=TOOL_WEB_SEARCH,
         )
         session_id = kwargs.get("session_id")
         if session_id:
@@ -1253,10 +1265,10 @@ def build_agent(
         )
         web_sources_collector: list[dict] = []
         agent.tools.register(
-            _trace_tool("search_stock")(_make_search_stock(api_key)), name="search_stock"
+            _trace_tool(TOOL_SEARCH_STOCK)(_make_search_stock(api_key)), name=TOOL_SEARCH_STOCK
         )
         agent.tools.register(
-            _trace_tool("run_deep_analysis")(
+            _trace_tool(TOOL_RUN_DEEP_ANALYSIS)(
                 _make_run_deep_analysis(
                     api_key=api_key,
                     analysis_type=analysis_type,
@@ -1267,7 +1279,7 @@ def build_agent(
                     llm_config=llm_config,
                 )
             ),
-            name="run_deep_analysis",
+            name=TOOL_RUN_DEEP_ANALYSIS,
         )
         # TESTING=1 时注册 stub web_search（固定结果，不调真实 Tavily），
         # 与 quick 分支同一 stub 逻辑，使深度模式澄清阶段也能确定性复现
@@ -1275,16 +1287,16 @@ def build_agent(
         from finance_agent.api import TESTING
 
         agent.tools.register(
-            _trace_tool("web_search")(
+            _trace_tool(TOOL_WEB_SEARCH)(
                 _stub_web_search
                 if TESTING
                 else _make_web_search_with_collector(web_sources_collector)
             ),
-            name="web_search",
+            name=TOOL_WEB_SEARCH,
         )
         agent.tools.register(
-            _trace_tool("batch_web_search")(_make_batch_web_search(web_sources_collector)),
-            name="batch_web_search",
+            _trace_tool(TOOL_BATCH_WEB_SEARCH)(_make_batch_web_search(web_sources_collector)),
+            name=TOOL_BATCH_WEB_SEARCH,
         )
         session_id = kwargs.get("session_id")
         if session_id:
@@ -1310,7 +1322,7 @@ def build_agent(
             llm=llm_client,
             context_budget=context_budget,
         )
-        agent.tools.register(_trace_tool("web_search")(_web_search), name="web_search")
+        agent.tools.register(_trace_tool(TOOL_WEB_SEARCH)(_web_search), name=TOOL_WEB_SEARCH)
         return agent
 
     raise ValueError(f"未知模式: {mode}")

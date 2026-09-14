@@ -115,6 +115,11 @@ function applyPipelineEvent(messages: UIMessage[], event: SSEEvent): UIMessage[]
         currentNode: event.node_id,
         content: `${event.layer}: ${event.desc}...`,
         layerTree: applyNodeEvent(pipelineMsg.layerTree ?? buildLayerTree(), event, Date.now()),
+        // 迭代计数（add-pipeline-graph-view）：重跑累计，graph 徽标数据源
+        nodeStartCounts: {
+          ...(pipelineMsg.nodeStartCounts ?? {}),
+          [event.node_id]: (pipelineMsg.nodeStartCounts?.[event.node_id] ?? 0) + 1,
+        },
       })
 
     case 'node_timing':
@@ -378,9 +383,14 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
     }
 
     case 'done': {
-      const nextMessages = messages.map((m) =>
-        m.streaming ? { ...m, streaming: false } : m,
-      )
+      // 管线终态标记（fix-pipeline-timer）：done = 分析全流程结束，计时器据此停止
+      const nextMessages = messages.map((m) => {
+        let next = m.streaming ? { ...m, streaming: false } : m
+        if (next.type === 'pipeline') {
+          next = { ...next, terminated: true }
+        }
+        return next
+      })
       return { ...state, phase: 'done', messages: nextMessages }
     }
 
@@ -390,6 +400,10 @@ export function reduce(state: SessionStreamState, event: SSEEvent): SessionStrea
         // 运行中管线收口提示（progress===1 的已完成时间轴不覆盖）
         if (next.type === 'pipeline' && next.progress !== 1) {
           next = { ...next, content: '输出已中断，可追问继续' }
+        }
+        // 管线终态标记（fix-pipeline-timer）：计时器据此停止
+        if (next.type === 'pipeline') {
+          next = { ...next, terminated: true }
         }
         return next
       })

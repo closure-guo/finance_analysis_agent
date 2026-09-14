@@ -1,7 +1,7 @@
 # E2E 门禁融入项目工作流 · 设计文档
 
 > 日期：2026-07-26
-> 输入：[E2E测试实现方案-finance_analysis_agent.md](../../E2E测试实现方案-finance_analysis_agent.md) + [project-workflow.md](../../project-workflow.md) + AGENTS.md 新版测试约束红线
+> 输入：[E2E测试实现方案-finance_analysis_agent.md](../../design/E2E测试实现方案-finance_analysis_agent.md) + [project-workflow.md](../../project-workflow.md) + AGENTS.md 新版测试约束红线
 > 目标：把 E2E 方案从一份孤立的技术方案，重构为项目工作流的正式门禁环节
 
 ---
