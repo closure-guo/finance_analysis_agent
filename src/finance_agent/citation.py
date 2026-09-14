@@ -674,7 +674,11 @@ def _verify_textual(claim: Claim, state: dict) -> CitationResult:
         items = state.get(key) or []
         if isinstance(items, list):
             sources += [
-                str(i.get(f) or "") for i in items if isinstance(i, dict) for f in fields if i.get(f)
+                str(i.get(f) or "")
+                for i in items
+                if isinstance(i, dict)
+                for f in fields
+                if i.get(f)
             ]
     resolved = _resolve_field_ref(claim.field_ref, state)
     if isinstance(resolved, str):

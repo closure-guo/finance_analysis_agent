@@ -333,6 +333,4 @@ class TestColumnAliasResolution:
             )
         }
         assert _resolve_field_ref("financial_indicators.加权每股收益", state) == 2.07
-        assert (
-            _resolve_field_ref("financial_indicators.20251231.加权每股收益", state) == 2.07
-        )
+        assert _resolve_field_ref("financial_indicators.20251231.加权每股收益", state) == 2.07

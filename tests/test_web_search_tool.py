@@ -79,7 +79,12 @@ class TestDetectSearchTopic:
     def test_news_intent_keywords_hit(self):
         from finance_agent.web_search import detect_search_topic
 
-        for q in ("贵州茅台 最新消息", "央行 近期 货币政策动态", "今天 A股 大跌新闻", "本周 央行动向"):
+        for q in (
+            "贵州茅台 最新消息",
+            "央行 近期 货币政策动态",
+            "今天 A股 大跌新闻",
+            "本周 央行动向",
+        ):
             assert detect_search_topic(q) == "news", q
 
     def test_non_news_query_stays_general(self):

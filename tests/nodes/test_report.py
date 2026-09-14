@@ -262,7 +262,6 @@ class TestDeriveFocusFromQuery:
         assert derive_focus_from_query("") == ""
 
 
-
 class TestTradeDecisionOperationalParams:
     """report-render-operational-params：交易决策节渲染完整操作参数。
 
@@ -313,7 +312,9 @@ class TestTradeDecisionOperationalParams:
         param_lines = [
             ln.strip()
             for ln in md.split("\n")
-            if any(k in ln for k in ("**入场价**", "**止损价**", "**目标价**", "**再评估触发条件**"))
+            if any(
+                k in ln for k in ("**入场价**", "**止损价**", "**目标价**", "**再评估触发条件**")
+            )
         ]
         assert param_lines == ["- **再评估触发条件**: 见理由"]
 

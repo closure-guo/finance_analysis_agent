@@ -140,9 +140,14 @@ class TestCitationEchoSources:
             "block_trades": [],
         }
         claim = Claim(
-            claim_type="entity", source_type="data", field_ref="announcements.0.title",
-            stated_value="2026年半年度报告", interpretation="公司发布中报",
-            metric_name=None, period=None, direction=None,
+            claim_type="entity",
+            source_type="data",
+            field_ref="announcements.0.title",
+            stated_value="2026年半年度报告",
+            interpretation="公司发布中报",
+            metric_name=None,
+            period=None,
+            direction=None,
         )
         result = _verify_textual(claim, state)
         assert result.status == "PASS"
@@ -150,11 +155,21 @@ class TestCitationEchoSources:
     def test_unlock_date_echo(self):
         from finance_agent.citation import Claim, _verify_textual
 
-        state = {"announcements": [], "research_reports": [], "share_unlock": [{"date": "2026-10-09"}], "block_trades": []}
+        state = {
+            "announcements": [],
+            "research_reports": [],
+            "share_unlock": [{"date": "2026-10-09"}],
+            "block_trades": [],
+        }
         claim = Claim(
-            claim_type="entity", source_type="data", field_ref="share_unlock.0.date",
-            stated_value="2026-10-09 限售解禁", interpretation="存在解禁压力",
-            metric_name=None, period=None, direction=None,
+            claim_type="entity",
+            source_type="data",
+            field_ref="share_unlock.0.date",
+            stated_value="2026-10-09 限售解禁",
+            interpretation="存在解禁压力",
+            metric_name=None,
+            period=None,
+            direction=None,
         )
         result = _verify_textual(claim, state)
         assert result.status == "PASS"
@@ -162,11 +177,21 @@ class TestCitationEchoSources:
     def test_unmatched_is_unverifiable_text(self):
         from finance_agent.citation import Claim, _verify_textual
 
-        state = {"announcements": [], "research_reports": [], "share_unlock": [], "block_trades": []}
+        state = {
+            "announcements": [],
+            "research_reports": [],
+            "share_unlock": [],
+            "block_trades": [],
+        }
         claim = Claim(
-            claim_type="entity", source_type="data", field_ref="announcements.0.title",
-            stated_value="凭空捏造的公告标题", interpretation="x",
-            metric_name=None, period=None, direction=None,
+            claim_type="entity",
+            source_type="data",
+            field_ref="announcements.0.title",
+            stated_value="凭空捏造的公告标题",
+            interpretation="x",
+            metric_name=None,
+            period=None,
+            direction=None,
         )
         result = _verify_textual(claim, state)
         assert result.status == "UNVERIFIABLE"

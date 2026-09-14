@@ -142,7 +142,9 @@ class AnalysisState(TypedDict, total=False):
     citation_retry_feedback: dict[str, list[dict]]  # 每分析师失败明细（重试上下文注入）
     citation_fail_buckets: dict[str, int]  # 桶计数（value_mismatch/path_unresolvable/...）
     citation_coverage_gap: bool  # 覆盖率缺口（重试准入路由读取；incident 027 补声明）
-    value_mismatch_repaired: int  # 数值失配修复数（analyst_true_fail 口径组件；incident 027 补声明）
+    value_mismatch_repaired: (
+        int  # 数值失配修复数（analyst_true_fail 口径组件；incident 027 补声明）
+    )
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──

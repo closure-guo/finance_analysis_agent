@@ -517,7 +517,11 @@ def _build_fundamental_context(state: dict) -> str:
     announcements = state.get("announcements") or []
     if announcements:
         trimmed_ann = [
-            {"title": a.get("title", ""), "date": a.get("date", ""), "category": a.get("category", "")}
+            {
+                "title": a.get("title", ""),
+                "date": a.get("date", ""),
+                "category": a.get("category", ""),
+            }
             for a in announcements[:10]
         ]
         sections.append(

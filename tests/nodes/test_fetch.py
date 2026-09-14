@@ -238,7 +238,11 @@ class TestFetchDataCoverageSources:
         mock.fetch_cash_flow.return_value = _make_cashflow()
         mock.fetch_indicators.return_value = _make_indicators()
         mock.fetch_industry.return_value = {"industry": "白酒", "name": "贵州茅台"}
-        mock.fetch_stock_quote.return_value = {"price": 1800.0, "name": "贵州茅台", "code": "600519"}
+        mock.fetch_stock_quote.return_value = {
+            "price": 1800.0,
+            "name": "贵州茅台",
+            "code": "600519",
+        }
         mock.fetch_kline.return_value = pd.DataFrame({"收盘": [1.0]})
         mock.fetch_benchmark_kline.return_value = pd.DataFrame({"收盘": [1.0]})
         mock.fetch_industry_pe.return_value = {"industry_pe": 30.0}
@@ -246,16 +250,40 @@ class TestFetchDataCoverageSources:
         mock.fetch_macro_indicators.return_value = {}
         mock.fetch_news.return_value = []
         mock.fetch_announcements.return_value = [
-            {"title": "2026年半年度报告", "date": "2026-08-15", "category": "财务报告", "url": "http://a/1"}
+            {
+                "title": "2026年半年度报告",
+                "date": "2026-08-15",
+                "category": "财务报告",
+                "url": "http://a/1",
+            }
         ]
         mock.fetch_research_reports.return_value = [
-            {"title": "中报点评", "org": "浙商证券", "rating": "买入", "target_price": 1600.0, "date": "2026-08-20"}
+            {
+                "title": "中报点评",
+                "org": "浙商证券",
+                "rating": "买入",
+                "target_price": 1600.0,
+                "date": "2026-08-20",
+            }
         ]
         mock.fetch_share_unlock.return_value = [
-            {"date": "2026-10-09", "shares": 120000000, "market_value": 14300000000, "pct_float": 1.23}
+            {
+                "date": "2026-10-09",
+                "shares": 120000000,
+                "market_value": 14300000000,
+                "pct_float": 1.23,
+            }
         ]
         mock.fetch_block_trades.return_value = [
-            {"date": "2026-09-10", "price": 1270.0, "volume": 100000, "amount": 127000000.0, "premium": -0.5, "buyer": "机构专用", "seller": "某营业部"}
+            {
+                "date": "2026-09-10",
+                "price": 1270.0,
+                "volume": 100000,
+                "amount": 127000000.0,
+                "premium": -0.5,
+                "buyer": "机构专用",
+                "seller": "某营业部",
+            }
         ]
         return mock
 
@@ -270,7 +298,12 @@ class TestFetchDataCoverageSources:
         cache = MagicMock()
         fetch_data({"stock_code": "600519"}, cache=cache, client=self._full_client())
         cached = {call[0][0]: call[1] for call in cache.set.call_args_list}
-        for key in ("600519:announcements", "600519:research_reports", "600519:share_unlock", "600519:block_trades"):
+        for key in (
+            "600519:announcements",
+            "600519:research_reports",
+            "600519:share_unlock",
+            "600519:block_trades",
+        ):
             assert key in cached, key
             assert cached[key].get("ttl_seconds") == 3600
 

@@ -615,11 +615,27 @@ class TestCoverageSourcesContext:
             "stock_name": "贵州茅台",
             "stock_code": "600519",
             "announcements": [
-                {"title": "2026年半年度报告", "date": "2026-08-15", "category": "财务报告", "url": "http://a/1"},
-                {"title": "关于回购股份的公告", "date": "2026-07-01", "category": "股份回购", "url": ""},
+                {
+                    "title": "2026年半年度报告",
+                    "date": "2026-08-15",
+                    "category": "财务报告",
+                    "url": "http://a/1",
+                },
+                {
+                    "title": "关于回购股份的公告",
+                    "date": "2026-07-01",
+                    "category": "股份回购",
+                    "url": "",
+                },
             ],
             "research_reports": [
-                {"title": "中报点评", "org": "浙商证券", "rating": "买入", "target_price": 1600.0, "date": "2026-08-20"}
+                {
+                    "title": "中报点评",
+                    "org": "浙商证券",
+                    "rating": "买入",
+                    "target_price": 1600.0,
+                    "date": "2026-08-20",
+                }
             ],
         }
         ctx = _build_fundamental_context(state)
@@ -639,7 +655,9 @@ class TestCoverageSourcesContext:
         state = {
             "stock_name": "贵州茅台",
             "stock_code": "600519",
-            "share_unlock": [{"date": "2026-10-09", "shares": 120000000, "market_value": 14300000000}],
+            "share_unlock": [
+                {"date": "2026-10-09", "shares": 120000000, "market_value": 14300000000}
+            ],
             "block_trades": [{"date": "2026-09-10", "price": 1270.0, "premium": -0.5}],
         }
         ctx = _build_sentiment_context(state)

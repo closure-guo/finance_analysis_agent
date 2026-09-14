@@ -14,7 +14,9 @@ from finance_agent.langfuse_tracing import open_span
 # 新闻意图词表（add-news-topic-search）：命中即以 Tavily topic='news' 检索。
 # 实测（2026-09-12）：「最新消息」类 query 走 general 通道召回的全是行情页/导航页
 # （18 条中 0 条真实新闻），news 通道才是对症解。年份（如尾部拼的「2026」）不构成意图。
-_NEWS_INTENT_PATTERN = re.compile(r"新闻|最新|消息|动态|近期|近日|今天|昨日|昨天|本周|上周|本月|突发")
+_NEWS_INTENT_PATTERN = re.compile(
+    r"新闻|最新|消息|动态|近期|近日|今天|昨日|昨天|本周|上周|本月|突发"
+)
 
 
 def detect_search_topic(query: str) -> str | None:

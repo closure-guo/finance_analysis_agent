@@ -50,7 +50,14 @@ def verify(state: dict, stock_code: str) -> dict:
     for msg in state.get("risk_debate_history") or []:
         role = msg.get("role", "?") if isinstance(msg, dict) else getattr(msg, "role", "?")
         content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-        debates.append({"role": role, "mentions_ratio": None, "mentions_stop_pct": None, "excerpt": content[:200]})
+        debates.append(
+            {
+                "role": role,
+                "mentions_ratio": None,
+                "mentions_stop_pct": None,
+                "excerpt": content[:200],
+            }
+        )
 
     ratio = dm.get("risk_reward_ratio")
     stop_pct = dm.get("stop_distance_pct")
@@ -58,8 +65,12 @@ def verify(state: dict, stock_code: str) -> dict:
         ratio_strs = [f"{ratio:.2f}:1", f"{ratio:.1f}:1", f"{ratio:.2f}", f"{ratio:.1f}"]
         stop_strs = [f"{stop_pct:.1%}", f"{stop_pct * 100:.1f}%"]
         for d in debates:
-            d["mentions_ratio"] = any(s in d["excerpt"] or s in _full_content(state, d["role"]) for s in ratio_strs)
-            d["mentions_stop_pct"] = any(s in d["excerpt"] or s in _full_content(state, d["role"]) for s in stop_strs)
+            d["mentions_ratio"] = any(
+                s in d["excerpt"] or s in _full_content(state, d["role"]) for s in ratio_strs
+            )
+            d["mentions_stop_pct"] = any(
+                s in d["excerpt"] or s in _full_content(state, d["role"]) for s in stop_strs
+            )
 
     report = state.get("final_report") or ""
     decision_section = ""
@@ -80,7 +91,8 @@ def verify(state: dict, stock_code: str) -> dict:
         "action": (decision or {}).get("action"),
         "derived_metrics": dm,
         "decision_params": {
-            k: (decision or {}).get(k) for k in ("position_size", "entry_price", "stop_loss", "target_price")
+            k: (decision or {}).get(k)
+            for k in ("position_size", "entry_price", "stop_loss", "target_price")
         },
         "debates": debates,
         "decision_section": decision_section,
@@ -114,9 +126,13 @@ def main() -> None:
         lines.append(f"- price_check: `{rec['price_check']}`")
         lines.append(f"- 决策参数: `{rec['decision_params']}`")
         lines.append(f"- 派生指标（代码计算）: `{rec['derived_metrics']}`\n")
-        lines.append("**风险辩论引用情况**（mentions = reasoning 中出现代码计算的赔率/止损距离数值）:\n")
+        lines.append(
+            "**风险辩论引用情况**（mentions = reasoning 中出现代码计算的赔率/止损距离数值）:\n"
+        )
         for d in rec["debates"]:
-            lines.append(f"- {d['role']}: mentions_ratio={d['mentions_ratio']} mentions_stop_pct={d['mentions_stop_pct']}")
+            lines.append(
+                f"- {d['role']}: mentions_ratio={d['mentions_ratio']} mentions_stop_pct={d['mentions_stop_pct']}"
+            )
         lines.append("\n**报告决策节**:\n\n```\n" + rec["decision_section"] + "\n```\n")
     out.write_text("\n".join(lines), encoding="utf-8")
     print(f"验证记录 → {out}", flush=True)
