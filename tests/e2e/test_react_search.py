@@ -15,18 +15,22 @@ import time
 import pytest
 
 API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
-BASE_URL = "http://127.0.0.1:5173"
+BASE_URL = os.environ.get("FRONTEND_URL", "http://127.0.0.1:5173")
 
 
 def _configure_api_key(page):
-    """Open settings modal and fill the API key if not already persisted."""
+    """进入设置页 LLM 分区填 API Key（settings-center 后为 /settings 路由页），
+    保存后「← 返回」回首页——否则后续步骤仍在设置页找输入框（旧用例在此挂）。"""
     if page.locator("button").filter(has_text="去配置").count() > 0:
         page.locator("button").filter(has_text="去配置").first.click(timeout=5000)
     else:
         page.locator("button").filter(has_text="设置").first.click(timeout=5000)
-    page.locator("input[type='password']").fill(API_KEY)
+    page.wait_for_selector("[data-testid='llm-config-pane']", timeout=10000)
+    page.locator("[data-testid='llm-config-pane'] input[type='password']").fill(API_KEY)
     page.locator("button").filter(has_text="确认").first.click(timeout=5000)
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(500)
+    page.locator("button").filter(has_text="返回").first.click(timeout=5000)
+    page.wait_for_timeout(800)
 
 
 def test_react_search(browser):
