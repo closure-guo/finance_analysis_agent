@@ -75,6 +75,15 @@ MA5=1295.30、MA20=1298.32、差值 -3.02：
 | 差值 3.02 + 方向未申报 | `PASS` + `coverage_gap=True`（显式降级） |
 | metric_name/period 申报齐全下的隔离验证 | 方向已申报 gap=False / 未申报 gap=True（归属本分支，不由全局口径兜底） |
 
+## 端到端验证（docker/本地真栈 + 真实 LLM + 真实行情缓存）
+
+本地后端（非 TESTING）直打 `/api/analyze`（600519，真实 LLM）：24 节点跑完、报告产出（`report_ready`）。
+
+- **Trader 本次决策为「观望（置信度 55%）」** → 按设计 `validate_trade_prices` 返回「hold/watch 无价位要求」（band 校验对无价位决策不适用）；band 校验的真实数据行为由上方四组定向申报覆盖（合理→pass、关系违规/偏离/带外→fail 及 reason）。
+- **Langfuse trace `68814a6f47383b197a37ca638deecc9b`（session 86838494-a7b）实据**：
+  - `trader` generation input 命中「**价位参考**」×1 —— 修复前该节因 `price_levels` 被图丢弃而**从未渲染**；
+  - `technical_analyst` generation input 命中「**常用派生值**」×1 —— 修复前同样不存在。
+
 ## 回归
 
 - 受影响模块：`tests/test_citation.py` / `tests/test_graph_5layer.py` / `tests/test_pipeline_stub.py` / `tests/nodes/test_validate_trade_prices.py` 全绿
