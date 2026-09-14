@@ -151,6 +151,19 @@ test.describe('并发流式输出完整性', () => {
     console.log('[E2E] 会话 B 流式输出已开始，两流并发中')
 
     // ── 读取会话列表获取两个 display_name ──
+    // display_name 在首条消息处理后才 upsert，异步时序：轮询等待两个会话出现
+    // （CI 曾 flaky：A=false B=false，重试仍红——不做「读一次就断言」的时序假设）
+    await expect
+      .poll(
+        async () => {
+          const resp = await page.request.get(`${API_BASE}/api/sessions`)
+          const list = (await resp.json()).sessions as Array<{ display_name: string }>
+          return [QUERY_A, QUERY_B].every((q) => list.some((s) => s.display_name === q))
+        },
+        { timeout: 30_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(true)
+
     const sessionsResp = await page.request.get(`${API_BASE}/api/sessions`)
     const sessions = (await sessionsResp.json()).sessions as Array<{
       session_id: string
@@ -230,6 +243,20 @@ test.describe('并发流式输出完整性', () => {
     await expectComposerReady(page)
     await sendMessage(page, QUERY_B)
     await expect(page.getByText(/分析思路|测试问题/i).first()).toBeVisible({ timeout: 30_000 })
+
+    // 会话行的 display_name 在首条消息处理后才 upsert，存在异步时序；
+    // 「读一次列表就断言」在 CI 上曾 flaky（A=false B=false，重试仍红）——
+    // 轮询等待本次创建的两个会话出现（web-first 纪律：只断言稳定终态）。
+    await expect
+      .poll(
+        async () => {
+          const resp = await page.request.get(`${API_BASE}/api/sessions`)
+          const list = (await resp.json()).sessions as Array<{ display_name: string }>
+          return [QUERY_A, QUERY_B].every((q) => list.some((s) => s.display_name === q))
+        },
+        { timeout: 30_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(true)
 
     const sessionsResp = await page.request.get(`${API_BASE}/api/sessions`)
     const sessions = (await sessionsResp.json()).sessions as Array<{

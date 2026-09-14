@@ -36,6 +36,9 @@ export default defineConfig({
     // 视觉基线截图采集（会话页/报告渲染态）：同 report-export 环境（8002/5175），
     // 未设 BASELINE_DIR 时整组自跳过（一次性采集工具，不进常规门禁）
     'visual-baseline-report.spec.ts',
+    // 管线卡视图切换：默认 graph（add-pipeline-graph-view）+ 切列表时间轴渲染，
+    // 同 pipeline 环境（8002/5175）
+    'pipeline-view-toggle.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },

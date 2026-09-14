@@ -66,6 +66,8 @@ test.describe('ReAct 路径后台化（harden-react-path-resilience）', () => {
       localStorage.setItem('fa_api_key', 'stub-key-for-testing')
       localStorage.setItem('fa_user_id', 'user-test-resilience')
       localStorage.removeItem('financeAgent.pipelineDurations')
+      // 本 spec 断言列表时间轴 DOM（pipeline-timeline）；默认视图为 graph，显式预置 list
+      localStorage.setItem('fa_pipeline_view', 'list')
     })
     await page.reload()
 
@@ -177,6 +179,7 @@ test.describe('LLM 失败场景（harden-react-path-resilience 8.3）', () => {
       localStorage.setItem('fa_api_key', 'stub-key-for-testing')
       localStorage.setItem('fa_user_id', 'user-test-fail')
       localStorage.removeItem('financeAgent.pipelineDurations')
+      localStorage.setItem('fa_pipeline_view', 'list') // 同 8.1：显式锁定列表视图
     })
     await page.reload()
 
