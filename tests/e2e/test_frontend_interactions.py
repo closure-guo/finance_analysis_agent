@@ -163,8 +163,10 @@ def test_sidebar_interactions(page):
 
 def test_chat_input_bar_mode_toggle(page):
     print("\n=== Chat Input Bar Mode Toggle ===")
-    # Seed API key so we can enter chat view without modal blocking
-    page.add_init_script(f"localStorage.setItem('fa_api_key', {API_KEY!r})")
+    # 播种非空 key 以进入 chat 视图（无 key 提交会跳转 /settings —— 见 empty_state 用例；
+    # CI 未配 DEEPSEEK_API_KEY 时 API_KEY 为空，`or "sk-e2e-test"` 保住本用例原意：
+    # 只验模式切换 UI，不依赖真实 LLM 凭证）
+    page.add_init_script(f"localStorage.setItem('fa_api_key', {API_KEY or 'sk-e2e-test'!r})")
     page.goto(BASE_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(800)
     textarea = page.locator("textarea").first
