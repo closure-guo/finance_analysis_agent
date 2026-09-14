@@ -41,6 +41,40 @@
 
 **兼容短路（回归保护）**：LLM 偶发以「某一端的值」填 `stated_value`（如 PMI claim 申报 49.8 而正文说「回升 0.6 个点」）——此类形态**保持 UNVERIFIABLE**（未知语义不武断判错），由既有测试 `TestComparativeEchoSkipped::test_comparative_numeric_direction_field_not_false_fail` 锁定；差值裁决仅在申报値既不≈a 也不≈b 时进行。
 
+## 真实数据定向验证（本地 cache.db 真实行情 600519，无网络/无 LLM）
+
+脚本：`tmp/verify_close_gaps_realdata.py`（一次性，不入库）；数据：2025-2026 真实日线/财报快照。
+
+**③ 价位参考与派生值（此前被图丢弃 → 恒 None）**
+
+```
+price_levels: available=true, entry_ref=1275.16,
+  stop_band_long=[1237.47, 1256.32], target_band_long=[1312.85, 1350.53], full_band=[1113.32, 1401.04]
+derived_series: chg_5d=-4.12% chg_20d=-4.98% chg_60d=+7.44% drawdown_from_high_250d=-16.06% rebound_from_low_250d=+9.12%
+```
+
+**③ validate 三类 sanity 校验真实生效（四组申报）**
+
+| 申报 | 结果 |
+|---|---|
+| 合理（收盘附近，-5%/+8%） | `pass` + derived_metrics（stop_distance 5.0%、风险回报比 1.60） |
+| stop>entry（long 关系违规） | `fail`：价格关系违规（实际 1338.92/1275.16/1377.17） |
+| entry 偏离收盘 50% | `fail`：偏差超 15% + stop/target 同时落带外（三类命中） |
+| stop/target 落带外 | `fail`：落在参考带 [1113.32, 1401.04] 之外 |
+
+（修复前该节点恒返回「price_levels 不可用，跳过校验」——三类校验一次都不会跑。）
+
+**① 差值重算（真实 MA5/MA20）**
+
+MA5=1295.30、MA20=1298.32、差值 -3.02：
+
+| 申报 | 结果 |
+|---|---|
+| 差值 3.02 + direction=negative | `PASS`（gt=-3.02） |
+| 差值错报 5 倍（15.12） | `FAIL value_mismatch`（delta=12.10） |
+| 差值 3.02 + 方向未申报 | `PASS` + `coverage_gap=True`（显式降级） |
+| metric_name/period 申报齐全下的隔离验证 | 方向已申报 gap=False / 未申报 gap=True（归属本分支，不由全局口径兜底） |
+
 ## 回归
 
 - 受影响模块：`tests/test_citation.py` / `tests/test_graph_5layer.py` / `tests/test_pipeline_stub.py` / `tests/nodes/test_validate_trade_prices.py` 全绿

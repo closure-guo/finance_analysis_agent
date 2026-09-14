@@ -666,6 +666,18 @@ class TestComparativeDifferenceRecompute:
         assert r.status == "PASS"
         assert r.coverage_gap is True
 
+    def test_direction_gap_flag_isolated_from_global_gap(self):
+        """隔离验证：metric_name/period 申报齐全（全局缺口口径不触发）时，
+        差值型的方向缺口标记由本分支负责——已申报→无缺口，未申报→计缺口。"""
+        declared = {"metric_name": "净利率", "period": "2025"}
+        (r_ok,) = verify_claims([self._claim(**declared)], self._STATE)
+        assert r_ok.status == "PASS"
+        assert r_ok.coverage_gap is False
+
+        (r_gap,) = verify_claims([self._claim(direction=None, **declared)], self._STATE)
+        assert r_gap.status == "PASS"
+        assert r_gap.coverage_gap is True
+
     def test_difference_claim_does_not_require_base_value(self):
         # 差值型申报对象是差值本身：stated_value_b 缺省不判「基期裸奔」（方向型仍保持 FAIL）
         (r,) = verify_claims([self._claim()], self._STATE)
