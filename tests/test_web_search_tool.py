@@ -103,6 +103,12 @@ class TestDetectSearchTopic:
 class TestTavilySearchTopicPassthrough:
     """tavily_search 按 topic 透传 TavilyClient（mock 层验证）。"""
 
+    @pytest.fixture(autouse=True)
+    def _tavily_key(self, monkeypatch):
+        """显式注入 key：本组用例只验证 topic 透传（网络层已 mock），
+        不应依赖运行环境是否配置 TAVILY_API_KEY（CI 无 .env 时会假红）。"""
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+
     def _mock_client(self):
         from unittest.mock import MagicMock
 
