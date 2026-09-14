@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test'
  * 以 chat 消息经 AnalysisThread 渲染为 stream-output,可 hover 断言操作条。
  *
  * 断言：
- * 1. 深度分析完成后摘要消息出现;操作条固定高度行恒渲染(未 hover 也在 DOM)
+ * 1. 深度分析完成后摘要消息出现;操作条为 hover-only 悬浮层(hover 才挂载,不占布局高度)
  * 2. hover 后四图标按钮,顺序 复制/重试/点赞/点踩,均为 FontAwesome 图标(无文字)
  * 3. 重试只出现在最后一段 agent 输出(历史消息 hover 无重试)
  */
@@ -48,13 +48,13 @@ test.describe('消息操作条（复制/重试/点赞/点踩）', () => {
     const last = page.getByTestId('stream-output').last()
     await expect(last).toBeVisible({ timeout: 30_000 })
 
-    // 操作条固定高度行恒渲染(未 hover 已在 DOM,保证文本块不位移)
-    await expect(last.getByTestId('message-actions')).toBeAttached()
-    // 点击发送后指针停在最后消息上方(hovered 自然为 true),先移开指针
+    // 操作条为 hover-only 悬浮层(b585921):未 hover 时不挂载(不占布局高度)。
+    // 先移开指针,断言未 hover 无操作条——旧断言依赖「指针恰好压在最后一条消息上」,
+    // 在 CI 布局下不稳定(timeline suite 两次红的历史根因之一)。
     await page.mouse.move(0, 0)
-    await expect(last.getByTestId('message-actions').locator('button')).toHaveCount(0)
+    await expect(last.getByTestId('message-actions')).toHaveCount(0)
 
-    // hover → 四图标按钮,顺序固定;这是最后一段 agent 输出 → 含重试
+    // hover → 挂载四图标按钮,顺序固定;这是最后一段 agent 输出 → 含重试
     await last.hover()
     const lastActions = last.getByTestId('message-actions')
     await expect(lastActions.locator('button')).toHaveCount(4)

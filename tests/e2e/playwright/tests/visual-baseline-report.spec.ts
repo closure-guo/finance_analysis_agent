@@ -39,6 +39,8 @@ test.describe('视觉基线截图采集（会话页 + 报告渲染态，refactor
     await page.evaluate(() => {
       localStorage.setItem('fa_api_key', 'stub-key-for-testing')
       localStorage.setItem('fa_user_id', 'user-visual-baseline-report')
+      // 本 spec 采集列表时间轴渲染态；默认视图为 graph，显式预置 list
+      localStorage.setItem('fa_pipeline_view', 'list')
     })
     await page.reload()
 

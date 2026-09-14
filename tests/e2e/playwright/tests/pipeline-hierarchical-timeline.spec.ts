@@ -21,6 +21,8 @@ test.describe('管线分层时间轴（redesign-pipeline-hierarchical-timeline�
       localStorage.setItem('fa_api_key', 'stub-key-for-testing')
       localStorage.setItem('fa_user_id', 'user-test-hierarchical')
       localStorage.removeItem('financeAgent.pipelineDurations')
+      // 本 spec 断言列表时间轴 DOM（pipeline-timeline）；默认视图为 graph，显式预置 list
+      localStorage.setItem('fa_pipeline_view', 'list')
     })
     await page.reload()
 
