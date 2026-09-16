@@ -6,7 +6,10 @@
   12.3 删除激活 profile → 自动回退到剩余第一个
 
 前置：TESTING=1 uvicorn + npm run dev
-运行：uv run python tests/e2e/test_llm_profiles.py
+运行：uv run pytest tests/e2e/test_llm_profiles.py（或 python tests/e2e/test_llm_profiles.py）
+
+用例使用 conftest 的 `page` fixture（原脚本式自带 sync_playwright 与 conftest 会话级
+browser 冲突：同一线程二次启动 sync API 报 "Sync API inside the asyncio loop"）。
 """
 
 import json
@@ -19,7 +22,10 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://127.0.0.1:5173")
+PANE = "[data-testid='llm-config-pane']"
+API_KEY_INPUT = f"{PANE} input[type='password']"
+TEXT_INPUTS = f"{PANE} input[type='text']"
 SCREENSHOT_DIR = Path(__file__).resolve().parent / "diagnostic_screenshots"
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
@@ -46,12 +52,13 @@ def _clear_storage(page):
 
 
 def _open_settings(page):
-    """打开设置面板——兼容「去配置」「修改」「设置」三种入口。"""
+    """进入设置页 LLM 分区——兼容「去配置」「修改」「设置」三种入口（路由 /settings）。"""
     for text in ["去配置", "修改", "设置"]:
         try:
             btn = page.locator(f"button:has-text('{text}')").first
             btn.click(timeout=3000)
-            page.wait_for_timeout(1000)
+            page.wait_for_selector(PANE, timeout=10000)
+            page.wait_for_timeout(400)
             return
         except Exception:  # noqa: S112 - 尝试下一个入口文本，无需记录
             continue
@@ -64,12 +71,11 @@ def _get_profiles(page):
     return json.loads(raw) if raw else None
 
 
-def test_legacy_migration():
+def test_legacy_migration(page):
     """12.2 旧 fa_llm_config 自动迁移为「旧配置」profile。"""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=LAUNCH_ARGS)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(FRONTEND_URL, wait_until="networkidle")
+    if True:
+        page.goto(FRONTEND_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
 
         # 清空所有存储后写入旧 fa_llm_config
         page.evaluate("() => localStorage.clear()")
@@ -104,22 +110,20 @@ def test_legacy_migration():
 
         page.screenshot(path=str(SCREENSHOT_DIR / "llm_profiles_legacy_migration.png"))
         print("[PASS] 12.2 旧 fa_llm_config 自动迁移为「旧配置」profile")
-        browser.close()
 
 
-def test_save_and_switch_profiles():
+def test_save_and_switch_profiles(page):
     """12.1 另存为两个 profile → 下拉切换 → 刷新验证持久化。"""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=LAUNCH_ARGS)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(FRONTEND_URL, wait_until="networkidle")
+    if True:
+        page.goto(FRONTEND_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
         _clear_storage(page)
 
         _open_settings(page)
 
         # 填入第一个配置：DeepSeek 测试
-        page.locator("input[type='password']").fill("sk-test-1")
-        text_inputs = page.locator("div.glass-card input[type='text']")
+        page.locator(API_KEY_INPUT).fill("sk-test-1")
+        text_inputs = page.locator(TEXT_INPUTS)
         text_inputs.nth(0).fill("deepseek/deepseek-chat")
         text_inputs.nth(1).fill("https://api.deepseek.com/v1")
 
@@ -133,7 +137,7 @@ def test_save_and_switch_profiles():
         assert "DeepSeek 测试" in body, "另存为后未出现「DeepSeek 测试」"
 
         # 填入第二个配置
-        page.locator("input[type='password']").fill("sk-test-2")
+        page.locator(API_KEY_INPUT).fill("sk-test-2")
         text_inputs.nth(0).fill("openai/gpt-4o")
         text_inputs.nth(1).fill("")
 
@@ -151,30 +155,23 @@ def test_save_and_switch_profiles():
         store = _get_profiles(page)
         assert store is not None and len(store["profiles"]) == 2, "localStorage 中应有 2 个 profile"
 
-        # 关闭面板，刷新验证持久化
-        # 点击面板外区域关闭
-        page.locator("div.fixed.inset-0").first.click(timeout=3000)
-        page.wait_for_timeout(500)
+        # 刷新验证持久化（仍在 /settings 路由）
         page.reload()
-        page.wait_for_timeout(2000)
-
-        # 打开设置面板验证
-        _open_settings(page)
+        page.wait_for_selector(PANE, timeout=10000)
+        page.wait_for_timeout(800)
         body = page.locator("body").inner_text(timeout=5000)
         assert "DeepSeek 测试" in body, "刷新后第一个 profile 丢失"
         assert "OpenAI 测试" in body, "刷新后第二个 profile 丢失"
 
         page.screenshot(path=str(SCREENSHOT_DIR / "llm_profiles_two_saved.png"))
         print("[PASS] 12.1 另存为两个 profile 并持久化成功")
-        browser.close()
 
 
-def test_delete_active_profile_fallback():
+def test_delete_active_profile_fallback(page):
     """12.3 删除激活 profile → 自动回退到剩余第一个。"""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=LAUNCH_ARGS)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(FRONTEND_URL, wait_until="networkidle")
+    if True:
+        page.goto(FRONTEND_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
         _clear_storage(page)
 
         # 直接通过 localStorage 创建两个 profile（精确控制 id 和 activeId）
@@ -216,7 +213,6 @@ def test_delete_active_profile_fallback():
 
         page.screenshot(path=str(SCREENSHOT_DIR / "llm_profiles_delete_fallback.png"))
         print("[PASS] 12.3 删除激活 profile 后自动回退到剩余第一个")
-        browser.close()
 
 
 if __name__ == "__main__":
@@ -224,11 +220,15 @@ if __name__ == "__main__":
     print("LLM Profiles E2E Tests (add-custom-llm-api Task 12.1-12.3)")
     print("=" * 60)
 
-    test_legacy_migration()
-    time.sleep(1)
-    test_save_and_switch_profiles()
-    time.sleep(1)
-    test_delete_active_profile_fallback()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=LAUNCH_ARGS)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        test_legacy_migration(page)
+        time.sleep(1)
+        test_save_and_switch_profiles(page)
+        time.sleep(1)
+        test_delete_active_profile_fallback(page)
+        browser.close()
 
     print()
     print("=" * 60)

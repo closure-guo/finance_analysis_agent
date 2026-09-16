@@ -13,9 +13,12 @@ import os
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://127.0.0.1:5173"
+BASE_URL = os.environ.get("FRONTEND_URL", "http://127.0.0.1:5173")
 SS_DIR = "tests/e2e/diagnostic_screenshots"
 API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+# 设置中心（settings-center）后 API Key 从弹窗迁到 /settings 路由页的 LLM 分区
+PANE = "[data-testid='llm-config-pane']"
+API_KEY_INPUT = f"{PANE} input[type='password']"
 
 
 def _screenshot(page, name):
@@ -34,47 +37,50 @@ def wait_for_stable(page, selector, timeout=10000):
 
 
 def test_api_key_modal(page):
-    print("\n=== API Key Modal ===")
+    """API Key 入口与持久化（settings-center 后：/settings 路由页，不再有弹窗）。
+
+    原用例断言「配置 API Key」弹窗标题 + `取消` 关闭——设置中心上线后该弹窗已移除
+    （App.tsx 的 onOpenSettings 改为 navigate('/settings')），用例随之失效并使手动
+    E2E 作业恒红（CI e2e job `-x` 首条即挂）。改为断言路由页 + 刷新后仍持久化。
+    """
+    print("\n=== API Key Settings Entry ===")
+    key = API_KEY or "sk-e2e-test"
     page.goto(BASE_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(1500)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_timeout(1500)
     _screenshot(page, "interact_01_empty.png")
 
-    # Open modal via 去配置
-    page.locator("button").filter(has_text="去配置").first.click(timeout=3000)
-    wait_for_stable(page, "input[type='password']")
+    # 空配置入口「去配置」→ 设置页 LLM 分区（标题 + 密码输入框）
+    page.locator("button").filter(has_text="去配置").first.click(timeout=5000)
+    page.wait_for_selector(PANE, timeout=10000)
+    page.wait_for_timeout(300)
     _screenshot(page, "interact_02_modal_open.png")
-    assert "配置 API Key" in _text(page), "Modal title not found"
-    print("  [PASS] 去配置 opens modal")
+    assert "LLM 配置" in _text(page), "设置页 LLM 分区标题缺失"
+    print("  [PASS] 去配置 opens settings LLM pane")
 
-    # Close via cancel
-    page.locator("button").filter(has_text="取消").first.click(timeout=3000)
+    # 填 key + 确认保存
+    page.locator(API_KEY_INPUT).fill(key)
+    page.locator("button").filter(has_text="确认").first.click(timeout=4000)
+    page.wait_for_timeout(600)
+
+    # 「← 返回」离开设置页；已有 key 时空态入口变为「修改」
+    page.locator("button").filter(has_text="返回").first.click(timeout=4000)
+    page.wait_for_timeout(1200)
+    assert page.locator(PANE).count() == 0, "返回后仍在设置页"
+    assert "修改" in _text(page), "保存后空态入口未变为「修改」"
+    print("  [PASS] Confirm saves key and returns home")
+
+    # 刷新后重新进入设置页，验证 key 持久化（localStorage fa_llm_profiles）
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_timeout(1800)
+    page.locator("button").filter(has_text="修改").first.click(timeout=6000)
+    page.wait_for_selector(PANE, timeout=10000)
     page.wait_for_timeout(300)
-    assert page.locator("input[type='password']").count() == 0
-    print("  [PASS] Cancel closes modal")
-
-    # Reopen, fill key, confirm saves key and closes modal
-    page.locator("button").filter(has_text="去配置").first.click(timeout=3000)
-    wait_for_stable(page, "input[type='password']")
-    page.locator("input[type='password']").fill(API_KEY)
-    page.locator("button").filter(has_text="确认").first.click(timeout=3000)
-    page.wait_for_timeout(300)
-    assert page.locator("input[type='password']").count() == 0
-    print("  [PASS] Confirm saves key and closes modal")
-
-    # Enter chat view so header settings is visible
-    textarea = page.locator("textarea").first
-    textarea.fill("hi")
-    textarea.press("Enter")
-    page.wait_for_timeout(1500)
-    _screenshot(page, "interact_02b_chat_for_settings.png")
-
-    # Reopen via header "设置" button and verify persisted
-    page.locator("button").filter(has_text="设置").first.click(timeout=3000)
-    wait_for_stable(page, "input[type='password']")
-    val = page.locator("input[type='password']").input_value()
-    assert val == API_KEY, f"Persisted key mismatch: {val[:10]}..."
+    val = page.locator(API_KEY_INPUT).input_value()
+    assert val == key, f"Persisted key mismatch: {val[:10]}..."
     print("  [PASS] Key persisted in localStorage after reload")
-    page.locator("button").filter(has_text="取消").first.click(timeout=3000)
 
 
 def test_empty_state_mode_dropdown(page):
@@ -115,16 +121,16 @@ def test_empty_state_mode_dropdown(page):
     assert "股票名称或代码" in ph, f"Deep placeholder mismatch after switch: {ph}"
     print("  [PASS] Switch back to deep mode works")
 
-    # Type and submit via Enter should transition to chat state
+    # Type and submit via Enter：无 key 提交 → 跳转设置页 LLM 分区
+    # （settings-center 前是弹窗拦截；迁移后 handleSend 无 key 直接 navigate('/settings')）
     textarea.fill("600519")
     page.wait_for_timeout(300)
     textarea.press("Enter")
     page.wait_for_timeout(1500)
     _screenshot(page, "interact_05_after_enter.png")
-    body = _text(page)
-    # After submit we should see chat UI header and user message or at least not empty state
-    assert page.locator("textarea").count() >= 1, "Input still exists"
-    print("  [PASS] Enter submit leaves empty state")
+    assert "/settings" in page.url, f"无 key 提交未跳转设置页: {page.url}"
+    assert page.locator(PANE).count() == 1, "设置页 LLM 分区未渲染"
+    print("  [PASS] Enter submit without key redirects to settings")
 
 
 def test_sidebar_interactions(page):
@@ -132,29 +138,35 @@ def test_sidebar_interactions(page):
     page.goto(BASE_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(800)
 
-    # Sidebar is open by default; click the close button in sidebar header
-    close_btn = page.locator("div:has-text('会话历史') + button:has(i.fa-times)")
-    if close_btn.count() == 0:
-        close_btn = page.locator("button:has(i.fa-times)").first
-    close_btn.click(timeout=3000)
-    page.wait_for_timeout(300)
+    # add-collapsible-sidebar：折叠由 SidebarProvider 管理的 sidebar-trigger 切换
+    # （旧用例按 `i.fa-times` / 「会话历史」标题定位，UI 重构后已不存在）
+    trigger = page.locator("[data-testid='sidebar-trigger']").first
+    assert page.locator("[data-testid='sidebar-new-collapsed']").count() == 0, "初始应为展开态"
+    trigger.click(timeout=3000)
+    page.wait_for_timeout(800)
     _screenshot(page, "interact_06_sidebar_collapsed.png")
-    body = _text(page)
-    assert "会话历史" not in body, "Sidebar did not collapse"
+    assert page.locator("[data-testid='sidebar-new-collapsed']").count() == 1, (
+        "Sidebar did not collapse"
+    )
+    assert page.evaluate("localStorage.getItem('fa_sidebar_collapsed')") == "1", "折叠态未持久化"
     print("  [PASS] Sidebar collapse works")
 
-    # Expand via the bars icon in the collapsed sidebar
-    expand_btn = page.locator("button:has(i.fa-bars)").first
-    expand_btn.click(timeout=3000)
-    page.wait_for_timeout(300)
-    assert "会话历史" in _text(page)
+    # 再次点击展开
+    trigger.click(timeout=3000)
+    page.wait_for_timeout(800)
+    assert page.locator("[data-testid='sidebar-new-collapsed']").count() == 0, (
+        "Sidebar did not expand"
+    )
+    assert page.evaluate("localStorage.getItem('fa_sidebar_collapsed')") == "0", "展开态未持久化"
     print("  [PASS] Sidebar expand works")
 
 
 def test_chat_input_bar_mode_toggle(page):
     print("\n=== Chat Input Bar Mode Toggle ===")
-    # Seed API key so we can enter chat view without modal blocking
-    page.add_init_script(f"localStorage.setItem('fa_api_key', {API_KEY!r})")
+    # 播种非空 key 以进入 chat 视图（无 key 提交会跳转 /settings —— 见 empty_state 用例；
+    # CI 未配 DEEPSEEK_API_KEY 时 API_KEY 为空，`or "sk-e2e-test"` 保住本用例原意：
+    # 只验模式切换 UI，不依赖真实 LLM 凭证）
+    page.add_init_script(f"localStorage.setItem('fa_api_key', {API_KEY or 'sk-e2e-test'!r})")
     page.goto(BASE_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(800)
     textarea = page.locator("textarea").first
