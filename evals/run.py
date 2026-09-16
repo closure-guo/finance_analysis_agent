@@ -172,6 +172,11 @@ def _judge_adapter(dimension: str):
         comment = result["reason"]
         if conf is not None:
             comment = f"[conf={conf:.2f}] {comment}"
+        # debate_quality v6 封顶证据随分数落库（可审计：机制是否生效、由谁扣的分）
+        if result.get("enumeration_missing"):
+            comment = f"[enum-missing] {comment}"
+        elif result.get("cap_applied"):
+            comment = f"[cap=qualitative×{result.get('qualitative_points', 0)}] {comment}"
         return make_evaluation(
             {"name": dimension, "value": float(result["score"]), "comment": comment}
         )
