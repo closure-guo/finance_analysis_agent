@@ -40,6 +40,8 @@
 | citation_coverage_warn | 警告 | coverage < 0.90 报警不阻断 |
 | auto_claims | 跟踪 | 正文数字唯一匹配 state 条目自动合成的 claim 数 |
 
+**口径注（2026-09-14，delta `infer-period-for-unindexed-series`）**：解析/术语层收口后，三类此前计入 `citation_blocked`/`analyst_true_fail` 的 FAIL 迁移为 UNVERIFIABLE（计入 `citation_unverifiable_unregistered`）——① 未索引序列且期次不可知；② 真值 NaN（未披露/不适用）；③ 术语/列名形态归一覆盖后的残留。同时三处真实误判不再产生 FAIL（脚本体边界术语包含、quarterly_trend 根域净利润、列名单位后缀）。含义：**跨此切点的 `citation_analyst_true_fail` 与 `citation_unverifiable_unregistered` 不可直接比较**（前者应下降、后者小幅上升，属归因口径修正而非行为退化）；未索引序列引用若正文写明确期次，仍按严格定位校验（不降级）。
+
 ### 1.4 校准指标（`evals/judge_calibration/measure.py`）
 
 Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥0.5、MAE≤1.0、方向一致率≥0.7。judge 分零方差的维度 Spearman 不可计算，以 MAE/方向一致率为主。
@@ -121,3 +123,4 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - **v8 候选（round8 代裁发现，2026-09-13）**：① debate 5 分档执行不稳定——「个别定性论点降 4」在 4 分档执行严格，但美的/宁德两行漏判纯定性论点给 5，建议 5 分判例进 rubric few-shot；② dg 归属层对「同一评判在多来源出现」判定偏机械——claim 在 debate_bear 与 research_manager 均有原话时 judge 只认单源（比亚迪 ref7 误扣），v8 补「任一真实来源即合法」判例
 - **debate 5 分边界可靠性（round9 审计发现 → round10 验证，2026-09-14）**：v4 判例 4 分档严格但 5 分档漏判 ≥3 行 → v5 强制枚举（prompt 内逐条标注）离线重判 8 行：准确率 2/8→6/8 但仍漏判宁德、且招行回归（LLM 自我枚举随机）→ **prompt 机制已到顶，候选换机制**：judge 输出结构化枚举字段（每条论点标注 data/qualitative）+ 代码强制封顶 4，不依赖 LLM 自律——需开新 delta 改 judge 输出契约
 - mypy 全仓 75 个既有错误（本次触碰文件为 0），是否立清理任务
+- **comparative 单端申报的处理（2026-09-14，delta `infer-period-for-unindexed-series` 重放发现）**：r2 语料 9 条 claim 声明 `comparative` 但只给一端（`field_ref` 单端 + 数值 stated），按现行规范 SHALL 判 FAIL（`citation-verification`「comparative 基期值双端申报与校验」；三分析师 prompt 第 6/7/9 条已强制双端）——语料为契约生效前的历史快照，故 FAIL 属契约执行。**待决策**：现行 FAIL 是否保留（契约强制力强、但会把「数值本身正确、只是漏报基期」的条目计入 `analyst_true_fail`），或增设降级通道（如：单端且 stated ≈ 该端真值 → PASS + 覆盖缺口，仅差值型才强制双端）。倾向保留 FAIL（契约已发布、放宽会削弱申报纪律），需 owner 定；重放白名单见 `tests/test_citation_real_corpus.py::_EXPECTED_FAIL_ALLOWLIST`

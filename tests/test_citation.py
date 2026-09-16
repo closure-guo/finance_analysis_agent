@@ -252,7 +252,9 @@ class TestNumericalRobustness:
         assert results[0].status == "FAIL"
         assert results[0].ground_truth is None
 
-    def test_field_ref_resolves_to_list_fails_gracefully(self):
+    def test_field_ref_resolves_to_list_degrades_without_fail(self):
+        """未索引序列引用（infer-period-for-unindexed-series）：期次不可知时降级
+        UNVERIFIABLE + 覆盖缺口，不得判死——数值对错不可知不得记成分析师错误。"""
         state = {"kline": [1700.0, 1710.0]}
         claim = Claim(
             claim_type="numerical",
@@ -262,7 +264,9 @@ class TestNumericalRobustness:
             interpretation="x",
         )
         results = verify_claims([claim], state)
-        assert results[0].status == "FAIL"
+        assert results[0].status == "UNVERIFIABLE"
+        assert results[0].coverage_gap is True
+        assert results[0].ground_truth is None
 
 
 class TestMacroClaimNewStructure:

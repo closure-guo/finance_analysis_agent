@@ -154,17 +154,36 @@ def _is_dataframe(obj: object) -> TypeGuard[pd.DataFrame]:
     return hasattr(obj, "columns") and hasattr(obj, "iloc")
 
 
+_COLUMN_UNIT_SUFFIX_RE = re.compile(r"[(（][^)）]{0,8}[)）]$")
+
+
+def _strip_unit_suffix(name: str) -> str:
+    """剥列名尾部括号单位（`股息发放率(%)` → `股息发放率`）。
+
+    akshare 指标表列名普遍带单位后缀（实测 `cache.db` 600519:indicators：
+    `加权每股收益(元)` / `净资产收益率(%)` / `股息发放率(%)`），而字段词表与手写
+    field_ref 常省略后缀——剥后缀后相等即同一列（r2 语料 `股息发放率` 判
+    path_unresolvable）。仅剥尾部括号，不动名称主体（摊薄/加权 前缀不受影响）。
+    """
+    return _COLUMN_UNIT_SUFFIX_RE.sub("", name.strip())
+
+
 def _resolve_column_alias(col_name: str, columns: Any) -> str | None:
     """列名别名回退：词表 canonical 归一后匹配真实列（如「加权每股收益」→
     「加权每股收益(元)」）。分析师手写 field_ref 常省略单位后缀，路径解析
-    与术语检查必须同一套归一口径。"""
+    与术语检查必须同一套归一口径。
+
+    兜底一层单位后缀归一：词表未收录的列（如「股息发放率」）按剥括号单位后的
+    名称匹配；多个列剥后缀后同名则判歧义返回 None（不得乱指）。
+    """
     canonical = canonical_metric(col_name)
-    if canonical is None:
-        return None
-    for col in columns:
-        if canonical_metric(str(col)) == canonical:
-            return str(col)
-    return None
+    if canonical is not None:
+        for col in columns:
+            if canonical_metric(str(col)) == canonical:
+                return str(col)
+    base = _strip_unit_suffix(col_name)
+    hits = [str(col) for col in columns if _strip_unit_suffix(str(col)) == base]
+    return hits[0] if len(hits) == 1 else None
 
 
 # 根键别名归一（前缀契约一致性）：analysts context 提示 LLM「field_ref 前缀 derived.」，
@@ -223,12 +242,13 @@ def _resolve_field_ref(
                 current = current[mask].iloc[0][col_name]
                 i += 2
                 continue
-            # 路径止于列名（分析师省略行键）：取最新一行（与负索引「最新一期」
-            # 约定一致），列名同样走别名回退（r4-1 实测缺口）
+            # 路径止于列名（分析师省略行键）：取最新一行——state 报表 DataFrame 为
+            # 生产者降序（最新在前，`compute.py` 以 `iloc[0]` 取最新），列名走别名
+            # 回退（词表 canonical + 单位后缀剥离）
             col = _resolve_column_alias(part, current.columns)
             if col is None:
                 return None
-            value: object = current.iloc[-1][col]
+            value: object = current.iloc[0][col]
             return value
         else:
             return None
@@ -237,6 +257,49 @@ def _resolve_field_ref(
 
 
 _QUARTER_LABEL_RE = re.compile(r"^(\d{4})[Qq]([1-4])$")
+
+# 正文期次表述（infer-period-for-unindexed-series）：优先级 季度 > 完整日期 > 年月 > 年
+_QUARTER_TEXT_RE = re.compile(r"((?:19|20)\d{2})\s*[Qq]([1-4])")
+_CN_DATE_TEXT_RE = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_ISO_DATE_TEXT_RE = re.compile(r"((?:19|20)\d{2})[-/](\d{1,2})[-/](\d{1,2})")
+_YEAR_MONTH_TEXT_RE = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月")
+_YEAR_TEXT_RE = re.compile(r"((?:19|20)\d{2})\s*年")
+
+
+def _infer_period_from_text(text: str) -> str | None:
+    """正文唯一期次表述 → 归一化期次；同优先级出现多个不同值时不猜（返回 None）。
+
+    只服务解析定位（`_effective_period`），不参与声明期次一致性校验。
+    """
+    if not text:
+        return None
+    quarters = {f"{m.group(1)}Q{m.group(2)}" for m in _QUARTER_TEXT_RE.finditer(text)}
+    if quarters:
+        return quarters.pop() if len(quarters) == 1 else None
+    dates = {
+        f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        for rex in (_CN_DATE_TEXT_RE, _ISO_DATE_TEXT_RE)
+        for m in rex.finditer(text)
+    }
+    if dates:
+        return dates.pop() if len(dates) == 1 else None
+    months = {f"{m.group(1)}-{int(m.group(2)):02d}" for m in _YEAR_MONTH_TEXT_RE.finditer(text)}
+    if months:
+        return months.pop() if len(months) == 1 else None
+    years = {m.group(1) for m in _YEAR_TEXT_RE.finditer(text)}
+    return years.pop() if len(years) == 1 else None
+
+
+def _effective_period(claim: Claim) -> str | None:
+    """解析定位用期次：claim.period 声明优先，缺省时取正文唯一期次表述。
+
+    仅注入给 `_resolve_field_ref` 做序列元素/期次段定位；`_check_period` 的
+    声明期次一致性校验仍只看 claim.period（用推断值比对等于自证循环）。
+    """
+    declared = (claim.period or "").strip()
+    if declared and normalize_period(declared):
+        return declared
+    return _infer_period_from_text(claim.interpretation or "")
 
 
 def _normalize_quarter_segments(parts: list[str], state: dict) -> list[str]:
@@ -499,7 +562,16 @@ def _verify_numerical(claim: Claim, state: dict) -> CitationResult:
     field_ref 解析结果非数值（dict/list 等，LLM 偶发指到容器节点）时按
     FAIL 处理而非抛 TypeError 炸管线（baseline-v2 r3 回归）。
     """
-    ground_truth = _resolve_field_ref(claim.field_ref, state, claim.period)
+    ground_truth = _resolve_field_ref(claim.field_ref, state, _effective_period(claim))
+    # infer-period-for-unindexed-series：解析结果为整条序列（未索引且期次不可知）
+    # → 数值对错不可知，降级 UNVERIFIABLE + 覆盖缺口，不得判死（incident 026：
+    # 校验器限制不得记成分析师错误）。路径不存在（None）等仍按 FAIL 处理。
+    if isinstance(ground_truth, list | tuple):
+        return CitationResult(status="UNVERIFIABLE", claim=claim, coverage_gap=True)
+    if _is_nan(ground_truth):
+        # 真值 NaN = 该期未披露/不适用（数据层缺失，实测 600519 `股息发放率(%)`
+        # 最新期为 NaN）——不可知不得判死，与未索引序列同口径降级
+        return CitationResult(status="UNVERIFIABLE", claim=claim, coverage_gap=True)
     if not isinstance(ground_truth, int | float | str):
         return CitationResult(
             status="FAIL",
@@ -616,6 +688,12 @@ def _as_number(value: object) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _is_nan(value: object) -> bool:
+    """真值是否为 NaN（未披露/不适用占位）——nan 参与比较恒为 False，会误判 FAIL。"""
+    num = _as_number(value)
+    return num is not None and num != num
 
 
 def _verify_comparative_difference(
@@ -834,6 +912,35 @@ def _verify_event(claim: Claim, state: dict) -> CitationResult:
 
 # ── 语义层检查（harden-citation-semantic-coverage）──
 
+# 根域序列键别名（infer-period-for-unindexed-series）：{根键: {末端键: 额外接受的规范键}}。
+# 仅用于本根域——quarterly_trend.net_profit 口径即归母净利润单季，域内不存在第二个
+# 净利润序列，正文写「净利润」不构成张冠李戴（r4 真实语料：招行 385.93 亿元被判
+# semantic_term_mismatch，数值与真值一致）。SHALL NOT 提升为全局别名：利润表域
+# 「净利润」与「归属于母公司的净利润」是不同行，合并即放开张冠李戴。
+_ROOT_TERM_ALIASES: dict[str, dict[str, frozenset[str]]] = {
+    "quarterly_trend": {"net_profit": frozenset({"归母净利润", "净利润"})},
+}
+
+
+def _term_containment_ok(canonical: str, seg_keys: set[str]) -> bool:
+    """术语包含（**仅限脚本体边界**）：申报名与引用段互为包含且断点在中英/中西文
+    边界时接受——`FCF` ⊂ `FCF收益率`、`ROE` ⊂ `加权ROE`（r4 语料两条真实误判，
+    数值与真值一致）。
+
+    同文种内的包含不豁免：`MA` ⊂ `MACD` 是不同指标（张冠李戴拦截面保持不变）。
+    """
+    for key in seg_keys:
+        shorter, longer = (canonical, key) if len(canonical) <= len(key) else (key, canonical)
+        if not shorter or shorter not in longer or shorter == longer:
+            continue
+        start = longer.index(shorter)
+        before = longer[start - 1] if start > 0 else ""
+        after = longer[start + len(shorter)] if start + len(shorter) < len(longer) else ""
+        for side in (before, after):
+            if side and side.isascii() != shorter[0].isascii():
+                return True
+    return False
+
 
 def _check_metric_term(claim: Claim, state: dict) -> tuple[CitationResult | None, bool]:
     """术语一致性。返回 (FAIL 结果或 None, 是否覆盖缺口)。
@@ -863,7 +970,11 @@ def _check_metric_term(claim: Claim, state: dict) -> tuple[CitationResult | None
         return None, True
     segments = field_ref_metric_segments(claim.field_ref)
     seg_keys = {(canonical_metric(s) or s) for s in segments}
-    if canonical not in seg_keys:
+    # 根域序列键别名（quarterly_trend.net_profit ← 净利润/归母净利润）
+    for seg in segments:
+        if canonical in _ROOT_TERM_ALIASES.get(root, {}).get(seg, frozenset()):
+            return None, False
+    if canonical not in seg_keys and not _term_containment_ok(canonical, seg_keys):
         return (
             CitationResult(status="FAIL", claim=claim, bucket="semantic_term_mismatch"),
             False,
