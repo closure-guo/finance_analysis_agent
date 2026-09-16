@@ -109,7 +109,7 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 **待 owner 终裁（round7 校准，2026-09-13）**：~~已完成~~——4 行 judge source 归属扣分成立（人工改 4）、1 行 judge 误判（维持人工 5）、1 行灰区（维持 5）、1caf1f7b 单向解读成立（维持 3）、7e6bc8bc 改 4、5f41a49a 补填 5。终值：整体 MAE 0.342 / 方向一致率 97.6%。rubric v7 四项改动清单已定稿（见校准报告）。
 
-**校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型 claim（「MA5 较 MA20 低约 X」）重算注册——**仍开放**：`_verify_comparative` 对数值差值申报（非 greater/less/equal 枚举）返回 UNVERIFIABLE、不计缺口，组件数字可从 state 推导，尚未注册重算；② quarterly_trend 期段定位补全（quarterly_trend.yoy/qoq 单季路径 path_unresolvable）——**已落地**（ff26b71：路径止于序列名时按 claim.period 季度标签补位置段）。
+**校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型差值重算——~~开放~~ **已落地（2026-09-14）**：数值差值申报走双端重算 + 符号校验（方向未申报显式计覆盖缺口）；② quarterly_trend 期段定位补全——**已落地**（ff26b71）。派生键注册补齐 8 键 + 两条门禁（引用覆盖 `test_recompute_registry_covers_all_compute_outputs`、图通道 `TestNodeOutputChannels`）随 delta `close-citation-coverage-gaps` 落地（见 `tests/validation/2026-09-14-close-citation-coverage-gaps-validation.md`）。
 
 **待决策**：
 - ~~#2 surgical 单点修复（<3 处失败真值回填）与重试准入的关系~~ **已落地（2026-09-14）**：真错口径含修复回填（`citation_analyst_true_fail = 残余 FAIL + value_mismatch_repaired`，`citation_node.py:411`）；修复数单独入拆报 `citation_surgical_repaired`；授权与三条护栏固化进规范（`citation-verification`「单点修复的自动处置授权与边界」，delta `2026-09-14-document-surgical-repair-policy`）
