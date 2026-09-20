@@ -100,6 +100,64 @@ class TestFailBuckets:
         assert r.status == "FAIL"
         assert r.bucket == "value_mismatch"
 
+    def test_comparative_numeric_delta_unverifiable_with_gap(self):
+        """非数值非枚举 stated_value → UNVERIFIABLE + 独立桶 + 覆盖缺口。
+
+        #123 差值重算后，纯数字申报走双端重算（PASS/FAIL，见 tests/test_citation.py ①）；
+        本测试守的是非数值申报（"约2.3"）的显式降级桶与覆盖缺口。
+        """
+        state = {"profitability_metrics": {"ROE": {"2024": 28.0, "2023": 25.0}}}
+        claim = Claim(
+            claim_type="comparative",
+            source_type="data",
+            field_ref="profitability_metrics.ROE.2024",
+            stated_value="约2.3",
+            interpretation="2024 年 ROE 较 2023 年低约 2.3",
+            field_ref_b="profitability_metrics.ROE.2023",
+            stated_value_b=25.0,
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "UNVERIFIABLE"
+        assert r.bucket == "comparative_delta_unregistered"
+        assert r.coverage_gap is True
+
+    def test_comparative_delta_not_recomputed(self):
+        """非数值申报不重算、不判 FAIL（未知语义不武断判错）——仍是 UNVERIFIABLE。
+
+        #123 之前本测试用 stated_value=999.0 验证「差值不重算」；差值重算落地后
+        数字申报离谱即 FAIL（回归归 tests/test_citation.py ①），非数值申报
+        （"约999"）仍走显式降级。
+        """
+        state = {"profitability_metrics": {"ROE": {"2024": 28.0, "2023": 25.0}}}
+        claim = Claim(
+            claim_type="comparative",
+            source_type="data",
+            field_ref="profitability_metrics.ROE.2024",
+            stated_value="约999",
+            interpretation="x",
+            field_ref_b="profitability_metrics.ROE.2023",
+            stated_value_b=25.0,
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "UNVERIFIABLE"
+        assert r.bucket == "comparative_delta_unregistered"
+
+    def test_comparative_enum_path_unchanged(self):
+        """三枚举路径行为不变：方向正确 PASS。"""
+        state = {"profitability_metrics": {"ROE": {"2024": 28.0, "2023": 25.0}}}
+        claim = Claim(
+            claim_type="comparative",
+            source_type="data",
+            field_ref="profitability_metrics.ROE.2024",
+            stated_value="greater_than",
+            interpretation="2024 年 ROE 高于 2023 年",
+            field_ref_b="profitability_metrics.ROE.2023",
+            stated_value_b=25.0,
+        )
+        (r,) = verify_claims([claim], state)
+        assert r.status == "PASS"
+        assert r.bucket is None
+
     def test_event_not_found_is_unverifiable_text(self):
         claim = Claim(
             claim_type="temporal",
