@@ -171,6 +171,12 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 **待 owner 终裁（round7 校准，2026-09-13）**：~~已完成~~——4 行 judge source 归属扣分成立（人工改 4）、1 行 judge 误判（维持人工 5）、1 行灰区（维持 5）、1caf1f7b 单向解读成立（维持 3）、7e6bc8bc 改 4、5f41a49a 补填 5。终值：整体 MAE 0.342 / 方向一致率 97.6%。rubric v7 四项改动清单已定稿（见校准报告）。
 
+**待 owner 下腿抽查（2026-09-20 表已生成，`tests/scripts/p2_lowerleg_export.py`，seed=20260920 可复现）**：
+- **B1（有条件转正的补独立抽查条件，§19.2）**：`tests/validation/2026-09-20-p2-calibration-b1-lowerleg.csv` 47 行 = 机器判「否」35 行全抽（正例层）+ 机器判「是」抽 10%（12 行）。**独立判读要求**：先填人工列再对照机器列（owner 前轮系预填照录，本轮补独立成分）
+- **B5c（§19.11 转正 provenance 补强）**：`tests/validation/2026-09-20-p2-calibration-b5c-lowerleg.csv` 6 行 = 分票低把握 2（600519/002027）+ 复核披露换判合理中把握 2（600036/600276）+ 一致票抽 2（601318/601398）
+- 判读口径：抽查一致率 ≥0.80 → 两腿转正维持（B1 撤条件注）；<0.80 → 分歧行逐条裁决后定
+
+
 **校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型差值重算——~~开放~~ **已落地（2026-09-14）**：数值差值申报走双端重算 + 符号校验（方向未申报显式计覆盖缺口）；② quarterly_trend 期段定位补全——**已落地**（ff26b71）。派生键注册补齐 8 键 + 两条门禁（引用覆盖 `test_recompute_registry_covers_all_compute_outputs`、图通道 `TestNodeOutputChannels`）随 delta `close-citation-coverage-gaps` 落地（见 `tests/validation/2026-09-14-close-citation-coverage-gaps-validation.md`）。
 
 **待决策**：
