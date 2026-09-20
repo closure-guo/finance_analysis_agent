@@ -44,21 +44,21 @@ COLUMNS = (
 )
 
 
-def _units() -> list[dict]:
+def _units(materials_dir: Path) -> list[dict]:
     out: list[dict] = []
-    for path in sorted(MATERIALS_DIR.glob("*.full.pkl")):
+    for path in sorted(materials_dir.glob("*.full.pkl")):
         ticker = path.name.split(".")[0]
-        state = fb.load_material(MATERIALS_DIR, ticker)["state"]
+        state = fb.load_material(materials_dir, ticker)["state"]
         out.extend(bg.grounding_units(ticker, state))
     return out
 
 
-def _load_cache() -> dict[str, dict]:
-    if not CACHE.exists():
+def _load_cache(cache: Path) -> dict[str, dict]:
+    if not cache.exists():
         return {}
     return {
         str(json.loads(x).get("unit_id")): json.loads(x)
-        for x in CACHE.read_text(encoding="utf-8").splitlines()
+        for x in cache.read_text(encoding="utf-8").splitlines()
         if x.strip()
     }
 
@@ -66,10 +66,15 @@ def _load_cache() -> dict[str, dict]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", action="store_true", help="只读缓存，不调 LLM")
+    ap.add_argument("--materials-dir", type=Path, default=MATERIALS_DIR)
+    ap.add_argument(
+        "--cache", type=Path, default=CACHE, help="判定缓存（新批次须换文件防 unit_id 撞旧判定）"
+    )
+    ap.add_argument("--calibration-csv", type=Path, default=CALIBRATION_CSV)
     args = ap.parse_args()
 
-    rows = _units()
-    done = _load_cache()
+    rows = _units(args.materials_dir)
+    done = _load_cache(args.cache)
     todo = [r for r in rows if str(r.get("unit_id")) not in done]
     print(f"[bg] 宇宙 {len(rows)} 单元｜缓存 {len(done)}｜待判 {len(todo)}", flush=True)
     if todo and not args.report:
@@ -77,11 +82,11 @@ def main() -> int:
 
         load_dotenv()
         fresh = bg.run_grounding(todo)
-        with CACHE.open("a", encoding="utf-8") as fh:
+        with args.cache.open("a", encoding="utf-8") as fh:
             for r in fresh:
                 fh.write(json.dumps(r, ensure_ascii=False) + chr(10))
         done.update({str(r["unit_id"]): r for r in fresh})
-        print(f"[bg] 新判 {len(fresh)} 行已落盘 {CACHE.name}", flush=True)
+        print(f"[bg] 新判 {len(fresh)} 行已落盘 {args.cache.name}", flush=True)
 
     judged = [done[str(r["unit_id"])] for r in rows if str(r["unit_id"]) in done]
     report = bg.grounding_report(judged)
@@ -98,9 +103,14 @@ def main() -> int:
         print(f"  无源 {uid}: {part[:60]}｜锚点 {list(anchors)}")
 
     sample = bg.calibration_sample(judged)
+    if args.report:
+        # 只读模式不写校准 CSV——已终裁的人工表绝不能被报告态重跑覆盖
+        # （2026-09-20 事故：--report 曾把 14 行终裁表覆盖成 0 行，git 恢复）
+        print(f"[bg] 只读模式：校准样本 {len(sample)} 行不导出")
+        return 0
     by_id = {str(r.get("unit_id")): r for r in judged}
     try:
-        with CALIBRATION_CSV.open("w", encoding="utf-8-sig", newline="") as fh:
+        with args.calibration_csv.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=list(COLUMNS))
             writer.writeheader()
             for uid in [str(r.get("unit_id")) for r in sample]:
@@ -124,9 +134,9 @@ def main() -> int:
                         "该论点挂的锚点": "；".join(r.get("anchors") or []) or "（无锚）",
                     }
                 )
-        print(f"[bg] 校准样本 {len(sample)} 行 → {CALIBRATION_CSV.name}（人工列留空）")
+        print(f"[bg] 校准样本 {len(sample)} 行 → {args.calibration_csv.name}（人工列留空）")
     except PermissionError:
-        print(f"[拒绝写入] {CALIBRATION_CSV}（Excel 占用？）")
+        print(f"[拒绝写入] {args.calibration_csv}（Excel 占用？）")
         return 3
     return 0
 

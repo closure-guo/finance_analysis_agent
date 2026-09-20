@@ -39,14 +39,15 @@ def _decision_block(report: str) -> str:
     return m.group(2).strip() if m else ""
 
 
-def _pairs(tickers: list[str]) -> list[dict]:
+def _pairs(tickers: list[str], materials_dir: Path | None = None) -> list[dict]:
+    materials = materials_dir or MATERIALS_DIR
     out: list[dict] = []
     for t in tickers:
         draft = _decision_block(
-            str(fb.load_material(MATERIALS_DIR, t, ARM_DRAFT)["state"].get("final_report") or "")
+            str(fb.load_material(materials, t, ARM_DRAFT)["state"].get("final_report") or "")
         )
         final = _decision_block(
-            str(fb.load_material(MATERIALS_DIR, t, ARM_FINAL)["state"].get("final_report") or "")
+            str(fb.load_material(materials, t, ARM_FINAL)["state"].get("final_report") or "")
         )
         if not draft.strip() or not final.strip():
             print(f"[b5c] {t}: 决策段提取为空，跳过", flush=True)
@@ -62,7 +63,7 @@ def _pairs(tickers: list[str]) -> list[dict]:
         )
     for t in DARK_CONTROL_TICKERS:
         text = _decision_block(
-            str(fb.load_material(MATERIALS_DIR, t, ARM_DRAFT)["state"].get("final_report") or "")
+            str(fb.load_material(materials, t, ARM_DRAFT)["state"].get("final_report") or "")
         )
         out.append(
             {
@@ -80,19 +81,26 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pilot", action="store_true", help="只跑前 2 对（试跑检理由质量）")
     ap.add_argument("--report", action="store_true", help="只读缓存")
+    ap.add_argument("--materials-dir", type=Path, default=MATERIALS_DIR)
+    ap.add_argument(
+        "--cache", type=Path, default=CACHE, help="判定缓存（新批次须换文件防 unit_id 撞旧判定）"
+    )
+    ap.add_argument("--calibration-csv", type=Path, default=CALIBRATION_CSV)
     args = ap.parse_args()
+    cache = args.cache
 
     done: dict[str, dict] = {}
-    if CACHE.exists():
+    if cache.exists():
         done = {
             str(json.loads(x).get("unit_id")): json.loads(x)
-            for x in CACHE.read_text(encoding="utf-8").splitlines()
+            for x in cache.read_text(encoding="utf-8").splitlines()
             if x.strip()
         }
     wanted = _pairs(
         ["600519", "000001"]
         if args.pilot
-        else sorted({p.name.split(".")[0] for p in MATERIALS_DIR.glob("*.full.pkl")})
+        else sorted({p.name.split(".")[0] for p in args.materials_dir.glob("*.full.pkl")}),
+        materials_dir=args.materials_dir,
     )
     todo = [p for p in wanted if str(p["unit_id"]) not in done]
     print(f"[b5c] 目标 {len(wanted)} 对｜缓存 {len(done)}｜待判 {len(todo)}", flush=True)
@@ -101,11 +109,11 @@ def main() -> int:
 
         load_dotenv()
         fresh = fj.run_b5_conclusion(todo)
-        with CACHE.open("a", encoding="utf-8") as fh:
+        with cache.open("a", encoding="utf-8") as fh:
             for r in fresh:
                 fh.write(json.dumps(r, ensure_ascii=False) + chr(10))
         done.update({str(r["unit_id"]): r for r in fresh})
-        print(f"[b5c] 新判 {len(fresh)} 行落盘 {CACHE.name}", flush=True)
+        print(f"[b5c] 新判 {len(fresh)} 行落盘 {cache.name}", flush=True)
 
     real = [r for r in done.values() if not str(r.get("unit_id")).endswith("-dark")]
     dark = [r for r in done.values() if str(r.get("unit_id")).endswith("-dark")]
@@ -130,12 +138,16 @@ def main() -> int:
     )
     for r in sorted(real, key=lambda x: str(x.get("unit_id"))):
         print(f"  {r['unit_id']}: {r.get('verdict')} | {str(r.get('judge_reason'))[:90]}")
+    if args.report:
+        # 只读模式不写校准 CSV——已终裁的人工表绝不能被报告态重跑覆盖（同 bg 扫描护栏）
+        print("[b5c] 只读模式：校准样本不导出")
+        return 0
     if not args.pilot and real:
         sample_rows = [r for r in real if r.get("verdict") != "tie"][:4] + [
             r for r in real if r.get("verdict") == "tie"
         ][:1]
         try:
-            with CALIBRATION_CSV.open("w", encoding="utf-8-sig", newline="") as fh:
+            with args.calibration_csv.open("w", encoding="utf-8-sig", newline="") as fh:
                 cols = [
                     "unit_id",
                     "ticker",
@@ -164,9 +176,9 @@ def main() -> int:
                             "风控终稿指令": str(p.get("instruction_b") or "")[:500],
                         }
                     )
-            print(f"[b5c] 校准样本 {len(sample_rows)} 行 → {CALIBRATION_CSV.name}")
+            print(f"[b5c] 校准样本 {len(sample_rows)} 行 → {args.calibration_csv.name}")
         except PermissionError:
-            print(f"[拒绝写入] {CALIBRATION_CSV}")
+            print(f"[拒绝写入] {args.calibration_csv}")
             return 3
     return 0
 

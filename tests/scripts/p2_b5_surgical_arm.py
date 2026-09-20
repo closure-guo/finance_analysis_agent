@@ -52,12 +52,13 @@ def build_no_riskfm_state(full_state: dict) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--verify", action="store_true", help="只跑第四关自检，不写产物")
+    ap.add_argument("--materials-dir", type=Path, default=MATERIALS_DIR)
     args = ap.parse_args()
     shared_fail: list[str] = []
     n = 0
-    for path in sorted(MATERIALS_DIR.glob("*.full.pkl")):
+    for path in sorted(args.materials_dir.glob("*.full.pkl")):
         ticker = path.name.split(".")[0]
-        full_mat = fb.load_material(MATERIALS_DIR, ticker)
+        full_mat = fb.load_material(args.materials_dir, ticker)
         full_state = full_mat["state"]
         new_state = build_no_riskfm_state(full_state)
         # 第四关自检：共享层 byte 级一致——浅拷贝构造下非豁免键应为同一对象
@@ -78,7 +79,7 @@ def main() -> int:
             return 2
         if not args.verify:
             fb.save_material(
-                MATERIALS_DIR,
+                args.materials_dir,
                 ticker,
                 state=new_state,
                 llm_calls=0,
