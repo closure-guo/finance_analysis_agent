@@ -177,6 +177,12 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 - 判读口径：抽查一致率 ≥0.80 → 两腿转正维持（B1 撤条件注）；<0.80 → 分歧行逐条裁决后定
 
 
+**待 owner 校准（2026-09-20 观测轮 §19.12，新材料跑批产物）**：
+- grounding 复扫：`tests/validation/2026-09-20-p2-grounding-calibration.csv` 8 行（0 无源正例 → 全抽自有源；判读=抽查判定器是否把有源误判无源）
+- B5c 观测轮：`tests/validation/2026-09-20-p2-calibration-b5c.csv` 5 行——**首行 000001::b5c 即判定器自相矛盾行**（verdict=b 但票面理由称「A更优」），一并终裁
+- **赔率自述矛盾处置候选（证据 strengthened 至四例）**：旧批 601899 终稿/000333 初稿 + 本轮 600030（1.78 自称 vs 1.57 派生）、601888（1.55 自称 vs 2.23 派生且方向矛盾）——横跨 Trader/风控层/批次。**归因（§19.12 实证）**：trader 初稿/risk_judge 出口已挂自检，本批两例均在 **FM 终稿——唯一未挂的决策出口**；处置 = `fund_manager.py` 出口补挂 `apply_payout_self_check`（实现就绪，待 OpenSpec 立项）
+
+
 **校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型差值重算——~~开放~~ **已落地（2026-09-14）**：数值差值申报走双端重算 + 符号校验（方向未申报显式计覆盖缺口）；② quarterly_trend 期段定位补全——**已落地**（ff26b71）。派生键注册补齐 8 键 + 两条门禁（引用覆盖 `test_recompute_registry_covers_all_compute_outputs`、图通道 `TestNodeOutputChannels`）随 delta `close-citation-coverage-gaps` 落地（见 `tests/validation/2026-09-14-close-citation-coverage-gaps-validation.md`）。
 
 **待决策**：
