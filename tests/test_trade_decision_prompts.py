@@ -58,3 +58,18 @@ class TestPromptSourceEnumDriftGuard:
         text = _load("risk_judge.md")
         for src in RISK_EVIDENCE_SOURCES:
             assert src in text, f"risk_judge.md 缺 source: {src}"
+
+
+class TestInactionRationalePromptContract:
+    """require-watch-hold-rationale：prompt 必须声明非执行动作理由字段与必填义务。"""
+
+    def test_trader_prompt_declares_fields_and_mandate(self):
+        text = _load("trader.md")
+        assert "inaction_reason" in text
+        assert "reeval_triggers" in text
+        assert "hold 或 watch" in text or ("hold" in text and "watch" in text)
+
+    def test_risk_judge_prompt_inherits_mandate(self):
+        text = _load("risk_judge.md")
+        assert "inaction_reason" in text
+        assert "reeval_triggers" in text

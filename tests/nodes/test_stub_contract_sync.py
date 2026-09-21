@@ -45,3 +45,10 @@ def test_stub_payload_matches_node_model(node_name: str, model: type) -> None:
     """stub 载荷必须能被对应节点的模型校验通过（契约漂移即红）。"""
     payload = json.loads(_stub_pipeline_answer(node_name))
     model.model_validate(payload)
+
+
+def test_stub_hold_carries_inaction_rationale():
+    """require-watch-hold-rationale：stub hold 载荷须带结构化理由（E2E 报告结构化渲染）。"""
+    payload = json.loads(_stub_pipeline_answer("trader"))
+    assert payload.get("inaction_reason")
+    assert payload.get("reeval_triggers")

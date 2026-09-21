@@ -59,6 +59,9 @@ _STUB_TRADE_DECISION: dict = {
     "action": "hold",
     "confidence": 0.6,
     "reasoning": "STUB 交易决策：多因素均衡，建议持有观察（测试数据）",
+    # require-watch-hold-rationale：非执行动作结构化理由（同契约，E2E 报告结构化渲染）
+    "inaction_reason": "STUB 不行动原因：多因素均衡（测试数据）",
+    "reeval_triggers": ["STUB 触发条件：关键指标显著变化（测试数据）"],
     "evidence_refs": [],
 }
 
