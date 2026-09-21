@@ -13,6 +13,7 @@ from finance_agent.langfuse_tracing import update_current_span
 from finance_agent.models import DebateMessage, TradeDecision
 from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.nodes.validate import apply_payout_self_check as _apply_payout_self_check
+from finance_agent.nodes.validate import final_price_missing
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -82,8 +83,35 @@ def risk_judge(state: dict) -> dict:
         prompt_version=_pinfo.prompt_version,
     )
     decision = TradeDecision.model_validate(data)
-    # 赔率自检（任务 6）：终稿 reasoning 自报赔率 vs 自身价位代码计算——冲突原位修正
-    _reasoning, _payout_fixed = _apply_payout_self_check(
+    # 终稿价位完整性（extend-payout-self-check-coverage，601888 实证：buy 价位全 None
+    # 直通）：buy/sell 缺失首次打回重试一次；仍缺放行 + 如实标注（同 Trader 价检语义）
+    final_price_check: dict = {"result": "pass", "note": ""}
+    _missing = final_price_missing(decision)
+    if _missing:
+        retry_context = (
+            f"{context}\n\n【价位完整性打回】{'buy' if decision.action == 'buy' else 'sell'}"
+            f"决策必须结构化申报数值价位，缺失：{'、'.join(_missing)}。"
+            "请重新输出补全 entry_price/stop_loss/target_price 的完整决策 JSON（继承或显式改写 Trader 价位均可，但必须以结构化字段申报）。"
+        )
+        data = call_llm_for_json(
+            retry_context,
+            system=system,
+            api_key=api_key,
+            node_name="risk_judge",
+            llm_config=state.get("llm_config"),
+            stock_code=state.get("stock_code"),
+            prompt_name=_pinfo.prompt_name,
+            prompt_version=_pinfo.prompt_version,
+        )
+        decision = TradeDecision.model_validate(data)
+        _missing = final_price_missing(decision)
+        if _missing:
+            final_price_check["note"] = f"已打回仍未申报：{'、'.join(_missing)}"
+        else:
+            final_price_check["note"] = "打回后已申报"
+    # 赔率自检（任务 6 + extend-payout-self-check-coverage）：终稿 reasoning 自报赔率
+    # vs 自身价位代码计算——冲突原位修正；转述窗口跳过（计数上报）
+    _reasoning, _payout_fixed, _payout_skipped = _apply_payout_self_check(
         decision.reasoning,
         decision.action,
         decision.entry_price,
@@ -93,7 +121,12 @@ def risk_judge(state: dict) -> dict:
     if _payout_fixed:
         decision = decision.model_copy(update={"reasoning": _reasoning})
 
-    return {"final_trade_decision": decision, "payout_ratio_corrected": _payout_fixed}
+    return {
+        "final_trade_decision": decision,
+        "payout_ratio_corrected": _payout_fixed,
+        "payout_ratio_conflict_skipped": _payout_skipped,
+        "final_price_check": final_price_check,
+    }
 
 
 def _build_risk_context(state: dict) -> str:

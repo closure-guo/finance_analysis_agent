@@ -180,7 +180,7 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 **owner 校准（2026-09-20 观测轮 §19.12，新材料跑批产物）——~~待判读~~ 已闭合（同日终裁）**：
 - grounding 复扫：8 行（0 无源正例 → 全抽自有源）owner 终判机器无误 → **0/79 无源率读数转正**（新 prompt 生产成立，§19.8 承诺闭环）
 - B5c 观测轮：5 行 owner 终判机器无误——**含 000001 矛盾行**（verdict=b 票面理由称「A更优」）：判定结果 b 维持，理由-结论不一致记录为判定器输出一致性的已知形态（与 §19.3「新增维度封顶」同族），**不处置**
-- **赔率自述矛盾处置候选（证据 strengthened 至四例，唯一未闭合项）**：旧批 601899 终稿/000333 初稿 + 本轮 600030（1.78 自称 vs 1.57 派生）、601888（1.55 自称 vs 2.23 派生且方向矛盾）——横跨 Trader/风控层/批次。**归因（§19.12 实证）**：trader 初稿/risk_judge 出口已挂自检，本批两例均在 **FM 终稿——唯一未挂的决策出口**；处置 = `fund_manager.py` 出口补挂 `apply_payout_self_check`（实现就绪，待 OpenSpec 立项）
+- ~~**赔率自述矛盾处置候选（证据 strengthened 至四例）**~~ **已落地（2026-09-21，delta `extend-payout-self-check-coverage` 归档）**：归因修正——trader/risk_judge 出口自检本已生效，两漏网为 ①600030「1.78**倍**」形态盲区（正则只认 `N:1`）②601888 终稿 buy 价位全 None 直通。修复三件套：N倍 形态替换 + 转述护栏（批评语境词近距离跳过+计数 `payout_ratio_conflict_skipped`，防反转批评语义）+ 终稿价位完整性打回（`final_price_check`）。**FM 出口不挂**（裁决：审批转述文本错改风险高于收益，见 delta design）。真实材料复算实证 600030 替换生效 / 601888 护栏保留+计数；全套 3046 绿。验证报告 `tests/validation/2026-09-21-extend-payout-self-check-coverage-validation.md`
 
 
 **校验器 follow-up（2026-09-13，22 条终裁副产品）**：① 比较型差值重算——~~开放~~ **已落地（2026-09-14）**：数值差值申报走双端重算 + 符号校验（方向未申报显式计覆盖缺口）；② quarterly_trend 期段定位补全——**已落地**（ff26b71）。派生键注册补齐 8 键 + 两条门禁（引用覆盖 `test_recompute_registry_covers_all_compute_outputs`、图通道 `TestNodeOutputChannels`）随 delta `close-citation-coverage-gaps` 落地（见 `tests/validation/2026-09-14-close-citation-coverage-gaps-validation.md`）。

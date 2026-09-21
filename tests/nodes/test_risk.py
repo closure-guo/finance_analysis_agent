@@ -170,3 +170,83 @@ class TestDerivedMetricsInjection:
         from finance_agent.nodes.risk import _build_risk_context
 
         assert "派生指标" not in _build_risk_context({"trader_plan": self._plan()})
+
+
+class TestFinalPriceIntegrity:
+    """终稿价位完整性（extend-payout-self-check-coverage，601888 实证：buy 价位
+    全 None 直通管线）：buy/sell 缺失首次打回重试一次；仍缺放行 + 如实标注。"""
+
+    @staticmethod
+    def _resp(action: str = "buy", **prices: object) -> str:
+        return json.dumps(
+            {
+                "action": action,
+                "confidence": 0.6,
+                "reasoning": "风险可控",
+                "position_size": "light",
+                **prices,
+            },
+            ensure_ascii=False,
+        )
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_buy_missing_price_first_retry_fills(self, mock_llm):
+        """首次缺价位 → 打回重试一次（第二次补齐）。"""
+        mock_llm.side_effect = [
+            self._resp(),  # 第一次：无价位
+            self._resp(entry_price=51.05, stop_loss=49.5, target_price=54.5),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        # 打回反馈拼进重试（第二次）调用的 context
+        assert "价位完整性打回" in mock_llm.call_args_list[1].args[0]
+        decision = result["final_trade_decision"]
+        assert decision.entry_price == 51.05
+        assert result["final_price_check"] == {"result": "pass", "note": "打回后已申报"}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_retry_exhausted_passes_with_note(self, mock_llm):
+        """重试仍缺 → 放行（不虚构价位）+ 如实标注。"""
+        mock_llm.return_value = self._resp()  # 两次都缺价位
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].entry_price is None
+        assert result["final_price_check"]["result"] == "pass"
+        assert "已打回仍未申报" in result["final_price_check"]["note"]
+        assert "entry_price" in result["final_price_check"]["note"]
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_complete_prices_no_extra_call(self, mock_llm):
+        mock_llm.return_value = self._resp(entry_price=26.35, stop_loss=25.3, target_price=28.0)
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 1
+        assert result["final_price_check"] == {"result": "pass", "note": ""}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_watch_no_price_requirement(self, mock_llm):
+        mock_llm.return_value = self._resp(action="watch")
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 1
+        assert result["final_price_check"] == {"result": "pass", "note": ""}
+
+    def test_final_price_missing_helper(self):
+        from finance_agent.models import TradeDecision
+        from finance_agent.nodes.validate import final_price_missing
+
+        buy = TradeDecision.model_validate({"action": "buy", "confidence": 0.6, "reasoning": "r"})
+        assert final_price_missing(buy) == ["entry_price", "stop_loss", "target_price"]
+        full = TradeDecision.model_validate(
+            {
+                "action": "buy",
+                "confidence": 0.6,
+                "reasoning": "r",
+                "entry_price": 10.0,
+                "stop_loss": 9.0,
+                "target_price": 12.0,
+            }
+        )
+        assert final_price_missing(full) == []
+        watch = TradeDecision.model_validate(
+            {"action": "watch", "confidence": 0.6, "reasoning": "r"}
+        )
+        assert final_price_missing(watch) == []

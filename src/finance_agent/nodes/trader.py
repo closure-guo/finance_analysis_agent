@@ -25,9 +25,10 @@ def trader(state: dict) -> dict:
         prompt_name=_pinfo.prompt_name,
         prompt_version=_pinfo.prompt_version,
     )
-    # 赔率自检（eval-driven-contract-fixes 任务 6）：初稿 reasoning 自报赔率 vs 自身价位
-    # 代码计算——冲突原位修正（确定性替换，无 LLM）
-    data["reasoning"], _payout_fixed = _apply_payout_self_check(
+    # 赔率自检（eval-driven-contract-fixes 任务 6 + extend-payout-self-check-coverage）：
+    # 初稿 reasoning 自报赔率 vs 自身价位代码计算——冲突原位修正（确定性替换，无 LLM）；
+    # 转述窗口跳过（`payout_ratio_conflict_skipped` 计数上报）
+    data["reasoning"], _payout_fixed, _payout_skipped = _apply_payout_self_check(
         str(data.get("reasoning") or ""),
         data.get("action"),
         data.get("entry_price"),
@@ -36,7 +37,11 @@ def trader(state: dict) -> dict:
     )
     decision = TradeDecision.model_validate(data)
 
-    return {"trader_plan": decision, "payout_ratio_corrected": _payout_fixed}
+    return {
+        "trader_plan": decision,
+        "payout_ratio_corrected": _payout_fixed,
+        "payout_ratio_conflict_skipped": _payout_skipped,
+    }
 
 
 def _build_trader_context(state: dict) -> str:
