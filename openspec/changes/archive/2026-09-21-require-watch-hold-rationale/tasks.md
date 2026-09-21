@@ -29,5 +29,5 @@
 ## 6. 收口
 
 - [x] 6.1 `openspec validate require-watch-hold-rationale --strict` 通过
-- [ ] 6.2 sync 主规范 + archive delta
+- [x] 6.2 sync 主规范 + archive delta
 - [x] 6.3 BACKLOG/metrics 台账按需登记（若涉及口径）
