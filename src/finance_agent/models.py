@@ -223,6 +223,30 @@ class TradeDecision(BaseModel):
             cleaned.append(item)
         return cleaned
 
+    # require-watch-hold-rationale：非执行动作（watch/hold）结构化理由与再评估触发条件。
+    # 必填约束由规则节点承担（同价位必填化先例），schema 保持宽松、清洗不抛异常。
+    inaction_reason: str | None = None
+    reeval_triggers: list[str] = Field(default_factory=list)
+
+    @field_validator("inaction_reason", mode="before")
+    @classmethod
+    def _blank_inaction_reason_to_none(cls, value: object) -> object:
+        """纯空白等同缺失（与 plain_conclusion 空值口径一致，但不抛异常）。"""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("reeval_triggers", mode="before")
+    @classmethod
+    def _normalize_reeval_triggers(cls, value: object) -> object:
+        """LLM 形态噪声归一（同 anchors 先例）：str→单元素列表；
+        None/非列表→[]；非 str 条目与纯空白条目丢弃（不字符串化，不抛异常）。"""
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, (list, tuple)):
+            return [v for v in value if isinstance(v, str) and v.strip()]
+        return []
+
 
 class FundManagerDecision(BaseModel):
     """Layer V Fund Manager 的审批决策。

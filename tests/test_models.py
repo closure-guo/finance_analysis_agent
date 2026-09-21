@@ -382,3 +382,51 @@ class TestRiskEvidenceSources:
             }
         )
         assert [e.source for e in d.evidence_refs] == ["debate_bull", "debate_bear", "risk_metrics"]
+
+
+class TestTradeDecisionInactionRationale:
+    """require-watch-hold-rationale：非执行动作结构化理由字段与噪声清洗。"""
+
+    def test_fields_default_none_and_empty(self):
+        d = TradeDecision(action="watch", confidence=0.5, reasoning="r")
+        assert d.inaction_reason is None
+        assert d.reeval_triggers == []
+
+    def test_reeval_triggers_single_string_to_list(self):
+        d = TradeDecision(
+            action="watch",
+            confidence=0.5,
+            reasoning="r",
+            reeval_triggers="价格回落至 1500 以下",
+        )
+        assert d.reeval_triggers == ["价格回落至 1500 以下"]
+
+    def test_reeval_triggers_none_and_other_types_to_empty(self):
+        for raw in (None, 123, {"a": 1}):
+            d = TradeDecision(action="hold", confidence=0.5, reasoning="r", reeval_triggers=raw)
+            assert d.reeval_triggers == []
+
+    def test_reeval_triggers_mixed_list_drops_non_str_and_blank(self):
+        d = TradeDecision(
+            action="watch",
+            confidence=0.5,
+            reasoning="r",
+            reeval_triggers=["有效", 42, None, "  ", "第二条"],
+        )
+        assert d.reeval_triggers == ["有效", "第二条"]
+
+    def test_blank_inaction_reason_normalized_to_none(self):
+        d = TradeDecision(action="watch", confidence=0.5, reasoning="r", inaction_reason="   ")
+        assert d.inaction_reason is None
+
+    def test_buy_unaffected(self):
+        d = TradeDecision(
+            action="buy",
+            confidence=0.8,
+            reasoning="r",
+            entry_price=1.0,
+            stop_loss=0.9,
+            target_price=1.2,
+        )
+        assert d.inaction_reason is None
+        assert d.reeval_triggers == []
