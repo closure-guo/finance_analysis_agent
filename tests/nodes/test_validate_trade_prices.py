@@ -448,3 +448,91 @@ class TestPayoutSelfCheckExtended:
         )
         assert corrected is False and skipped == 1
         assert "1.55:1" in reasoning
+
+
+class TestInactionRationaleCheck:
+    """require-watch-hold-rationale：watch/hold 结构化理由回路（trader 侧）。"""
+
+    def test_watch_with_rationale_passes(self):
+        plan = TradeDecision(
+            action="watch",
+            confidence=0.5,
+            reasoning="r",
+            inaction_reason="估值分位偏高且缺催化剂",
+            reeval_triggers=["价格回落至 1500 以下", "季报毛利率低于 60%"],
+        )
+        out = validate_trade_prices(_state(plan))
+        assert out["inaction_rationale_check"]["result"] == "pass"
+
+    def test_watch_missing_rationale_fails_first_attempt(self):
+        plan = TradeDecision(action="watch", confidence=0.5, reasoning="r")
+        out = validate_trade_prices(_state(plan))
+        assert out["inaction_rationale_check"]["result"] == "fail"
+        assert out["inaction_rationale_attempts"] == 1
+        fb = out["inaction_rationale_feedback"]
+        assert "inaction_reason" in fb
+        assert "reeval_triggers" in fb
+
+    def test_hold_partial_missing_lists_only_missing(self):
+        plan = TradeDecision(
+            action="hold",
+            confidence=0.5,
+            reasoning="r",
+            inaction_reason="维持仓位等待趋势确认",
+        )
+        out = validate_trade_prices(_state(plan))
+        assert out["inaction_rationale_check"]["result"] == "fail"
+        assert "reeval_triggers" in out["inaction_rationale_check"]["reason"]
+        assert "inaction_reason" not in out["inaction_rationale_check"]["reason"]
+
+    def test_second_attempt_still_missing_released_with_note(self):
+        plan = TradeDecision(action="watch", confidence=0.5, reasoning="r")
+        state = _state(plan)
+        state["inaction_rationale_attempts"] = 1
+        out = validate_trade_prices(state)
+        assert out["inaction_rationale_check"]["result"] == "pass"
+        assert "未申报" in out["inaction_rationale_check"]["note"]
+        assert out["inaction_rationale_attempts"] == 1  # 不再递增
+
+    def test_buy_gets_pass_and_price_unchanged(self):
+        out = validate_trade_prices(_state(_plan()))
+        assert out["price_check"]["result"] == "pass"
+        assert out["inaction_rationale_check"]["result"] == "pass"
+
+    def test_stale_fail_key_overwritten_for_buy(self):
+        """上一轮 watch fail 后重出 buy：理由键必须被覆盖为 pass，防路由回跳。"""
+        state = _state(_plan())
+        state["inaction_rationale_check"] = {"result": "fail"}
+        out = validate_trade_prices(state)
+        assert out["inaction_rationale_check"]["result"] == "pass"
+
+    def test_helper_accepts_dict_and_pydantic(self):
+        from finance_agent.nodes.validate import inaction_rationale_missing
+
+        as_dict = {"action": "watch", "confidence": 0.5, "reasoning": "r"}
+        as_obj = TradeDecision(action="watch", confidence=0.5, reasoning="r")
+        assert inaction_rationale_missing(as_dict) == ["inaction_reason", "reeval_triggers"]
+        assert inaction_rationale_missing(as_obj) == ["inaction_reason", "reeval_triggers"]
+        # dict 形态字符串 triggers 视为已申报（报告/历史对象兼容）
+        partial = {"action": "hold", "inaction_reason": "等待", "reeval_triggers": "价格跌破 10"}
+        assert inaction_rationale_missing(partial) == []
+
+
+class TestInactionRationaleRouting:
+    def test_rationale_fail_routes_back_to_trader(self):
+        state = {
+            "price_check": {"result": "pass"},
+            "inaction_rationale_check": {"result": "fail"},
+        }
+        assert after_validate_trade_prices(state) == "trader"
+
+    def test_both_pass_goes_forward(self):
+        state = {
+            "price_check": {"result": "pass"},
+            "inaction_rationale_check": {"result": "pass"},
+        }
+        assert after_validate_trade_prices(state) == "risk_r1_entry"
+
+    def test_price_fail_still_routes_back(self):
+        state = {"price_check": {"result": "fail"}}
+        assert after_validate_trade_prices(state) == "trader"

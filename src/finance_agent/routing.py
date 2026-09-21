@@ -158,8 +158,11 @@ def route_to_risk_r2(state: dict) -> list[Send]:
 
 
 def after_validate_trade_prices(state: dict) -> str:
-    """toolize-price-levels：价位 sanity 校验路由。pass/corrected 前行，fail 打回 trader。"""
+    """价位/非执行动作理由 sanity 路由：pass/corrected 前行，任一 fail 打回 trader。"""
     check = state.get("price_check") or {}
     if check.get("result") == "fail":
+        return "trader"
+    rationale = state.get("inaction_rationale_check") or {}
+    if rationale.get("result") == "fail":
         return "trader"
     return "risk_r1_entry"
