@@ -37,6 +37,7 @@ risk_neutral（采纳自激进/保守/中性方风险辩论的论据）；risk_m
   方向改为 hold/watch 时无需价位
 - 非执行动作理由继承：裁决为 hold/watch 时 MUST 结构化申报 inaction_reason（不行动依据）
   与 reeval_triggers（1-3 条可观察、可判定的再评估触发条件）——可基于风险辩论改写内容，
-  但 MUST NOT 置空或省略；方向为 buy/sell 时两个字段无要求
+  但 MUST NOT 置空或省略；与 reasoning 的分工同 Trader 阶段（inaction_reason 只写不执行
+  的具体卡点，禁止照抄 reasoning）；action 为 buy/sell 时两个字段无要求
 - confidence 锚点：≥0.7 高置信、0.4-0.7 中等、<0.4 低置信
 - 若 context 含「派生指标（代码计算）」行：止损距离与赔率已由代码算出，直接引用该数值，MUST NOT 自行重算或改写

@@ -67,9 +67,17 @@ class TestInactionRationalePromptContract:
         text = _load("trader.md")
         assert "inaction_reason" in text
         assert "reeval_triggers" in text
-        assert "hold 或 watch" in text or ("hold" in text and "watch" in text)
+        # 契约段独有短语：字段名在 JSON 示例里也出现、「hold 或 watch」被既有价位行
+        # 预先满足——只断言它们杀不死「删除整段义务」的变异（review Minor #2）。
+        assert "1-3 条" in text
+        assert "禁止空泛表述" in text
+        # 与 reasoning 的分工（design D1）：禁止照抄整体决策叙述
+        assert "禁止照抄" in text
 
     def test_risk_judge_prompt_inherits_mandate(self):
         text = _load("risk_judge.md")
         assert "inaction_reason" in text
         assert "reeval_triggers" in text
+        assert "1-3 条" in text
+        # 继承行同样须钉死与 reasoning 的分工（design D1）
+        assert "禁止照抄" in text
