@@ -1,5 +1,7 @@
 # decision-semantics r5 重评收口报告（harden 6.2 / 6.3）
 
+**status**: active
+
 日期：2026-09-12｜run：`baseline-decision-semantics-r5`（03:17Z，HEAD fa9f72b+当日 5e6008a/9af47ff/5d80058，均不含管线行为变更）｜模型 glm-5.3 + judge deepseek-v4-flash（与 r3/r4 同配置）
 
 ## 1. 6.2 重评执行

@@ -37,12 +37,12 @@
 - `add-debate-argument-anchors` —— 论点结构化锚点 + 零 LLM 校验 + `argument_anchor_coverage`；验证报告 `tests/validation/2026-09-16-add-debate-argument-anchors-validation.md`
 - `ground-comparative-delta-claims` —— 比较型差值计数 + `derived_series`/`price_levels` 通路修复 + 均线差幅；验证报告 `tests/validation/2026-09-15-ground-comparative-delta-claims-validation.md`
 - `update-ablation-driver-parity-and-report-status` —— 消融口径正名/驱动接回/报告状态契约
-## 评估补强（后续批次，2026-09-15 登记；2026-09-20 盘点更新）
+## 评估补强（2026-09-15 登记；2026-09-21 全段收口盘点）
 
 > 与 `update-ablation-driver-parity-and-report-status` 互补：该 delta 修「已有结论的可信度管理」，本批修「新结论的产出机制」。
 
-1. **结论注册表 + superseded 状态机**（未立项）：把报告 `status` 契约扩到 `docs/evals/` 全库（日期报告 + 台账 + 模板），索引页渲染状态徽章 + 状态迁移校验。需先盘清全库每份报告的真实状态。
-2. **跑批入口唯一化**（未立项）：`ablation_pilot.py` 改薄壳——只做续跑/记账，判分与过滤全调库侧。整体瘦身牵动计量、材料落盘、断点续跑三块。
+1. ~~**结论注册表 + superseded 状态机**~~ **已完成（2026-09-21 收口）**：基础设施（状态契约 `report_status.py` + 索引渲染 `status_index.py` + README 登记/刷新流程）随 v2 delta 落地；2026-09-21 补齐存量盘点——8 份历史报告（开机记录/round5-9 校准与审计/r4-r5 收口）逐份盘清均为演进链事实记录（无结论被证伪），统一回填 `status: active`；索引刷新后未标注段 12→4，剩余 4 份（dataset-baseline/hosted-evaluator-template/metrics.md/GoldenSet 设计文档）为非报告文档，按设计留在未标注段（未标注 ≠ 作废）。
+2. ~~**跑批入口唯一化**~~ **已完成（2026-09-18，#126）**：`ablation_pilot.py` 已薄壳化——judge 判分（维度适用性过滤 + K 次均值）、judge 明细塑形、judge_vars 材料落盘全部移入库侧 `evals/ablation.py`，驱动仅剩续跑/计量/聚合落盘（352 行）。本条为过时登记，2026-09-21 盘点确认划线。
 3. ~~**阳性对照进消融跑批**~~ **已随 v2 框架落地（2026-09-20 盘点确认）**：`pilot_runner._positive_control` + McNemar 精确检验 + 「阳性对照失灵作废本轮阴性」契约（`negative_results_status`）+ 预登记门禁引用，见 `evals/causal_ablation/pilot_runner.py` 与 spec causal-ablation「预登记与阳性对照」。
 4. ~~**v2 消融框架**~~ **已完成并归档（2026-09-19，`revamp-ablation-v2-causal-claims`）**：因果主张登记 + 注入法 + 单元级判定 + 校准门控三腿转正；主规范 `openspec/specs/causal-ablation/` 9 条 requirement。与幻觉率度量 v1（`evals/hallucination/`）互补——注入法覆盖文本/事件型防线。
 

@@ -1,5 +1,7 @@
 # round7 Judge 人工校准报告（2026-09-13，终裁后终版）
 
+**status**: active
+
 数据：`judge-sample-round7-blind-v2.xlsx` × `judge-sample-round7-judge.jsonl`（r3 运行时落库，已冻结），41/41 行完整；按 [metrics.md §2.1 预登记分析计划](../metrics.md) 口径执行，含 2026-09-13 owner 终裁（[终裁材料](../../tests/validation/round7-校准终裁材料.md)）后的人工改分。
 
 ## 结论
