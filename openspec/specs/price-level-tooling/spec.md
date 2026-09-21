@@ -17,15 +17,13 @@ entry/stop/target SHALL 经过该工具数据支撑，不得无依据产出。
 
 ### Requirement: 交易价位 sanity 校验
 
-系统 SHALL 在 Trader 产出后运行确定性校验：long 须 stop<entry<target（short 对
-称）；entry 距最新收盘偏差 ≤ 配置上限（默认 15%）；stop/target 落在工具参考带内
-（±2ATR 放宽带）。校验 SHALL NOT 由 LLM 执行。
+系统 SHALL 在 Trader 产出后运行确定性校验：long 须 stop<entry<target（short 对称）；entry 距最新收盘偏差 ≤ 配置上限（默认 15%）；stop/target 落在工具参考带内（±2ATR 放宽带）。校验 SHALL NOT 由 LLM 执行。
 
-buy/sell 决策 SHALL 申报数值价位：entry_price、stop_loss、target_price 任一缺失
-（None、≤0）SHALL 视为价位不合法——首次 SHALL 打回并要求申报数值价位（打回
-feedback SHALL 列明缺失项）；已打回一次仍缺失 SHALL 放行并如实标注（`price_check`
-note 记录「已打回仍未申报」，报告端按「未提供」渲染，不静默、不虚构数值）。
-watch/hold 决策无价位要求，维持直通。
+buy/sell 决策 SHALL 申报数值价位：entry_price、stop_loss、target_price 任一缺失（None、≤0）SHALL 视为价位不合法——首次 SHALL 打回并要求申报数值价位（打回 feedback SHALL 列明缺失项）；已打回一次仍缺失 SHALL 放行并如实标注（`price_check` note 记录「已打回仍未申报」，报告端按「未提供」渲染，不静默、不虚构数值）。watch/hold 决策无价位要求，维持直通。
+
+**覆盖面（2026-09-21 扩展，证据：601888 终稿 action=buy 且 entry/stop/target 全 None——价位埋在 reasoning 文本，管线放行）**：价位完整性要求 SHALL 同样作用于 risk_judge 写入的 `final_trade_decision`——action 为 buy/sell 而价位任一缺失时，SHALL 打回 risk_judge 重试一次（feedback 列明缺失项与理由「价位须随终稿结构化申报」）；重试后仍缺失 SHALL 放行并在 telemetry 如实标注（`final_price_check` note「已打回仍未申报」），报告端按「未提供」渲染，SHALL NOT 虚构数值。该完整性校验 SHALL NOT 重跑 Trader 侧的关系/参考带校验（终稿价位以 Trader 校验通过的价位为基线，仅补缺失）。
+
+(Previously: 系统 SHALL 在 Trader 产出后运行确定性校验：long 须 stop<entry<target（short 对称）；entry 距最新收盘偏差 ≤ 配置上限（默认 15%）；stop/target 落在工具参考带内（±2ATR 放宽带）。校验 SHALL NOT 由 LLM 执行。buy/sell 决策 SHALL 申报数值价位：entry_price、stop_loss、target_price 任一缺失（None、≤0）SHALL 视为价位不合法——首次 SHALL 打回并要求申报数值价位；已打回一次仍缺失 SHALL 放行并如实标注。watch/hold 决策无价位要求，维持直通。)
 
 #### Scenario: 首次不合法打回
 
@@ -61,9 +59,27 @@ watch/hold 决策无价位要求，维持直通。
 
 #### Scenario: watch/hold 无价位要求
 
-- **GIVEN** Trader 产出 action=watch 或 hold
-- **WHEN** 路由判定
-- **THEN** SHALL 直通（价位缺失不触发打回）
+（同旧行为，见主规范）
+
+#### Scenario: 终稿 buy 价位缺失打回 risk_judge
+
+- **GIVEN** risk_judge 产出 final_trade_decision 且 action=buy，entry/stop/target 任一缺失
+- **WHEN** risk_judge 出口校验
+- **THEN** SHALL 打回 risk_judge 重试一次，feedback 列明缺失项与「价位须随终稿结构化申报」
+- **AND** SHALL NOT 由代码虚构价位填充
+
+#### Scenario: 终稿打回后仍缺失放行标注
+
+- **GIVEN** 终稿价检已打回一次，重试产出仍缺失价位
+- **WHEN** risk_judge 出口校验
+- **THEN** SHALL 放行并在 `final_price_check` note 如实记录「已打回仍未申报」
+- **AND** 报告端按「未提供」渲染
+
+#### Scenario: 终稿价位完整直通
+
+- **GIVEN** final_trade_decision 的 buy/sell 三价位齐全
+- **WHEN** risk_judge 出口校验
+- **THEN** SHALL 原样放行，不触发打回
 
 ### Requirement: quick 模式行情快照
 
