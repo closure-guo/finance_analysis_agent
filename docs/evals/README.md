@@ -11,6 +11,7 @@
 | docs/evals/2026-09-13-round7-judge校准报告.md | ![active](badge:active) | — |
 | docs/evals/2026-09-13-round8-维护者代裁报告.md | ![active](badge:active) | — |
 | docs/evals/2026-09-14-round9-v8审计.md | ![active](badge:active) | — |
+| docs/evals/2026-09-21-决策层全watch取证.md | ![active](badge:active) | — |
 | evals/ablation/results/pilot.md | ![superseded](badge:superseded) → docs/evals/2026-09-03-消融n10权威结果.md | docs/evals/2026-09-03-消融n10权威结果.md |
 
 ## 未标注生命周期（4 份）
