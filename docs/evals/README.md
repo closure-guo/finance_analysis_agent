@@ -1,26 +1,25 @@
-<!-- BEGIN render_status_index 输出（刷新时整段替换；勿手改。扫描范围 / 刷新命令 / 已知渲染形态见文末「索引维护」） -->
 # 评估结论注册表
 
 | 报告 | 状态 | 取代者 |
 |---|---|---|
+| docs/evals/2026-09-02-评估体系开机与coverage-v3记录.md | ![active](badge:active) | — |
 | docs/evals/2026-09-03-消融n10权威结果.md | ![active](badge:active) | — |
+| docs/evals/2026-09-10-judge校准round5报告.md | ![active](badge:active) | — |
+| docs/evals/2026-09-11-citation门禁整改r4收口报告.md | ![active](badge:active) | — |
+| docs/evals/2026-09-11-judge校准复盘-round5到r3问题发现链.md | ![active](badge:active) | — |
+| docs/evals/2026-09-12-decision-semantics-r5重评收口报告.md | ![active](badge:active) | — |
+| docs/evals/2026-09-13-round7-judge校准报告.md | ![active](badge:active) | — |
+| docs/evals/2026-09-13-round8-维护者代裁报告.md | ![active](badge:active) | — |
+| docs/evals/2026-09-14-round9-v8审计.md | ![active](badge:active) | — |
 | evals/ablation/results/pilot.md | ![superseded](badge:superseded) → docs/evals/2026-09-03-消融n10权威结果.md | docs/evals/2026-09-03-消融n10权威结果.md |
 
-## 未标注生命周期（12 份）
+## 未标注生命周期（4 份）
 
-- docs/evals/2026-09-02-评估体系开机与coverage-v3记录.md
-- docs/evals/2026-09-10-judge校准round5报告.md
-- docs/evals/2026-09-11-citation门禁整改r4收口报告.md
-- docs/evals/2026-09-11-judge校准复盘-round5到r3问题发现链.md
-- docs/evals/2026-09-12-decision-semantics-r5重评收口报告.md
-- docs/evals/2026-09-13-round7-judge校准报告.md
-- docs/evals/2026-09-13-round8-维护者代裁报告.md
-- docs/evals/2026-09-14-round9-v8审计.md
 - docs/evals/dataset-baseline.md
 - docs/evals/hosted-evaluator-template.md
 - docs/evals/metrics.md
 - docs/evals/金融分析Agent-GoldenSet设计文档.md
-<!-- END render_status_index 输出 -->
+
 
 ## 索引维护
 

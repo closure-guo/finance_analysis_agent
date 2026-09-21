@@ -1,5 +1,7 @@
 # Judge 校准 Round5 报告（2026-09-10）
 
+**status**: active
+
 ## 配置
 
 - 样本：53 行（20 trace × 4 维度；report_relevance 20 / debate_quality 11 / decision_grounding 11 / consistency 11）

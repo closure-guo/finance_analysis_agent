@@ -1,5 +1,7 @@
 # judge 校准复盘：从 round5 人工标注到 r3——指标状态、人机对比与问题发现链
 
+**status**: active
+
 日期：2026-09-10 ～ 2026-09-11
 范围：LLM-as-judge 四维度（report_relevance / debate_quality / decision_grounding / consistency）的校准工作；数据集 `a-share-analysis-v1`（17 item：9 deep + 5 quick + 3 有意跳过）；judge = 方舟 deepseek-v4-flash；管线 LLM = glm-5.3。
 关联：`docs/evals/2026-09-10-judge校准round5报告.md`（起点）、delta `openspec/changes/harden-decision-report-semantics/`（全部修复归口）。
