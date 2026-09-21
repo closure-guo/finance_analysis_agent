@@ -231,16 +231,24 @@ class TradeDecision(BaseModel):
     @field_validator("inaction_reason", mode="before")
     @classmethod
     def _blank_inaction_reason_to_none(cls, value: object) -> object:
-        """纯空白等同缺失（与 plain_conclusion 空值口径一致，但不抛异常）。"""
-        if isinstance(value, str) and not value.strip():
+        """非字符串 / 纯空白一律归一为 None（未申报）——形态噪声不炸管线（同 anchors 先例）。
+
+        非 str 形态（int/dict/list：LLM 会把理由包成 `{"reason": "..."}`）若原样交给
+        pydantic 会抛 ValidationError 中断整条管线；trader.py / risk.py 的 LLM JSON
+        入口无 schema 强制，故此处按「未申报」降级（必填约束由规则节点承担）。
+        """
+        if not isinstance(value, str):
             return None
-        return value
+        return None if not value.strip() else value
 
     @field_validator("reeval_triggers", mode="before")
     @classmethod
     def _normalize_reeval_triggers(cls, value: object) -> object:
         """LLM 形态噪声归一（同 anchors 先例）：str→单元素列表；
-        None/非列表→[]；非 str 条目与纯空白条目丢弃（不字符串化，不抛异常）。"""
+        None/非列表→[]；非 str 条目与纯空白条目丢弃（不字符串化，不抛异常）。
+
+        与 `_normalize_anchors` 的差异：本条把纯空白条目录视为未申报丢弃。
+        """
         if isinstance(value, str):
             return [value] if value.strip() else []
         if isinstance(value, (list, tuple)):
