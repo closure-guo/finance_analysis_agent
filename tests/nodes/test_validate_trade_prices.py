@@ -338,7 +338,7 @@ class TestPayoutRatioSelfCheck:
         from finance_agent.nodes.validate import check_and_fix_stated_ratio
 
         reasoning = "维持买入，赔率约1.7:1属正常区间但不放大预期。"
-        fixed, corrected = check_and_fix_stated_ratio(reasoning, 1.24)
+        fixed, corrected, _ = check_and_fix_stated_ratio(reasoning, 1.24)
         assert corrected is True
         assert "赔率约1.24:1" in fixed and "1.7:1" not in fixed
         assert "维持买入" in fixed  # 其余文字不动
@@ -346,20 +346,20 @@ class TestPayoutRatioSelfCheck:
     def test_within_tolerance_untouched(self):
         from finance_agent.nodes.validate import check_and_fix_stated_ratio
 
-        fixed, corrected = check_and_fix_stated_ratio("赔率约1.9:1，可执行。", 1.90)
+        fixed, corrected, _ = check_and_fix_stated_ratio("赔率约1.9:1，可执行。", 1.90)
         assert corrected is False
         assert fixed == "赔率约1.9:1，可执行。"
 
     def test_missing_derived_skips(self):
         from finance_agent.nodes.validate import check_and_fix_stated_ratio
 
-        fixed, corrected = check_and_fix_stated_ratio("赔率约1.7:1", None)
+        fixed, corrected, _ = check_and_fix_stated_ratio("赔率约1.7:1", None)
         assert corrected is False and fixed == "赔率约1.7:1"
 
     def test_no_ratio_claim_untouched(self):
         from finance_agent.nodes.validate import check_and_fix_stated_ratio
 
-        fixed, corrected = check_and_fix_stated_ratio("维持观望。", 1.24)
+        fixed, corrected, _ = check_and_fix_stated_ratio("维持观望。", 1.24)
         assert corrected is False and fixed == "维持观望。"
 
     def test_sixty_case_601899_adjudicated_fixture(self):
@@ -367,7 +367,7 @@ class TestPayoutRatioSelfCheck:
         from finance_agent.nodes.validate import check_and_fix_stated_ratio
 
         reasoning = "目标位34.5维持不变，赔率约1.7:1属正常区间但不放大预期。"
-        fixed, corrected = check_and_fix_stated_ratio(reasoning, 1.24)
+        fixed, corrected, _ = check_and_fix_stated_ratio(reasoning, 1.24)
         assert corrected and "1.24:1" in fixed
 
     def test_wired_into_trader_and_risk_judge_outputs(self):
@@ -377,3 +377,74 @@ class TestPayoutRatioSelfCheck:
 
         assert hasattr(trader_mod, "_apply_payout_self_check")
         assert hasattr(risk_mod, "_apply_payout_self_check")
+
+
+class TestPayoutSelfCheckExtended:
+    """形态扩展 + 转述护栏（extend-payout-self-check-coverage，2026-09-21）：
+    N倍 形态替换（600030 实证）/ 转述窗口跳过+计数（601888 实证）/ 护栏不误伤。"""
+
+    def test_nbei_form_mismatched_ratio_is_corrected(self):
+        """600030 实证：risk_judge 改止损后旧赔率以「N倍」形态残留 → 原位替换。"""
+        from finance_agent.nodes.validate import check_and_fix_stated_ratio
+
+        reasoning = "26.35贴近近期低点26.28且RSI/KDJ逼近超卖，赔率约1.78倍纸面占优。激进方建议加大仓位被中性方正确驳斥。"  # noqa: E501
+        fixed, corrected, skipped = check_and_fix_stated_ratio(reasoning, 1.57)
+        assert corrected is True and skipped == 0
+        assert "赔率约1.57倍" in fixed and "1.78倍" not in fixed
+        assert "26.35贴近近期低点" in fixed  # 其余文字不动
+
+    def test_nbei_form_within_tolerance_untouched(self):
+        from finance_agent.nodes.validate import check_and_fix_stated_ratio
+
+        fixed, corrected, _ = check_and_fix_stated_ratio("赔率约1.6倍，可执行。", 1.57)
+        assert corrected is False
+        assert fixed == "赔率约1.6倍，可执行。"
+
+    def test_transcript_guard_skips_but_counts(self):
+        """601888 实证：转述辩论对方的赔率（批评语境）→ 不替换，冲突计数可见。"""
+        from finance_agent.nodes.validate import check_and_fix_stated_ratio
+
+        reasoning = "激进方对收益端无人修补、赔率约1.55:1不合格的批评被部分采纳，故confidence下调。"
+        fixed, corrected, skipped = check_and_fix_stated_ratio(reasoning, 2.23)
+        assert corrected is False and skipped == 1
+        assert fixed == reasoning  # 原文不动（替换会反转批评指向）
+
+    def test_guard_word_variants_all_skip(self):
+        from finance_agent.nodes.validate import check_and_fix_stated_ratio
+
+        for tail in ("不合格的批评", "偏低的质疑", "名不副实的反驳", "过严的驳回"):
+            reasoning = f"维持方案。赔率约1.55:1{tail}被记录在案。"
+            fixed, corrected, skipped = check_and_fix_stated_ratio(reasoning, 2.23)
+            assert corrected is False, tail
+            assert skipped == 1, tail
+            assert fixed == reasoning, tail
+
+    def test_subject_word_after_ratio_is_not_transcript(self):
+        """600030 实证形态：主语词（激进方等）出现在数字后是新句叙述，非转述——
+        自报冲突照常替换（护栏近距离词表不含主语词的设计依据）。"""
+        from finance_agent.nodes.validate import check_and_fix_stated_ratio
+
+        reasoning = "赔率约1.78倍纸面占优。激进方建议加大仓位被中性方正确驳斥。"
+        fixed, corrected, skipped = check_and_fix_stated_ratio(reasoning, 1.57)
+        assert corrected is True and skipped == 0
+        assert "1.57倍" in fixed and "1.78倍" not in fixed
+
+    def test_plain_conflict_unaffected_by_guard(self):
+        """护栏不误伤：无指涉词的自报冲突（两种形态）照常替换。"""
+        from finance_agent.nodes.validate import check_and_fix_stated_ratio
+
+        fixed, corrected, skipped = check_and_fix_stated_ratio("赔率约1.55:1，可执行。", 2.23)
+        assert corrected is True and skipped == 0
+        assert "2.23:1" in fixed
+        fixed2, corrected2, _ = check_and_fix_stated_ratio("赔率约1.5倍尚可。", 2.23)
+        assert corrected2 is True
+        assert "2.23倍" in fixed2
+
+    def test_apply_payout_self_check_carries_skip_count(self):
+        from finance_agent.nodes.validate import apply_payout_self_check
+
+        reasoning, corrected, skipped = apply_payout_self_check(
+            "激进方对赔率1.55:1的批评被采纳", "buy", 51.05, 49.5, 54.5
+        )
+        assert corrected is False and skipped == 1
+        assert "1.55:1" in reasoning

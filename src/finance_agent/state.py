@@ -172,6 +172,12 @@ class AnalysisState(TypedDict, total=False):
         int  # 按 claim 修复记账：重校验后目标 claim PASS 即计（incident 029 处置）
     )
     payout_ratio_corrected: bool  # 赔率自检：reasoning 自报赔率与代码计算冲突已原位修正
+    payout_ratio_conflict_skipped: (
+        int  # 赔率自检转述护栏：跳过替换的冲突计数（批评语境，防反转语义）
+    )
+    final_price_check: (
+        dict  # 终稿价位完整性（601888 实证）：{result, note}——打回后申报/仍缺如实标注
+    )
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──

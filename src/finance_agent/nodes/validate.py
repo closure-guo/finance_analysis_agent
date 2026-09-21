@@ -67,17 +67,30 @@ def _is_missing_price(v: object) -> bool:
 _RATIO_KEYWORDS = ("赔率", "盈亏比")
 _RATIO_WINDOW = 40  # 关键词后扫描窗口（字符）
 _RATIO_TOL = 0.10  # 相对容差：四舍五入级差异不修正
+# 赔率表述形态（extend-payout-self-check-coverage）：`N:1` 与 `N倍`——600030 实证
+# 「赔率约1.78倍纸面占优」形态旧正则未命中（risk_judge 改止损后旧赔率残留）
+_RATIO_FORM = re.compile(r"(\d+(?:\.\d+)?)\s*(?:[:：]\s*1|倍)")
+# 转述护栏（601888 实证）：匹配数字后近距离（12 字符）出现批评语境词 = 转述辩论
+# 对方的赔率判断——替换会反转批评指向，跳过仅计数。主语词（激进方/保守方等）不进
+# 词表：出现在数字前不进窗口（窗口自「赔率」关键词起算），出现在数字后是新句主语
+# （600030「赔率约1.78倍纸面占优。激进方建议…」为自报+后续叙述，须替换）
+_TRANSCRIPT_GUARD_WORDS = ("批评", "质疑", "反驳", "驳回")
+_GUARD_SPAN = 12  # 数字后护栏检测半径（字符）
 
 
-def check_and_fix_stated_ratio(reasoning: str, derived_ratio: float | None) -> tuple[str, bool]:
-    """赔率自检（eval-driven-contract-fixes 任务 6）：reasoning 自报赔率与代码计算冲突时
-    原位替换为代码值（确定性字符串替换，无 LLM）；容差内 / 派生缺失 / 无赔率表述 → 原样。
+def check_and_fix_stated_ratio(
+    reasoning: str, derived_ratio: float | None
+) -> tuple[str, bool, int]:
+    """赔率自检：reasoning 自报赔率与代码计算冲突时原位替换为代码值（确定性，无 LLM）；
+    转述窗口（辩论指涉词）跳过替换、计数返回；容差内 / 派生缺失 / 无赔率表述 → 原样。
 
-    证据：601899 终稿「赔率约1.7:1」vs 派生 1.24；000333 初稿「约2.6:1」vs 派生 2.00。"""
+    返回 (修正后文本, 是否修正, 转述跳过计数)。证据：601899「1.7:1」vs 1.24、
+    000333「2.6:1」vs 2.00、600030「1.78倍」vs 1.57（形态盲区）、601888 转述「1.55:1」。"""
     if derived_ratio is None or derived_ratio <= 0 or not reasoning:
-        return reasoning, False
+        return reasoning, False, 0
     fixed = reasoning
     corrected = False
+    skipped = 0
     for kw in _RATIO_KEYWORDS:
         start = 0
         while True:
@@ -85,9 +98,14 @@ def check_and_fix_stated_ratio(reasoning: str, derived_ratio: float | None) -> t
             if i < 0:
                 break
             window = fixed[i : i + len(kw) + _RATIO_WINDOW]
-            m = re.search(r"(\d+(?:\.\d+)?)\s*[:：]\s*1", window)
+            m = _RATIO_FORM.search(window)
             if not m:
                 start = i + len(kw)
+                continue
+            if any(w in window[m.end(1) : m.end(1) + _GUARD_SPAN] for w in _TRANSCRIPT_GUARD_WORDS):
+                # 转述语境（数字后紧跟批评语境词）：不替换（防反转批评语义），计数可见
+                skipped += 1
+                start = i + m.end(1)
                 continue
             stated = float(m.group(1))
             if stated > 0 and abs(stated - derived_ratio) / derived_ratio > _RATIO_TOL:
@@ -97,15 +115,37 @@ def check_and_fix_stated_ratio(reasoning: str, derived_ratio: float | None) -> t
                 start = i + len(new_window)
             else:
                 start = i + m.end(1)
-    return fixed, corrected
+    return fixed, corrected, skipped
 
 
 def apply_payout_self_check(
     reasoning: str, action: object, entry: object, stop: object, target: object
-) -> tuple[str, bool]:
-    """自算派生赔率并对 reasoning 做原位修正（trader / risk_judge 产出路径共用）。"""
+) -> tuple[str, bool, int]:
+    """自算派生赔率并对 reasoning 做原位修正（trader / risk_judge 产出路径共用）。
+
+    返回 (修正后文本, 是否修正, 转述跳过计数)——跳过计数随节点 state 上报
+    （`payout_ratio_conflict_skipped`），供批次归因消费。"""
     derived = _compute_derived_metrics(str(action or ""), entry, stop, target)
     return check_and_fix_stated_ratio(reasoning, derived.get("risk_reward_ratio"))
+
+
+def final_price_missing(decision: object) -> list[str]:
+    """终稿（final_trade_decision）buy/sell 的缺失价位清单（None/≤0；watch/hold 无要求）。
+
+    extend-payout-self-check-coverage（601888 实证：buy 价位全 None 直通）——
+    完整性校验语义与 Trader 价位必填一致，但只查缺失，不重跑关系/参考带。"""
+    action = str(getattr(decision, "action", "") or "")
+    if action not in ("buy", "sell"):
+        return []
+    missing: list[str] = []
+    for label, value in (
+        ("entry_price", getattr(decision, "entry_price", None)),
+        ("stop_loss", getattr(decision, "stop_loss", None)),
+        ("target_price", getattr(decision, "target_price", None)),
+    ):
+        if _is_missing_price(value):
+            missing.append(label)
+    return missing
 
 
 def validate_trade_prices(state: dict) -> dict:
