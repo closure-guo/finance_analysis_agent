@@ -298,7 +298,8 @@ class TestTradeDecisionOperationalParams:
     """report-render-operational-params：交易决策节渲染完整操作参数。
 
     spec 三条硬规则：buy/sell 渲染仓位+入场/止损/目标价（0/缺失如实「未提供」）；
-    watch/hold 不渲染硬价格行、注明触发条件见理由；派生指标（止损距离/赔率）
+    watch/hold 不渲染硬价格行，渲染结构化「不行动原因」与「再评估触发条件」（缺失
+    如实「未申报」，require-watch-hold-rationale）；派生指标（止损距离/赔率）
     由代码按参数原值计算，不采用 reasoning 中心算值。
     """
 
@@ -324,7 +325,7 @@ class TestTradeDecisionOperationalParams:
         assert "8.1%" in md
         assert "1.90" in md
 
-    def test_watch_no_price_rows_and_trigger_hint(self):
+    def test_watch_missing_rationale_marked_unprovided(self):
         state = {
             "stock_code": "600519",
             "final_trade_decision": {
@@ -339,16 +340,62 @@ class TestTradeDecisionOperationalParams:
         }
         md = generate_report(state)["final_report"]
         assert "watch" in md
-        # 锚定渲染器特有的加粗标签行断言：报告其他章节（缓存的历史结论等）
-        # 可能出现「入场」「止损」等普通词，与本节渲染规则无关
+        assert "- **不行动原因**: 未申报" in md
+        assert "- **再评估触发条件**: 未申报" in md
+        # 锚定渲染器特有的加粗标签行断言：watch/hold 不渲染硬价格行
         param_lines = [
             ln.strip()
             for ln in md.split("\n")
-            if any(
-                k in ln for k in ("**入场价**", "**止损价**", "**目标价**", "**再评估触发条件**")
-            )
+            if any(k in ln for k in ("**入场价**", "**止损价**", "**目标价**"))
         ]
-        assert param_lines == ["- **再评估触发条件**: 见理由"]
+        assert param_lines == []
+
+    def test_watch_renders_structured_rationale(self):
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.5,
+                "reasoning": "等待站稳均线",
+                "inaction_reason": "估值分位偏高且缺乏催化剂",
+                "reeval_triggers": ["价格回落至 1500 以下", "季报毛利率低于 60%"],
+            },
+        }
+        md = generate_report(state)["final_report"]
+        assert "- **不行动原因**: 估值分位偏高且缺乏催化剂" in md
+        assert "- **再评估触发条件**: ① 价格回落至 1500 以下；② 季报毛利率低于 60%" in md
+
+    def test_watch_pydantic_decision_renders_structured_rationale(self):
+        from finance_agent.models import TradeDecision
+
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": TradeDecision(
+                action="hold",
+                confidence=0.6,
+                reasoning="r",
+                inaction_reason="维持仓位等待趋势确认",
+                reeval_triggers=["价格跌破 1450"],
+            ),
+        }
+        md = generate_report(state)["final_report"]
+        assert "- **不行动原因**: 维持仓位等待趋势确认" in md
+        assert "- **再评估触发条件**: ① 价格跌破 1450" in md
+
+    def test_watch_dict_string_triggers_rendered_leniently(self):
+        """dict 形态（历史落库 JSON）triggers 为字符串时宽容渲染为单条目，不抛异常。"""
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {
+                "action": "hold",
+                "confidence": 0.6,
+                "reasoning": "维持",
+                "inaction_reason": "趋势未确认",
+                "reeval_triggers": "价格跌破 1450",
+            },
+        }
+        md = generate_report(state)["final_report"]
+        assert "- **再评估触发条件**: ① 价格跌破 1450" in md
 
     def test_sell_zero_params_marked_unprovided(self):
         """比亚迪形态：stop/target 均为 0，如实「未提供」，其余参数不受影响。"""

@@ -496,11 +496,31 @@ def _fmt_derived_metrics(action: str, entry: object, stop: object, target: objec
     return "- **派生指标**（代码计算）: " + "、".join(parts)
 
 
+_TRIGGER_MARKS = "①②③④⑤⑥⑦⑧⑨⑩"
+
+
+def _fmt_reeval_triggers(triggers: object) -> str:
+    """再评估触发条件渲染：编号条目；无有效条目 → 未申报（require-watch-hold-rationale）。"""
+    items: list[str] = []
+    if isinstance(triggers, str):
+        items = [triggers.strip()] if triggers.strip() else []
+    elif isinstance(triggers, (list, tuple)):
+        items = [t.strip() for t in triggers if isinstance(t, str) and t.strip()]
+    if not items:
+        return "未申报"
+    parts = []
+    for i, t in enumerate(items):
+        mark = _TRIGGER_MARKS[i] if i < len(_TRIGGER_MARKS) else f"({i + 1})"
+        parts.append(f"{mark} {t}")
+    return "；".join(parts)
+
+
 def _format_trade_decision(decision: TradeDecision | dict) -> str:
     """格式化交易决策（report-render-operational-params：渲染完整操作参数）。
 
-    buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）；watch/hold 语义上
-    无建仓参数，不渲染硬价格行，注明再评估触发条件见理由。
+    buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）；watch/hold 语义上无建仓
+    参数，不渲染硬价格行，渲染结构化「不行动原因」与「再评估触发条件」（缺失如实
+    标注「未申报」，require-watch-hold-rationale）。
     """
     if isinstance(decision, TradeDecision):
         action = decision.action
@@ -512,6 +532,8 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         target = getattr(decision, "target_price", None)
         corrected = getattr(decision, "price_level_corrected", False)
         correction_reason = getattr(decision, "price_level_correction_reason", "") or ""
+        inaction = getattr(decision, "inaction_reason", None)
+        triggers = getattr(decision, "reeval_triggers", []) or []
     else:
         action = decision.get("action", "N/A")
         confidence = decision.get("confidence", 0)
@@ -522,6 +544,8 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         target = decision.get("target_price")
         corrected = decision.get("price_level_corrected", False)
         correction_reason = decision.get("price_level_correction_reason", "") or ""
+        inaction = decision.get("inaction_reason")
+        triggers = decision.get("reeval_triggers") or []
 
     lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
     if position:
@@ -534,7 +558,10 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         if derived:
             lines.append(derived)
     else:
-        lines.append("- **再评估触发条件**: 见理由")
+        lines.append(
+            f"- **不行动原因**: {inaction if isinstance(inaction, str) and inaction.strip() else '未申报'}"
+        )
+        lines.append(f"- **再评估触发条件**: {_fmt_reeval_triggers(triggers)}")
     lines.append(f"- **理由**: {reasoning}")
     if corrected:
         # toolize-price-levels：价位经工具参考带修正（可观测，不静默）
