@@ -109,10 +109,14 @@ Expected: FAIL —— `AttributeError: 'TradeDecision' object has no attribute '
     @field_validator("inaction_reason", mode="before")
     @classmethod
     def _blank_inaction_reason_to_none(cls, value: object) -> object:
-        """纯空白等同缺失（与 plain_conclusion 空值口径一致，但不抛异常）。"""
-        if isinstance(value, str) and not value.strip():
+        """非字符串 / 纯空白一律归一为 None（未申报）——形态噪声不炸管线（同 anchors 先例）。
+
+        语义与 plain_conclusion 的空值口径一致，但不抛异常：旧 anchors 实现曾因
+        形态噪声抛 ValidationError 炸掉整条 full-graph 运行。
+        """
+        if not isinstance(value, str):
             return None
-        return value
+        return None if not value.strip() else value
 
     @field_validator("reeval_triggers", mode="before")
     @classmethod
