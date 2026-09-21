@@ -107,6 +107,9 @@ def risk_judge(state: dict) -> dict:
         _missing = final_price_missing(decision)
         if _missing:
             final_price_check["note"] = f"已打回仍未申报：{'、'.join(_missing)}"
+        elif str(getattr(decision, "action", "")) in ("watch", "hold"):
+            # 终审 I-1：重试输出非执行动作时「已申报」是错话——如实标注价位不适用
+            final_price_check["note"] = "打回后改为非执行动作（价位不适用）"
         else:
             final_price_check["note"] = "打回后已申报"
     # 终稿非执行动作理由完整性（require-watch-hold-rationale）：watch/hold 缺理由
@@ -136,6 +139,14 @@ def risk_judge(state: dict) -> dict:
             final_inaction_check["note"] = f"已打回仍未申报：{'、'.join(_missing_inaction)}"
         else:
             final_inaction_check["note"] = "打回后已申报"
+        # I-1（终审）：理由重试使终稿换代，价位块结论作废——复核并如实改注
+        _price_after = final_price_missing(decision)
+        if _price_after:
+            final_price_check["note"] = (
+                f"理由重试后终稿价位缺失：{'、'.join(_price_after)}（未再次打回，如实标注）"
+            )
+        elif final_price_check["note"]:
+            final_price_check["note"] = "价位结论已被理由重试覆盖（终稿换代后价位齐备，未再次打回）"
     # 赔率自检（任务 6 + extend-payout-self-check-coverage）：终稿 reasoning 自报赔率
     # vs 自身价位代码计算——冲突原位修正；转述窗口跳过（计数上报）
     _reasoning, _payout_fixed, _payout_skipped = _apply_payout_self_check(

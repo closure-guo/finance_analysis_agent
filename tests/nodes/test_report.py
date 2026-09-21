@@ -342,6 +342,8 @@ class TestTradeDecisionOperationalParams:
         assert "watch" in md
         assert "- **不行动原因**: 未申报" in md
         assert "- **再评估触发条件**: 未申报" in md
+        # arity 断言（恢复被替换旧用例的「恰好一行」强度）：占位行不得重复渲染
+        assert md.count("- **再评估触发条件**:") == 1
         # 锚定渲染器特有的加粗标签行断言：watch/hold 不渲染硬价格行
         param_lines = [
             ln.strip()

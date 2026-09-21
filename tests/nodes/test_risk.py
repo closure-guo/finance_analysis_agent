@@ -310,3 +310,41 @@ class TestFinalInactionRationale:
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
         assert result["final_inaction_check"] == {"result": "pass", "note": ""}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_inaction_retry_to_buy_rechecks_price_conclusion(self, mock_llm):
+        """终审 I-1 主场景：理由重试使终稿换代（watch→buy），价位结论作废必须复核改注。
+
+        两段式最小复现：第 1 次 watch 缺理由（价位块不触发，价位 note 为空 pass），
+        理由重试返回无价位的 buy——若不复核，终稿是无价位 buy 却仍报 pass 空注（假阳性）。
+        """
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="watch"),
+            TestFinalPriceIntegrity._resp(action="buy"),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "buy"
+        note = result["final_price_check"]["note"]
+        assert "理由重试后终稿价位缺失" in note
+        assert "entry_price" in note
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_retry_to_watch_annotated_as_not_applicable(self, mock_llm):
+        """终审 I-1 反向：价位重试输出 watch（带完整理由）→ 如实标注非执行动作。
+
+        不得沿用「打回后已申报」——该文案对非执行动作是错话；理由块此时不应再打回
+        （watch 理由齐备），故 call_count 停在第 2 次。
+        """
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="buy"),
+            TestFinalPriceIntegrity._resp(
+                action="watch",
+                inaction_reason="等待趋势确认",
+                reeval_triggers=["价格站稳 60 日均线"],
+            ),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "watch"
+        assert result["final_price_check"]["note"] == "打回后改为非执行动作（价位不适用）"
