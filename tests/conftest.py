@@ -33,6 +33,23 @@ def _isolate_reports_dir(request, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _reset_probe_cache():
+    """probe 缓存逐测试重置（#77 测试卫生）：单例跨用例残留会让 resolver 用例 order-dependent。
+
+    resolver 解析会合并 probe 缓存事实（capability 以 probe 为准、未命中标
+    probe_required），一旦某用例写入缓存，后续用例的解析结果就随执行顺序漂移。
+    此前只在个别文件手工 reset，新增用例漏 reset 即引入顺序依赖。
+    """
+    from finance_agent.llm.probe_cache import _reset_probe_cache_for_tests
+
+    _reset_probe_cache_for_tests()
+    try:
+        yield
+    finally:
+        _reset_probe_cache_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_runtime_dbs(request, tmp_path):
     """运行时数据库隔离（#133 / incident 031）：非 live 测试一律不得写开发库。
 
