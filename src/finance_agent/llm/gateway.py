@@ -167,7 +167,7 @@ def _usage_details(resp) -> dict:
     }
 
 
-def _extract_with_tools_output(resp) -> dict:
+def _extract_with_tools_output(resp: Any) -> dict:
     """从 completion resp 提取结构化 generation output（自 legacy.py 移植）。
 
     返回 ``{answer, reasoning}``，非空 tool_calls 时追加 ``tool_calls`` 字段
@@ -580,11 +580,21 @@ def complete_with_tools(
         with open_span(
             name=trace.get("name") or f"litellm:{profile.model}",
             input={"messages": messages},
+            # prompt metadata 与主观测（_start_trace_observation）同源下发
+            metadata=trace.get("metadata") or {},
+            # 与主路径同型（generation）：span 观测会静默丢弃 usage_details，
+            # token 用量只有 generation 落库（langfuse 4.13 真机实测）
+            as_type="generation",
+            model=profile.model,
         ) as obs:
             resp = _do_call()
             if obs is not None:
                 with suppress(Exception):  # trace 失败不影响业务
-                    obs.update(output=_extract_with_tools_output(resp))
+                    # 字段与主路径对齐：output + usage_details（token 用量可比较）
+                    obs.update(
+                        output=_extract_with_tools_output(resp),
+                        usage_details=_usage_details(resp),
+                    )
             _close_observation(_gen_cm)
             return resp
 
