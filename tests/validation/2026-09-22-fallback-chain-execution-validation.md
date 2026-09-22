@@ -47,8 +47,28 @@
 | 懒解析不变量 | `tests/nodes/test_llm_utils_fallback.py::TestLazyChainResolution`（2 用例） | ✅ happy path 零 `fallback_attempt_plan` 调用；链解析失败不盖原错误 |
 | 既有语义不回退 | `tests/nodes/test_call_llm_for_json.py`（15 用例，2 条 raises 用例固定单 profile 链） | ✅ 同 profile 强化指令重试、瞬时故障重试、validate 重试语义不变 |
 | 节点/LLM/图 5 层回归 | `pytest tests/nodes tests/llm tests/test_graph_5layer.py tests/test_models.py` | ✅ 722 passed |
-| 全量后端 | `uv run pytest` | ✅ 3121 passed / 2 skipped（18:59，Docker/Langfuse 在线） |
+| 全量后端（本地 env，含 `.env`） | `uv run pytest` | ✅ 3121 passed / 2 skipped（18:59）——**该结果无效**，见下「验证协议发现」 |
+| 全量后端（CI 等价 env：`LLM_MODEL= LLM_BASE_URL= LLM_API_KEY=`） | `uv run pytest` | ✅ 3117 passed / 5 skipped / 1 failed——唯一失败为 `tests/evals/test_eval_live.py::test_live_quick_task_produces_report`（live 用例，需真实 key，被本次清空 env 人为禁用；CI 侧 12 条 live 为 deselected） |
 | lint / 类型 | `ruff check` / `ruff format --check` / `mypy`（改动文件） | ✅ 0 issues |
+
+## 验证协议发现（重要，CI 首轮红）
+
+**本地全量绿不成立**：本机存在仓库 `.env`，而 `litellm/__init__.py:20` 在 import 时调用
+`load_dotenv()` —— 于是本地测试进程在首次 import litellm 后 `LLM_MODEL=openai/glm-5.3` 被载入，
+`resolve_profile` 落到 `env:openai/glm-5.3`（`fallback=()`，链长 1）；CI 无 `.env`，primary 落到
+registry 默认 `deepseek-official`（链长 2）。链长差异使「repair 耗尽后是否再切成员」在两地行为分叉：
+
+- CI 首轮 `lint-and-test` 红：`tests/nodes/test_fund_manager.py::TestApproveFieldRetry::test_still_invalid_after_retry_raises`
+  —— mock `side_effect` 用尽后链执行器仍切 `openai-official` → `StopIteration`。
+- 同一测试本地绿（`.env` 使链长 1，无切换）。
+
+**处置**：受影响用例统一 pin 单 profile 链（`_pin_single_profile()`：`resolve_profile` →
+`deepseek-official` 且 `fallback=()`），语义不变（本文件钉的是「同 profile 重试后仍失败则抛」，
+链切换在 `tests/nodes/test_llm_utils_fallback.py` 单独覆盖）；本地复跑改用 CI 等价 env
+（`LLM_MODEL= LLM_BASE_URL= LLM_API_KEY=` 显式清空，`load_dotenv` 默认不覆盖已存在变量）。
+
+**教训**：改动 LLM 解析/链长相关代码时，本地全量必须用 CI 等价 env 复跑；`.env` 在场时本地
+绿不能作为门禁证据（与「整齐得可疑的数字先解释再放行」同族）。
 
 ## 人工抽查项（⬜ 待人工）
 

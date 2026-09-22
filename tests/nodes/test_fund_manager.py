@@ -30,6 +30,24 @@ def _base_state() -> dict:
     }
 
 
+def _pin_single_profile():
+    """固定 primary 为无 fallback 配置的 profile（隔离链长对「重试后仍失败」断言的干扰）。
+
+    本文件钉的是「同 profile 带校验错误摘要重试一次，仍失败则抛」语义；fallback 链切换
+    单独在 tests/nodes/test_llm_utils_fallback.py 覆盖。注意本地 `litellm` import 会经
+    load_dotenv 载入仓库 `.env`（LLM_MODEL → env profile，链长 1），CI 无 `.env` 时
+    primary 落到 registry 默认 deepseek-official（链长 2）——不 pin 则本地/CI 行为分叉。
+    """
+    import dataclasses
+
+    from finance_agent.llm.registry import get_profile_preset
+
+    return patch(
+        "finance_agent.llm.gateway.resolve_profile",
+        return_value=dataclasses.replace(get_profile_preset("deepseek-official"), fallback=()),
+    )
+
+
 class TestFundManager:
     """Layer V Fund Manager Agent。"""
 
@@ -181,7 +199,7 @@ class TestApproveFieldRetry:
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_still_invalid_after_retry_raises(self, mock_llm):
         mock_llm.side_effect = [self._bad, self._bad]
-        with pytest.raises(ValidationError):
+        with _pin_single_profile(), pytest.raises(ValidationError):
             fund_manager(_base_state())
         assert mock_llm.call_count == 2
 
