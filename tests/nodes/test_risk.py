@@ -348,3 +348,40 @@ class TestFinalInactionRationale:
         assert mock_llm.call_count == 2
         assert result["final_trade_decision"].action == "watch"
         assert result["final_price_check"]["note"] == "打回后改为非执行动作（价位不适用）"
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_double_retry_to_watch_annotates_price_note_accurately(self, mock_llm):
+        """双翻转终态为非执行动作：价位结论注记须精确（评审 Minor 收口）。
+
+        序：buy 缺价位 →（价位重试）watch 缺理由 →（理由重试）watch 带理由。
+        终稿为 watch 时不得声称「价位齐备」（对非执行动作是错话）——如实标注改为非执行。
+        """
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="buy"),
+            TestFinalPriceIntegrity._resp(action="watch"),
+            TestFinalPriceIntegrity._resp(
+                action="watch",
+                inaction_reason="等待趋势确认",
+                reeval_triggers=["价格站稳 60 日均线"],
+            ),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 3
+        note = result["final_price_check"]["note"]
+        assert "非执行动作" in note
+        assert "价位齐备" not in note
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_double_retry_to_buy_keeps_complete_price_wording(self, mock_llm):
+        """双翻转终态为执行动作且价位齐备：仍须如实声称「价位齐备」（措辞精确化的另一半）。"""
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="buy"),
+            TestFinalPriceIntegrity._resp(action="watch"),
+            TestFinalPriceIntegrity._resp(
+                entry_price=26.0, stop_loss=25.0, target_price=28.0
+            ),  # 默认 action=buy，价位齐备
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 3
+        assert result["final_trade_decision"].action == "buy"
+        assert "价位齐备" in result["final_price_check"]["note"]

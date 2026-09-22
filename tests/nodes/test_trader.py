@@ -80,6 +80,14 @@ class TestTraderReturnFeedback:
 class TestInactionFeedbackInjection:
     """require-watch-hold-rationale：理由打回意见注入 trader context。"""
 
+    def test_empty_feedback_not_injected(self):
+        """空串等同未申报（评审 Minor 收口：truthiness 守卫的边界）。
+        与 FM 先例 test_context_with_empty_reasoning_not_injected 同款判据。"""
+        from finance_agent.nodes.trader import _build_trader_context
+
+        ctx = _build_trader_context({"analyst_reports": {}, "inaction_rationale_feedback": ""})
+        assert "非执行动作理由打回意见" not in ctx
+
     def test_feedback_injected_into_context(self):
         from finance_agent.nodes.trader import _build_trader_context
 

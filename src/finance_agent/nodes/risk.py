@@ -146,7 +146,16 @@ def risk_judge(state: dict) -> dict:
                 f"理由重试后终稿价位缺失：{'、'.join(_price_after)}（未再次打回，如实标注）"
             )
         elif final_price_check["note"]:
-            final_price_check["note"] = "价位结论已被理由重试覆盖（终稿换代后价位齐备，未再次打回）"
+            # 双翻转终态措辞精确化（评审 Minor 收口）：终稿为非执行动作时不得声称
+            # 「价位齐备」（对 watch/hold 是错话）——如实标注改为非执行动作。
+            if str(getattr(decision, "action", "")) in ("watch", "hold"):
+                final_price_check["note"] = (
+                    "价位结论已被理由重试覆盖（终稿改为非执行动作，价位不适用，未再次打回）"
+                )
+            else:
+                final_price_check["note"] = (
+                    "价位结论已被理由重试覆盖（终稿换代后价位齐备，未再次打回）"
+                )
     # 赔率自检（任务 6 + extend-payout-self-check-coverage）：终稿 reasoning 自报赔率
     # vs 自身价位代码计算——冲突原位修正；转述窗口跳过（计数上报）
     _reasoning, _payout_fixed, _payout_skipped = _apply_payout_self_check(

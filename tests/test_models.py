@@ -432,9 +432,20 @@ class TestTradeDecisionInactionRationale:
         assert d.reeval_triggers == []
 
     def test_reeval_triggers_tuple_normalized(self):
-        """tuple 与 list 同款归一（LLM/中间层可能给 tuple）。"""
+        """tuple 与 list 同款归一，且非 str/空白条目被丢弃。
+
+        评审 Minor 收口：纯 ("a","b") 形态 pydantic 自身也能 coerce → 不判别 tuple 分支；
+        混合 tuple 在删除该分支时会落进 `return []`，本断言才真正钉住分支行为。
+        """
         d = TradeDecision(action="watch", confidence=0.5, reasoning="r", reeval_triggers=("a", "b"))
         assert d.reeval_triggers == ["a", "b"]
+        mixed = TradeDecision(
+            action="watch",
+            confidence=0.5,
+            reasoning="r",
+            reeval_triggers=("有效", 42, "  ", "第二条"),  # pyrefly: ignore[bad-argument-type]
+        )
+        assert mixed.reeval_triggers == ["有效", "第二条"]
 
     def test_non_str_inaction_reason_normalized_to_none_without_raising(self):
         """非 str 形态（int/dict/list）一律归一为 None——MUST NOT 抛 ValidationError 中断管线。

@@ -384,6 +384,23 @@ class TestTradeDecisionOperationalParams:
         assert "- **不行动原因**: 维持仓位等待趋势确认" in md
         assert "- **再评估触发条件**: ① 价格跌破 1450" in md
 
+    def test_more_than_ten_triggers_numbered_with_fallback(self):
+        """超过 ⑩ 的编号回退为 (11)/(12)（评审 Minor 收口：回退分支此前未测）。"""
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.5,
+                "reasoning": "r",
+                "inaction_reason": "等待",
+                "reeval_triggers": [f"条件{i}" for i in range(1, 13)],
+            },
+        }
+        md = generate_report(state)["final_report"]
+        assert "⑩ 条件10" in md
+        assert "(11) 条件11" in md and "(12) 条件12" in md
+        assert "⑪" not in md
+
     def test_watch_dict_string_triggers_rendered_leniently(self):
         """dict 形态（历史落库 JSON）triggers 为字符串时宽容渲染为单条目，不抛异常。"""
         state = {

@@ -89,8 +89,8 @@ def _build_trader_context(state: dict) -> str:
     if price_feedback:
         sections.append(f"价位校验打回意见: {price_feedback}")
 
-    # 非执行动作理由打回意见（require-watch-hold-rationale：watch/hold 缺理由
-    # fail 后重出时携带；非 fail 路径无此键，不注入）
+    # 非执行动作理由打回意见（require-watch-hold-rationale）：存在即注入——fail 时写入，
+    # pass 分支不写但旧值可滞留 state（与 price_check_feedback 同款语义，非 retry 作用域）
     inaction_feedback = state.get("inaction_rationale_feedback")
     if inaction_feedback:
         sections.append(f"非执行动作理由打回意见: {inaction_feedback}")

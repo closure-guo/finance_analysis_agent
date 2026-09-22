@@ -517,8 +517,25 @@ class TestInactionRationaleCheck:
         partial = {"action": "hold", "inaction_reason": "等待", "reeval_triggers": "价格跌破 10"}
         assert inaction_rationale_missing(partial) == []
 
+    def test_helper_treats_blank_values_as_missing(self):
+        """纯空白容差（评审 Minor 收口）：空白 reason / 全空白 triggers 条 → 视为缺失。
+
+        缺这两条断言时，删掉 helper 里的 `.strip()` 判据测试仍全绿。
+        """
+        from finance_agent.nodes.validate import inaction_rationale_missing
+
+        blank = {"action": "watch", "inaction_reason": "   ", "reeval_triggers": ["", "  "]}
+        assert inaction_rationale_missing(blank) == ["inaction_reason", "reeval_triggers"]
+        # 有一条有效条目即算申报（空白条被忽略而非拖累）
+        mixed = {"action": "hold", "inaction_reason": "有值", "reeval_triggers": ["  ", "有效"]}
+        assert inaction_rationale_missing(mixed) == []
+
 
 class TestInactionRationaleRouting:
+    def test_missing_check_key_routes_forward(self):
+        """键不存在（旧检查点/直调）→ 前进，不 KeyError（评审 Minor 收口）。"""
+        assert after_validate_trade_prices({"price_check": {"result": "pass"}}) == "risk_r1_entry"
+
     def test_rationale_fail_routes_back_to_trader(self):
         state = {
             "price_check": {"result": "pass"},
