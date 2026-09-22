@@ -244,6 +244,7 @@ cache.db*
 
 # Runtime data
 **/sessions.db
+**/sessions.db.bak*
 # SQLite WAL/SHM 与 E2E 独立测试库（SESSIONS_DB_PATH 注入）
 **/sessions.db-wal
 **/sessions.db-shm
