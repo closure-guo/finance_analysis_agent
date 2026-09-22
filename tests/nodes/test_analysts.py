@@ -176,8 +176,15 @@ class TestAnalystSpanMetadata:
         # 喂非法 JSON 触发降级
         report = _parse_analyst_report("not a json {{{", "technical")
         assert report.parse_degraded is True
-        assert captured["metadata"]["degradation"] == "parse_degraded"
+        md = captured["metadata"]
+        assert md["degradation"] == "parse_degraded"
         assert captured["level"] == "WARNING"
+        # raw_excerpt 必须存在且含原文（否则降级原因不可审计——「观测数据会撒谎」同族）
+        assert md.get("raw_excerpt"), f"raw_excerpt 缺失/为空: {md}"
+        assert "not a json" in md["raw_excerpt"]
+        # 命名空间键：同 span 多次降级不互相覆盖（agent/轮次可区分）
+        assert md["agent"] == "technical"
+        assert md["degradation.technical.r0"] == "parse_degraded"
 
     def test_sanitize_claims_marks_span(self, monkeypatch):
         """非法枚举被改写时，span metadata 记 sanitize_claims。"""
@@ -194,10 +201,23 @@ class TestAnalystSpanMetadata:
             {"claims": [{"claim_type": "非法类型", "source_type": "data"}]}, "technical"
         )
         # 断言至少一次 sanitize_claims 记录
-        assert any(
-            c["metadata"] and c["metadata"].get("degradation") == "sanitize_claims"
-            for c in captured
+        rec = next(
+            (
+                c
+                for c in captured
+                if c["metadata"] and c["metadata"].get("degradation") == "sanitize_claims"
+            ),
+            None,
         )
+        assert rec is not None, f"未捕获 sanitize_claims 记录: {captured}"
+        # 锁完整 metadata 值：键名漂移或 raw/fixed 写反都会让看板误读降级事实
+        md = rec["metadata"]
+        assert md["field"] == "claim_type"
+        assert md["raw"] == "非法类型"
+        assert md["fixed"] == "entity"
+        assert md["agent"] == "technical"
+        assert md["degradation.technical.r0.sanitize.claim_type"] == "非法类型->entity"
+        assert rec["level"] == "WARNING"
         assert all(c["level"] == "WARNING" for c in captured if c["metadata"])
 
     def test_trace_errors_do_not_block_degradation(self):

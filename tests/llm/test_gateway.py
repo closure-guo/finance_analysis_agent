@@ -164,3 +164,47 @@ class TestCompleteStreamPresetPassthrough:
 
         assert "".join(e.text for e in events if e.kind == "text") == "ok"
         assert calls[0]["model"] == "openai/glm-5.2"
+
+
+class TestFinalizeObservationTruncation:
+    """8KB 截断 wiring 直测（#49）：超长字段在写入 generation output 前实际被截断。
+
+    此前只有 helper 级（truncate_for_trace）覆盖，没有「写入路径真的调了截断」的直测——
+    `_finalize_observation` 若漏掉截断（或换用未截断的字段），trace 体积会静默膨胀。
+    """
+
+    @staticmethod
+    def _fake_gen():
+        class _Gen:
+            def __init__(self):
+                self.updated: dict = {}
+
+            def update(self, **kw):
+                self.updated.update(kw)
+
+        return _Gen()
+
+    def test_oversized_answer_and_reasoning_truncated(self):
+        from finance_agent.llm.gateway import _finalize_observation
+
+        gen = self._fake_gen()
+        _finalize_observation(gen, answer="X" * 20000, reasoning="股" * 20000, last_usage=None)
+
+        answer = gen.updated["output"]["answer"]
+        reasoning = gen.updated["output"]["reasoning"]
+        assert "[truncated" in answer
+        assert "[truncated" in reasoning
+        assert len(answer.encode("utf-8")) <= 8192 + 200
+        assert len(reasoning.encode("utf-8")) <= 8192 + 200
+        # 截断后仍是合法 UTF-8（CJK 字节边界不产生孤儿字节）
+        reasoning.encode("utf-8").decode("utf-8")
+
+    def test_small_output_written_verbatim(self):
+        """未超限不截断（不得平白给正常输出加标记）。"""
+        from finance_agent.llm.gateway import _finalize_observation
+
+        gen = self._fake_gen()
+        _finalize_observation(gen, answer="短答", reasoning="短思考", last_usage=None)
+        assert gen.updated["output"]["answer"] == "短答"
+        assert gen.updated["output"]["reasoning"] == "短思考"
+        assert gen.updated["usage_details"] == {}

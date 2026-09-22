@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 import finance_agent.nodes.fetch as fetch_mod
-from finance_agent.nodes.fetch import fetch_data
+from finance_agent.nodes.fetch import _summarize_success_output, fetch_data
 
 
 def _make_balance_sheet():
@@ -191,6 +191,8 @@ class TestFetchDataSpanObservability:
             if n == "data_source:akshare:balance_sheet" and "output" in kwargs
         ]
         assert bs_outputs, f"balance_sheet span output 未捕获: {captured}"
+        # 每个 span 只写一次 output（取 [0] 会掩盖重复写：多写一次也没人发现）
+        assert len(bs_outputs) == 1, f"balance_sheet span output 应只写一次: {bs_outputs}"
         output = bs_outputs[0]
         assert output["status"] == "success", f"成功路径 status 应为 success: {output}"
         assert output["rows"] == 2, f"balance_sheet 行数应为 2: {output}"
@@ -200,6 +202,38 @@ class TestFetchDataSpanObservability:
         assert not any(isinstance(v, pd.DataFrame) for v in output.values()), (
             f"output 误含完整 DataFrame: {output}"
         )
+
+
+class TestSummarizeSuccessOutput:
+    """`_summarize_success_output` 直接单测（#49）：列截断分支与兜底分支。
+
+    此前只经 fetch_data 端到端间接覆盖（且只取首个 output），>20 列截断与
+    非 DataFrame 兜底两条分支无直测——分支改动无人拦。
+    """
+
+    def test_dataframe_summary_rows_and_columns(self):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        out = _summarize_success_output(df)
+        assert out == {"status": "success", "rows": 3, "columns": ["a", "b"]}
+
+    def test_many_columns_truncated_to_20_plus_ellipsis(self):
+        cols = [f"c{i}" for i in range(25)]
+        df = pd.DataFrame({c: [1] for c in cols})
+        out = _summarize_success_output(df)
+        assert out["columns"] == cols[:20] + ["..."]
+        assert len(out["columns"]) == 21
+
+    def test_exactly_20_columns_not_truncated(self):
+        """边界：恰 20 列不截断（不得平白加 "..." 噪声）。"""
+        cols = [f"c{i}" for i in range(20)]
+        df = pd.DataFrame({c: [1] for c in cols})
+        assert _summarize_success_output(df)["columns"] == cols
+
+    def test_non_dataframe_falls_back_to_status_only(self):
+        """非 DataFrame（list/dict/None）只记 status，不臆造 rows/columns。"""
+        for value in ([{"x": 1}], {"industry": "白酒"}, None, "text"):
+            out = _summarize_success_output(value)
+            assert out == {"status": "success"}, f"{value!r} 摘要应为纯 status: {out}"
 
 
 class TestFetchDataMonitoring:
