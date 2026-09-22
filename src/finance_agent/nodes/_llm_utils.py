@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from finance_agent.llm.gateway import FallbackAttempt
 
 # ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
 #
@@ -172,24 +175,99 @@ def call_llm_for_json(
     与 max_tokens 配额无关）。下游节点（debate/risk/trader/fund_manager）
     解析无降级，单次空输出即炸整行 —— 统一经本函数调用并重试。
 
-    重试一次后仍失败向上抛 JSONDecodeError：保留 fund_manager
-    「非法输出中断管线、不静默降级」的既有设计（重试 ≠ 降级）。
-
     validate：可选字段校验钩子（典型为 pydantic Model.model_validate）。JSON 合法
-    但校验抛 ValidationError 时，带错误摘要重试一次；仍不过向上抛 ValidationError。
+    但校验抛 ValidationError 时，带错误摘要重试一次。
+
+    fallback 链执行（spec llm-policy-router Requirement 2）：单 profile 的
+    repair 耗尽（JSON 解析失败 / 字段校验失败）与触发类 typed error
+    （ContentFiltered/AuthError/ModelNotFound/UnsupportedCapability）依
+    ``fallback_attempt_plan`` 切换下一 profile 重试；每次切换落该次尝试的
+    trace（fallback_from + fallback_path）；链长上限 3，链耗尽上抛最后一个
+    错误（保留 fund_manager「非法输出中断管线、不静默降级」的设计：重试 ≠ 降级）。
+    链在首次失败后才解析（懒）：happy path 与 TESTING stub 路径不付解析成本，
+    也不在触发错误前引入新的配置错误面。
     其余参数与 call_llm_streaming 一致，原样透传。
     """
-    kwargs: dict = {
+    from finance_agent.llm.gateway import FALLBACK_TRIGGER_ERRORS, fallback_attempt_plan
+
+    # 路径触发集：spec 的四类 typed error + 本路径的「输出合同」repair 耗尽
+    triggers = (*FALLBACK_TRIGGER_ERRORS, json.JSONDecodeError, ValidationError)
+    base_kwargs: dict = {
         "system": system,
         "api_key": api_key,
         "node_name": node_name,
-        "llm_config": llm_config,
         "prompt_name": prompt_name,
         "prompt_version": prompt_version,
         "stock_code": stock_code,
     }
+    attempted: list[str] = []
+    attempts: list[FallbackAttempt] = []
+    pos = 0
+    while True:
+        if attempts:
+            att = attempts[pos]
+            cur_config, cur_preset = att.llm_config, att.preset
+            fallback_from: str | None = attempted[-1]
+            fallback_path: list[str] | None = [*attempted, att.profile]
+        else:
+            # 首次尝试沿用既有语义：请求级（或 env/preset 解析的）配置原样透传
+            cur_config, cur_preset = llm_config, None
+            fallback_from, fallback_path = None, None
+        try:
+            return _call_llm_for_json_once(
+                prompt,
+                base_kwargs=base_kwargs,
+                llm_config=cur_config,
+                preset=cur_preset,
+                fallback_from=fallback_from,
+                fallback_path=fallback_path,
+                validate=validate,
+            )
+        except triggers as exc:
+            if attempts:
+                attempted.append(attempts[pos].profile)
+                pos += 1
+                if pos < len(attempts):
+                    continue
+                raise
+            # 首次失败：此刻才解析链——解析失败（配置半套等）不得盖住原错误
+            try:
+                attempts = fallback_attempt_plan(
+                    purpose="deep", llm_config=_request_config_dict(llm_config, api_key)
+                ).attempts
+            except Exception:
+                raise exc from None
+            attempted.append(attempts[0].profile)
+            if len(attempts) == 1:
+                raise
+            pos = 1
+
+
+def _call_llm_for_json_once(
+    prompt: str,
+    *,
+    base_kwargs: dict,
+    llm_config,
+    preset: str | None,
+    fallback_from: str | None,
+    fallback_path: list[str] | None,
+    validate: Callable[[dict], Any] | None,
+) -> dict:
+    """单 profile 的一次「调用 + 解析 + repair」。"""
+    from finance_agent.llm.gateway import FALLBACK_TRIGGER_ERRORS
+
+    kwargs = {
+        **base_kwargs,
+        "llm_config": llm_config,
+        "preset": preset,
+        "fallback_from": fallback_from,
+        "fallback_path": fallback_path,
+    }
     try:
         response = call_llm_streaming(prompt, **kwargs)
+    except FALLBACK_TRIGGER_ERRORS:
+        # 触发类错误同 profile 重试无意义（spec：依链切换）→ 交给上层链执行器
+        raise
     except Exception:
         # 服务瞬时故障（方舟偶发 500 / 流式中断，r4 实测）重试一次
         response = call_llm_streaming(prompt, **kwargs)
@@ -328,6 +406,9 @@ def call_llm_streaming(
     prompt_name: str | None = None,
     prompt_version: str | int | None = None,
     stock_code: str | None = None,
+    preset: str | None = None,
+    fallback_from: str | None = None,
+    fallback_path: list[str] | None = None,
 ) -> str:
     """Like call_llm but streams thinking tokens via LangGraph custom stream writer.
 
@@ -337,7 +418,12 @@ def call_llm_streaming(
     还原为 typed error 并 raise；finished 事件忽略。
 
     llm_config（LLMConfig | dict | None）经请求级 dict 注入（复刻
-    legacy._request_config_dict，实现请求级配置注入）。
+    legacy._request_config_dict，实现请求级配置注入）。preset 为命名 preset
+    选中 profile（fallback 链成员用）。
+
+    fallback_from / fallback_path（可选）：fallback 链切换事实，写入本次
+    generation 的 trace metadata（spec「每次切换 MUST 在 trace 记录
+    fallback_from」——每次尝试各自成观测记录，多跳的中间跳不丢失）。
 
     prompt_name / prompt_version（ADR-0015 Task 4）与 node_name / stock_code
     经 trace.metadata 挂到 Langfuse generation（Prompt 元数据可追溯 +
@@ -383,9 +469,16 @@ def call_llm_streaming(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     cfg_dict = _request_config_dict(llm_config, api_key)
+    _trace_md = _generation_metadata(prompt_name, prompt_version, node_name, None, stock_code)
+    # fallback 链切换事实（仅切换后的尝试携带）——每次切换在本 generation
+    # 观测里可见，多跳路径可回溯（spec llm-policy-router Requirement 2）
+    if fallback_from:
+        _trace_md["fallback_from"] = fallback_from
+    if fallback_path:
+        _trace_md["fallback_path"] = list(fallback_path)
     trace = {
         "name": node_name or f"litellm:{_llm_model_for_name(llm_config)}",
-        "metadata": _generation_metadata(prompt_name, prompt_version, node_name, None, stock_code),
+        "metadata": _trace_md,
     }
 
     # retryable LLMError（OutputTruncated/EmptyLLMOutput/超时/限流）重试一次：
@@ -411,6 +504,7 @@ def call_llm_streaming(
         "temperature": 0.3,
         "max_tokens": 65536,
         "llm_config": cfg_dict,
+        "preset": preset,
         "trace": trace,
     }
     escalate: dict = {}

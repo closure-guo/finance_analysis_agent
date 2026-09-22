@@ -9,6 +9,7 @@ streaming/with_tools 在 5.1 薄壳转调时补全。
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from finance_agent.llm.adapters.litellm_adapter import (
@@ -358,8 +359,9 @@ def complete_text(
 
 # fallback 链触发错误（spec llm-policy-router Requirement 2）：不可经同
 # profile 重试解决的（合同耗尽/内容过滤/鉴权/模型缺失/能力不支持）依链
-# 切换 profile；网络瞬时错误不在此处理（流路径内部自有重试）。
-_FALLBACK_TRIGGER_ERRORS = (
+# 切换 profile；网络瞬时错误不在此处理（流路径内部自有重试）。节点路径
+# （nodes/_llm_utils）复用同一集合，另加本路径的合同 repair 耗尽错误。
+FALLBACK_TRIGGER_ERRORS = (
     OutputContractError,
     ContentFilteredError,
     AuthError,
@@ -369,24 +371,38 @@ _FALLBACK_TRIGGER_ERRORS = (
 _MAX_FALLBACK_ATTEMPTS = 3
 
 
-def complete_text_with_fallback(
-    messages: list[dict[str, Any]],
-    *,
-    purpose: Purpose = "deep",
-    llm_config: dict[str, Any] | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    trace: dict[str, Any] | None = None,
-) -> tuple[str, dict]:
-    """带 fallback 链的非流式 complete 入口（harden Task 4）。
+@dataclass(frozen=True)
+class FallbackAttempt:
+    """fallback 链的一次尝试：profile 名 + 该次尝试的配置选择依据。
 
-    流程：resolve primary → 拼 candidates（primary + 其 registry fallback
-    名）→ select_profile 排序/能力校验得重试链 → 逐成员调
-    complete_text（primary 用请求级 llm_config 或命名 preset，fallback
-    成员用 ``preset=<name>``）。捕获 ``_FALLBACK_TRIGGER_ERRORS``：
-    链未耗尽换下一成员重试，成功后 metadata 合并 ``fallback_from``
-    （前一 profile 名）+ ``router_trace``；链耗尽上抛最后错误；其他
-    异常立即传播。总尝试次数 ≤3。业务调用点接线为 follow-up。
+    index=0 是请求级 primary：llm_config 可透传（primary 命中命名 preset 时
+    改用 preset 名，避免链执行中途重解析漂移）；index>0 是链成员，只按命名
+    preset 选中——请求级配置描述 primary 的端点，不得带到成员上。
+    """
+
+    profile: str
+    index: int
+    llm_config: dict[str, Any] | None
+    preset: str | None
+
+
+@dataclass(frozen=True)
+class FallbackPlan:
+    """依序尝试计划：attempts（链长上限内）+ router 审计 trace。"""
+
+    attempts: list[FallbackAttempt]
+    router_trace: dict
+
+
+def fallback_attempt_plan(
+    *, purpose: Purpose = "deep", llm_config: dict[str, Any] | None = None
+) -> FallbackPlan:
+    """算 fallback 链的依序尝试计划（非流式执行器与节点路径共用，避免口径漂移）。
+
+    primary = ``resolve_profile(purpose, llm_config)``；候选 = primary + 其
+    registry fallback 名 → ``select_profile`` 做能力偏序校验（链成员能力 >=
+    primary）与排序 → 请求级 primary 打头，链成员按路由序去重，截到
+    ``_MAX_FALLBACK_ATTEMPTS``。
     """
     primary = resolve_profile(purpose=purpose, llm_config=llm_config)
     candidates: list[ModelProfile] = [primary]
@@ -402,29 +418,81 @@ def complete_text_with_fallback(
     ordered = ordered[:_MAX_FALLBACK_ATTEMPTS]
 
     preset_names = set(list_presets())
-    last_error: Exception | None = None
+    attempts: list[FallbackAttempt] = []
     for idx, prof in enumerate(ordered):
-        # 请求级 primary 优先透传 llm_config；命名 preset 成员用 preset 名
-        use_config = llm_config if idx == 0 else None
-        use_preset = prof.name if prof.name in preset_names else None
+        preset = prof.name if prof.name in preset_names else None
+        attempts.append(
+            FallbackAttempt(
+                profile=prof.name,
+                index=idx,
+                llm_config=llm_config if idx == 0 and preset is None else None,
+                preset=preset,
+            )
+        )
+    return FallbackPlan(attempts=attempts, router_trace=routed.trace)
+
+
+def _attempt_trace(
+    trace: dict[str, Any] | None, *, previous: str | None, path: list[str]
+) -> dict[str, Any] | None:
+    """把切换事实并入本次尝试的 trace metadata（每次切换各自成观测记录）。
+
+    spec「每次切换 MUST 在 trace 记录 fallback_from」：多跳链里中间那跳也必须
+    可见，故每次尝试携带自己的切换事实（``fallback_from`` = 触发切换的上一
+    成员，``fallback_path`` = 含本次在内的完整尝试路径）。首次尝试不改写
+    metadata；未开启观测（trace 为空）原样返回。
+    """
+    if not trace or previous is None:
+        return trace
+    metadata = dict(trace.get("metadata") or {})
+    metadata["fallback_from"] = previous
+    metadata["fallback_path"] = list(path)
+    return {**trace, "metadata": metadata}
+
+
+def complete_text_with_fallback(
+    messages: list[dict[str, Any]],
+    *,
+    purpose: Purpose = "deep",
+    llm_config: dict[str, Any] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    trace: dict[str, Any] | None = None,
+) -> tuple[str, dict]:
+    """带 fallback 链的非流式 complete 入口（harden Task 4）。
+
+    按 ``fallback_attempt_plan`` 依序尝试：捕获 ``FALLBACK_TRIGGER_ERRORS``
+    → 链未耗尽换下一成员重试（每次切换并入该次尝试的 trace metadata）；
+    成功后返回 metadata 合并 ``fallback_from``（触发切换的上一成员）、
+    ``fallback_path``（完整尝试路径）与 ``router_trace``；链耗尽上抛最后
+    错误；其他异常立即传播。总尝试次数 ≤3。
+    """
+    plan = fallback_attempt_plan(purpose=purpose, llm_config=llm_config)
+    last_error: Exception | None = None
+    attempted: list[str] = []
+    for att in plan.attempts:
+        fallback_from = attempted[-1] if attempted else None
+        path = [*attempted, att.profile]
         try:
             text, metadata = complete_text(
                 messages,
                 purpose=purpose,
                 max_tokens=max_tokens,
-                llm_config=use_config if use_preset is None else None,
-                preset=use_preset,
+                llm_config=att.llm_config,
+                preset=att.preset,
                 temperature=temperature,
-                trace=trace,
+                trace=_attempt_trace(trace, previous=fallback_from, path=path),
             )
-        except _FALLBACK_TRIGGER_ERRORS as exc:
+        except FALLBACK_TRIGGER_ERRORS as exc:
             last_error = exc
-            if idx + 1 < len(ordered):
+            attempted.append(att.profile)
+            if att.index + 1 < len(plan.attempts):
                 continue
             raise
-        if idx > 0:
-            metadata["fallback_from"] = ordered[idx - 1].name
-            metadata["router_trace"] = routed.trace
+        if att.index > 0:
+            metadata["fallback_from"] = fallback_from
+            metadata["fallback_path"] = path
+            metadata["router_trace"] = plan.router_trace
         return text, metadata
     raise last_error if last_error is not None else RuntimeError("fallback 链为空")
 
@@ -536,6 +604,7 @@ def complete_stream(
     tools: list[dict[str, Any]] | None = None,
     top_fields: list[str] | None = None,
     llm_config: dict[str, Any] | None = None,
+    preset: str | None = None,
     trace: dict[str, Any] | None = None,
     temperature: float | None = None,
     chunk_timeout: float = 120.0,
@@ -545,6 +614,10 @@ def complete_stream(
     Agent 核心消费归一事件流（reasoning/text/finished/error），不感知
     provider 细节。对接 litellm 同步流 chunk（choices[0].delta:
     reasoning_content -> reasoning；content -> text）。
+
+    ``preset``（可选）：显式命名 preset 选中 profile（registry），供
+    fallback 链成员按 preset 名切换使用（与非流式入口 ``complete_text``
+    同语义：请求级 llm_config 优先于 preset）。
 
     断点续写（llm-output-resume delta）：finish_reason=length 且正文非空时
     以「已生成正文尾部 + 进度标注 + 剩余预算」构造续写请求二次流式，续写段
@@ -559,7 +632,7 @@ def complete_stream(
     """
     from finance_agent.llm.types import CanonicalEvent
 
-    profile = resolve_profile(purpose=purpose, llm_config=llm_config)
+    profile = resolve_profile(purpose=purpose, llm_config=llm_config, preset=preset)
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice="auto")
     from finance_agent.llm.adapters.litellm_adapter import (

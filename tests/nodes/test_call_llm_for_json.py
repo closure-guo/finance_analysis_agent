@@ -33,6 +33,22 @@ def _mock_call(responses: list[str]):
     return fake, calls
 
 
+def _pin_single_profile():
+    """固定 primary 为无 fallback 配置的 profile（隔离 env / 链长对断言的干扰）。
+
+    本文件钉的是「同 profile 带强化指令重试一次」语义；fallback 链切换单独在
+    tests/nodes/test_llm_utils_fallback.py 覆盖。
+    """
+    import dataclasses
+
+    from finance_agent.llm.registry import get_profile_preset
+
+    return patch(
+        "finance_agent.llm.gateway.resolve_profile",
+        return_value=dataclasses.replace(get_profile_preset("deepseek-official"), fallback=()),
+    )
+
+
 class TestRetryOnBadOutput:
     def test_empty_then_valid_retries_once(self):
         fake, calls = _mock_call(["", '{"decision": "hold"}'])
@@ -68,9 +84,10 @@ class TestRetryOnBadOutput:
         assert len(calls) == 1
 
     def test_both_bad_raises(self):
-        """两次都失败必须抛（不静默降级），上游节点/管线按原语义中断。"""
+        """单 profile 链内两次都失败必须抛（不静默降级），上游节点/管线按原语义中断。"""
         fake, _ = _mock_call(["", "   "])
         with (
+            _pin_single_profile(),
             patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
             pytest.raises(json.JSONDecodeError),
         ):
@@ -250,6 +267,7 @@ class TestValidateHook:
 
         fake, calls = _mock_call(['{"x": 1}', '{"y": 2}'])
         with (
+            _pin_single_profile(),
             patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
             pytest.raises(ValidationError),
         ):

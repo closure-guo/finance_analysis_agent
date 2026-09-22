@@ -127,3 +127,40 @@ def test_complete_text_hangs_times_out(monkeypatch):
     t.join(4)
     assert not t.is_alive(), "complete_text 卡死：timeout 未生效"
     assert result["err"] == "LLMTimeoutError"
+
+
+class TestCompleteStreamPresetPassthrough:
+    """complete_stream 支持 ``preset=``：fallback 链成员按命名 preset 切换 profile。
+
+    fallback 链执行需要按 preset 名选中链成员（非请求级 llm_config）——流式入口
+    此前缺该参数，节点路径无法切 profile。
+    """
+
+    def test_preset_selects_named_profile(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from finance_agent.llm.gateway import complete_stream
+
+        calls = []
+
+        def _chunk(text=None, finish=None):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(reasoning_content=None, content=text),
+                        finish_reason=finish,
+                    )
+                ]
+            )
+
+        def fake_raw_stream(**kwargs):
+            calls.append(kwargs)
+            return iter([_chunk(text="ok"), _chunk(finish="stop")])
+
+        monkeypatch.setattr(
+            "finance_agent.llm.adapters.litellm_adapter.raw_stream", fake_raw_stream
+        )
+        events = list(complete_stream([{"role": "user", "content": "hi"}], preset="ark-glm"))
+
+        assert "".join(e.text for e in events if e.kind == "text") == "ok"
+        assert calls[0]["model"] == "openai/glm-5.2"

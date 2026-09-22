@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import patch
 
 import pytest
@@ -111,6 +112,85 @@ def test_request_level_config_no_fallback_single_attempt():
     assert text == "ok"
     assert "fallback_from" not in meta or meta["fallback_from"] is None
     assert m.call_count == 1
+
+
+def test_every_switch_recorded_on_its_own_attempt_trace():
+    """多跳：每次切换各自成观测记录（spec「每次切换 MUST 在 trace 记录 fallback_from」）。
+
+    缺口（本轮修复前）：只有最终返回 metadata 记最后一跳（fallback_from=前一 profile），
+    中间那跳的切换事实在任何 trace 里都不可见 —— 审计无法还原完整降级路径。
+    """
+    calls = []
+    trace = {"name": "litellm:deepseek", "metadata": {"node": "risk_judge"}}
+
+    def fake(
+        messages,
+        *,
+        purpose="deep",
+        max_tokens=None,
+        llm_config=None,
+        temperature=None,
+        trace=None,
+        preset=None,
+        **kw,
+    ):
+        calls.append({"preset": preset, "trace": trace})
+        if len(calls) <= 2:
+            raise OutputContractError("contract exhausted")
+        return _ok()
+
+    with (
+        patch(
+            "finance_agent.llm.gateway.resolve_profile",
+            return_value=dataclasses.replace(
+                get_profile_preset("deepseek-official"),
+                fallback=("openai-official", "anthropic"),
+            ),
+        ),
+        patch("finance_agent.llm.gateway.complete_text", side_effect=fake),
+    ):
+        text, meta = complete_text_with_fallback(MSGS, purpose="deep", trace=trace)
+
+    assert text == "ok"
+    assert [c["preset"] for c in calls] == ["deepseek-official", "openai-official", "anthropic"]
+    # 首次尝试没有切换事实，且原始 trace metadata 不被破坏
+    assert "fallback_from" not in (calls[0]["trace"]["metadata"])
+    assert calls[0]["trace"]["metadata"]["node"] == "risk_judge"
+    # 第 2/3 次尝试各自携带自己的切换事实（中间跳不再丢失）
+    assert calls[1]["trace"]["metadata"]["fallback_from"] == "deepseek-official"
+    assert calls[1]["trace"]["metadata"]["fallback_path"] == [
+        "deepseek-official",
+        "openai-official",
+    ]
+    assert calls[2]["trace"]["metadata"]["fallback_from"] == "openai-official"
+    assert calls[2]["trace"]["metadata"]["fallback_path"] == [
+        "deepseek-official",
+        "openai-official",
+        "anthropic",
+    ]
+    # 返回值侧：最后一跳 + 完整路径（多跳可审计）
+    assert meta["fallback_from"] == "openai-official"
+    assert meta["fallback_path"] == ["deepseek-official", "openai-official", "anthropic"]
+
+
+def test_single_hop_keeps_returned_metadata_shape():
+    """单跳：fallback_from 语义不变（既有消费者不受影响）。"""
+    calls = []
+
+    def fake(messages, *, preset=None, trace=None, **kw):
+        calls.append(preset)
+        if len(calls) == 1:
+            raise OutputContractError("contract exhausted")
+        return _ok()
+
+    with (
+        _pin_deepseek_primary(),
+        patch("finance_agent.llm.gateway.complete_text", side_effect=fake),
+    ):
+        _text, meta = complete_text_with_fallback(MSGS, purpose="deep")
+
+    assert meta["fallback_from"] == "deepseek-official"
+    assert meta["fallback_path"] == ["deepseek-official", "openai-official"]
 
 
 def test_attempts_capped_at_three():
