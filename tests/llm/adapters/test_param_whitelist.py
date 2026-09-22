@@ -5,11 +5,13 @@
 - top_p 全场景透传（白名单内但无 capability 信号，YAGNI 保留）
 - 白名单外未知参数透传至 litellm（由 litellm 原生报错，不静默丢弃）
 - LLM_DROP_PARAMS_STRICT=1 回滚开关恢复全局 drop
+- 剔除 SHALL 记 trace warning（spec llm-provider-gateway「非关键参数白名单」）
 """
 
 from __future__ import annotations
 
 import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -103,3 +105,30 @@ def test_strict_env_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     finally:
         litellm.drop_params = False
         monkeypatch.setattr(litellm_adapter, "_initialized", False)
+
+
+def test_drop_records_trace_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """spec llm-provider-gateway「非关键参数白名单」：剔除 SHALL 记 trace warning。
+
+    修复前只有 logger.warning（进程日志），Langfuse trace 上看不到「本次调用丢了
+    temperature」——降级事实不可审计（与 trace-observability「降级与重试路径 span
+    可观测」同族：降级事件 SHALL 经 update_current_span 标 WARNING）。
+    """
+    with patch("finance_agent.langfuse_tracing.update_current_span") as m:
+        out = _drop_unsupported({"model": "openai/glm-5.2", "temperature": 0.3})
+
+    assert "temperature" not in out
+    m.assert_called_once()
+    kwargs = m.call_args.kwargs
+    assert kwargs["level"] == "WARNING"
+    assert kwargs["metadata"]["degradation"] == "drop_params"
+    assert kwargs["metadata"]["field"] == "temperature"
+    assert kwargs["metadata"]["model"] == "openai/glm-5.2"
+
+
+def test_no_trace_write_when_nothing_dropped() -> None:
+    """无剔除时不写 trace（不得每轮调用刷噪声）。"""
+    with patch("finance_agent.langfuse_tracing.update_current_span") as m:
+        out = _drop_unsupported({"model": "deepseek/deepseek-chat", "temperature": 0.3})
+    assert out.get("temperature") == 0.3
+    m.assert_not_called()
