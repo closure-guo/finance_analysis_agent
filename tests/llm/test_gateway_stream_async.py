@@ -424,3 +424,82 @@ async def test_generator_exit_ends_observation_without_cm_exit(monkeypatch):
         "'Failed to detach context' 告警），应改为 _gen.end() 收口"
     )
     assert obs.ended is True, "observation 应以 end() 收口，span 数据不丢"
+
+
+async def test_retry_observation_output_excludes_failed_attempt_text(monkeypatch):
+    """重试后观测 output 只含成功那次尝试的文本（issue #50 症状复核）。
+
+    issue #50 记录：`_accumulated_text/_accumulated_reasoning` 在 for-attempt 重试循环外
+    初始化，重试后 trace output 会把多次 attempt 的文本拼接。当前实现（complete_stream_async）
+    的 answer/reasoning_acc 已在循环体内重置——本用例把「第 1 次尝试先出正文再失败」这一
+    最坏场景钉住，防回归：观测 output 必须等于第 2 次尝试的文本。
+    """
+
+    class _Obs:
+        def __init__(self):
+            self.updated: dict = {}
+
+        def update(self, **kw):
+            self.updated.update(kw)
+
+    obs = _Obs()
+
+    class _CM:
+        def __enter__(self):
+            return obs
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        "finance_agent.langfuse_tracing.get_langfuse",
+        lambda: type("_LF", (), {"start_as_current_observation": lambda self, **kw: _CM()})(),
+    )
+
+    calls = {"n": 0}
+
+    class _FailingIter:
+        """先吐一段正文，再抛可重试错误（半途失败）。"""
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if calls["n"] == 1:
+                calls["n"] = 2
+                return _chunk(text="第一段不该进 trace")
+            raise litellm.exceptions.RateLimitError(
+                message="limit", llm_provider="openai", model="m"
+            )
+
+    async def fake_acompletion(**kwargs):  # noqa: ARG001
+        if calls["n"] == 0:
+            calls["n"] = 1
+            return _FailingIter()
+        return _AsyncIter([_chunk(text="第二次答案", finish="stop")])
+
+    async def fake_sleep(_):
+        return None
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    events = await _collect(
+        complete_stream_async(
+            [{"role": "user", "content": "hi"}],
+            llm_config=CFG,
+            max_retries=3,
+            trace={"name": "t"},
+        )
+    )
+
+    assert events[-1].kind == "finished"
+    # 场景非空转：第 1 次尝试确实先吐过正文（否则本用例证明不了「重置」语义）
+    streamed = "".join(e.text for e in events if e.kind == "text")
+    assert "第一段不该进 trace" in streamed
+    assert "第二次答案" in streamed
+    answer = obs.updated.get("output", {}).get("answer", "")
+    assert answer == "第二次答案"
+    assert "第一段不该进 trace" not in answer
