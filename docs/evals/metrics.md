@@ -13,7 +13,7 @@
 
 | 指标 | 口径 | rubric 版 | 备注 |
 |---|---|---|---|
-| report_relevance | 切题 = 回答了用户的问题（非主题相关） | v3 | quick/deep 均评 |
+| report_relevance | 切题 = 回答了用户的问题（非主题相关）；v4 起 5 分档锚点：查询显式子问题逐一回答才给 5 | v4 | **deep only**（quick 段零方差停评，2026-09-22 切点） |
 | debate_quality | 辩论交锋质量（含交锋覆盖率对照锚点） | v2 | deep only |
 | decision_grounding | 决策论据逐条核对 evidence_refs ↔ source | v5 | deep only；材料 v6 含风控指标+风险辩论 |
 | consistency | 各层方向一致性（approve 语义：批准对象是 Risk Judge 方案） | v3 | deep only |
@@ -116,6 +116,7 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 **消融 v2 口径切点（2026-09-16，delta `revamp-ablation-v2-causal-claims`，未跑批）**：① 消融聚合的 citation 腿接入四桶拆报，`citation_pass` 标量退出层增量比较路径（标量仍产出、不再进层增量裁决）；② 驱动薄壳化——`ablation_pilot.py` 的 judge 判分与 `judge_vars` 材料落盘移入库侧，驱动只留续跑/记账/coverage 包装；③ 口径先行登记（§1.7）：因果下游指标准入 + 判定方式 code｜nli｜judge、校准门控 0.80 覆盖全部 nli/judge 指标、逃逸率分母=已终裁单元（未终裁 `rate=None` 不报 0%）、结论两句式 + MDE 强制；④ 结论注册表落地——报告头部生命周期字段 + `docs/evals` 索引（[`README.md`](README.md)）渲染状态；首批注册对象：`evals/ablation/results/pilot.md` 标 `superseded-by` 指向 n10 报告、n10 报告标 `active`，其余存量文档列入索引「未标注生命周期」（未标注 ≠ 作废）。**跨此切点的消融层增量结论须按新口径读**：v1 的 judge 四维层增量与 `citation_pass` 标量读法不再作为层增量裁决依据。
 **决策契约口径切点（2026-09-21，delta `require-watch-hold-rationale`，未跑批）**：watch/hold 决策新增结构化 `inaction_reason`（不行动原因）与 `reeval_triggers`（可观察再评估触发条件）——两侧一次打回回路（trader 侧 `validate_trade_prices` / 终稿侧 `risk_judge`，同价位必填语义）+ 报告结构化渲染（缺失如实标注「未申报」）。prompt 契约同步（trader/risk_judge **v28**，2026-09-21 发布）。**judge 材料经 `_serialize_decision` 自动携带新字段 → B5 可执行性维度（rubric 原句「'观望等待好转' = 差」，`family_b_judge.py:227`）与 consistency 的打分基线可能移动，跨此切点的 B5 pairwise 分数不可直接比较**；action 语义与动作分布不变（契约不改决策倾向，真实产出分布待下轮读数核）。取证背景与真实链路实证（600519 一次产出合格字段、risk_judge 改写非照抄）见 `docs/evals/2026-09-21-决策层全watch取证.md` 与 `tests/validation/2026-09-21-require-watch-hold-rationale-validation.md`。
 **hosted 判分口径切点（2026-09-22，delta `switch-hosted-judge-to-k-mean`，未跑批）**：`python -m evals.run` 的 judge 判分从单次调用改为 **K 次均值**（`run_judge_mean`，K 经 `--judge-repeats` 声明、默认 3；scores/spread/部分失败计数随 Scores.comment 落库，产物 JSON 记 `judge_repeats`）。round11 实测单次调用在 4/5 边界双峰翻转（同材料 n=13：4 分 7 次/5 分 6 次）、K=3 中极差>0 行 5/8——单次噪声与 hosted 待测回归效应同阶，故与消融路径（2026-09-14 起 K 均值）统一协议。**跨此切点的 judge 绝对分不可与 r1–r9（单次口径）直接比较**；切点前「跨实验比较按同噪声下的相对差异解读」的临时纪律随之退役。非 debate 维度结果形状不变；debate 封顶/枚举遥测取最低分调用（与消融同口径）；judge 维度均值在时间线表中的含义不变（仍为各 item 点估计的均值）。
+**report_relevance 口径切点（2026-09-22，delta `resolve-report-relevance-zero-variance`，未跑批）**：quick 条目停评全部 judge 维（该维 quick 段自 r3 起零方差全 5、Spearman 不可算，失败面由 ticker_match/section_coverage/citation 系确定性指标覆盖）；deep 条目保留并 rubric **v3→v4**（5 分档锚点判例：查询显式子问题逐一回答方可给 5，任一被回避/泛泛带过降 4 且 reason 指明被回避的子问题）。**跨此切点 report_relevance 均值不可直接比较（quick 行退出分母 + v4 收紧）**。离线校准（round7 同批 14 行、K=3 均值）：MAE **0.143** / 方向一致率 **1.000**，过门（≤1.0 / ≥0.80）——如实记录：**14 行 v4 全部仍 5（含人工打 4 的两行），锚点判例在本样本未产生降分行**（样本查询多为单一焦点），判例实际区分力待含多焦点查询的下轮样本验证（产物 `evals/judge_calibration/data/judge-sample-round12-relevance-v4.jsonl`，脚本 `tests/scripts/rejudge_relevance_v4.py`）。
 
 ---
 

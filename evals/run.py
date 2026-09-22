@@ -42,8 +42,9 @@ _PROMPT_NAMES = [
     "follow_up_mode",
 ]
 _JUDGE_DIMS = ["report_relevance", "debate_quality", "decision_grounding", "consistency"]
-# quick 模式无辩论/决策层:只有 report_relevance 适用(design §7 过滤器)
-_JUDGE_DEEP_ONLY = {"debate_quality", "decision_grounding", "consistency"}
+# judge 仅评 deep 条目（delta resolve-report-relevance-zero-variance）：quick 段
+# report_relevance 自 r3 起零方差（全 5，Spearman 不可算），其失败面（解析错标的/
+# 章节缺失/引用断链）已由确定性指标覆盖——quick 不再发起任何 judge 调用。
 # hosted 判分 K 次均值（spec「hosted 实验判分取 K 次均值」）：round11 实测单次调用
 # 在 4/5 边界双峰翻转（同材料 n=13：4 分 7 次/5 分 6 次），与回归待测效应同阶。
 # 模块级常量便于 CLI 注入（main 的 --judge-repeats）与测试 monkeypatch。
@@ -186,8 +187,10 @@ def _citation_ci(
 def _judge_adapter(dimension: str):
     def _eval(*, input, output, expected_output, metadata):
         mode = (output or {}).get("mode") or (input or {}).get("mode")
-        if mode == "quick" and dimension in _JUDGE_DEEP_ONLY:
-            return None  # quick 无辩论,跳过
+        if mode == "quick":
+            return (
+                None  # quick 停评全部 judge 维（report_relevance 零方差，失败面由确定性指标覆盖）
+            )
         if not (output or {}).get("report"):
             return None  # skipped item
         result = run_judge_mean(
