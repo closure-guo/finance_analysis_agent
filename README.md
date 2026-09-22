@@ -147,7 +147,7 @@ cp .env.example .env
 | `LLM_API_KEY` | **是** | - | LLM API Key；也可用 `DEEPSEEK_API_KEY` 作为回退 |
 | `LLM_MODEL` | 否 | `openai/deepseek-v4-flash` | 深度模式模型名，litellm 格式 |
 | `LLM_QUICK_MODEL` | 否 | `openai/deepseek-v4-flash` | 快速/追问模式模型名 |
-| `LLM_BASE_URL` | 否 | `https://opencode.ai/zen/go/v1` | API 端点（默认 opencode zen/go OpenAI 兼容网关） |
+| `LLM_BASE_URL` | **条件必填** | -（无代码默认，见 `.env.example` 模板值） | API 端点。**与 `LLM_API_KEY` 搭配使用时必填**——配了 key 缺端点启动即报 `IncompleteLLMConfigError`（有意收紧，见 5.1-B2）；只配 `LLM_MODEL` 不配 key 时按模型前缀走官方端点，可省略 |
 | `LLM_THINKING` | 否 | `enabled` | 思考模式 `enabled` / `disabled` |
 | `LLM_REASONING_EFFORT` | 否 | `max` | 思考强度 `low` / `high` / `max` |
 | `TAVILY_API_KEY` | 否 | - | Tavily 搜索 API Key，快速模式 Web 搜索需要 |
