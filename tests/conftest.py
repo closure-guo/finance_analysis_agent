@@ -32,9 +32,9 @@ def _isolate_reports_dir(request, tmp_path):
             os.environ["REPORTS_DIR"] = old
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _isolate_runtime_dbs(tmp_path_factory):
-    """运行时数据库隔离（#133 / incident 031）：测试一律不得写开发库。
+@pytest.fixture(autouse=True)
+def _isolate_runtime_dbs(request, tmp_path):
+    """运行时数据库隔离（#133 / incident 031）：非 live 测试一律不得写开发库。
 
     背景：非 live 测试也会走真实落库挂点——tests/test_deep_trace_root.py 调
     真实 api._run_graph_streaming（仅图被 patch），未隔离 DB 时每次跑套件都往
@@ -44,10 +44,16 @@ def _isolate_runtime_dbs(tmp_path_factory):
     ① 环境变量 SESSIONS_DB_PATH——predictions 侧 model._default_db_path() 调用时读取；
     ② session_store._DB_PATH——模块导入期冻结的常量，只能直接改模块属性。
 
-    个别测试自行 monkeypatch 具体路径时，其 patch 会覆盖本 fixture 的值并在
-    测试后恢复，不受影响。REPORTS_DIR 的 live 隔离（_isolate_reports_dir）是同类先例。
+    **live 测试豁免**：live 是手动发起的真实测量（如 hallucination live 从开发库
+    取样历史报告），按设计读开发库；其写入即真实运行产物。个别非 live 测试自行
+    monkeypatch 具体路径时，其 patch 覆盖本 fixture 值并在测试后恢复，不受影响。
+    REPORTS_DIR 的 live 隔离（_isolate_reports_dir）是同类先例。
     """
-    tmp_db = tmp_path_factory.mktemp("runtime-db") / "sessions.db"
+    if request.node.get_closest_marker("live") is not None:
+        yield None
+        return
+
+    tmp_db = tmp_path / "runtime-sessions.db"
     old_env = os.environ.get("SESSIONS_DB_PATH")
     os.environ["SESSIONS_DB_PATH"] = str(tmp_db)
 
@@ -55,6 +61,12 @@ def _isolate_runtime_dbs(tmp_path_factory):
 
     old_path = session_store._DB_PATH
     session_store._DB_PATH = tmp_db
+    # 隔离库必须自带 schema：非 live 测试会经真实挂点写两张表
+    # （session_store → sessions；ingest → predictions），空文件会报 no such table
+    session_store.init_db()
+    from finance_agent.outcome.track_record.model import init_predictions
+
+    init_predictions(tmp_db)
     try:
         yield tmp_db
     finally:

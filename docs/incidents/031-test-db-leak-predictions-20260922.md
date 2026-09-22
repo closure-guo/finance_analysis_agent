@@ -44,16 +44,33 @@
 **真问题（测试设施泄漏，非模型/管线缺陷）**。取证① 曾据此把 09-07 起的行判为「evals 跑批污染」——
 错误归因，实为测试泄漏；已同步更正取证报告的对应表述。
 
+## 写入面完整枚举（插桩 11 笔写入尝试）
+
+| 调用点 | 性质 |
+|---|---|
+| `tests/test_deep_trace_root.py:349`（+同族 3 例经 `_run_graph_streaming`） | **真泄漏**（无任何 DB 隔离）→ 66 行 |
+| `tests/outcome/test_decision_logging.py`（3 例直调 `_persist_decision_log`） | 已自行 patch `model._default_db_path`，写入 tmp 库（非泄漏） |
+| `tests/outcome/test_track_record_ingest.py`（3 例） | 同上（非泄漏） |
+| `tests/outcome/test_track_record_ingest_shared.py`（4 例） | 同上（非泄漏） |
+
+即：**隔离是「按测试自觉」模式，漏一个测试就全漏**——本 incident 的 4 个写入面中
+3 个自觉隔离、1 个漏，泄漏行全部来自漏的那个。
+
 ## 修复（已实施）
 
-1. **全局默认隔离**（`tests/conftest.py::_isolate_runtime_dbs`，session 级 autouse）：
+1. **全局默认隔离**（`tests/conftest.py::_isolate_runtime_dbs`，函数级 autouse，**live 豁免**）：
    ① `SESSIONS_DB_PATH` → 临时目录（predictions 侧 `model._default_db_path()` 调用时读取）；
-   ② `session_store._DB_PATH` → 同一临时库（模块导入期冻结的常量，直接改模块属性）。
-   个别测试自行 monkeypatch 时其值覆盖默认，不受影响。
-2. **回归护栏**（`tests/test_db_isolation.py`）：断言测试期间两处路径均不指向
-   `data/sessions.db`（红→绿，先红证明测试环境当时的默认路径确实未隔离）。
-3. **存量清理**：按 `snapshot_hash` 指纹精确删除 66 行（备份 `data/sessions.db.bak-20260922`）；
-   删前核验无 `daily_marks` 引用（unresolvable 行无结算记录）。
+   ② `session_store._DB_PATH` → 同一临时库（模块导入期冻结的常量，直接改模块属性）；
+   ③ 隔离库**自带 schema**（`session_store.init_db()` + `init_predictions()`）——非 live
+   测试会经真实挂点写两张表，空文件会 `no such table`（首版漏此步，组合跑复现后补齐）。
+   **live 豁免**：live 是手动发起的真实测量（`test_hallucination_live.py` 从开发库取样
+   历史报告），按设计读开发库；首版未豁免曾令该 live 测试红（空库无 sessions 表），
+   已按 REPORTS_DIR 先例改为豁免。个别非 live 测试自行 monkeypatch 时其 patch 覆盖默认值。
+2. **回归护栏**（`tests/test_db_isolation.py`）：断言非 live 测试期间两处路径均不指向
+   `data/sessions.db`（红→绿，先红证明当时默认路径确实未隔离）。
+3. **存量清理**：按 `snapshot_hash` 指纹精确删除 66 行（备份 `data/sessions.db.bak-20260922`，
+   已补 `.gitignore` 规则）；删前核验无 `daily_marks` 引用。清理后 51 行 = 30 回填 + 21
+   真实运行（trace 均为真实 Langfuse id，零测试痕迹）。
 
 ## 证据链
 
