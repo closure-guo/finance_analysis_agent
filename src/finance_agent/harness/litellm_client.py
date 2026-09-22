@@ -172,7 +172,9 @@ class LiteLLMClient:
                                 arguments=args,
                             )
                         )
-                    yield LLMResponse(tool_calls=calls, is_finished=True)
+                    # usage 随本次响应下发：循环消费到 is_finished 即 break，
+                    # 跟在 tool_call 之后的 finished 事件读不到（预算校准的真值入口）
+                    yield LLMResponse(tool_calls=calls, is_finished=True, usage=ev.usage)
                     finished_yielded = True
                 elif ev.kind == "finished":
                     _tail = _ark_tool_text.finish()
@@ -188,10 +190,10 @@ class LiteLLMClient:
                             )
                             for i, c in enumerate(_ark_tool_text.calls)
                         ]
-                        yield LLMResponse(tool_calls=ark_calls, is_finished=True)
+                        yield LLMResponse(tool_calls=ark_calls, is_finished=True, usage=ev.usage)
                         finished_yielded = True
                     if not finished_yielded:
-                        yield LLMResponse(is_finished=True)
+                        yield LLMResponse(is_finished=True, usage=ev.usage)
                     return
         finally:
             # finished 后生成器仍悬挂在 yield 点：显式 aclose 使 gateway 的观测收尾

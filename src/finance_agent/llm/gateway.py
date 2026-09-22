@@ -167,6 +167,25 @@ def _usage_details(resp) -> dict:
     }
 
 
+def _canonical_usage(usage) -> dict[str, int] | None:
+    """usage 对象 → CanonicalEvent.usage（provider 中立键名，缺省 None）。
+
+    键名取 prompt_tokens/completion_tokens/total_tokens：消费方（harness ReAct 循环）
+    据此取 prompt_tokens 校准上下文预算——预算约束的是请求上下文，不含输出。
+    无任何 token 计数时返回 None（消费方据此保持 usage_estimated 估算态）。
+    """
+    if usage is None:
+        return None
+    prompt = getattr(usage, "prompt_tokens", None)
+    completion = getattr(usage, "completion_tokens", None)
+    total = getattr(usage, "total_tokens", None)
+    if prompt is None and completion is None and total is None:
+        return None
+    p = int(prompt or 0)
+    c = int(completion or 0)
+    return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": int(total or (p + c))}
+
+
 def _extract_with_tools_output(resp: Any) -> dict:
     """从 completion resp 提取结构化 generation output（自 legacy.py 移植）。
 
@@ -1169,8 +1188,16 @@ async def complete_stream_async(
                             tool_calls=calls,
                             metadata=(trace or {}).get("metadata"),
                         )
-                        yield CanonicalEvent(kind="tool_call", tool_call={"calls": calls})
-                        yield CanonicalEvent(kind="finished", finish_reason="tool_calls")
+                        yield CanonicalEvent(
+                            kind="tool_call",
+                            tool_call={"calls": calls},
+                            usage=_canonical_usage(last_usage),
+                        )
+                        yield CanonicalEvent(
+                            kind="finished",
+                            finish_reason="tool_calls",
+                            usage=_canonical_usage(last_usage),
+                        )
                         return
                     if finish == "stop":
                         if accumulator.calls:
@@ -1183,8 +1210,16 @@ async def complete_stream_async(
                                 tool_calls=calls,
                                 metadata=(trace or {}).get("metadata"),
                             )
-                            yield CanonicalEvent(kind="tool_call", tool_call={"calls": calls})
-                            yield CanonicalEvent(kind="finished", finish_reason="tool_calls")
+                            yield CanonicalEvent(
+                                kind="tool_call",
+                                tool_call={"calls": calls},
+                                usage=_canonical_usage(last_usage),
+                            )
+                            yield CanonicalEvent(
+                                kind="finished",
+                                finish_reason="tool_calls",
+                                usage=_canonical_usage(last_usage),
+                            )
                         else:
                             _finalize_observation(
                                 _gen,
@@ -1192,7 +1227,11 @@ async def complete_stream_async(
                                 reasoning_acc,
                                 last_usage,
                             )
-                            yield CanonicalEvent(kind="finished", finish_reason="stop")
+                            yield CanonicalEvent(
+                                kind="finished",
+                                finish_reason="stop",
+                                usage=_canonical_usage(last_usage),
+                            )
                         return
 
                 # 流结束但无明确 finish_reason
@@ -1206,8 +1245,16 @@ async def complete_stream_async(
                         tool_calls=calls,
                         metadata=(trace or {}).get("metadata"),
                     )
-                    yield CanonicalEvent(kind="tool_call", tool_call={"calls": calls})
-                    yield CanonicalEvent(kind="finished", finish_reason="tool_calls")
+                    yield CanonicalEvent(
+                        kind="tool_call",
+                        tool_call={"calls": calls},
+                        usage=_canonical_usage(last_usage),
+                    )
+                    yield CanonicalEvent(
+                        kind="finished",
+                        finish_reason="tool_calls",
+                        usage=_canonical_usage(last_usage),
+                    )
                 else:
                     _finalize_observation(
                         _gen,
@@ -1216,7 +1263,11 @@ async def complete_stream_async(
                         last_usage,
                         metadata=(trace or {}).get("metadata"),
                     )
-                    yield CanonicalEvent(kind="finished", finish_reason=None)
+                    yield CanonicalEvent(
+                        kind="finished",
+                        finish_reason=None,
+                        usage=_canonical_usage(last_usage),
+                    )
                 return
             except Exception as exc:  # noqa: BLE001
                 err = normalize_exception(exc)

@@ -407,3 +407,68 @@ class TestActionProtocolIntegration:
         assert "已执行完成" in final_answer
         # action 块本身不泄漏为答案
         assert "<action" not in final_answer
+
+
+class TestBudgetCalibrationFromUsage:
+    """#77：usage 真值用于预算校准（calibrate 接线到 ReAct 循环）。
+
+    修复前 `ContextBudget.calibrate` 零生产调用方：预算永远停在 capability 派生值
+    且 usage_estimated 恒为 True，估算偏差无法被真值纠正（spec llm-budget-governance
+    「usage 真实值存在时用于校准 token 计数；不存在时估算并标记 usage_estimated=true」）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_prompt_tokens_calibrate_budget(self):
+        from finance_agent.harness.context import ContextBudget
+
+        budget = ContextBudget(max_context_tokens=1000)  # 故意小，便于触发上抬
+        mock_llm = MockLLMClient(
+            [
+                [
+                    LLMResponse(
+                        text_delta="答案",
+                        is_finished=True,
+                        usage={
+                            "prompt_tokens": 5000,
+                            "completion_tokens": 10,
+                            "total_tokens": 5010,
+                        },
+                    )
+                ]
+            ]
+        )
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=2,
+            llm=mock_llm,
+            context_budget=budget,
+        )
+        async for _ in agent.run("测试"):
+            pass
+
+        # 真值到达 → 翻 usage_estimated；5000 + 8192 > 1000 → 上抬至 int(5000 * 1.05)
+        assert budget.usage_estimated is False
+        assert budget.max_context_tokens == 5250
+
+    @pytest.mark.asyncio
+    async def test_no_usage_keeps_estimated_state(self):
+        from finance_agent.harness.context import ContextBudget
+
+        budget = ContextBudget(max_context_tokens=100000)
+        mock_llm = MockLLMClient([[LLMResponse(text_delta="答案", is_finished=True)]])
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=2,
+            llm=mock_llm,
+            context_budget=budget,
+        )
+        async for _ in agent.run("测试"):
+            pass
+
+        # 无真值 → 保持估算态与派生预算（不得凭空调预算）
+        assert budget.usage_estimated is True
+        assert budget.max_context_tokens == 100000

@@ -503,3 +503,55 @@ async def test_retry_observation_output_excludes_failed_attempt_text(monkeypatch
     answer = obs.updated.get("output", {}).get("answer", "")
     assert answer == "第二次答案"
     assert "第一段不该进 trace" not in answer
+
+
+def _usage_chunk(prompt=11, completion=22):
+    """仅带 usage 的 chunk（OpenAI 流末尾 usage 帧，choices 为空）。"""
+    return SimpleNamespace(
+        choices=[],
+        usage=SimpleNamespace(
+            prompt_tokens=prompt, completion_tokens=completion, total_tokens=prompt + completion
+        ),
+    )
+
+
+async def test_finished_event_carries_usage(monkeypatch):
+    """#77：finished 事件携带 usage（calibrate 接线的前提：真值要能到消费者）。"""
+
+    async def fake_acompletion(**kwargs):  # noqa: ARG001
+        return _AsyncIter([_chunk(text="答"), _usage_chunk(), _chunk(finish="stop")])
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    events = await _collect(
+        complete_stream_async([{"role": "user", "content": "hi"}], llm_config=CFG)
+    )
+    assert events[-1].kind == "finished"
+    assert events[-1].usage == {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33}
+
+
+async def test_tool_call_event_carries_usage(monkeypatch):
+    """工具调用路径：usage 必须挂在 tool_call 事件上。
+
+    ReAct 循环消费到 is_finished 即 break——跟在 tool_call 之后的 finished 事件
+    不会被读到，usage 只有挂在 tool_call 事件上才到得了循环。
+    """
+
+    async def fake_acompletion(**kwargs):  # noqa: ARG001
+        return _AsyncIter(
+            [
+                _chunk(tool_calls=[_tc(index=0, id="c1", name="echo", arguments="{}")]),
+                _usage_chunk(prompt=7, completion=3),
+                _chunk(finish="tool_calls"),
+            ]
+        )
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    events = await _collect(
+        complete_stream_async([{"role": "user", "content": "hi"}], llm_config=CFG)
+    )
+    tool_ev = next(e for e in events if e.kind == "tool_call")
+    assert tool_ev.usage == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
