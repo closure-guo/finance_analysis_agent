@@ -364,6 +364,8 @@ class Agent:
                 # 第一次迭代且 force_tool=True 时，强制调用工具
                 _tool_choice = "required" if (force_tool and iterations == 1) else "auto"
 
+                # 本次调用的 usage 真值（provider 返回时非 None）→ 预算校准用
+                _call_usage: dict[str, int] | None = None
                 async for chunk in self.llm.chat_stream(
                     messages=api_messages,
                     tools=tool_schemas if tool_schemas else None,
@@ -399,8 +401,17 @@ class Agent:
                     if chunk.tool_calls:
                         pending_tool_calls = chunk.tool_calls
 
+                    if chunk.usage:
+                        _call_usage = chunk.usage
+
                     if chunk.is_finished:
                         break
+
+                # usage 真值用于校准上下文预算（spec llm-budget-governance：usage 真实值
+                # 存在时用于校准 token 计数；不存在时保持估算态）。入参取 prompt_tokens：
+                # 预算约束的是请求上下文，不含输出。此前 calibrate 零生产调用方——预算永远
+                # 停在 capability 派生值、usage_estimated 恒为 True，估算偏差无从纠正。
+                self.context.budget.calibrate((_call_usage or {}).get("prompt_tokens"))
 
                 # ── DSML 防御性解析 ──
                 # DeepSeek 偶发以 DSML 文本标记输出工具调用，litellm 未解析为

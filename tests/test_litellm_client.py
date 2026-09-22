@@ -32,6 +32,7 @@ class FakeEvent:
     reasoning: str = ""
     tool_call: dict[str, Any] | None = None
     finish_reason: str | None = None
+    usage: dict[str, int] | None = None
 
 
 def _text_ev(t: str) -> FakeEvent:
@@ -289,3 +290,37 @@ async def test_ark_text_tool_call_converted_to_structured(monkeypatch):
     assert call.name == "run_deep_analysis"
     assert call.arguments == {"stock_code": "601700", "stock_name": "风范股份"}
     assert tool_resp[0].is_finished is True
+
+
+async def test_usage_forwarded_on_finished(monkeypatch):
+    """#77：finished 事件的 usage 转发到 LLMResponse（预算校准的真值入口）。"""
+    usage = {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33}
+
+    async def fake_stream(*a, **kw):  # noqa: ARG001
+        yield FakeEvent(kind="text", text="答")
+        yield FakeEvent(kind="finished", finish_reason="stop", usage=usage)
+
+    monkeypatch.setattr("finance_agent.llm.gateway.complete_stream_async", fake_stream)
+    client = LiteLLMClient(model="m", api_key="k", base_url="https://x/v1")
+    chunks = [c async for c in client.chat_stream([{"role": "user", "content": "hi"}])]
+    assert chunks[-1].is_finished
+    assert chunks[-1].usage == usage
+
+
+async def test_usage_forwarded_on_tool_calls(monkeypatch):
+    """工具调用路径：usage 随 tool_calls 响应一起下发（循环 break 前能读到）。"""
+    usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+
+    async def fake_stream(*a, **kw):  # noqa: ARG001
+        yield FakeEvent(
+            kind="tool_call",
+            tool_call={"calls": [{"id": "c1", "function": {"name": "echo", "arguments": "{}"}}]},
+            usage=usage,
+        )
+        yield FakeEvent(kind="finished", finish_reason="tool_calls", usage=usage)
+
+    monkeypatch.setattr("finance_agent.llm.gateway.complete_stream_async", fake_stream)
+    client = LiteLLMClient(model="m", api_key="k", base_url="https://x/v1")
+    chunks = [c async for c in client.chat_stream([{"role": "user", "content": "hi"}])]
+    tc = next(c for c in chunks if c.tool_calls)
+    assert tc.usage == usage
