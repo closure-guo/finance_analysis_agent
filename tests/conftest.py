@@ -32,6 +32,39 @@ def _isolate_reports_dir(request, tmp_path):
             os.environ["REPORTS_DIR"] = old
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_runtime_dbs(tmp_path_factory):
+    """运行时数据库隔离（#133 / incident 031）：测试一律不得写开发库。
+
+    背景：非 live 测试也会走真实落库挂点——tests/test_deep_trace_root.py 调
+    真实 api._run_graph_streaming（仅图被 patch），未隔离 DB 时每次跑套件都往
+    开发库 data/sessions.db 写一行 600519 buy/0.7 假决策（9/7–9/22 累计 66 行）。
+
+    两处路径都要改：
+    ① 环境变量 SESSIONS_DB_PATH——predictions 侧 model._default_db_path() 调用时读取；
+    ② session_store._DB_PATH——模块导入期冻结的常量，只能直接改模块属性。
+
+    个别测试自行 monkeypatch 具体路径时，其 patch 会覆盖本 fixture 的值并在
+    测试后恢复，不受影响。REPORTS_DIR 的 live 隔离（_isolate_reports_dir）是同类先例。
+    """
+    tmp_db = tmp_path_factory.mktemp("runtime-db") / "sessions.db"
+    old_env = os.environ.get("SESSIONS_DB_PATH")
+    os.environ["SESSIONS_DB_PATH"] = str(tmp_db)
+
+    from finance_agent import session_store
+
+    old_path = session_store._DB_PATH
+    session_store._DB_PATH = tmp_db
+    try:
+        yield tmp_db
+    finally:
+        session_store._DB_PATH = old_path
+        if old_env is None:
+            os.environ.pop("SESSIONS_DB_PATH", None)
+        else:
+            os.environ["SESSIONS_DB_PATH"] = old_env
+
+
 @pytest.fixture
 def balance_sheet():
     """资产负债表 fixture — 3 年数据，圆整数字便于手算验证。"""
