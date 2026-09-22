@@ -21,7 +21,7 @@ from pathlib import Path
 
 from evals.dataset_seed import DATASET_NAME
 from evals.evaluators import make_evaluation, section_coverage, ticker_match
-from evals.judges import run_judge
+from evals.judges import run_judge_mean
 from evals.task import run_task
 from finance_agent.langfuse_tracing import get_langfuse
 
@@ -44,6 +44,10 @@ _PROMPT_NAMES = [
 _JUDGE_DIMS = ["report_relevance", "debate_quality", "decision_grounding", "consistency"]
 # quick 模式无辩论/决策层:只有 report_relevance 适用(design §7 过滤器)
 _JUDGE_DEEP_ONLY = {"debate_quality", "decision_grounding", "consistency"}
+# hosted 判分 K 次均值（spec「hosted 实验判分取 K 次均值」）：round11 实测单次调用
+# 在 4/5 边界双峰翻转（同材料 n=13：4 分 7 次/5 分 6 次），与回归待测效应同阶。
+# 模块级常量便于 CLI 注入（main 的 --judge-repeats）与测试 monkeypatch。
+_JUDGE_REPEATS = 3
 # 本地 prompts/*.md（git 跟踪）是唯一权威源（模块级常量便于测试注入）
 _PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src/finance_agent/prompts"
 
@@ -186,11 +190,27 @@ def _judge_adapter(dimension: str):
             return None  # quick 无辩论,跳过
         if not (output or {}).get("report"):
             return None  # skipped item
-        result = run_judge(dimension, (output or {}).get("judge_vars") or {})
+        result = run_judge_mean(
+            dimension, (output or {}).get("judge_vars") or {}, repeats=_JUDGE_REPEATS
+        )
+        k = result.get("judge_repeats", _JUDGE_REPEATS)
+        fails = result.get("judge_failures", 0)
         if result["score"] is None:
-            # score=null:解析失败,记入失败率(已实测 langfuse 4.13
+            # score=null:K 次全部解析失败,记入失败率(已实测 langfuse 4.13
             # Evaluation.value 接受 None,无需 _failed 占位 fallback)
-            return make_evaluation({"name": dimension, "value": None, "comment": result["reason"]})
+            return make_evaluation(
+                {
+                    "name": dimension,
+                    "value": None,
+                    "comment": f"[K={k} fail={fails or k}] {result['reason']}",
+                }
+            )
+        # K 均值离散度随 comment 落库（Langfuse Scores 为逐 trace 明细真源；
+        # 只留均值会静默抹掉调用级噪声，跨切点解读需要 scores/spread 可见）
+        k_note = f"[K={k} scores={result.get('scores')} spread={result.get('score_spread')}"
+        if fails:
+            k_note += f" fail={fails}"
+        k_note += "]"
         # confidence 随 comment 落库（round5 校准实证：残缺输入上 judge 幻觉高分
         # 无信号可辨——置信度使「高分+低置信」组合可识别）
         conf = result.get("confidence")
@@ -202,6 +222,7 @@ def _judge_adapter(dimension: str):
             comment = f"[enum-missing] {comment}"
         elif result.get("cap_applied"):
             comment = f"[cap=qualitative×{result.get('qualitative_points', 0)}] {comment}"
+        comment = f"{k_note} {comment}"
         return make_evaluation(
             {"name": dimension, "value": float(result["score"]), "comment": comment}
         )
@@ -295,7 +316,12 @@ def _resolve_eval_model() -> str:
 
 
 def _write_report(
-    rows: list[dict], means: dict, name: str, prompt_versions: dict, citation_ci: dict
+    rows: list[dict],
+    means: dict,
+    name: str,
+    prompt_versions: dict,
+    citation_ci: dict,
+    judge_repeats: int,
 ) -> Path:
     out_dir = Path("reports/evals")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -307,6 +333,7 @@ def _write_report(
                 "experiment": name,
                 "timestamp": ts,
                 "model": _resolve_eval_model(),
+                "judge_repeats": judge_repeats,
                 "prompt_versions": prompt_versions,
                 "means": means,
                 "citation_ci": citation_ci,
@@ -332,7 +359,15 @@ def main() -> None:
         default=DATASET_NAME,
         help=f"评估 dataset 名(默认 {DATASET_NAME}；rotating 轮换池用 seed 建库后的独立名)",
     )
+    parser.add_argument(
+        "--judge-repeats",
+        type=int,
+        default=3,
+        help="judge 判分 K 次均值次数(默认 3；与消融路径同协议)",
+    )
     args = parser.parse_args()
+    global _JUDGE_REPEATS  # noqa: PLW0603 - CLI 注入判分协议,模块常量便于 evaluator 闭包读取
+    _JUDGE_REPEATS = max(1, int(args.judge_repeats))
 
     # run_experiment 是实验唯一执行入口(spec「实验回归工作流」Scenario「无 Langfuse 时显式报错」):
     # langfuse 不可用时显式报错并退出,绝不降级为本地循环产出不可对比的分数。
@@ -380,7 +415,9 @@ def main() -> None:
         if vals:
             lo, hi = _citation_ci(vals)
             citation_ci[metric] = [round(lo, 4), round(hi, 4)]
-    path = _write_report(rows, means, args.name, prompt_versions, citation_ci)
+    path = _write_report(
+        rows, means, args.name, prompt_versions, citation_ci, judge_repeats=_JUDGE_REPEATS
+    )
     print(f"结果已写入 {path}")
     client.flush()
 

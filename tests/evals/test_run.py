@@ -55,7 +55,7 @@ class TestEvaluatorAssembly:
             or result["name"] == "section_coverage"
         )
 
-    @patch("evals.run.run_judge")
+    @patch("evals.run.run_judge_mean")
     def test_judge_skipped_for_quick_mode(self, mock_judge):
         mock_judge.return_value = {"name": "debate_quality", "score": 4, "reason": "x"}
         evals = {e.__name__: e for e in all_evaluators()}
@@ -69,9 +69,17 @@ class TestEvaluatorAssembly:
         mock_judge.assert_not_called()
         assert result in (None, [])
 
-    @patch("evals.run.run_judge")
+    @patch("evals.run.run_judge_mean")
     def test_judge_uses_output_judge_vars(self, mock_judge):
-        mock_judge.return_value = {"name": "report_relevance", "score": 5, "reason": "切题"}
+        mock_judge.return_value = {
+            "name": "report_relevance",
+            "score": 5,
+            "reason": "切题",
+            "scores": [5],
+            "score_spread": 0,
+            "judge_repeats": 3,
+            "judge_failures": 0,
+        }
         evals = {e.__name__: e for e in all_evaluators()}
         evals["eval_report_relevance"](
             input={"query": "茅台", "mode": "quick"},
@@ -85,7 +93,7 @@ class TestEvaluatorAssembly:
             metadata={},
         )
         mock_judge.assert_called_once_with(
-            "report_relevance", {"query": "茅台", "report": "茅台好"}
+            "report_relevance", {"query": "茅台", "report": "茅台好"}, repeats=3
         )
 
 
@@ -285,7 +293,7 @@ class TestDebateCapEvidenceInComment:
             metadata={},
         )
 
-    @patch("evals.run.run_judge")
+    @patch("evals.run.run_judge_mean")
     def test_cap_applied_marked_in_comment(self, mock_judge):
         mock_judge.return_value = {
             "name": "debate_quality",
@@ -296,13 +304,17 @@ class TestDebateCapEvidenceInComment:
             "qualitative_points": 2,
             "cap_applied": True,
             "enumeration_missing": False,
+            "scores": [4, 4, 4],
+            "score_spread": 0,
+            "judge_repeats": 3,
+            "judge_failures": 0,
         }
         result = self._call(mock_judge.return_value)
         comment = getattr(result, "comment", None) or result["comment"]
         assert "[cap=qualitative×2]" in comment
         assert "[conf=0.90]" in comment
 
-    @patch("evals.run.run_judge")
+    @patch("evals.run.run_judge_mean")
     def test_enumeration_missing_marked_in_comment(self, mock_judge):
         mock_judge.return_value = {
             "name": "debate_quality",
@@ -313,7 +325,178 @@ class TestDebateCapEvidenceInComment:
             "qualitative_points": 0,
             "cap_applied": False,
             "enumeration_missing": True,
+            "scores": [5, 5, 5],
+            "score_spread": 0,
+            "judge_repeats": 3,
+            "judge_failures": 0,
         }
         result = self._call(mock_judge.return_value)
         comment = getattr(result, "comment", None) or result["comment"]
         assert "[enum-missing]" in comment
+
+
+class TestJudgeKMean:
+    """hosted 判分取 K 次均值（delta switch-hosted-judge-to-k-mean）。
+
+    round11 实测单次调用在 4/5 边界双峰翻转（同材料 n=13：4 分 7 次/5 分 6 次），
+    与 hosted 回归要检测的效应同阶——点估计改为 K 次均值，scores/spread 随
+    comment 落库（Langfuse Scores 为逐 trace 明细真源）。
+    """
+
+    def _call(self, dim="debate_quality", mode="deep"):
+        fns = {e.__name__: e for e in all_evaluators()}
+        return fns[f"eval_{dim}"](
+            input={"query": "q", "mode": mode},
+            output={
+                "report": "r",
+                "ticker": "600519",
+                "judge_vars": {dim: "材料"},
+                "mode": mode,
+            },
+            expected_output={},
+            metadata={},
+        )
+
+    @staticmethod
+    def _comment(result):
+        return getattr(result, "comment", None) if hasattr(result, "comment") else result["comment"]
+
+    @staticmethod
+    def _value(result):
+        return getattr(result, "value", None) if hasattr(result, "value") else result["value"]
+
+    def test_default_repeats_is_three(self):
+        assert evals.run._JUDGE_REPEATS == 3
+
+    def test_adapter_calls_run_judge_mean_with_configured_repeats(self, monkeypatch):
+        seen = {}
+
+        def fake_mean(dim, variables, *, repeats):
+            seen.update(dim=dim, variables=variables, repeats=repeats)
+            return {
+                "name": dim,
+                "score": 4.333,
+                "reason": "交锋充分",
+                "confidence": 0.8,
+                "scores": [4, 5, 4],
+                "score_spread": 1,
+                "judge_repeats": repeats,
+                "judge_failures": 0,
+            }
+
+        monkeypatch.setattr(evals.run, "run_judge_mean", fake_mean)
+        monkeypatch.setattr(evals.run, "_JUDGE_REPEATS", 5)
+        result = self._call()
+        assert seen == {
+            "dim": "debate_quality",
+            "variables": {"debate_quality": "材料"},
+            "repeats": 5,
+        }
+        assert self._value(result) == 4.333
+
+    def test_comment_carries_scores_and_spread(self, monkeypatch):
+        def fake_mean(dim, variables, *, repeats):
+            return {
+                "name": dim,
+                "score": 4.333,
+                "reason": "交锋充分",
+                "confidence": None,
+                "scores": [4, 5, 4],
+                "score_spread": 1,
+                "judge_repeats": 3,
+                "judge_failures": 0,
+            }
+
+        monkeypatch.setattr(evals.run, "run_judge_mean", fake_mean)
+        comment = self._comment(self._call())
+        assert "[K=3" in comment
+        assert "scores=[4, 5, 4]" in comment
+        assert "spread=1" in comment
+        assert "fail=" not in comment  # 无失败不标 fail
+
+    def test_partial_failure_marked_mean_of_valid(self, monkeypatch):
+        def fake_mean(dim, variables, *, repeats):
+            return {
+                "name": dim,
+                "score": 4.5,
+                "reason": "一致",
+                "confidence": None,
+                "scores": [4, 5, None],
+                "score_spread": 1,
+                "judge_repeats": 3,
+                "judge_failures": 1,
+            }
+
+        monkeypatch.setattr(evals.run, "run_judge_mean", fake_mean)
+        result = self._call(dim="consistency")
+        assert self._value(result) == 4.5
+        assert "fail=1" in self._comment(result)
+
+    def test_all_failed_score_none_with_k_note(self, monkeypatch):
+        def fake_mean(dim, variables, *, repeats):
+            return {
+                "name": dim,
+                "score": None,
+                "reason": "parse_failed",
+                "scores": [None, None, None],
+                "score_spread": None,
+                "judge_repeats": 3,
+                "judge_failures": 3,
+            }
+
+        monkeypatch.setattr(evals.run, "run_judge_mean", fake_mean)
+        result = self._call(dim="consistency")
+        assert self._value(result) is None
+        comment = self._comment(result)
+        assert "[K=3 fail=3]" in comment
+        assert "parse_failed" in comment
+
+    def test_non_debate_dims_do_not_gain_debate_keys_in_comment(self, monkeypatch):
+        """非 debate 维度结果形状不变：comment 只含 K 均值标注与 reason。"""
+
+        def fake_mean(dim, variables, *, repeats):
+            return {
+                "name": dim,
+                "score": 5.0,
+                "reason": "切题",
+                "confidence": 0.9,
+                "scores": [5, 5, 5],
+                "score_spread": 0,
+                "judge_repeats": 3,
+                "judge_failures": 0,
+            }
+
+        monkeypatch.setattr(evals.run, "run_judge_mean", fake_mean)
+        comment = self._comment(self._call(dim="report_relevance"))
+        assert "cap=" not in comment and "enum-missing" not in comment
+        assert "[conf=0.90]" in comment
+
+    def test_report_json_contains_judge_repeats(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        path = evals.run._write_report(
+            rows=[],
+            means={"judge_failures": 0},
+            name="t",
+            prompt_versions={},
+            citation_ci={},
+            judge_repeats=3,
+        )
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["judge_repeats"] == 3
+
+    def test_cli_judge_repeats_threaded_to_report(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["evals/run.py", "test-exp", "--judge-repeats", "5"])
+        fake = MagicMock()
+        fake_result = MagicMock()
+        fake_result.item_results = []
+        fake.get_dataset.return_value.run_experiment.return_value = fake_result
+        with (
+            patch("evals.run.get_langfuse", return_value=fake),
+            patch("evals.run._verify_prompt_sync", return_value=[]),
+            patch("evals.run._write_report") as mock_write,
+        ):
+            evals.run.main()
+        assert evals.run._JUDGE_REPEATS == 5
+        assert mock_write.call_args.kwargs["judge_repeats"] == 5
