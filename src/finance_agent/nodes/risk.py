@@ -13,7 +13,7 @@ from finance_agent.langfuse_tracing import update_current_span
 from finance_agent.models import DebateMessage, TradeDecision
 from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.nodes.validate import apply_payout_self_check as _apply_payout_self_check
-from finance_agent.nodes.validate import final_price_missing
+from finance_agent.nodes.validate import final_price_missing, inaction_rationale_missing
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 
@@ -107,8 +107,46 @@ def risk_judge(state: dict) -> dict:
         _missing = final_price_missing(decision)
         if _missing:
             final_price_check["note"] = f"已打回仍未申报：{'、'.join(_missing)}"
+        elif str(getattr(decision, "action", "")) in ("watch", "hold"):
+            # 终审 I-1：重试输出非执行动作时「已申报」是错话——如实标注价位不适用
+            final_price_check["note"] = "打回后改为非执行动作（价位不适用）"
         else:
             final_price_check["note"] = "打回后已申报"
+    # 终稿非执行动作理由完整性（require-watch-hold-rationale）：watch/hold 缺理由
+    # 首次打回重试一次；仍缺放行 + 如实标注（与 final_price_check 同款一次重试语义）
+    final_inaction_check: dict = {"result": "pass", "note": ""}
+    _missing_inaction = inaction_rationale_missing(decision)
+    if _missing_inaction:
+        retry_context = (
+            f"{context}\n\n【非执行动作理由打回】watch/hold 终稿必须结构化申报不行动理由"
+            f"与再评估触发条件，缺失：{'、'.join(_missing_inaction)}。"
+            "请重新输出补全 inaction_reason（一句话，具体到当前不满足执行条件的点）与 "
+            "reeval_triggers（1-3 条可观察、可判定的再评估触发条件）的完整决策 JSON。"
+        )
+        data = call_llm_for_json(
+            retry_context,
+            system=system,
+            api_key=api_key,
+            node_name="risk_judge",
+            llm_config=state.get("llm_config"),
+            stock_code=state.get("stock_code"),
+            prompt_name=_pinfo.prompt_name,
+            prompt_version=_pinfo.prompt_version,
+        )
+        decision = TradeDecision.model_validate(data)
+        _missing_inaction = inaction_rationale_missing(decision)
+        if _missing_inaction:
+            final_inaction_check["note"] = f"已打回仍未申报：{'、'.join(_missing_inaction)}"
+        else:
+            final_inaction_check["note"] = "打回后已申报"
+        # I-1（终审）：理由重试使终稿换代，价位块结论作废——复核并如实改注
+        _price_after = final_price_missing(decision)
+        if _price_after:
+            final_price_check["note"] = (
+                f"理由重试后终稿价位缺失：{'、'.join(_price_after)}（未再次打回，如实标注）"
+            )
+        elif final_price_check["note"]:
+            final_price_check["note"] = "价位结论已被理由重试覆盖（终稿换代后价位齐备，未再次打回）"
     # 赔率自检（任务 6 + extend-payout-self-check-coverage）：终稿 reasoning 自报赔率
     # vs 自身价位代码计算——冲突原位修正；转述窗口跳过（计数上报）
     _reasoning, _payout_fixed, _payout_skipped = _apply_payout_self_check(
@@ -126,6 +164,7 @@ def risk_judge(state: dict) -> dict:
         "payout_ratio_corrected": _payout_fixed,
         "payout_ratio_conflict_skipped": _payout_skipped,
         "final_price_check": final_price_check,
+        "final_inaction_check": final_inaction_check,
     }
 
 

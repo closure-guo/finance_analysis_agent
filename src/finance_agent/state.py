@@ -111,6 +111,11 @@ class AnalysisState(TypedDict, total=False):
     price_check: dict  # {result: pass|fail|corrected, reason?, note?}
     price_check_feedback: str  # fail 时打回 trader 的重出反馈
     price_check_attempts: int  # 已校验次数（<1 fail 打回；>=1 二次失败走参考带修正）
+    # 非执行动作理由回路（require-watch-hold-rationale）：watch/hold 结构化理由缺失
+    # 同款一次打回（独立计数，不与价位回路互相消耗）
+    inaction_rationale_check: dict  # {result: pass|fail, reason?, note?}
+    inaction_rationale_feedback: str  # fail 时打回 trader 的重出反馈
+    inaction_rationale_attempts: int  # 理由检查已打回次数（<1 fail 打回；>=1 放行+标注）
     price_level_corrected: bool  # 价位已按工具参考带修正（可观测）
     price_level_correction_reason: str  # 修正原因（报告「价位修正」行）
     # 派生风险指标（deterministic-derived-metrics）：validate 代码计算，辩论/裁决引用
@@ -177,6 +182,9 @@ class AnalysisState(TypedDict, total=False):
     )
     final_price_check: (
         dict  # 终稿价位完整性（601888 实证）：{result, note}——打回后申报/仍缺如实标注
+    )
+    final_inaction_check: (
+        dict  # 终稿非执行动作理由完整性（require-watch-hold-rationale）：{result, note}
     )
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 

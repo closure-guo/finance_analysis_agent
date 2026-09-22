@@ -75,3 +75,27 @@ class TestTraderReturnFeedback:
         }
         context = _build_trader_context(state)
         assert "基金经理退回意见" not in context
+
+
+class TestInactionFeedbackInjection:
+    """require-watch-hold-rationale：理由打回意见注入 trader context。"""
+
+    def test_feedback_injected_into_context(self):
+        from finance_agent.nodes.trader import _build_trader_context
+
+        ctx = _build_trader_context(
+            {
+                "analyst_reports": {},
+                "inaction_rationale_feedback": (
+                    "非执行动作理由检查未通过：缺失 inaction_reason、reeval_triggers"
+                ),
+            }
+        )
+        assert "非执行动作理由打回意见" in ctx
+        assert "reeval_triggers" in ctx
+
+    def test_absent_feedback_not_injected(self):
+        from finance_agent.nodes.trader import _build_trader_context
+
+        ctx = _build_trader_context({"analyst_reports": {}})
+        assert "非执行动作理由打回意见" not in ctx

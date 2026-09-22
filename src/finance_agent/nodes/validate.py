@@ -148,7 +148,84 @@ def final_price_missing(decision: object) -> list[str]:
     return missing
 
 
+def inaction_rationale_missing(decision: object) -> list[str]:
+    """非执行动作（watch/hold）缺失理由清单（require-watch-hold-rationale）。
+
+    只查缺失、不做形态清洗（模型层负责）：inaction_reason 纯空白视为缺失；
+    reeval_triggers 无有效条目视为缺失（str 形态视为已申报，兼容 dict 历史对象）。
+    buy/sell 无要求（返回 []）。接受 pydantic 对象与 dict 两种形态。
+    """
+    if isinstance(decision, dict):
+        action = str(decision.get("action") or "")
+        reason = decision.get("inaction_reason")
+        triggers = decision.get("reeval_triggers")
+    else:
+        action = str(getattr(decision, "action", "") or "")
+        reason = getattr(decision, "inaction_reason", None)
+        triggers = getattr(decision, "reeval_triggers", None)
+    if action not in ("watch", "hold"):
+        return []
+    missing: list[str] = []
+    if not (isinstance(reason, str) and reason.strip()):
+        missing.append("inaction_reason")
+    if isinstance(triggers, str):
+        triggers = [triggers] if triggers.strip() else []
+    if not (isinstance(triggers, list) and any(isinstance(t, str) and t.strip() for t in triggers)):
+        missing.append("reeval_triggers")
+    return missing
+
+
+def _inaction_rationale_check(plan: object, state: dict) -> dict:
+    """非执行动作理由完整性检查（trader 侧）：缺一次打回，仍缺放行+如实标注。
+
+    与价位检查同款一次重试语义（require-trade-price-declaration 先例），
+    独立 attempts 计数，避免与价位回路互相消耗。
+    """
+    missing = inaction_rationale_missing(plan)
+    if not missing:
+        return {"inaction_rationale_check": {"result": "pass"}}
+    attempts = int(state.get("inaction_rationale_attempts") or 0)
+    if attempts < 1:
+        reason = (
+            f"watch/hold 决策必须结构化申报不行动理由与再评估触发条件，缺失：{'、'.join(missing)}"
+        )
+        return {
+            "inaction_rationale_check": {"result": "fail", "reason": reason},
+            "inaction_rationale_feedback": (
+                f"非执行动作理由检查未通过：{reason}。"
+                "请补全 inaction_reason（一句话，具体到当前不满足执行条件的点）与 "
+                "reeval_triggers（1-3 条可观察、可判定的再评估触发条件）。"
+            ),
+            "inaction_rationale_attempts": attempts + 1,
+        }
+    return {
+        "inaction_rationale_check": {
+            "result": "pass",
+            "note": (
+                "已打回仍未申报非执行动作理由（watch/hold 必填），放行——"
+                "报告按「未申报」渲染，不虚构内容"
+            ),
+        },
+        "inaction_rationale_attempts": attempts,
+    }
+
+
 def validate_trade_prices(state: dict) -> dict:
+    """校验 trader 方案：价位 sanity（原语义）+ 非执行动作理由完整性。
+
+    require-watch-hold-rationale：watch/hold 的结构化理由缺失同样打回一次。
+    两类检查动作互斥（buy/sell vs watch/hold），但理由键在所有路径统一补齐——
+    防止上一轮 fail 状态滞留导致路由回跳。
+    """
+    updates = _validate_price_levels(state)
+    plan = state.get("trader_plan") or {}
+    if hasattr(plan, "model_dump"):
+        plan = plan.model_dump()
+    updates.update(_inaction_rationale_check(plan, state))
+    return updates
+
+
+def _validate_price_levels(state: dict) -> dict:
     """校验 trader 价位：价格关系 / entry 距现价偏差 / 工具参考带。
 
     三路结果写入 price_check.result：pass（含跳过）/ fail（打回）/ corrected

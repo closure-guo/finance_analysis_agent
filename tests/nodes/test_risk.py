@@ -224,10 +224,17 @@ class TestFinalPriceIntegrity:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_watch_no_price_requirement(self, mock_llm):
-        mock_llm.return_value = self._resp(action="watch")
+        # watch 无价位要求，但 require-watch-hold-rationale 要求理由字段齐备
+        # （否则理由回路会追加一次重试，call_count 变 2）
+        mock_llm.return_value = self._resp(
+            action="watch",
+            inaction_reason="多因素均衡，等待信号",
+            reeval_triggers=["关键指标显著变化"],
+        )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
         assert result["final_price_check"] == {"result": "pass", "note": ""}
+        assert result["final_inaction_check"] == {"result": "pass", "note": ""}
 
     def test_final_price_missing_helper(self):
         from finance_agent.models import TradeDecision
@@ -250,3 +257,94 @@ class TestFinalPriceIntegrity:
             {"action": "watch", "confidence": 0.6, "reasoning": "r"}
         )
         assert final_price_missing(watch) == []
+
+
+class TestFinalInactionRationale:
+    """require-watch-hold-rationale：终稿 watch/hold 理由完整性回路。
+
+    复用 TestFinalPriceIntegrity._resp（staticmethod，字段透传），不复制副本：
+    两条终稿回路共用同一响应构造器，字段语义保持单点定义。
+    """
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_watch_with_rationale_no_extra_call(self, mock_llm):
+        mock_llm.return_value = TestFinalPriceIntegrity._resp(
+            action="watch",
+            inaction_reason="估值分位偏高且缺催化剂",
+            reeval_triggers=["价格回落至 1500 以下"],
+        )
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 1
+        assert result["final_inaction_check"] == {"result": "pass", "note": ""}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_watch_missing_rationale_retries_then_completes(self, mock_llm):
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="watch"),
+            TestFinalPriceIntegrity._resp(
+                action="watch",
+                inaction_reason="等待趋势确认",
+                reeval_triggers=["价格站稳 60 日均线"],
+            ),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        # 打回反馈拼进重试（第二次）调用的 context
+        assert "非执行动作理由打回" in mock_llm.call_args_list[1].args[0]
+        assert result["final_inaction_check"] == {"result": "pass", "note": "打回后已申报"}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_retry_exhausted_passes_with_note(self, mock_llm):
+        mock_llm.return_value = TestFinalPriceIntegrity._resp(action="watch")
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_inaction_check"]["result"] == "pass"
+        assert "已打回仍未申报" in result["final_inaction_check"]["note"]
+        assert "inaction_reason" in result["final_inaction_check"]["note"]
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_buy_unaffected(self, mock_llm):
+        mock_llm.return_value = TestFinalPriceIntegrity._resp(
+            entry_price=26.35, stop_loss=25.3, target_price=28.0
+        )
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 1
+        assert result["final_inaction_check"] == {"result": "pass", "note": ""}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_inaction_retry_to_buy_rechecks_price_conclusion(self, mock_llm):
+        """终审 I-1 主场景：理由重试使终稿换代（watch→buy），价位结论作废必须复核改注。
+
+        两段式最小复现：第 1 次 watch 缺理由（价位块不触发，价位 note 为空 pass），
+        理由重试返回无价位的 buy——若不复核，终稿是无价位 buy 却仍报 pass 空注（假阳性）。
+        """
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="watch"),
+            TestFinalPriceIntegrity._resp(action="buy"),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "buy"
+        note = result["final_price_check"]["note"]
+        assert "理由重试后终稿价位缺失" in note
+        assert "entry_price" in note
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_retry_to_watch_annotated_as_not_applicable(self, mock_llm):
+        """终审 I-1 反向：价位重试输出 watch（带完整理由）→ 如实标注非执行动作。
+
+        不得沿用「打回后已申报」——该文案对非执行动作是错话；理由块此时不应再打回
+        （watch 理由齐备），故 call_count 停在第 2 次。
+        """
+        mock_llm.side_effect = [
+            TestFinalPriceIntegrity._resp(action="buy"),
+            TestFinalPriceIntegrity._resp(
+                action="watch",
+                inaction_reason="等待趋势确认",
+                reeval_triggers=["价格站稳 60 日均线"],
+            ),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "watch"
+        assert result["final_price_check"]["note"] == "打回后改为非执行动作（价位不适用）"

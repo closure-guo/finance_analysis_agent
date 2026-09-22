@@ -382,3 +382,82 @@ class TestRiskEvidenceSources:
             }
         )
         assert [e.source for e in d.evidence_refs] == ["debate_bull", "debate_bear", "risk_metrics"]
+
+
+class TestTradeDecisionInactionRationale:
+    """require-watch-hold-rationale：非执行动作结构化理由字段与噪声清洗。"""
+
+    def test_fields_default_none_and_empty(self):
+        d = TradeDecision(action="watch", confidence=0.5, reasoning="r")
+        assert d.inaction_reason is None
+        assert d.reeval_triggers == []
+
+    def test_reeval_triggers_single_string_to_list(self):
+        d = TradeDecision(
+            action="watch",
+            confidence=0.5,
+            reasoning="r",
+            reeval_triggers="价格回落至 1500 以下",
+        )
+        assert d.reeval_triggers == ["价格回落至 1500 以下"]
+
+    def test_reeval_triggers_none_and_other_types_to_empty(self):
+        for raw in (None, 123, {"a": 1}):
+            d = TradeDecision(action="hold", confidence=0.5, reasoning="r", reeval_triggers=raw)
+            assert d.reeval_triggers == []
+
+    def test_reeval_triggers_mixed_list_drops_non_str_and_blank(self):
+        d = TradeDecision(
+            action="watch",
+            confidence=0.5,
+            reasoning="r",
+            reeval_triggers=["有效", 42, None, "  ", "第二条"],
+        )
+        assert d.reeval_triggers == ["有效", "第二条"]
+
+    def test_blank_inaction_reason_normalized_to_none(self):
+        d = TradeDecision(action="watch", confidence=0.5, reasoning="r", inaction_reason="   ")
+        assert d.inaction_reason is None
+
+    def test_inaction_reason_preserved_verbatim(self):
+        """正路径钉子：合法理由原样保留（清洗不得改写或截断理由内容）。"""
+        d = TradeDecision(
+            action="watch", confidence=0.5, reasoning="r", inaction_reason="估值分位偏高"
+        )
+        assert d.inaction_reason == "估值分位偏高"
+
+    def test_reeval_triggers_blank_string_to_empty(self):
+        """纯空白字符串等同未申报（str 分支的空白口径与列表条目一致）。"""
+        d = TradeDecision(action="watch", confidence=0.5, reasoning="r", reeval_triggers="  ")
+        assert d.reeval_triggers == []
+
+    def test_reeval_triggers_tuple_normalized(self):
+        """tuple 与 list 同款归一（LLM/中间层可能给 tuple）。"""
+        d = TradeDecision(action="watch", confidence=0.5, reasoning="r", reeval_triggers=("a", "b"))
+        assert d.reeval_triggers == ["a", "b"]
+
+    def test_non_str_inaction_reason_normalized_to_none_without_raising(self):
+        """非 str 形态（int/dict/list）一律归一为 None——MUST NOT 抛 ValidationError 中断管线。
+
+        与 `_normalize_anchors` 先例同因：trader.py / risk.py 的 LLM JSON 入口无 schema
+        强制，LLM 真实会输出 dict 形态理由（如 {"reason": "..."}），原样交给 pydantic
+        会炸掉整条 full-graph 运行。
+        """
+        for raw in (123, {"a": 1}, ["x"], 1.5, True):
+            d = TradeDecision(action="watch", confidence=0.5, reasoning="r", inaction_reason=raw)
+            assert d.inaction_reason is None, f"inaction_reason={raw!r} 未归一为 None"
+
+    def test_buy_unaffected(self):
+        """执行动作不受理由约束：价位原样回读，新字段保持默认。"""
+        d = TradeDecision(
+            action="buy",
+            confidence=0.8,
+            reasoning="r",
+            entry_price=1.0,
+            stop_loss=0.9,
+            target_price=1.2,
+        )
+        assert d.action == "buy"
+        assert (d.entry_price, d.stop_loss, d.target_price) == (1.0, 0.9, 1.2)
+        assert d.inaction_reason is None
+        assert d.reeval_triggers == []
