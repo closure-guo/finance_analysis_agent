@@ -258,7 +258,9 @@ class TestDecisionGroundingRubricV3:
             assert src in rubric, src
 
     def test_other_rubrics_version_pinned(self):
-        assert RUBRIC_VERSIONS["report_relevance"] == 3  # v3 = confidence 契约 + 口径必读
+        assert (
+            RUBRIC_VERSIONS["report_relevance"] == 4
+        )  # v4 = 5 分档锚点判例（显式子问题逐一回答；v3 = confidence 契约 + 口径必读）
         assert (
             RUBRIC_VERSIONS["debate_quality"] == 6
         )  # v6 = points 结构化枚举 + 程序封顶（v5 强制枚举 round10 实测仍漏判）
@@ -448,3 +450,20 @@ class TestRunJudgeMean:
             result = run_judge_mean("report_relevance", {"query": "q", "report": "r"}, repeats=1)
         assert result["score"] == 5
         assert result["score_spread"] == 0
+
+
+class TestReportRelevanceV4:
+    """report_relevance rubric v4：5 分档锚点判例（显式子问题逐一回答）。"""
+
+    def test_version_bumped_to_4(self):
+        from evals.judges import RUBRIC_VERSIONS
+
+        assert RUBRIC_VERSIONS["report_relevance"] == 4
+
+    def test_anchor_caselaw_in_rubric(self):
+        from evals.judges import RUBRICS
+
+        rubric = RUBRICS["report_relevance"]
+        assert "子问题" in rubric
+        assert "逐一回答" in rubric
+        assert "降 4" in rubric or "降4" in rubric

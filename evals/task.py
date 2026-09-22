@@ -147,7 +147,7 @@ def _run_quick(inp: dict) -> dict:
         "report": answer,
         "ticker": inp.get("ticker"),
         # quick 无辩论/决策层,用 extract_judge_vars 补齐 9 键(缺失键给空串),
-        # 下游 evaluator 不会 KeyError;deep-only 项由 run.py _JUDGE_DEEP_ONLY 过滤。
+        # 下游 evaluator 不会 KeyError;quick 全部 judge 维由 run.py 适配器停评。
         "judge_vars": extract_judge_vars({"final_report": answer or ""}, query=query),
         "mode": "quick",
         "skipped": None,

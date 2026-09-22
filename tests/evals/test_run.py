@@ -82,12 +82,12 @@ class TestEvaluatorAssembly:
         }
         evals = {e.__name__: e for e in all_evaluators()}
         evals["eval_report_relevance"](
-            input={"query": "茅台", "mode": "quick"},
+            input={"query": "茅台", "mode": "deep"},
             output={
                 "report": "r",
                 "ticker": None,
                 "judge_vars": {"query": "茅台", "report": "茅台好"},
-                "mode": "quick",
+                "mode": "deep",
             },
             expected_output={},
             metadata={},
@@ -500,3 +500,28 @@ class TestJudgeKMean:
             evals.run.main()
         assert evals.run._JUDGE_REPEATS == 5
         assert mock_write.call_args.kwargs["judge_repeats"] == 5
+
+
+class TestQuickNoJudge:
+    """quick 条目停评全部 judge 维（delta resolve-report-relevance-zero-variance）。
+
+    report_relevance 在 quick 段自 r3 起零方差（全 5，Spearman 不可算），判据失败面
+    已被确定性指标覆盖；quick 不再发起任何 judge 调用，确定性指标照常。
+    """
+
+    def test_report_relevance_skipped_for_quick(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        mock_judge = MagicMock()
+        # 判分入口双防御：K 均值切换（PR #149）合入前后都能挡住调用
+        monkeypatch.setattr(evals.run, "run_judge_mean", mock_judge, raising=False)
+        monkeypatch.setattr(evals.run, "run_judge", mock_judge, raising=False)
+        fns = {e.__name__: e for e in all_evaluators()}
+        result = fns["eval_report_relevance"](
+            input={"query": "q", "mode": "quick"},
+            output={"report": "r", "ticker": None, "judge_vars": {"query": "q"}, "mode": "quick"},
+            expected_output={},
+            metadata={},
+        )
+        mock_judge.assert_not_called()
+        assert result in (None, [])
