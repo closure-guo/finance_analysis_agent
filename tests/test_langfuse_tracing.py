@@ -9,6 +9,8 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from finance_agent.langfuse_tracing import (
     get_callback_handler,
     open_span,
@@ -92,6 +94,94 @@ class TestOpenSpan:
                 obs.update(output={"result": "echo: hi"})
 
         mockObs.update.assert_called_once_with(output={"result": "echo: hi"})
+
+
+class TestOpenSpanErrorStatus:
+    """span 内异常必须把异常信息交给 __exit__（issue #28）。
+
+    修复前 `__exit__(None, None, None)` 恒定传空 → 业务抛异常的 span 在 Langfuse 里
+    仍是绿色（level=DEFAULT），失败场景恰恰最需要 trace。真机取证（本地 Langfuse +
+    langfuse SDK v4）：传 `sys.exc_info()` → span level=ERROR 且 status_message 自动取
+    「异常类型: 消息」；传 None → level=DEFAULT。
+
+    覆盖缺口场景：`tool:{name}`（harness/loop.py）与 `search_api_call`
+    （web_search.py）这类由调用方直接抛出、未显式 obs.update(level="ERROR") 的 span。
+    """
+
+    def _mock_client(self, cm: MagicMock) -> MagicMock:
+        client = MagicMock()
+        client.start_as_current_observation.return_value = cm
+        return client
+
+    def test_exit_receives_exception_info_and_reraises(self):
+        """span 内异常：__exit__ 收到异常三元组，且异常照常传播（不吞）。"""
+        cm = MagicMock()
+        exc_seen: list = []
+
+        def _exit(exc_type, exc, tb):
+            exc_seen.append((exc_type, exc, tb))
+            return False
+
+        cm.__exit__.side_effect = _exit
+        client = self._mock_client(cm)
+
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=client),
+            pytest.raises(ValueError, match="tool boom"),
+            open_span("tool:web_search", {"args": {}}),
+        ):
+            raise ValueError("tool boom")
+
+        assert len(exc_seen) == 1
+        exc_type, exc, tb = exc_seen[0]
+        assert exc_type is ValueError
+        assert isinstance(exc, ValueError) and tb is not None
+
+    def test_base_exception_also_marked(self):
+        """BaseException（如 KeyboardInterrupt）同样交异常信息，不被当作正常退出。"""
+        cm = MagicMock()
+        client = self._mock_client(cm)
+
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=client),
+            pytest.raises(KeyboardInterrupt),
+            open_span("tool:web_search", {"args": {}}),
+        ):
+            raise KeyboardInterrupt
+
+        args = cm.__exit__.call_args.args
+        assert args[0] is KeyboardInterrupt
+
+    def test_success_path_exit_args_unchanged(self):
+        """正常退出仍传 (None, None, None)——成功 span 不得被标错。"""
+        cm = MagicMock()
+        client = self._mock_client(cm)
+
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=client),
+            open_span("tool:echo", {"args": {}}),
+        ):
+            pass
+
+        assert cm.__exit__.call_args.args == (None, None, None)
+
+    def test_exit_failure_does_not_mask_body_exception(self, caplog):
+        """__exit__ 自身抛异常时：业务异常仍上抛（span 故障不改变业务行为），留 WARNING。"""
+        cm = MagicMock()
+        cm.__exit__.side_effect = RuntimeError("langfuse down")
+        client = self._mock_client(cm)
+
+        with (
+            patch("finance_agent.langfuse_tracing.get_langfuse", return_value=client),
+            caplog.at_level(logging.WARNING, logger="finance_agent.langfuse"),
+            pytest.raises(ValueError, match="original"),
+            open_span("tool:web_search", {"args": {}}),
+        ):
+            raise ValueError("original")
+
+        assert any(
+            "退出失败" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records
+        ), f"expected WARNING log for exit failure, got: {[r.message for r in caplog.records]}"
 
 
 def test_update_current_span_noop_when_unconfigured():

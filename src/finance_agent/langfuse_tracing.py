@@ -115,6 +115,11 @@ def open_span(name: str, input: dict | None = None):
     建立 span（as_type=span），未配置或异常时降级为 yield None（零开销，
     业务无感知）。调用方可用 obs.update(output=...) 记录 output。
 
+    span 内异常（`tool:{name}` / `search_api_call` 这类由调用方直接抛出、
+    未显式标 ERROR 的场景）SHALL 把异常信息交给 `cm.__exit__`：Langfuse SDK
+    据此把 span 标为 `level=ERROR`（status_message 自动取「异常类型: 消息」）。
+    异常照常传播，不被本 helper 吞掉；`__exit__` 自身失败仅记 WARNING。
+
     Args:
         name: span 名称（如 "tool:web_search"、"search_api_call"）
         input: span 的 input 字段（dict）
@@ -133,11 +138,17 @@ def open_span(name: str, input: dict | None = None):
         yield None
         return
     obs = cm.__enter__()
+    exc_info: tuple[Any, Any, Any] = (None, None, None)
     try:
         yield obs
+    except BaseException as exc:
+        # BaseException：KeyboardInterrupt/SystemExit 等同样是「这次 span 失败了」，
+        # 不得被记成正常退出（捕获后原样 raise，业务语义不变）
+        exc_info = (type(exc), exc, exc.__traceback__)
+        raise
     finally:
         try:
-            cm.__exit__(None, None, None)
+            cm.__exit__(*exc_info)
         except Exception:
             _span_logger.warning("Langfuse span 退出失败: %s", name, exc_info=True)
 
