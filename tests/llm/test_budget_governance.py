@@ -63,6 +63,62 @@ def test_calibrate_small_usage_keeps_budget():
     assert budget.max_context_tokens == 120000
 
 
+def test_calibrate_repeat_same_usage_is_idempotent():
+    """重复校准同一 usage：预算不再二次上抬（幂等，不随调用次数膨胀）。"""
+    budget = ContextBudget()
+    budget.calibrate(150000)
+    once = budget.max_context_tokens
+    budget.calibrate(150000)
+    budget.calibrate(150000)
+    assert budget.max_context_tokens == once == 157500
+    assert budget.usage_estimated is False
+
+
+def test_calibrate_never_shrinks_after_raise():
+    """校准只上抬不下压：随后报更小 usage 时预算保持不变（防误压缩）。"""
+    budget = ContextBudget()
+    budget.calibrate(150000)
+    budget.calibrate(1000)
+    assert budget.max_context_tokens == 157500
+
+
+def test_calibrate_none_after_truth_keeps_raised_budget():
+    """真值校准后回到估算态（None）：只翻标记，不回退已上抬的预算。"""
+    budget = ContextBudget()
+    budget.calibrate(150000)
+    budget.calibrate(None)
+    assert budget.usage_estimated is True
+    assert budget.max_context_tokens == 157500
+
+
+# ── agent_factory._build_context_budget（#77 测试卫生：异常回落无测试）──
+
+
+def test_build_context_budget_derives_from_react_profile(monkeypatch):
+    from finance_agent import agent_factory
+
+    monkeypatch.setattr(
+        "finance_agent.llm.resolver.resolve_profile",
+        lambda **kw: get_profile_preset("ark-glm"),
+    )
+    budget = agent_factory._build_context_budget("openai/glm-5.2", "k", "https://x/v1")
+    assert budget is not None
+    assert budget.max_context_tokens == get_profile_preset("ark-glm").capability.max_context
+
+
+def test_build_context_budget_falls_back_on_resolver_failure(monkeypatch):
+    """resolver 抛错（配置半套等）→ 回落默认预算，绝不阻断 Agent 构建。"""
+    from finance_agent import agent_factory
+
+    def _boom(**kw):
+        raise RuntimeError("resolver down")
+
+    monkeypatch.setattr("finance_agent.llm.resolver.resolve_profile", _boom)
+    budget = agent_factory._build_context_budget("openai/glm-5.2", "k", "https://x/v1")
+    assert budget is not None
+    assert budget.max_context_tokens == 120000
+
+
 # ── build_trace_metadata 可选键 ──────────────────
 
 

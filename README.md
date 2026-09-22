@@ -156,6 +156,7 @@ cp .env.example .env
 | `LANGFUSE_PUBLIC_KEY` | 否 | - | Langfuse 公钥，配置后启用 LLM 调用追踪 |
 | `LANGFUSE_SECRET_KEY` | 否 | - | Langfuse 密钥 |
 | `LANGFUSE_HOST` | 否 | `https://cloud.langfuse.com` | Langfuse 服务地址（自托管填本地地址） |
+| `LLM_DROP_PARAMS_STRICT` | 否 | 未设置 | 应急回滚开关（仅运维）：`=1` 恢复「全局静默丢弃不支持参数」的旧行为。**必须在首次 LLM 调用前设置**——该开关只在 adapter 首次初始化时读取（`ensure_litellm_runtime`），进程起来后再设不生效；默认行为是白名单显式剔除 + trace warning，关键参数不支持时显式报错 |
 
 ### 示例
 
