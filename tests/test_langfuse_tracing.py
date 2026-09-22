@@ -52,9 +52,9 @@ class TestOpenSpan:
             # 在 span 上下文内，obs 是 observation 对象
             assert obs is mockObs
 
-        # 验证 start_as_current_observation 被正确调用
+        # 验证 start_as_current_observation 被正确调用（metadata 缺省空 dict，见 #51）
         mockClient.start_as_current_observation.assert_called_once_with(
-            name="tool:web_search", as_type="span", input={"args": {"query": "test"}}
+            name="tool:web_search", as_type="span", input={"args": {"query": "test"}}, metadata={}
         )
         # 验证 span 上下文正确退出
         mockCm.__exit__.assert_called_once()
@@ -182,6 +182,67 @@ class TestOpenSpanErrorStatus:
         assert any(
             "退出失败" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records
         ), f"expected WARNING log for exit failure, got: {[r.message for r in caplog.records]}"
+
+
+def test_open_span_passes_metadata_to_creation():
+    """#51：open_span 支持 metadata 参数，创建 span 时下发（prompt 溯源等）。"""
+    mockClient = MagicMock()
+    with (
+        patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient),
+        open_span("litellm:x", {"messages": []}, metadata={"prompt_name": "trader"}),
+    ):
+        pass
+    mockClient.start_as_current_observation.assert_called_once_with(
+        name="litellm:x",
+        as_type="span",
+        input={"messages": []},
+        metadata={"prompt_name": "trader"},
+    )
+
+
+def test_open_span_generation_type_forwards_model():
+    """#51：降级记录 LLM 调用时按 generation 建观测并下发 model（usage 落库前提）。"""
+    mockClient = MagicMock()
+    with (
+        patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient),
+        open_span(
+            "litellm:x",
+            {"messages": []},
+            metadata={"prompt_name": "trader"},
+            as_type="generation",
+            model="deepseek/deepseek-chat",
+        ),
+    ):
+        pass
+    mockClient.start_as_current_observation.assert_called_once_with(
+        name="litellm:x",
+        as_type="generation",
+        input={"messages": []},
+        metadata={"prompt_name": "trader"},
+        model="deepseek/deepseek-chat",
+    )
+
+
+def test_open_span_span_type_omits_model():
+    """span 类型不携带 model（SDK span 观测无此参数，多传无意义）。"""
+    mockClient = MagicMock()
+    with (
+        patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient),
+        open_span("tool:echo", {"args": {}}),
+    ):
+        pass
+    assert "model" not in mockClient.start_as_current_observation.call_args.kwargs
+
+
+def test_open_span_metadata_defaults_empty():
+    """不传 metadata → 空 dict（既有调用方行为不变）。"""
+    mockClient = MagicMock()
+    with (
+        patch("finance_agent.langfuse_tracing.get_langfuse", return_value=mockClient),
+        open_span("tool:echo", {"args": {}}),
+    ):
+        pass
+    assert mockClient.start_as_current_observation.call_args.kwargs["metadata"] == {}
 
 
 def test_update_current_span_noop_when_unconfigured():

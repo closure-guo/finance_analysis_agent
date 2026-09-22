@@ -107,7 +107,13 @@ _span_logger = logging.getLogger("finance_agent.langfuse")
 
 
 @contextmanager
-def open_span(name: str, input: dict | None = None):
+def open_span(
+    name: str,
+    input: dict | None = None,
+    metadata: dict | None = None,
+    as_type: str = "span",
+    model: str | None = None,
+):
     """创建 Langfuse span 上下文管理器；未配置或异常时优雅降级。
 
     用于工具调用、网络搜索等非 LLM 操作的可观测性追踪。复用
@@ -123,6 +129,12 @@ def open_span(name: str, input: dict | None = None):
     Args:
         name: span 名称（如 "tool:web_search"、"search_api_call"）
         input: span 的 input 字段（dict）
+        metadata: span 的 metadata 字段（dict，如 prompt_name/prompt_version/
+            agent 溯源字段）；缺省空 dict，既有调用方行为不变
+        as_type: 观测类型，默认 "span"；降级记录 LLM 调用时传 "generation"
+            （**span 观测会静默丢弃 usage_details**，token 用量只有 generation
+            才落库——真机实测 langfuse 4.13）
+        model: 模型名，仅 as_type="generation" 时有意义（与主路径同字段）
 
     Yields:
         observation 对象（已配置时）或 None（降级时）
@@ -132,7 +144,15 @@ def open_span(name: str, input: dict | None = None):
         yield None
         return
     try:
-        cm = client.start_as_current_observation(name=name, as_type="span", input=input or {})
+        kwargs: dict = {
+            "name": name,
+            "as_type": as_type,
+            "input": input or {},
+            "metadata": metadata or {},
+        }
+        if model:
+            kwargs["model"] = model
+        cm = client.start_as_current_observation(**kwargs)
     except Exception:
         _span_logger.warning("Langfuse span 创建失败: %s", name, exc_info=True)
         yield None

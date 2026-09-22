@@ -485,6 +485,55 @@ def test_complete_with_tools_degraded_records_via_open_span(
 @patch(_OPEN_SPAN)
 @patch(_GET_LANGFUSE)
 @patch(_RAW_COMPLETION)
+def test_complete_with_tools_degraded_parity_usage_and_prompt_metadata(
+    mock_completion, mock_get_langfuse, mock_open_span
+):
+    """#51：降级路径与主路径对等——usage_details 与 prompt metadata 同样落观测。
+
+    主路径 `_gen.update(output=..., usage_details=...)` 且观测自带 trace metadata；
+    降级路径此前只写 output，token 用量与 prompt 溯源在 trace 上缺失（同一调用
+    两条路径的观测字段不对等，复盘时无法比较）。
+    """
+    from types import SimpleNamespace
+
+    resp = _mock_resp("答案", tool_calls=[_tool_call_mock()])
+    resp.usage = SimpleNamespace(prompt_tokens=11, completion_tokens=22)
+    mock_completion.return_value = resp
+
+    mockLf = MagicMock()
+    mockLf.start_as_current_observation.side_effect = RuntimeError("langfuse down")
+    mock_get_langfuse.return_value = mockLf
+
+    mockObs = MagicMock()
+    mockCm = MagicMock()
+    mockCm.__enter__ = MagicMock(return_value=mockObs)
+    mockCm.__exit__ = MagicMock(return_value=False)
+    mock_open_span.return_value = mockCm
+
+    from finance_agent.llm.gateway import complete_with_tools
+
+    trace_meta = {"prompt_name": "trader", "prompt_version": "28", "agent": "trader"}
+    complete_with_tools(
+        _messages("搜一下"),
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        llm_config={"model": "deepseek/deepseek-chat", "baseUrl": "https://x/v1", "apiKey": "k"},
+        trace={"name": "litellm:deepseek/deepseek-chat", "metadata": trace_meta},
+    )
+
+    # prompt metadata 经 span 创建下发（与主观测 _start_trace_observation 同源）
+    span_kwargs = mock_open_span.call_args.kwargs
+    assert span_kwargs["metadata"] == trace_meta
+    # 必须与主路径同型 generation + model：span 观测会静默丢弃 usage_details
+    # （langfuse 4.13 真机实测），只写 usage_details 而不改类型等于假对等
+    assert span_kwargs["as_type"] == "generation"
+    assert span_kwargs["model"] == "deepseek/deepseek-chat"
+    # usage_details 与主路径同字段
+    assert mockObs.update.call_args.kwargs["usage_details"] == {"input": 11, "output": 22}
+
+
+@patch(_OPEN_SPAN)
+@patch(_GET_LANGFUSE)
+@patch(_RAW_COMPLETION)
 def test_complete_with_tools_degraded_noop_without_error(
     mock_completion, mock_get_langfuse, mock_open_span
 ):
