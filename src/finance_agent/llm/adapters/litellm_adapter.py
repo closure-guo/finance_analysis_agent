@@ -499,12 +499,23 @@ def _drop_unsupported(kwargs: dict[str, Any]) -> dict[str, Any]:
     YAGNI：当前唯一 capability 信号是 ``reasoning_forced``（方舟 GLM 类
     thinking 强制端点拒收 temperature）→ 仅据此剔除 temperature；
     top_p/frequency_penalty/presence_penalty 暂无 capability 信号，透传。
+
+    剔除事实 SHALL 落 trace（spec llm-provider-gateway「非关键参数白名单」：
+    「按白名单显式剔除并记 trace warning」）：经 update_current_span 写到当前
+    generation 观测（未配置 Langfuse 时 no-op，观测故障不阻断业务）。只记进程
+    日志则 trace 上看不出「本次调用丢了 temperature」，降级事实不可审计。
     """
     model = kwargs.get("model")
     if not isinstance(model, str):
         return kwargs
     if "temperature" in kwargs and capability_for_model(model).reasoning_forced:
         logger.warning("参数 temperature 被 adapter 白名单剔除(端点不支持)：model=%s", model)
+        from finance_agent.langfuse_tracing import update_current_span
+
+        update_current_span(
+            metadata={"degradation": "drop_params", "field": "temperature", "model": model},
+            level="WARNING",
+        )
         kwargs.pop("temperature")
     return kwargs
 
