@@ -280,8 +280,8 @@ def _install_cost_meter() -> Callable[[], int] | None:
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     try:
+        import backtest_pilot_2023 as pilot_util
         import p1_injection_pilot as pilot_cli
-        from backtest_pilot_2023 import pilot_util
 
         if pilot_cli._install_cost_meter() is None:
             return None
