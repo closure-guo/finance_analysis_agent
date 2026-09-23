@@ -6,4 +6,4 @@
 - [x] 非 debate 维度结果形状回归（不新增 debate 专有键）既有精确断言测试通过
 - [x] `docs/evals/metrics.md` §2 时间线登记「单次判分 → K 均值」切点行（跨切点绝对分不可直接比较）
 - [x] 全量测试通过（`uv run pytest`：3118 passed / 2 skipped，2026-09-22）
-- [ ] 首轮 K 均值口径 hosted 实验收口时：runs.jsonl 追加行带切点标注（留待真实跑批，非本变更代码范畴）
+- [x] 首轮 K 均值口径 hosted 实验收口（2026-09-23 round13）：runs.jsonl 第 32 行带切点标注 + 时间线 r13 行（K=3 生效证据：产物 judge_repeats=3 / comment [K=3 scores spread] / dg thirds 粒度）
