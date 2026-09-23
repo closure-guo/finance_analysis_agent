@@ -261,11 +261,13 @@ Judge 评估器 SHALL NOT 在未校准情况下用于线上决策（如阻塞 PR
 
 ### Requirement: 线上托管 Evaluator
 
-第二阶段，系统 SHALL 在 Langfuse 服务端配置线上托管 Evaluator，与线下实验用同一套 rubric 与裁判模型，按采样率（初值 10-20%）对生产 trace 自动评估，结果作为 Monitors 告警信号。quick 模式无辩论，仅跑 `report_relevance`。
+第二阶段，系统 SHALL 在 Langfuse 服务端配置线上托管 Evaluator，与线下实验用同一套 rubric 与裁判模型，按采样率（初值 10-20%）对生产 trace 自动评估，结果作为 Monitors 告警信号。judge 评估 SHALL 仅对 deep 模式 trace 生效：quick 模式 trace SHALL NOT 跑任何 judge 维度（report_relevance 已转 deep-only），Monitors 告警 SHALL 以 deep trace 的 judge 分与确定性指标为信号源。
+
+(Previously: 第二阶段，系统 SHALL 在 Langfuse 服务端配置线上托管 Evaluator，与线下实验用同一套 rubric 与裁判模型，按采样率（初值 10-20%）对生产 trace 自动评估，结果作为 Monitors 告警信号。quick 模式无辩论，仅跑 `report_relevance`。)
 
 #### Scenario: 采样评估
 
-- **GIVEN** 线上 trace 产生
+- **GIVEN** 线上 deep trace 产生
 - **WHEN** 命中采样率
 - **THEN** 托管 Evaluator SHALL 按同 rubric 自动跑 Judge
 - **AND** Score 附着到该 trace
@@ -273,7 +275,8 @@ Judge 评估器 SHALL NOT 在未校准情况下用于线上决策（如阻塞 PR
 #### Scenario: 模式过滤
 
 - **GIVEN** trace 的 `mode=quick`
-- **THEN** 托管 Evaluator SHALL 仅跑 `report_relevance`，跳过 `debate_quality`
+- **THEN** 托管 Evaluator SHALL 跳过全部 judge 维度（report_relevance 为 deep-only），SHALL NOT 为 quick trace 产生 judge Score
+- **AND** quick trace 的质量信号 SHALL 来自确定性指标
 
 #### Scenario: 漂移告警
 
@@ -609,4 +612,76 @@ debate_quality 的 judge 材料 SHALL 在既有骨架行（交锋覆盖统计、
 - **WHEN** 本变更合入并首轮实验收口
 - **THEN** `docs/evals/metrics.md` §1.2 SHALL 新增该指标行（定义 / 代码位置 / 拆项）
 - **AND** 时间线 SHALL 标注「judge 材料加锚点骨架行」切点，跨切点 debate_quality 分数 SHALL 标注不可直接比较
+
+### Requirement: hosted 实验判分取 K 次均值
+
+`run_experiment`（`evals/run.py`）的 LLM-as-Judge 判分 SHALL 以 K 次重复调用的**均值**为点估计（复用 `run_judge_mean`），K SHALL 经 CLI 声明并写入实验产物 config，默认 3。SHALL NOT 用中位数（双峰分布 p→0.5 时中位不降翻转概率）。每次分数（`scores`）与极差（`score_spread`）SHALL 随 item 记录落盘，SHALL NOT 只留均值而静默抹掉离散度。解析失败/输入缺失的调用 SHALL 不计入均值但计入 `judge_failures`；全部调用失败时该维度 SHALL 记 `score=None`（沿实验失败率口径，不静默给分）。debate_quality（v6）的封顶/枚举遥测 SHALL 取最低分那次调用的观测（最保守）。本变更合入 SHALL 在 `docs/evals/metrics.md` §1.1 更新口径并在时间线登记切点：跨切点的 judge 绝对分不可与历史单次口径（r1–r9）直接比较。
+
+#### Scenario: K 均值与离散度落盘
+
+- **GIVEN** 某 item 的 debate_quality 三次调用返回 `[5, 4, 4]`
+- **WHEN** run_experiment 记录该维度判分
+- **THEN** 点估计 SHALL 为 4.33（均值），`scores` 与 `score_spread=1` SHALL 一并落盘
+- **AND** 实验产物 config SHALL 含 `judge_repeats=3`
+
+#### Scenario: 失败口径沿用
+
+- **GIVEN** 某 item 的 consistency 三次调用中 1 次解析失败
+- **WHEN** 记录该维度判分
+- **THEN** 点估计 SHALL 为其余 2 次的均值，`judge_failures` SHALL 计 1
+- **AND** 三次全部失败时 SHALL 记 `score=None` 且 `judge_failures=3`
+
+#### Scenario: 封顶遥测取最低分调用
+
+- **GIVEN** debate_quality 三次调用分数 `[5, 4, 4]`，其中 4 分那次枚举出纯定性标头
+- **WHEN** 汇总封顶/枚举遥测
+- **THEN** 遥测 SHALL 取最低分那次的观测（`cap_applied=true`、`qualitative_points ≥ 1`）
+- **AND** SHALL NOT 因均值 4.33 > 4 而丢失封顶证据
+
+#### Scenario: K 经 CLI 声明
+
+- **WHEN** 以 `--judge-repeats N` 运行 hosted 实验
+- **THEN** 实际 K SHALL 写入产物 config，全部维度按同一 K 判分
+- **AND** 未声明时 SHALL 取默认 3
+
+#### Scenario: 切点登记
+
+- **WHEN** 本变更合入并首轮 hosted 实验收口
+- **THEN** `docs/evals/metrics.md` 时间线 SHALL 新增切点行（单次判分 → K 次均值）
+- **AND** 跨该切点的 judge 绝对分 SHALL 标注不可直接比较，与 r1–r9 的对比 SHALL 以切点行显式声明为前提
+
+#### Scenario: 其余维度结果形状不变
+
+- **WHEN** 运行 report_relevance / decision_grounding / consistency 判分
+- **THEN** 结果字典 SHALL NOT 增加 debate 专有键（`points` / `cap_applied` / `enumeration_missing` 仍仅属 debate_quality），既有精确断言契约不变
+
+### Requirement: report_relevance 评估范围与 5 分档判例
+
+report_relevance SHALL 仅对 deep 条目评估：quick 条目 SHALL 跳过 report_relevance 判分（不发起 judge 调用、不产出该维分数），其回归信号由确定性指标（ticker_match / section_coverage / citation 系）承担。deep 条目的 report_relevance rubric SHALL 自 v4 起执行 5 分档锚点判例：query 中可辨识的显式子问题被逐一回答方可给 5，任一子问题被回避或仅泛泛带过即降 4。rubric 版本 SHALL 递增记录于 `RUBRIC_VERSIONS`，并按「Judge 校准门禁」契约重校准（与人工一致性 ≥80%）后方可上线。本变更合入 SHALL 在 `docs/evals/metrics.md` §1.1 更新口径（deep-only）并登记时间线切点：跨切点的 report_relevance 均值不可直接比较。
+
+#### Scenario: quick 条目跳过 judge
+
+- **GIVEN** dataset 含 mode=quick 的条目
+- **WHEN** run_experiment 处理该条目
+- **THEN** SHALL NOT 对其发起任何 judge 调用，其结果记录 SHALL NOT 含 report_relevance 分数
+- **AND** 确定性指标（ticker_match / section_coverage / citation 系）SHALL 照常评估
+
+#### Scenario: deep 子问题回避降档
+
+- **GIVEN** query 为「分析 XX 的估值和分红能力」，报告仅覆盖估值、分红一笔带过
+- **WHEN** 运行 report_relevance judge（rubric v4）
+- **THEN** judge SHALL 按 5 分档锚点判例降 4（显式子问题未逐一回答）
+- **AND** 输出 reason SHALL 指明被回避的子问题
+
+#### Scenario: 重校准后上线
+
+- **WHEN** rubric v3 → v4 变更
+- **THEN** SHALL 以校准样本离线重判 v4 并与人工分对照，一致性 ≥80% 后方可合入生产判分路径
+- **AND** `RUBRIC_VERSIONS` 的 report_relevance SHALL 递增为 4
+
+#### Scenario: 切点登记
+
+- **WHEN** 本变更合入并首轮实验收口
+- **THEN** `docs/evals/metrics.md` 时间线 SHALL 新增切点行（report_relevance 转为 deep-only + rubric v4）
+- **AND** 跨切点的 report_relevance 均值 SHALL 标注不可直接比较
 
