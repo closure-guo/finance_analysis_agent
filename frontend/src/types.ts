@@ -619,3 +619,81 @@ export interface PredictionsResponse {
   as_of: string
   disclaimer: string
 }
+
+// ── 评估运维（delta add-eval-ops-console Task 6）──
+// 字段名逐字对齐 `src/finance_agent/ops_api.py` 的 /api/v1/ops/* 契约（不猜测）。
+
+export interface OpsSchedule {
+  day_of_week: string
+  hour: number
+  minute: number
+  timezone: string
+}
+
+// 运行历史行的生命周期：scheduled 定时 / manual 手动补跑 / config-change 配置变更审计
+export type OpsRunKind = 'scheduled' | 'manual' | 'config-change'
+// 终态：running 进行中 / ok 成功 / failed 失败 / skipped-disabled 空转（cohort 开关关闭）
+export type OpsRunStatus = 'running' | 'ok' | 'failed' | 'skipped-disabled'
+
+export interface OpsRun {
+  run_id: number
+  job_id: string
+  kind: OpsRunKind | string
+  source: string
+  status: OpsRunStatus | string
+  started_at: string
+  finished_at: string | null
+  summary: Record<string, any> | null
+  error: string | null
+}
+
+export interface OpsJobStatus {
+  job_id: string
+  label: string
+  schedule: OpsSchedule
+  next_fire_time: string | null
+  last_run: OpsRun | null
+  history: OpsRun[]
+}
+
+export interface OpsCohortState {
+  enabled: boolean
+  hour: number
+  minute: number
+  budget_tokens: number
+  today_spend: number
+  today_success: number
+  today_failure: number
+}
+
+// GET /api/v1/ops/jobs
+export interface OpsJobsResponse {
+  scheduler_running: boolean
+  jobs: OpsJobStatus[]
+  cohort: OpsCohortState
+}
+
+// GET /api/v1/ops/reports（回测报告注册表）
+export interface OpsReportEntry {
+  name: string
+  path: string
+  status: string
+  target: string | null
+  positioning: string | null
+  probe_direction_hit_rate: number | null
+}
+
+// GET /api/v1/ops/prereg（预登记版本；locked = 已产生读数，只读）
+export interface OpsPreregVersion {
+  path: string
+  fields: Record<string, string>
+  valid: boolean
+  issues: string[]
+  locked: boolean
+}
+
+// GET /api/v1/ops/caliber（当前口径旋钮现值；只读）
+export interface OpsCaliber {
+  knobs: Record<string, number>
+  source: string
+}
