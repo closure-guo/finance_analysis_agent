@@ -153,6 +153,8 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 **复权口径切点（2026-09-23，delta `add-backtest-leakage-controls`，未跑批）**：结算与回测取数统一**后复权（hfq）**，分析输入保持前复权；跨切点的结算数值（分红除权样本）不可直接比较，存量已结算行不重算。
 **泄漏控制启用切点（2026-09-23，delta `add-backtest-leakage-controls`，未跑批）**：回测**正式批（`--batch-kind formal`）**绑定预登记（门禁字段 `OUTCOME_REQUIRED_FIELDS`，无效预登记拒绝正式批身份）+ 干净窗口判定（决策日距跑批日 ≥ 20 个**交易日**，基准不可得 / 空样本保守判不通过）+ 泄漏探针披露（裸问三层题，方向命中率阈值 0.60，超阈 → 结论降级为「泄漏污染下的上界证据（真实 skill ≤ 读数）」；探针不可测 → 按通路验证处理）。`--batch-kind pathway`（默认）结论恒标「通路验证定位」，不产 skill / 赚钱能力结论句——**深历史批次永久定位通路验证**（记忆泄漏不可根除，只可披露与降级）。报告 md 落 `evals/backtest/results/*.md`（含生命周期 status 头，已纳入 `docs/evals/README.md` 结论注册表索引扫描范围）；`evals/backtest/results/pilot-2023-shock.md` 就地补 status 头 + 「通路验证 + 泄漏风险」标注（原文与数字保留）。**本切点不产生任何 skill 读数**：首个正式批的窗口与样本量由预登记 MDE 反算后 owner 批预算，探针降级阈值（0.60）为预登记可调项。
 
+**运维控制台启用切点（2026-09-24，delta `add-eval-ops-console`，未跑批）**：设置中心新增「评估运维」分区（六页签），把日批五任务（判定 / 盯市 / 指标快照 / 完整性 / cohort）的状态与运行历史、手动补跑、cohort 开关与跑批时刻、回测批与泄漏探针触发、outcome 收口健康检查、回测报告注册表、预登记版本化与口径旋钮全部纳入界面（只读 + 触发；烧钱动作一律前端确认 + 后端沿用既有门禁，**预算熔断 / 串行 / usage 真值记账一行不改**）。**cohort 开关与跑批时刻的运行期唯一真相源由环境变量改为持久化 `ops_config` 表**（`cohort_enabled` / `cohort_hour` / `cohort_minute`；env 仅作进程启动引导默认值、已有表值不被覆盖，重启保持）——**跨此切点，「改 env 重启生效」的运维时代结束：旧的「env-only」运维期与切点后的界面期不可直接比较**（同一开关在两期的取值来源不同；切点后归因不得再把环境变量改动当作生效手段，须查 `ops_config` 现值与 `job_runs` 审计行）。调度器未启动（TESTING=1 或显式禁用）时状态接口显式返回「未运行」而非 500 或空列表。口径旋钮（判定窗口 / 中性带 / 探针阈值 / 最小已结算样本）的界面修改**只生成 `openspec/changes/ops-caliber-draft-*` 草稿**，不写本文件、不改 `evals/outcome/caliber.py` 常量——生效仍须走 §1 口径修订 + delta 流程（草稿骨架当前未过 `openspec validate --strict`，见 `tests/validation/2026-09-24-add-eval-ops-console-validation.md` 残留风险）。**本切点不产生任何读数**：无 cohort 跑批、无回测正式批、无探针 LLM 调用，故 §2 时间线不加行。
+
 ---
 
 ## 2.1 round7 预登记分析计划（标注前锁定，防事后口径漂移）
