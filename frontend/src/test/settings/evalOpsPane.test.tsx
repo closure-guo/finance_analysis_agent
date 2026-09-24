@@ -342,8 +342,7 @@ describe('EvalOpsPane 评估运维分区（add-eval-ops-console Task 6）', () =
     expect(callsOf(calls, 'POST', '/api/v1/ops/backtest')).toHaveLength(0)
   })
 
-  it('正式批：服务端 409 门禁拒绝时展示原因（非静默/非转圈），且不落报告结果', async () => {
-    const { calls } = mockFetch({
+  it('正式批：服务端 409 门禁拒绝时展示原因（非静默/非转圈），且不落报告结果', async () => {    const { calls } = mockFetch({
       'POST /api/v1/ops/backtest': { status: 409, body: { detail: '距 as_of 仅 3 个交易日，干净窗口未过' } },
     })
     renderPane()
@@ -389,6 +388,34 @@ describe('EvalOpsPane 评估运维分区（add-eval-ops-console Task 6）', () =
     const result = await screen.findByTestId('eval-ops-backtest-result')
     expect(result).toHaveTextContent('通路验证定位')
     expect(result).toHaveTextContent('pathway-1.md')
+  })
+
+  it('正式批确认弹窗取消：零请求（不启动任何回放）', async () => {
+    const { calls } = mockFetch()
+    renderPane()
+    await openTab('backtest')
+    fireEvent.change(await screen.findByTestId('eval-ops-backtest-codes'), { target: { value: '600519' } })
+    await waitFor(() => expect(screen.getByTestId('eval-ops-backtest-prereg')).toHaveTextContent('字段齐备'))
+    fireEvent.click(screen.getByTestId('eval-ops-backtest-formal'))
+    await screen.findByTestId('eval-ops-confirm-dialog')
+    fireEvent.click(screen.getByTestId('eval-ops-confirm-cancel'))
+    await waitFor(() => expect(screen.queryByTestId('eval-ops-confirm-dialog')).not.toBeInTheDocument())
+    expect(callsOf(calls, 'POST', '/api/v1/ops/backtest')).toHaveLength(0)
+    expect(screen.queryByTestId('eval-ops-backtest-result')).not.toBeInTheDocument()
+  })
+
+  it('探针单跑确认弹窗取消：零请求（不产生 LLM 调用）', async () => {
+    const { calls } = mockFetch()
+    renderPane()
+    await openTab('backtest')
+    fireEvent.change(await screen.findByTestId('eval-ops-probe-codes'), { target: { value: '600519' } })
+    fireEvent.change(screen.getByTestId('eval-ops-probe-date'), { target: { value: '2024-06-03' } })
+    fireEvent.click(screen.getByTestId('eval-ops-probe-submit'))
+    await screen.findByTestId('eval-ops-confirm-dialog')
+    fireEvent.click(screen.getByTestId('eval-ops-confirm-cancel'))
+    await waitFor(() => expect(screen.queryByTestId('eval-ops-confirm-dialog')).not.toBeInTheDocument())
+    expect(callsOf(calls, 'POST', '/api/v1/ops/probe')).toHaveLength(0)
+    expect(screen.queryByTestId('eval-ops-probe-result')).not.toBeInTheDocument()
   })
 
   it('探针单跑：确认含规模估算；不可测态展示「不可测」而非 0', async () => {
