@@ -345,6 +345,21 @@ def list_job_runs(
         conn.close()
 
 
+def get_job_run(run_id: int, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    """按 ``run_id`` 直读一行(``WHERE run_id=?``),不依赖「最新 N 行」窗口。
+
+    运行历史由 ``prune_job_runs`` 按 job 保序,超出列表窗口的旧行仍可经本函数读取
+    (单条运行接口不得因窗口上限而 404)。无此行 → None。
+    """
+    init_ops(db_path)
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM job_runs WHERE run_id=?", (int(run_id),)).fetchone()
+        return _row_to_dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
 def last_job_run(job_id: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
     """某任务最近一行(含 running 中的行);无历史 → None。"""
     init_ops(db_path)

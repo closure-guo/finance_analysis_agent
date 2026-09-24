@@ -256,6 +256,22 @@ describe('EvalOpsPane 评估运维分区（add-eval-ops-console Task 6）', () =
     expect(await screen.findByTestId('eval-ops-error')).toHaveTextContent('开关未开启')
   })
 
+  it('手动补跑 500（run_failed 详情）必须可见，不被吞成通用文案', async () => {
+    mockFetch({
+      'POST /api/v1/ops/jobs/:id/run': {
+        status: 500,
+        body: { detail: 'run_failed（run_id=7）：RuntimeError: db locked' },
+      },
+    })
+    renderPane()
+    const card = await screen.findByTestId('eval-ops-job-integrity_check')
+    fireEvent.click(within(card).getByTestId('eval-ops-run-integrity_check'))
+    const banner = await screen.findByTestId('eval-ops-error')
+    expect(banner).toHaveTextContent('run_failed')
+    expect(banner).toHaveTextContent('run_id=7')
+    expect(banner).toHaveTextContent('db locked')
+  })
+
   /* ── 3. cohort 开关 / 时刻 ── */
 
   it('开启 cohort 开关先弹确认（含成本估算与预算上限），取消零请求', async () => {
@@ -474,6 +490,32 @@ describe('EvalOpsPane 评估运维分区（add-eval-ops-console Task 6）', () =
     expect(within(table).getByTestId('eval-ops-health-gate-settlement_success')).toHaveTextContent('83.3%')
     expect(within(table).getByTestId('eval-ops-health-gate-settlement_success')).toHaveTextContent('90.0%')
     expect(within(table).getByTestId('eval-ops-health-gate-integrity')).toHaveTextContent('PASS')
+    expect(screen.getByTestId('eval-ops-health-verdict')).toHaveTextContent('不通过')
+  })
+
+  it('不可判定率 0.11（略超 0.10 阈值）渲染 FAIL 与「≤ 10.0%」——常量被测试钉住', async () => {
+    mockFetch({
+      'POST /api/v1/ops/health': { status: 202, body: { run_id: 63 } },
+      'GET /api/v1/ops/runs/:id': {
+        body: {
+          ...runRow({ run_id: 63, job_id: 'health', status: 'ok', summary: null }),
+          summary: {
+            settled: 89, settlement_success_rate: 0.89, unresolvable_rate: 0.11,
+            bookkeeping_completeness: 1.0, integrity_mismatches: 0,
+            checks: { settlement_success: false, unresolvable: false, integrity: true },
+            warnings: [], passed: false,
+          },
+        },
+      },
+    })
+    renderPane()
+    await openTab('health')
+    fireEvent.click(await screen.findByTestId('eval-ops-health-run'))
+    const row = await screen.findByTestId('eval-ops-health-gate-unresolvable')
+    expect(row).toHaveTextContent('11.0%')   // 实测值
+    expect(row).toHaveTextContent('10.0%')   // 阈值展示（MAX_UNRESOLVABLE_RATE 字面同步）
+    expect(row).toHaveTextContent('≤')
+    expect(row).toHaveTextContent('FAIL')
     expect(screen.getByTestId('eval-ops-health-verdict')).toHaveTextContent('不通过')
   })
 

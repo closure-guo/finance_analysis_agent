@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -276,6 +277,10 @@ def run_probe_task(
     ``state`` 复用 ``evals.backtest.report.probe_state`` 的取值域
     (measurable / downgraded / unmeasurable):不可测态 ``direction_hit_rate`` 为
     ``None``(「不可测」),与全答错的 ``0.0`` 严格可分——界面据此渲染三态。
+
+    单跑只有一个窗口,故按请求入参合成 ``probe_window=[decision_date]`` 与一条
+    ``per_window``(形状对齐 ``report.aggregate_probes`` 的逐窗口条目:每项带**它自己**
+    的窗口 + 读数),让运行历史与批报告的窗口披露字段同形;``window_days`` 随条目披露。
     """
     pool = [str(code).strip() for code in codes if str(code).strip()]
     if not pool:
@@ -289,7 +294,27 @@ def run_probe_task(
         client=_client(client),
         llm=llm,
     )
-    return {**reading, "state": probe_state(reading)}
+    state = probe_state(reading)
+    window = [decision_date]
+    per_window = [
+        {
+            "probe_window": list(window),
+            "window_days": window_days,
+            "state": state,
+            "probe_n": reading.get("probe_n"),
+            "direction_hit_rate": reading.get("direction_hit_rate"),
+            "magnitude_hit_rate": reading.get("magnitude_hit_rate"),
+            "event_hit_rate": reading.get("event_hit_rate"),
+            "unknown_ratio": reading.get("unknown_ratio"),
+            "downgraded": bool(reading.get("downgraded")),
+        }
+    ]
+    return {
+        **reading,
+        "state": state,
+        "probe_window": list(window),
+        "per_window": per_window,
+    }
 
 
 # ── 健康检查 ──
@@ -320,31 +345,44 @@ def _gate_row(
     }
 
 
+def _no_readings_payload(path: Path, *, error: str) -> dict[str, Any]:
+    """「无读数」载荷(DB 缺失 / 缺 predictions 表共用同一形状):门禁全 None,不折算 0/100%。"""
+    specs = (*_BLOCKING_GATES, _BOOKKEEPING_GATE)
+    return {
+        "db": str(path),
+        "available": False,
+        "error": error,
+        "gates": [
+            _gate_row(gate_id=gate_id, label=label, value=None, threshold=threshold, passed=None)
+            for gate_id, label, _key, threshold, _check in specs
+        ],
+        "passed": None,
+        "readings": None,
+    }
+
+
 def run_health_task(*, db_path: str | Path | None = None) -> dict[str, Any]:
     """outcome 收口健康读数 + 门禁表格(JSON 可序列化,供 ``job_runs.summary``)。
 
     门禁四项:结算成功率 / 不可判定率 / 快照完整性(阻断门禁,判据复用
     ``collect_outcome_health`` 的 ``checks``)+ 记账完整率(披露项)。读数缺失
     (无已结算样本等)→ ``value=None`` + 原因「无读数」,不冒充 0/100%。
-    DB 不存在 → ``available=False`` + 全部门禁无读数(端点不 500,界面显式披露)。
+    DB 不存在、或 DB 存在但缺 ``predictions`` 表(空库/半初始化库)→ 同一「无读数」
+    形状(``available=False`` + ``error`` 说明原因),端点不 500。
     """
     path = Path(db_path) if db_path else Path(os.getenv("SESSIONS_DB_PATH", "data/sessions.db"))
     specs = (*_BLOCKING_GATES, _BOOKKEEPING_GATE)
     if not path.exists():
-        return {
-            "db": str(path),
-            "available": False,
-            "error": f"DB 不存在:{path}(无读数,不得折算 0/100%)",
-            "gates": [
-                _gate_row(
-                    gate_id=gate_id, label=label, value=None, threshold=threshold, passed=None
-                )
-                for gate_id, label, _key, threshold, _check in specs
-            ],
-            "passed": None,
-            "readings": None,
-        }
-    readings = collect_outcome_health(path)
+        return _no_readings_payload(path, error=f"DB 不存在:{path}(无读数,不得折算 0/100%)")
+    try:
+        readings = collect_outcome_health(path)
+    except sqlite3.OperationalError as exc:
+        # 只有「缺表」是本层可如实降级的情形(空库/半初始化库);其余 OperationalError
+        # (锁超时/磁盘故障)是环境故障,原样上抛交端点落 failed,不冒充「无读数」。
+        if "no such table" not in str(exc).lower():
+            raise
+        logger.warning("健康检查读数不可得(缺表): %s: %s", path, exc)
+        return _no_readings_payload(path, error=f"DB 缺表({exc}):无读数,不得折算 0/100%")
     checks = readings.get("checks") or {}
     gates = [
         _gate_row(

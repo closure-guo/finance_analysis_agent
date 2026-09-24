@@ -265,12 +265,15 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 {showWinRate ? `${(overview.win_rate! * 100).toFixed(1)}%` : '—'}
               </div>
             </div>
-            {/* 回避正确率（Δ2 披露）：与胜率同门槛——settled < 10 显示「样本积累中」，绝不折算 0% */}
+            {/* 回避正确率（Δ2 披露）：门槛真源在后端——GET /track-record/overview 在
+                settled < MIN_SETTLED_FOR_WINRATE 时把 avoidance_rate 置 null（见
+                src/finance_agent/api.py 的 avoidance_rate 组装），前端只认 null，
+                不再复制「10」这个阈值。null → 「样本积累中」，绝不折算 0% */}
             <div className="rounded-xl p-4" data-testid="track-record-avoidance" style={{ background: 'var(--bg-overlay-l1)' }}>
               <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>回避正确率（neutral 已判定）</div>
               {overview.avoidance === undefined ? (
                 <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>—</div>
-              ) : overview.avoidance.settled < 10 ? (
+              ) : overview.avoidance.avoidance_rate === null ? (
                 <div className="text-sm font-medium mt-1" style={{ color: 'var(--text-secondary)' }}>
                   样本积累中（已判定 {overview.avoidance.settled} 条，满 10 条解锁）
                 </div>

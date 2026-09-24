@@ -456,6 +456,30 @@ class TestProbeTask:
         assert out["probe_n"] == 1
         assert out["state"] == "unmeasurable"
 
+    def test_synthesizes_single_window_disclosure_from_request(self):
+        """``run_leakage_probe`` 不返回窗口字段:单跑按请求入参合成一条窗口披露。
+
+        形状对齐 ``report.aggregate_probes`` 的逐窗口条目(每项带**它自己**的窗口 + 读数),
+        使运行历史与批报告的窗口字段同形;单窗口的 ``window_days`` 随条目披露。
+        """
+        decision_date = _grid(60)[10]
+        out = batches.run_probe_task(
+            codes=["600000"],
+            decision_date=decision_date,
+            window_days=5,
+            client=self._client(),
+            llm=lambda _prompt: "我不确定",
+        )
+        assert out["probe_window"] == [decision_date]
+        assert isinstance(out["per_window"], list) and len(out["per_window"]) == 1
+        entry = out["per_window"][0]
+        assert entry["probe_window"] == [decision_date]
+        assert entry["window_days"] == 5
+        assert entry["state"] == out["state"] == "unmeasurable"
+        assert entry["direction_hit_rate"] is None
+        assert entry["probe_n"] == out["probe_n"]
+        assert "details" not in entry  # 逐题明细不进窗口条目(体积大且非披露面)
+
 
 # ── 健康检查 ──
 
@@ -469,6 +493,23 @@ class TestHealthTask:
         assert out["gates"] and all(g["value"] is None for g in out["gates"])
         assert all(g["passed"] is None for g in out["gates"])
         assert "DB 不存在" in out["error"]
+
+    def test_db_without_predictions_table_reports_no_reading(self, tmp_path):
+        """DB 文件存在但缺 predictions 表(空库/半初始化库):同「无读数」形状,不抛不 500。"""
+        import sqlite3
+
+        db = tmp_path / "empty.db"
+        sqlite3.connect(db).close()  # 零字节库:文件在,表不在
+
+        out = batches.run_health_task(db_path=db)
+
+        json.dumps(out, ensure_ascii=False)
+        assert out["available"] is False
+        assert out["passed"] is None and out["readings"] is None
+        assert out["gates"] and all(g["value"] is None for g in out["gates"])
+        assert all(g["passed"] is None for g in out["gates"])
+        assert "无读数" in out["error"]
+        assert "predictions" in out["error"]
 
     def test_empty_db_gates_fail_without_reading(self, tmp_path):
         from finance_agent.outcome.track_record.model import init_predictions

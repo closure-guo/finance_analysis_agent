@@ -574,7 +574,22 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     expect(card).toHaveTextContent('12')
   })
 
-  it('回避样本不足时展示「样本积累中」而非 0 值', async () => {
+  it('回避样本不足（后端已置 null）时展示「样本积累中」而非 0 值', async () => {
+    // 门槛真源在后端：settled 不足时后端把 avoidance_rate 置 null（见 api.py），
+    // 前端只认 null，不自己比 settled 与 10。
+    mockFetch({
+      overview: overviewWith({ avoidance: { ...AVOIDANCE, settled: 3, avoidance_win: 2, avoidance_loss: 1, avoidance_rate: null } }),
+      predictions: PREDICTIONS,
+    })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const card = screen.getByTestId('track-record-avoidance')
+    expect(card).toHaveTextContent('样本积累中')
+    expect(card).toHaveTextContent('已判定 3 条')
+    expect(card.textContent ?? '').not.toContain('0%')
+  })
+
+  it('后端给了率就照实展示（前端不再自行套 settled<10 门槛）', async () => {
     mockFetch({
       overview: overviewWith({ avoidance: { ...AVOIDANCE, settled: 3, avoidance_win: 2, avoidance_loss: 1, avoidance_rate: 0.6667 } }),
       predictions: PREDICTIONS,
@@ -582,9 +597,8 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     renderPage()
     await screen.findByText('贵州茅台')
     const card = screen.getByTestId('track-record-avoidance')
-    expect(card).toHaveTextContent('样本积累中')
-    expect(card).not.toHaveTextContent('66.7%')
-    expect(card.textContent ?? '').not.toContain('0%')
+    expect(card).toHaveTextContent('66.7%')
+    expect(card).not.toHaveTextContent('样本积累中')
   })
 
   it('判定口径与存量计数常驻；存量为 0 时明示「无存量」', async () => {

@@ -15,6 +15,8 @@
   定时批失败不得炸 API 进程;手动补跑的失败经返回值与历史展示);
 - 历史层自身故障(``job_runs`` 建行失败)不伪装成任务失败:上抛给调用方
   (scheduler 按失败尝试重试),但单飞锁必在 ``finally`` 释放。
+- 运行行的**所有权**:本进程开出的 running 行登记在 ``active_run_ids()``(收尾即注销),
+  悬挂行清扫据此跳过——时钟只作次要条件,所有权才是「本进程在跑」的硬证据。
 
 ``JOB_FUNCS`` 是默认注册表;``run_job`` 的 ``func`` 参数供 scheduler 传入**它自己
 模块级**的任务函数引用——既有测试在那里打桩,且保证调用期才解析(不把 env/config
@@ -117,6 +119,29 @@ class CohortDisabled(RuntimeError):  # noqa: N818 —— 名称是实施计划�
 # (全局约束),互斥只需进程内锁,不得据此假设多 worker 场景。
 _LOCKS: dict[str, threading.Lock] = {job_id: threading.Lock() for job_id in JOB_IDS}
 
+# 本进程正在执行的 run_id 集合:悬挂行清扫的**所有权**依据(时钟可被回拨/人工回填,
+# 不可作为「这行是不是本进程在跑」的证据)。长任务经 ``ops_api._spawn_task`` 亦登记。
+_ACTIVE_RUN_IDS: set[int] = set()
+_ACTIVE_RUNS_LOCK = threading.Lock()
+
+
+def mark_run_active(run_id: int) -> None:
+    """登记本进程正在执行的运行行(悬挂清扫据此跳过该行)。"""
+    with _ACTIVE_RUNS_LOCK:
+        _ACTIVE_RUN_IDS.add(int(run_id))
+
+
+def mark_run_finished(run_id: int) -> None:
+    """注销已收尾的运行行(注销后不再受所有权保护,按时钟判定)。"""
+    with _ACTIVE_RUNS_LOCK:
+        _ACTIVE_RUN_IDS.discard(int(run_id))
+
+
+def active_run_ids() -> frozenset[int]:
+    """当前在跑的行 id 快照(清扫时一次取齐,避免逐行加锁)。"""
+    with _ACTIVE_RUNS_LOCK:
+        return frozenset(_ACTIVE_RUN_IDS)
+
 
 def run_job(
     job_id: str,
@@ -150,10 +175,13 @@ def run_job(
     lock = _LOCKS[job_id]
     if not lock.acquire(blocking=False):
         raise JobAlreadyRunning(f"{job_id} 已在运行(本次不排队)")
+    active_run_id: int | None = None
     try:
         # 历史层故障(建行失败)不伪装成任务失败:上抛给调用方(scheduler 按失败尝试
         # 计数重试);关键是 finally 必须释放锁——否则该 job 在本进程内永久被占。
         run_id = insert_job_run(job_id, kind, "running", source=source, db_path=db_path)
+        mark_run_active(run_id)
+        active_run_id = run_id
         try:
             result = (func or JOB_FUNCS[job_id])()
         except Exception as exc:  # noqa: BLE001 - 旁路铁律:任务失败落历史,不向调用链上抛
@@ -168,4 +196,6 @@ def run_job(
         finish_job_run(run_id, status="ok", summary=summary, db_path=db_path)
         return {"run_id": run_id, "status": "ok", "summary": summary, "error": None}
     finally:
+        if active_run_id is not None:
+            mark_run_finished(active_run_id)
         lock.release()

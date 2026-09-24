@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
@@ -41,6 +42,7 @@ from finance_agent.outcome.ops.jobs import (
     SCHEDULES,
     CohortDisabled,
     JobAlreadyRunning,
+    run_job,
 )
 from finance_agent.outcome.ops.model import (
     COHORT_HOUR_KEY,
@@ -161,6 +163,27 @@ def _job(body: dict, job_id: str) -> dict:
     return next(j for j in body["jobs"] if j["job_id"] == job_id)
 
 
+def _backdate_started_at(run_id: int, when: str = "2020-01-01T00:00:00") -> None:
+    """把某行 started_at 回拨到过去（模拟时钟不可信：在跑的行也可能带旧时刻）。"""
+    conn = sqlite3.connect(_db())
+    try:
+        conn.execute("UPDATE job_runs SET started_at=? WHERE run_id=?", (when, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _wait_running_row(job_id: str, timeout: float = 5.0) -> int:
+    """等某 job 落 running 行（真实执行路径开出的行），返回 run_id。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        row = last_job_run(job_id, _db())
+        if row is not None and row["status"] == "running":
+            return int(row["run_id"])
+        time.sleep(0.02)
+    raise AssertionError(f"{job_id} 未在 {timeout}s 内落 running 行")
+
+
 def _wait_run(client: TestClient, run_id: int, timeout: float = 5.0) -> dict:
     """轮询 GET /runs/{id} 直到离开 running(异步任务完成)。"""
     deadline = time.time() + timeout
@@ -273,6 +296,8 @@ class TestJobsEndpoint:
         for job in body["jobs"]:
             assert set(job["schedule"]) == {"day_of_week", "hour", "minute", "timezone"}
             assert job["last_run"] is None and job["history"] == []
+        # error 只在降级载荷出现（正常载荷不得带它）
+        assert "error" not in body
 
     def test_last_run_and_history_shape(self, client):
         run_id = _seed_run("integrity_check", summary={"issues": 0})
@@ -331,6 +356,71 @@ class TestJobsEndpoint:
         job = _job(client.get(f"{BASE}/jobs").json(), "daily_marking")
         assert job["last_run"]["run_id"] == live
         assert job["last_run"]["status"] == "running"
+
+    def test_backdated_inflight_run_not_swept_but_foreign_stale_row_is(self, client, monkeypatch):
+        """清扫以所有权为准:在跑的行即使 started_at 被回拨也不得清扫,无主的陈旧行仍被清扫。"""
+        gate = threading.Event()
+        monkeypatch.setitem(JOB_FUNCS, "daily_marking", lambda: gate.wait(5) or {"ok": True})
+        # 时钟条件对两条行都成立(进程启动时刻被推到未来)——只有所有权能把它们分开
+        monkeypatch.setattr(
+            ops_api, "_PROCESS_STARTED_AT", (datetime.now() + timedelta(minutes=5)).isoformat()
+        )
+        foreign = insert_job_run("metrics_snapshot", "scheduled", "running", source="scheduled")
+        _backdate_started_at(foreign)
+        worker = threading.Thread(
+            target=run_job, args=("daily_marking",), kwargs={"source": "manual"}, daemon=True
+        )
+        worker.start()
+        try:
+            live_id = _wait_running_row("daily_marking")
+            _backdate_started_at(live_id)
+            body = client.get(f"{BASE}/jobs").json()
+            live = _job(body, "daily_marking")["last_run"]
+            assert live["run_id"] == live_id and live["status"] == "running"
+            swept = _job(body, "metrics_snapshot")["last_run"]
+            assert swept["run_id"] == foreign and swept["status"] == "failed"
+            assert "stale_process_restart" in (swept["error"] or "")
+        finally:
+            gate.set()
+            worker.join(5)
+
+    def test_run_detail_reachable_beyond_listing_window(self, client, monkeypatch):
+        """单条运行按 run_id 直读:不依赖「最新 1000 行」窗口,旧行不会因窗口 404。"""
+        run_id = _seed_run("integrity_check", summary={"issues": 0})
+        monkeypatch.setattr(ops_api, "list_job_runs", lambda *a, **k: [])
+        resp = client.get(f"{BASE}/runs/{run_id}")
+        assert resp.status_code == 200
+        assert resp.json()["run_id"] == run_id
+        assert resp.json()["summary"] == {"issues": 0}
+
+    def test_status_read_prunes_history_per_job(self, client, monkeypatch):
+        """状态读取路径顺带裁剪运行历史(每 job 保最新 N 行),防表无限膨胀。"""
+        assert ops_api.PRUNE_KEEP_PER_JOB == 500  # 裁剪线 500(实施约定)
+        monkeypatch.setattr(ops_api, "PRUNE_KEEP_PER_JOB", 2)
+        ids = [_seed_run("metrics_snapshot", summary={"i": i}) for i in range(5)]
+        client.get(f"{BASE}/jobs")
+        rows = list_job_runs("metrics_snapshot", db_path=_db(), limit=1000)
+        assert [r["run_id"] for r in rows] == list(reversed(ids[-2:]))
+
+    def test_degraded_payload_on_unexpected_db_error(self, client, monkeypatch):
+        """意外 DB 故障不得把状态接口打成 500:降级但合法的载荷 + 顶层 error 字段。"""
+        monkeypatch.setattr(ops_api, "last_job_run", _raising(RuntimeError("db locked")))
+        resp = client.get(f"{BASE}/jobs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "db locked" in body["error"]
+        assert body["scheduler_running"] is False
+        assert [j["job_id"] for j in body["jobs"]] == list(JOB_IDS)
+        assert all(j["last_run"] is None and j["history"] == [] for j in body["jobs"])
+        assert set(body["cohort"]) == {
+            "enabled",
+            "hour",
+            "minute",
+            "budget_tokens",
+            "today_spend",
+            "today_success",
+            "today_failure",
+        }
 
     def test_cohort_job_row_agrees_with_cohort_block(self, client):
         """cohort 行不得渲染调度器启动期的陈旧快照,须与 cohort 块同源(不可能互相矛盾)。"""
@@ -452,6 +542,15 @@ class TestManualRun:
 
     def test_unknown_job_404(self, client):
         assert client.post(f"{BASE}/jobs/nope/run").status_code == 404
+
+    def test_serialization_valueerror_is_500_not_404(self, client, monkeypatch):
+        """合法 job 的真故障(summary 循环引用 → ValueError)不得被误报成「未知任务」404。"""
+        circular: dict[str, Any] = {}
+        circular["self"] = circular
+        monkeypatch.setitem(JOB_FUNCS, "integrity_check", lambda: circular)
+        resp = client.post(f"{BASE}/jobs/integrity_check/run")
+        assert resp.status_code == 500
+        assert "Circular reference" in resp.json()["detail"]
 
     def test_unknown_run_404(self, client):
         assert client.get(f"{BASE}/runs/999999").status_code == 404
@@ -847,13 +946,14 @@ class TestRealBatchIntegration:
         from finance_agent.outcome.ops import batches
 
         frame = _offline_kline(60)
+        decision_date = str(frame["日期"][10])[:10]
         monkeypatch.setattr(batches, "_default_client", lambda: _OfflineClient(frame))
         monkeypatch.setattr("evals.backtest.leakage_probe._default_llm", lambda _prompt: "我不确定")
         resp = client.post(
             f"{BASE}/probe",
             json={
                 "codes": ["600519"],
-                "decision_date": str(frame["日期"][10])[:10],
+                "decision_date": decision_date,
                 "window_days": 20,
                 "n_tickers": 1,
             },
@@ -864,6 +964,14 @@ class TestRealBatchIntegration:
         assert run["summary"]["state"] == "unmeasurable"
         assert run["summary"]["direction_hit_rate"] is None
         assert "details" not in run["summary"]
+        # 窗口披露字段按请求入参合成(不为 null):单窗口 + 逐窗口读数一条
+        assert run["summary"]["probe_window"] == [decision_date]
+        per_window = run["summary"]["per_window"]
+        assert isinstance(per_window, list) and len(per_window) == 1
+        assert per_window[0]["probe_window"] == [decision_date]
+        assert per_window[0]["window_days"] == 20
+        assert per_window[0]["state"] == "unmeasurable"
+        assert per_window[0]["direction_hit_rate"] is None
 
 
 # ── 5. 报告注册表 ──
@@ -1152,6 +1260,57 @@ class TestPreregEndpoints:
         resp = client.put(f"{BASE}/prereg", json={**_prereg_fields(), "决策阈值": "0.5"})
         assert resp.status_code == 422
         assert "换算依据" in resp.json()["detail"]
+
+    def test_put_refuses_locked_base_version_and_writes_nothing(
+        self, client, prereg_dir, tmp_path, monkeypatch
+    ):
+        """spec「已有读数的预登记锁定」:基准版本已有读数 → 409 locked,磁盘零改动。"""
+        backtests = tmp_path / "bt"
+        backtests.mkdir()
+        _patch_prereg_dir(monkeypatch, prereg_dir, backtests)
+        base = (prereg_dir / "2026-01-01-outcome-prereg.md").as_posix()
+        (backtests / "formal-1.md").write_text(
+            f"**status**: active\n**预登记**: {base}（valid）\n", encoding="utf-8"
+        )
+        before = sorted(p.name for p in prereg_dir.glob("*.md"))
+
+        resp = client.put(f"{BASE}/prereg", json={**_prereg_fields(), "base_path": base})
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "locked"
+        assert sorted(p.name for p in prereg_dir.glob("*.md")) == before
+        assert list_job_runs(ops_api.PREREG_AUDIT_JOB) == []
+
+    def test_put_allows_unlocked_base_version(self, client, prereg_dir, tmp_path, monkeypatch):
+        """基准版本无读数(未锁定)→ 照常新建版本(201),锁定只拦已产生读数的版本。"""
+        backtests = tmp_path / "bt"
+        backtests.mkdir()
+        _patch_prereg_dir(monkeypatch, prereg_dir, backtests)
+        base = (prereg_dir / "2026-01-01-outcome-prereg.md").as_posix()
+
+        resp = client.put(f"{BASE}/prereg", json={**_prereg_fields(), "base_path": base})
+
+        assert resp.status_code == 201
+        saved = Path(resp.json()["path"])
+        assert saved.parent == prereg_dir and saved.exists()
+        assert saved.name != Path(base).name
+
+    def test_put_without_base_path_keeps_create_new_version_semantics(
+        self, client, prereg_dir, tmp_path, monkeypatch
+    ):
+        """缺省 base_path:不读任何历史版本(即便最新版本已锁定),保持「新建版本」语义。"""
+        backtests = tmp_path / "bt"
+        backtests.mkdir()
+        _patch_prereg_dir(monkeypatch, prereg_dir, backtests)
+        base = (prereg_dir / "2026-01-01-outcome-prereg.md").as_posix()
+        (backtests / "formal-1.md").write_text(
+            f"**status**: active\n**预登记**: {base}（valid）\n", encoding="utf-8"
+        )
+
+        resp = client.put(f"{BASE}/prereg", json=_prereg_fields())
+
+        assert resp.status_code == 201
+        assert Path(resp.json()["path"]).exists()
 
 
 class TestCaliberEndpoints:
