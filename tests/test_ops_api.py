@@ -27,6 +27,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -186,6 +187,76 @@ class _FakeTask:
         if self.exc is not None:
             raise self.exc
         return self.result
+
+
+def _raising(exc: BaseException):
+    """总是抛该异常的假实现(钉死错误映射)。"""
+
+    def fn(*_args, **_kwargs):
+        raise exc
+
+    return fn
+
+
+# ── 离线取数替身(与 tests/outcome/test_ops_batches.py 同款思路,零网络零 LLM)──
+
+
+def _offline_kline(n: int = 60, start: float = 10.0) -> Any:
+    import pandas as pd
+
+    dates = pd.date_range("2024-01-02", periods=n, freq="B").strftime("%Y-%m-%d").tolist()
+    closes = [start]
+    for i in range(1, n):
+        closes.append(closes[-1] * (1.014 if i % 2 else 0.99))
+    return pd.DataFrame(
+        {"日期": dates, "开盘": closes, "收盘": closes, "最高": closes, "最低": closes}
+    )
+
+
+class _OfflineClient:
+    """AKShareClient 签名对齐的零网络替身。"""
+
+    def __init__(self, frame: Any = None) -> None:
+        self._frame = frame
+
+    def _kline(self, days: int | None) -> Any:
+        return self._frame if self._frame is not None else _offline_kline(days or 60)
+
+    def fetch_index_kline(self, _code: str, days: int | None = None) -> Any:
+        return self._kline(days)
+
+    def fetch_kline(self, _code: str, days: int | None = None, *, adjust: str = "qfq") -> Any:
+        return self._kline(days)
+
+    def fetch_news(self, _code: str, limit: int = 20) -> list[dict]:
+        return [{"title": "公司发布日常经营公告"}]
+
+
+def _offline_replay(code: str, decision_date: str, *, n: int = 3, full_kline: Any = None, **_kw):
+    """与 replay_with_consistency 同形态的假回放(按帧取价,零 LLM)。"""
+    dates = full_kline["日期"].astype(str).str[:10].tolist()
+    closes = full_kline["收盘"].astype(float).tolist()
+    idx = dates.index(str(decision_date)[:10])
+    settle_idx = min(idx + 10, len(closes) - 1)
+    return {
+        "code": code,
+        "decision_date": str(decision_date)[:10],
+        "actions": ["buy"] * n,
+        "agreement": 1.0,
+        "settlement": {
+            "status": "expired",
+            "settle_date": dates[settle_idx],
+            "settle_price": closes[settle_idx],
+            "hold_days": 10,
+            "decision_return": None,
+            "benchmark_return": None,
+            "decision_excess": None,
+            "decision_hit": None,
+        },
+        "entry_price": closes[idx],
+        "action": "buy",
+        "snapshot_metadata": {},
+    }
 
 
 # ── 1. 状态与运行历史 ──
@@ -669,6 +740,131 @@ class TestAsyncTasks:
         _wait_run(client, third.json()["run_id"])
 
 
+# ── 4b. 端点 × 真实 batch 层(接线 + 门禁语义,离线) ──
+
+
+class TestRealBatchIntegration:
+    """Task 4 落地后补的接线用例:真实 ``outcome.ops.batches`` 走 HTTP 端点(零网络零 LLM)。"""
+
+    def _patch_offline(self, monkeypatch, *, frame: Any = None):
+        from finance_agent.outcome.ops import batches
+
+        monkeypatch.setattr(batches, "_default_client", lambda: _OfflineClient(frame))
+        monkeypatch.setattr(batches, "replay_with_consistency", _offline_replay)
+        monkeypatch.setattr(
+            batches,
+            "stratified_sample",
+            lambda *a, **k: [
+                {
+                    "code": "600519",
+                    "regime": "bull",
+                    "decision_date": _offline_kline(60)["日期"][30],
+                }
+            ],
+        )
+
+    def test_formal_clean_window_refusal_via_real_batches(self, client, monkeypatch, prereg_dir):
+        """真实 prepare_backtest + 真实 CleanWindowError → 409(门禁拒绝,不派发回放)。"""
+        from finance_agent.outcome.ops import batches
+
+        monkeypatch.setattr(ops_api, "PREREGISTER_DIR", prereg_dir)
+        self._patch_offline(monkeypatch)
+        monkeypatch.setattr(
+            batches,
+            "assert_clean_window",
+            lambda *a, **k: {"passed": False, "reason": "决策日 2024-06-03 距 as_of 仅 3 个交易日"},
+        )
+        resp = client.post(
+            f"{BASE}/backtest", json={"batch_kind": "formal", "codes": ["600519"], "per_regime": 1}
+        )
+        assert resp.status_code == 409
+        assert "3 个交易日" in resp.json()["detail"]
+        assert list_job_runs("backtest", db_path=_db()) == []
+
+    def test_formal_bad_pool_is_422_with_reason(self, client, monkeypatch, prereg_dir):
+        """标的池不足 per_regime → 422 + 原因原文(不裸 500、不派发)。"""
+        from finance_agent.outcome.ops import batches
+
+        monkeypatch.setattr(ops_api, "PREREGISTER_DIR", prereg_dir)
+        self._patch_offline(monkeypatch)
+        monkeypatch.setattr(
+            batches,
+            "stratified_sample",
+            _raising(ValueError("regime bull 标的池不足 10")),
+        )
+        resp = client.post(f"{BASE}/backtest", json={"batch_kind": "formal", "codes": ["600519"]})
+        assert resp.status_code == 422
+        assert "标的池不足" in resp.json()["detail"]
+        assert list_job_runs("backtest", db_path=_db()) == []
+
+    def test_pathway_offline_end_to_end_writes_report(self, client, monkeypatch, tmp_path):
+        """通路批全链路(真实 batches + 真实 run_backtest):报告落 md/json,summary 裁剪。"""
+        monkeypatch.chdir(tmp_path)
+        self._patch_offline(monkeypatch)
+        resp = client.post(
+            f"{BASE}/backtest",
+            json={"batch_kind": "pathway", "codes": ["600519"], "per_regime": 1},
+        )
+        assert resp.status_code == 202
+        run = _wait_run(client, resp.json()["run_id"])
+        assert run["status"] == "ok"
+        summary = run["summary"]
+        assert summary["positioning"] == "pathway"
+        assert summary["conclusion"].startswith("通路验证定位")
+        assert summary["leakage_probe"]["direction_hit_rate"] is None  # pathway 不跑探针
+        md_rel = summary["report_paths"]["md"]
+        assert md_rel.startswith("evals/backtest/results/pathway-")
+        md_path = tmp_path / md_rel
+        assert md_path.exists() and (tmp_path / summary["report_paths"]["json"]).exists()
+        from evals.causal_ablation.report_status import parse_status
+
+        assert parse_status(md_path.read_text(encoding="utf-8"))[0] == "active"
+        # 报告注册表(指向同一目录时)能看到刚生成的报告
+        monkeypatch.setattr(ops_api, "BACKTEST_RESULTS_DIR", tmp_path / "evals/backtest/results")
+        names = [item["name"] for item in client.get(f"{BASE}/reports").json()]
+        assert md_path.stem in names
+
+    def test_health_run_uses_real_collector(self, client):
+        """真实健康检查(隔离空库):读数缺失如实为 None(「无读数」),不冒充 0/100%。"""
+        resp = client.post(f"{BASE}/health")
+        assert resp.status_code == 202
+        run = _wait_run(client, resp.json()["run_id"])
+        assert run["status"] == "ok" and run["job_id"] == "health"
+        summary = run["summary"]
+        assert summary["available"] is True
+        gates = {g["id"]: g for g in summary["gates"]}
+        assert set(gates) == {"settlement_success", "unresolvable", "integrity", "bookkeeping"}
+        assert gates["settlement_success"]["value"] is None
+        assert gates["settlement_success"]["passed"] is False
+        assert "无读数" in gates["settlement_success"]["reason"]
+        assert gates["integrity"]["passed"] is True
+        assert summary["passed"] is False
+        assert summary["readings"]["total"] == 0
+
+    def test_probe_offline_end_to_end(self, client, monkeypatch):
+        """探针单跑全链路(真实 run_leakage_probe + 假 LLM):三态读数经 /runs 可读。"""
+        from finance_agent.outcome.ops import batches
+
+        frame = _offline_kline(60)
+        monkeypatch.setattr(batches, "_default_client", lambda: _OfflineClient(frame))
+        monkeypatch.setattr("evals.backtest.leakage_probe._default_llm", lambda _prompt: "我不确定")
+        resp = client.post(
+            f"{BASE}/probe",
+            json={
+                "codes": ["600519"],
+                "decision_date": str(frame["日期"][10])[:10],
+                "window_days": 20,
+                "n_tickers": 1,
+            },
+        )
+        assert resp.status_code == 202
+        run = _wait_run(client, resp.json()["run_id"])
+        assert run["status"] == "ok"
+        assert run["summary"]["state"] == "unmeasurable"
+        assert run["summary"]["direction_hit_rate"] is None
+        assert "details" not in run["summary"]
+
+
 # ── 5. 报告注册表 ──
 
 
@@ -815,3 +1011,44 @@ def test_job_already_running_and_cohort_disabled_are_runtime_errors():
     """端点映射依赖的异常类型(回归护栏)。"""
     assert issubclass(JobAlreadyRunning, RuntimeError)
     assert issubclass(CohortDisabled, RuntimeError)
+
+
+# ── 7. 调度器句柄健壮性(跨测试模块泄漏的 Mock / 真实运行态)──
+
+
+class TestSchedulerHandleRobustness:
+    def test_mock_handle_does_not_claim_running(self, client):
+        """句柄被其它测试模块泄漏成 Mock 时不得冒充「已运行」:非真实调度器 → False/None。"""
+        from unittest.mock import MagicMock
+
+        import finance_agent.outcome.scheduler as scheduler_mod
+
+        scheduler_mod._scheduler = MagicMock()  # autouse 夹具负责复原
+        body = client.get(f"{BASE}/jobs").json()
+        assert body["scheduler_running"] is False
+        assert all(j["next_fire_time"] is None for j in body["jobs"])
+
+    def test_real_running_scheduler_reports_next_fire_time(self, client):
+        """真实在跑的 BackgroundScheduler → scheduler_running=True + 该任务 next_fire_time 有值。"""
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        import finance_agent.outcome.scheduler as scheduler_mod
+
+        real = BackgroundScheduler()
+        real.add_job(
+            lambda: None,
+            CronTrigger(day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Shanghai"),
+            id="integrity_check",
+        )
+        real.start()
+        try:
+            scheduler_mod._scheduler = real
+            body = client.get(f"{BASE}/jobs").json()
+        finally:
+            real.shutdown(wait=False)
+        assert body["scheduler_running"] is True
+        job = _job(body, "integrity_check")
+        assert job["next_fire_time"] is not None
+        assert job["next_fire_time"].startswith("20")  # ISO 时间戳
+        assert datetime.fromisoformat(job["next_fire_time"]).tzinfo is not None

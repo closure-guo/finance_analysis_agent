@@ -602,6 +602,10 @@ async def trigger_backtest(req: BacktestRequest) -> dict[str, Any]:
             kwargs["prepared"] = await _preflight_formal(req)
         except MissingPreregistrationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            # 标的池不足 per_regime / 指数历史未覆盖三 regime:参数或数据前置条件不满足,
+            # 422 + 原因原文(裸 500 会让界面无话可说;这不是「已在运行」也不是门禁拒绝)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - 只把干净窗口拒绝翻 409,其余原样上抛
             if not _is_clean_window_refusal(exc):
                 raise
