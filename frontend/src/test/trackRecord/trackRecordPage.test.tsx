@@ -551,3 +551,65 @@ describe('战绩展示偏好消费（add-agent-settings-center Task 12）', () =
     expect(lastChartOption().xAxis.data).toEqual(LONG_CURVE.map(p => p.date))
   })
 })
+
+// Δ2 口径三披露（update-decision-settlement-contract：后端 overview 已返回但前端未读）
+// + add-eval-ops-console Task 7：回避正确率（与胜率同门槛）/ caliber_horizon 常驻 / legacy_settled 常驻。
+describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（add-eval-ops-console Task 7）', () => {
+  beforeEach(() => { vi.spyOn(window, 'scrollTo').mockImplementation(() => {}) })
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  // 后端 avoidance 形状：avoidance_stats()（win/(win+loss) 口径，<10 不展示率）
+  const AVOIDANCE = { avoidance_win: 7, avoidance_loss: 5, avoidance_neutral: 2, settled: 12, avoidance_rate: 0.5833 }
+
+  const overviewWith = (extra: Record<string, unknown>) => ({
+    ...OVERVIEW, avoidance: AVOIDANCE, caliber_horizon: 20, legacy_settled: 0, ...extra,
+  })
+
+  it('回避样本充足时展示回避正确率与样本数', async () => {
+    mockFetch({ overview: overviewWith({}), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const card = screen.getByTestId('track-record-avoidance')
+    expect(card).toHaveTextContent('58.3%')
+    expect(card).toHaveTextContent('12')
+  })
+
+  it('回避样本不足时展示「样本积累中」而非 0 值', async () => {
+    mockFetch({
+      overview: overviewWith({ avoidance: { ...AVOIDANCE, settled: 3, avoidance_win: 2, avoidance_loss: 1, avoidance_rate: 0.6667 } }),
+      predictions: PREDICTIONS,
+    })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const card = screen.getByTestId('track-record-avoidance')
+    expect(card).toHaveTextContent('样本积累中')
+    expect(card).not.toHaveTextContent('66.7%')
+    expect(card.textContent ?? '').not.toContain('0%')
+  })
+
+  it('判定口径与存量计数常驻；存量为 0 时明示「无存量」', async () => {
+    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 0 }), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    expect(screen.getByTestId('track-record-caliber')).toHaveTextContent('T+20 交易日')
+    expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('无存量')
+  })
+
+  it('存量旧口径 >0 时展示条数与未计入声明', async () => {
+    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 7 }), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const legacy = screen.getByTestId('track-record-legacy')
+    expect(legacy).toHaveTextContent('7')
+    expect(legacy).toHaveTextContent('未计入')
+  })
+
+  it('回避读数缺失（老会话/缺字段）时不展示 0%，如实占位', async () => {
+    mockFetch({ overview: { ...OVERVIEW }, predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const card = screen.getByTestId('track-record-avoidance')
+    expect(card.textContent ?? '').not.toContain('0%')
+    expect(card).toHaveTextContent('—')
+  })
+})

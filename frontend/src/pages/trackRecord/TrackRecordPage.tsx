@@ -254,7 +254,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
       ) : (
         <>
           {/* 总览区 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6" data-testid="track-record-summary">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3" data-testid="track-record-summary">
             <div className="rounded-xl p-4" style={{ background: 'var(--bg-overlay-l1)' }}>
               <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>观点总数</div>
               <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>{overview.total}</div>
@@ -265,6 +265,26 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 {showWinRate ? `${(overview.win_rate! * 100).toFixed(1)}%` : '—'}
               </div>
             </div>
+            {/* 回避正确率（Δ2 披露）：与胜率同门槛——settled < 10 显示「样本积累中」，绝不折算 0% */}
+            <div className="rounded-xl p-4" data-testid="track-record-avoidance" style={{ background: 'var(--bg-overlay-l1)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>回避正确率（neutral 已判定）</div>
+              {overview.avoidance === undefined ? (
+                <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>—</div>
+              ) : overview.avoidance.settled < 10 ? (
+                <div className="text-sm font-medium mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  样本积累中（已判定 {overview.avoidance.settled} 条，满 10 条解锁）
+                </div>
+              ) : (
+                <>
+                  <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>
+                    {pct(overview.avoidance.avoidance_rate, 1)}
+                  </div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    样本 {overview.avoidance.settled} 条（回避命中 {overview.avoidance.avoidance_win} / 未命中 {overview.avoidance.avoidance_loss}）
+                  </div>
+                </>
+              )}
+            </div>
             <div className="rounded-xl p-4" style={{ background: 'var(--bg-overlay-l1)' }}>
               <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>平均超额</div>
               <div className="text-2xl font-semibold"><Delta value={overview.avg_excess} /></div>
@@ -273,6 +293,21 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
               <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>截至</div>
               <div className="text-2xl font-semibold text-base mt-1" style={{ color: 'var(--text-default)' }}>{overview.as_of}</div>
             </div>
+          </div>
+
+          {/* 口径披露（Δ2）：判定口径与存量旧口径计数常驻，不受样本门槛限制；存量 0 明示「无存量」 */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 text-xs"
+            style={{ color: 'var(--text-tertiary)' }} data-testid="track-record-caliber-row">
+            <span data-testid="track-record-caliber">
+              当前判定口径 T+{overview.caliber_horizon ?? '（未提供）'} 交易日
+            </span>
+            <span data-testid="track-record-legacy">
+              {overview.legacy_settled === undefined
+                ? '存量旧口径：（未提供）'
+                : overview.legacy_settled === 0
+                  ? '存量旧口径：无存量'
+                  : `另有 ${overview.legacy_settled} 条旧口径（252 日）历史未计入头条口径`}
+            </span>
           </div>
 
           {/* 样本积累提示 */}

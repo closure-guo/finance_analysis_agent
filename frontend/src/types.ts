@@ -502,6 +502,15 @@ export interface TrackRecordPortfolio {
   as_of: string | null
 }
 
+// neutral 回避正确率读数（avoidance_stats() 形状：win/(win+loss) 口径，settled 为分母）
+export interface TrackRecordAvoidance {
+  avoidance_win: number
+  avoidance_loss: number
+  avoidance_neutral: number
+  settled: number
+  avoidance_rate: number | null
+}
+
 export interface TrackRecordOverview {
   total: number
   open: number
@@ -516,6 +525,11 @@ export interface TrackRecordOverview {
   portfolio: TrackRecordPortfolio
   version_seq: number | null
   versions: AgentVersion[]
+  // Δ2（update-decision-settlement-contract）+ add-eval-ops-console Task 7 三披露。
+  // 后端 overview 恒定返回；声明为可选以容忍旧会话/旧后端数据（前端如实占位，不折算 0）
+  avoidance?: TrackRecordAvoidance
+  caliber_horizon?: number
+  legacy_settled?: number
 }
 
 // 净值曲线点（add-track-record-stage-b）
