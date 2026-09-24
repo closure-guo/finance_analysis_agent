@@ -14,7 +14,7 @@ outcome 评估链（口径协议 / 结算契约 / forward cohort / 回测泄漏�
   5. **健康检查**：界面运行 §1.9⑤ 收口健康检查并展示各门禁读数与 FAIL 原因，不静默通过。
   6. **回测报告注册表**：`evals/backtest/results/*.md` 列表 + 生命周期徽章（active/superseded-by）+ 定位标签（通路验证/上界证据）+ 探针读数摘要。
   7. **预登记编辑**：表单化编辑七个门禁字段，保存前跑同一套字段校验；**版本化**（保存生成新版本）；**已有读数的预登记锁定不可改**（防事后改靶）。
-  8. **口径查看与受治理编辑**：展示 §1.9 口径表；数值旋钮（判定窗口/中性带/探针阈值/最小样本）的修改**不直接改写台账**，而是生成一份 OpenSpec delta 草稿 + §2 切点行草稿供评审，界面明示「生效须走 delta 流程」。
+  8. **口径查看与受治理编辑**：展示 §1.9 口径表；数值旋钮（判定窗口/中性带/探针阈值/最小样本）的修改**不直接改写台账**，而是生成一份 delta 草稿 + §2 切点行草稿供评审（落 `docs/evals/caliber-drafts/`，不落 `openspec/changes/`），界面明示「生效须走 delta 流程」。
 - **战绩页补齐**：总览区渲染回避正确率、当前口径（T+20）、存量旧口径计数（后端已返回、前端未读的三个字段）。
 - **运行历史落库**：`job_runs` 表记录每次触发（含 cohort 关闭空转、失败、手动补跑、配置变更审计行）。
 - **治理护栏（本 delta 的边界）**：口径/预登记的 UI 是**受治理的编辑入口**而非旁路——预登记保存走版本化与锁定，口径修改只产出 delta 草稿；烧钱动作（cohort 开启、正式批、探针单跑）一律带确认与成本展示，且预算熔断等既有安全语义不变。
@@ -37,4 +37,4 @@ outcome 评估链（口径协议 / 结算契约 / forward cohort / 回测泄漏�
 - 前端：`frontend/src/pages/settings/panes/EvalOpsPane.tsx`（新分区）+ `SettingsCenterPage` 注册；`trackRecord/TrackRecordPage.tsx` 总览补齐 + `types.ts` 字段声明。
 - 评估侧：`evals/backtest/run_backtest.py`、`evals/backtest/leakage_probe.py`、`evals/outcome/health.py` 增加可被 API 调用的入口封装（行为不变）。
 - **交互类变更**：涉及前端 UI → 走 §3 完整管线（E2E 门禁 + 人工验证）。
-- 约束沿用：单 uvicorn worker；TESTING=1 调度器不启动、状态接口显式报「未运行」；不新增任何对 `openspec/specs/` 的直接写路径（口径编辑只产出 changes/ 草稿）。
+- 约束沿用：单 uvicorn worker；TESTING=1 调度器不启动、状态接口显式报「未运行」；不新增任何对 `openspec/specs/` 的直接写路径（口径编辑只产出 `docs/evals/caliber-drafts/` 草稿）。

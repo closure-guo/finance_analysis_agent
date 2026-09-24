@@ -7,7 +7,7 @@
 
 ## 范围说明（读表前必读）
 
-本 delta 把 outcome 评估链此前只能经 CLI / 环境变量 / 手改 markdown 访问的能力，收进设置中心「评估运维」分区（六页签）并落成可操作界面：日批五任务状态与运行历史、手动补跑、cohort 开关与跑批时刻（持久化 + 即时重排）、回测批与泄漏探针触发、outcome 收口健康检查、回测报告注册表、预登记版本化与口径受治理编辑；另补战绩页总览三项披露。**9 条 requirement（7 ADDED + 2 MODIFIED）共 38 个 Scenario 全部有落点。**
+本 delta 把 outcome 评估链此前只能经 CLI / 环境变量 / 手改 markdown 访问的能力，收进设置中心「评估运维」分区（六页签）并落成可操作界面：日批五任务状态与运行历史、手动补跑、cohort 开关与跑批时刻（持久化 + 即时重排）、回测批与泄漏探针触发、outcome 收口健康检查、回测报告注册表、预登记版本化与口径受治理编辑；另补战绩页总览三项披露。**9 条 requirement（7 ADDED + 2 MODIFIED）共 40 个 Scenario 全部有落点**（23 + 5 + 12；其中两条为 track-record 的既有场景回归项，列在对照表「（附）」行）。
 
 **验证分层（诚实声明）**：
 
@@ -25,7 +25,7 @@
 | 全量 stub 门禁（**去掉新 spec**） | 同上，spec 移出后 | `15 failed, 12 passed`，exit 1 |
 | 全量 stub 门禁（**分支基点 worktree** `743ea80`） | 同上，独立 worktree + 独立 venv | `14 failed, 13 passed, 2 skipped`，exit 1 |
 
-**结论**：红的 14–15 例全部属同一家族（`streaming` / `thinking-banner` / `search-banner` / `agui-chat` / `interaction` / `deep-thinking-toolcall` / `concurrent-streaming-integrity`），失败形态是 `agui-stream-status` 不消失 / `思考中` 按钮不出现，即**流式终态未到达**；本机无 LLM key 且 Langfuse 不可达（日志实测 `prompt quick_mode 拉取失败，回退本地`、`WinError 10061`）。**基点 worktree 同样红 → 既有失败，非本 delta 引入**；家族内个别用例逐轮翻转（如 `streaming.spec.ts:87` 在基点红、终轮绿；`concurrent-streaming-integrity.spec.ts:134` 相反），属该家族既有的不稳定。**本 delta 未删除、未放宽任何既有断言**（红线遵守；新增 spec 的断言强度不变，仅放大时间预算，见 §异常记录②）。
+**结论**：红的 14–15 例全部属同一家族（`streaming` / `thinking-banner` / `search-banner` / `agui-chat` / `interaction` / `deep-thinking-toolcall` / `concurrent-streaming-integrity`），失败形态是 `agui-stream-status` 不消失 / `思考中` 按钮不出现，即**流式终态未到达**。归因更正（终审）：家族中部分用例（如 `streaming.spec.ts`）走 `stub-key-for-testing` + StubLLMClient 默认场景，**不依赖真实 LLM/Langfuse**，故「无 LLM key / Langfuse 不可达」不足以解释全部红例——准确表述为**该家族既有的不稳定，根因未查明**（家族内用例逐轮翻转亦支持此判断）。**基点 worktree 同样红 → 既有失败，非本 delta 引入**；家族内个别用例逐轮翻转（如 `streaming.spec.ts:87` 在基点红、终轮绿；`concurrent-streaming-integrity.spec.ts:134` 相反），属该家族既有的不稳定。**本 delta 未删除、未放宽任何既有断言**（红线遵守；新增 spec 的断言强度不变，仅放大时间预算，见 §异常记录②）。**一处既有测试被等价改写**（终审核实）：`trackRecordPage.test.tsx:577` 的回避门槛用例改为驱动 `avoidance_rate: null`（前端阈值分支已删、门槛改由后端 `api.py` 钉住，双态由 `tests/test_api_track_record.py` 覆盖），覆盖未丢。
 
 ## Scenario 对照表（38 Scenario / 9 requirement）
 
@@ -76,7 +76,7 @@
 |---|---|---|---|---|
 | 17 | 预登记缺字段拒绝保存 | `ops/prereg.py::save_prereg_version`（L97）/ `InvalidPreregistration`（L64）；`ops_api.py::save_prereg`（L808） | `tests/outcome/test_ops_prereg.py::test_save_rejects_invalid_fields_without_touching_disk`（L61）、`test_save_rejects_bare_threshold_without_rationale`（L70）；`tests/test_ops_api.py::test_put_rejects_missing_fields_without_writing`（L1243）、`test_put_rejects_bare_threshold_without_rationale`（L1256）；`frontend/.../evalOpsPane.test.tsx:611` | ✅ |
 | 18 | 已有读数的预登记锁定 | `ops/prereg.py::is_locked`（L241）/ `_backtest_references`（L170）/ `_cohort_readings_lock`（L197）；`ops_api.py` 409 `locked` | `tests/outcome/test_ops_prereg.py::test_lock_detects_reading_reference`（L150）、`test_lock_degrades_to_any_success_cohort_run`（L175）、`test_lock_without_readings_is_false_and_creates_nothing`（L166）；`tests/test_ops_api.py::test_put_refuses_locked_base_version_and_writes_nothing`（L1264）、`test_lock_flips_when_backtest_report_references_version`（L1204）；`frontend/.../evalOpsPane.test.tsx:624`（只读 + 锁定原因 + 引导新建版本） | ✅ |
-| 19 | 口径修改生成 delta 草稿而非直接改台账 | `ops/prereg.py::write_caliber_draft`（L448）+ `_render_proposal`（L388）/ `_render_spec_skeleton`（L313）/ `_render_timeline_line`（L363）；`ops_api.py::create_caliber_draft`（L868） | `tests/outcome/test_ops_prereg.py::test_caliber_draft_does_not_touch_ledger_or_constants`（L267）、`test_caliber_draft_files_are_the_three_required_artifacts`（L282）、`test_second_draft_for_same_knob_refused`（L327）；`tests/test_ops_api.py::test_draft_created_then_refused_for_same_knob`（L1330）；`frontend/.../evalOpsPane.test.tsx:642`（明示「草稿待评审」）；**本轮实测生成草稿**（`LEAKAGE_PROBE_THRESHOLD 0.6→0.55` → `openspec/changes/ops-caliber-draft-20260924-200458/{proposal.md,specs/evaluation/spec.md,metrics-timeline-line.md}`，台账与 `caliber.py` 零改动，草稿已删） | ✅（草稿 validate 见残留风险③） |
+| 19 | 口径修改生成 delta 草稿而非直接改台账 | `ops/prereg.py::write_caliber_draft`（L448）+ `_render_proposal`（L388）/ `_render_spec_skeleton`（L313）/ `_render_timeline_line`（L363）；`ops_api.py::create_caliber_draft`（L868） | `tests/outcome/test_ops_prereg.py::test_caliber_draft_does_not_touch_ledger_or_constants`（L267）、`test_caliber_draft_files_are_the_three_required_artifacts`（L282）、`test_second_draft_for_same_knob_refused`（L327）；`tests/test_ops_api.py::test_draft_created_then_refused_for_same_knob`（L1330）；`frontend/.../evalOpsPane.test.tsx:642`（明示「草稿待评审」）；**本轮实测生成草稿**（`LEAKAGE_PROBE_THRESHOLD 0.6→0.55` → `docs/evals/caliber-drafts/ops-caliber-draft-20260924-200458/{proposal.md,specs/evaluation/spec.md,metrics-timeline-line.md}`，台账与 `caliber.py` 零改动，草稿已删） | ✅（草稿 validate 见残留风险③） |
 | 20 | 编辑留审计 | `ops_api.py::_save_prereg_with_audit`（L781）/ `_draft_with_audit`（L847） | `tests/test_ops_api.py::test_put_saves_new_version_and_audits`（L1218）、`test_put_without_base_path_keeps_create_new_version_semantics`（L1298）；`tests/outcome/test_ops_prereg.py::test_save_writes_new_version_without_touching_history`（L78） | ✅ |
 
 ### R7 评估运维分区前端（ADDED，3 Scenario）

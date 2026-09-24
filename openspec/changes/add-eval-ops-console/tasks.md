@@ -27,7 +27,7 @@
 
 - [x] 5.1 预登记保存 = 新版本文件 + 同套字段校验拒存 + 单测
 - [x] 5.2 读数锁定：被 cohort 读数/回测报告引用的版本只读 + 引导新建版本 + 单测
-- [x] 5.3 口径旋钮提交 → 生成 `openspec/changes/ops-caliber-draft-*` 草稿（proposal/specs/§2 切点行），**不写** metrics.md 与 caliber.py；同旋钮未处理草稿拒再生成 + 单测（断言台账与常量逐字节未变）
+- [x] 5.3 口径旋钮提交 → 生成 `docs/evals/caliber-drafts/ops-caliber-draft-*` 草稿（proposal/specs/§2 切点行；不落 `openspec/changes/`），**不写** metrics.md 与 caliber.py；同旋钮未处理草稿拒再生成 + 单测（断言台账与常量逐字节未变）
 
 ## 6. 前端评估运维分区
 

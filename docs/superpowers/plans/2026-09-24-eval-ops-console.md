@@ -15,7 +15,7 @@
 - `TESTING=1` 时调度器不启动：状态接口必须返回 `scheduler_running: false`（200），不得 500、不得以空列表冒充正常。
 - 烧钱动作（cohort 开启 / 正式批 / 探针单跑）一律前端确认 + 后端沿用既有安全语义；**预算熔断、串行、usage 真值记账一行不改**。
 - cohort 开关关闭时：定时触发零 LLM 调用、运行历史记 `skipped-disabled`；手动触发拒绝（409）。
-- 口径编辑**不得**写 `docs/evals/metrics.md`、不得写 `evals/outcome/caliber.py`；只生成 `openspec/changes/ops-caliber-draft-*/` 草稿。
+- 口径编辑**不得**写 `docs/evals/metrics.md`、不得写 `evals/outcome/caliber.py`；只生成 `docs/evals/caliber-drafts/ops-caliber-draft-*/` 草稿。
 - 预登记保存走新版本文件，已产生读数的版本只读。
 - 所有新增 SQLite 表用幂等 DDL（`CREATE TABLE IF NOT EXISTS`），与 `track_record/model.py::_connect` 同款连接参数（WAL + busy_timeout=15s + `check_same_thread=False`）。
 - 新增 Python 代码不得复制 CLI 实现：回测/探针/健康检查均 import 既有 `evals.*` 函数。
@@ -389,7 +389,7 @@ def test_health_task_is_json_serializable(tmp_path):
   - `InvalidPreregistration(RuntimeError)`
   - `KNOB_KEYS: tuple[str, ...] = ("PRIMARY_WINDOW_DAYS", "NEUTRAL_BAND", "LEAKAGE_PROBE_THRESHOLD", "MIN_SETTLED_FOR_WINRATE")`
   - `current_knobs() -> dict[str, float | int]`（import `evals.outcome.caliber` 读取，**只读**）
-  - `write_caliber_draft(knobs: dict[str, float | int], *, changes_dir: Path = Path("openspec/changes"), ts: str | None = None) -> Path`（已有未处理草稿涉及同一旋钮 → `DraftExists`；**不写** metrics.md / caliber.py）
+  - `write_caliber_draft(knobs: dict[str, float | int], *, changes_dir: Path = Path("docs/evals/caliber-drafts"), ts: str | None = None) -> Path`（已有未处理草稿涉及同一旋钮 → `DraftExists`；**不写** metrics.md / caliber.py）
 
 - [ ] **Step 1: 写失败测试**
 

@@ -681,10 +681,13 @@ export interface OpsCohortState {
 }
 
 // GET /api/v1/ops/jobs
+// error：后端降级载荷（读运行历史/配置失败）时给出的人类可读原因；健康载荷下缺失。
+// 界面必须消费它——否则「数据库读失败」与「从未跑过」在界面上不可分。
 export interface OpsJobsResponse {
   scheduler_running: boolean
   jobs: OpsJobStatus[]
   cohort: OpsCohortState
+  error?: string | null
 }
 
 // GET /api/v1/ops/reports（回测报告注册表）

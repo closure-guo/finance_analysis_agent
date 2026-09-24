@@ -704,3 +704,23 @@ describe('设置中心注册「评估运维」分区（add-eval-ops-console Task
     }
   })
 })
+
+describe('降级载荷披露', () => {
+  it('运行状态读取异常时展示原因，而非显示成「从未跑过」', async () => {
+    mockFetch({
+      'GET /api/v1/ops/jobs': {
+        body: { ...JOBS_NOT_RUNNING, error: 'last_job_run: database is locked' },
+      },
+    })
+    render(<EvalOpsPane />)
+    const banner = await screen.findByTestId('eval-ops-degraded')
+    expect(banner).toHaveTextContent('database is locked')
+  })
+
+  it('健康载荷不渲染降级提示', async () => {
+    mockFetch({})
+    render(<EvalOpsPane />)
+    await screen.findByTestId('eval-ops-pane')
+    expect(screen.queryByTestId('eval-ops-degraded')).not.toBeInTheDocument()
+  })
+})

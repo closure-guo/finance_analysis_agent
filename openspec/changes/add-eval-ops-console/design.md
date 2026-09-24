@@ -28,7 +28,7 @@
 
 ## D6 口径编辑：只产 delta 草稿，不碰台账与常量
 
-界面提交数值旋钮（判定窗口 / 中性带 / 探针阈值 / 最小已结算样本）→ 生成 `openspec/changes/ops-caliber-draft-<ts>/`（proposal 片段 + `specs/evaluation` delta 片段 + §2 切点行草稿），**不写** `docs/evals/metrics.md`、不写 `evals/outcome/caliber.py`；界面展示草稿路径与「生效须走 delta 流程（validate → 评审 → sync）」。同一旋钮已有未处理草稿时拒绝再生成。这把「编辑界面」变成**受治理的起草入口**：owner 要的是可见可操作，项目红线要的是口径变更走评审，两者在此兼容。
+界面提交数值旋钮（判定窗口 / 中性带 / 探针阈值 / 最小已结算样本）→ 生成 `docs/evals/caliber-drafts/ops-caliber-draft-<ts>/`（proposal 片段 + `specs/evaluation` delta 片段 + §2 切点行草稿；**不落 `openspec/changes/`**——骨架草稿会被仓库级 `validate --all --strict` 当成正式 change 校验而报错），**不写** `docs/evals/metrics.md`、不写 `evals/outcome/caliber.py`；界面展示草稿路径与「生效须走 delta 流程（validate → 评审 → sync）」。同一旋钮已有未处理草稿时拒绝再生成。这把「编辑界面」变成**受治理的起草入口**：owner 要的是可见可操作，项目红线要的是口径变更走评审，两者在此兼容。
 
 ## D7 前端：EvalOpsPane 与子页签
 

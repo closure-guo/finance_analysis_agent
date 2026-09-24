@@ -660,6 +660,12 @@ export function EvalOpsPane() {
   return (
     <div data-testid="eval-ops-pane" className="space-y-4">
       {/* 调度器未运行显式提示（不得空白、不得空列表冒充正常） */}
+      {jobs?.error ? (
+        <div data-testid="eval-ops-degraded" className="rounded-lg px-4 py-3 text-xs"
+          style={{ background: 'var(--bg-overlay-l1)', color: 'var(--status-error-default)' }}>
+          运行状态读取异常（下方数据可能不完整）：{jobs.error}
+        </div>
+      ) : null}
       {!jobs.scheduler_running && (
         <div data-testid="eval-ops-not-running" className="rounded-lg px-4 py-3 text-xs"
           style={{ background: 'rgba(250, 204, 21, 0.12)', color: 'var(--text-secondary)' }}>
