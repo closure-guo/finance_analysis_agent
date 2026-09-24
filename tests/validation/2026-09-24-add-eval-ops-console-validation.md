@@ -186,3 +186,28 @@
 3. 本 delta 与 origin/main 的 6 个提交**都未触碰前端** `App.tsx`（`git log --oneline 376db1c..HEAD -- frontend/src/App.tsx` 为空；`git diff --name-only 743ea80 origin/main -- frontend/` 为空）。
 
 **结论**：既有陈旧用例（stale test）与既有应用行为不一致，因 `e2e` job 仅在 `push: main` 与手动触发时运行、PR 门禁跳过，故长期未被发现；**根因不在本 delta，也不在本 delta 的 base 分支**。处置建议：owner 单独立 issue（更新该用例为「去配置 → 设置中心 LLM 配置分区」或删除），**不要**在本 delta 内顺手改（避免把既有测试的语义变更混进 UI delta）。
+
+## 附二：浏览器实测（2026-09-24，ZCode 内嵌浏览器 + 真实后端 TESTING=1）
+
+**方法**：worktree 内起 `TESTING=1` 后端（:8000）与 vite dev（:5173），用内嵌浏览器打开 `http://127.0.0.1:5173/settings` 走完「评估运维」六页签与 `/track-record`。**输入投递限制（如实披露）**：本会话的内嵌浏览器对 Playwright 指针探测返回 `pointer probe returned no click point`（既有分区同样如此），`cua.click` / `dom_cua.click` 亦不生效，故点击经**页面上下文 `el.click()`** 触发——组件与接口接线为真实渲染 + 真实 HTTP，但**「真实输入事件」这一层不在本次实测覆盖内**（该层由仓库 Playwright 套件 `eval-ops-console.spec.ts`（5 passed，CDP 真实鼠标事件）与 `decisions.spec.ts`（3 passed）覆盖）。
+
+**实测结果（逐项，均为真实渲染读数）**：
+
+| 项 | 实测 |
+|---|---|
+| 分区入口 | 设置中心导航含「评估运维」（`settings-nav-eval-ops`）；未运行横幅「调度器未运行（TESTING=1 或显式禁用）…」正确显示 |
+| 任务卡 | 5 张，排程 mon-fri 16:00/16:30/16:35/16:40/18:00（Asia/Shanghai），下次触发 `—`（未运行） |
+| 运行历史（既有真实行） | `完整性校验 成功 · checked=0 · mismatch_count=0`；`cohort 跑批 空转（开关关闭）· reason=switch_off` |
+| cohort 摘要条 | 未开启 / 18:00 / 今日花费 0 / 预算 2,000,000 tokens |
+| 开关确认弹窗 | 「确认开启 cohort 跑批」+ ≈1.7M tokens/日 + **真实读取预登记「成本分型」文本**（含 ≈166k tokens/标的）+ 预算上限；**取消后**弹窗关闭、开关仍「未开启」、时刻仍 18:00，且 API `enabled=false` 与 `job_runs` 中 `config-change` 行数 **0**（零写入） |
+| 正式批确认弹窗 | 空标的时**本地校验前置**直接报「回测批被拒绝：标的列表不得为空」（不发请求）；填入 3 只标的后弹窗出现（「确认发起正式批」+ 规模 3 只 × 每 regime 10 × 3 次重复 + 探针 3–5 问 + 门禁声明）；取消零副作用 |
+| 报告注册表 | 读到真实报告 `pilot-2023-shock · 生效中 · 通路验证 —`（status 头与定位标签解析正确） |
+| 健康检查 | 界面实跑（`运行 #20`），四门禁齐全；无读数时显示「无读数」而非 0/100%，总体保守判「不通过」 |
+| 预登记与口径 | 表单七字段齐 + 「最新版本 …字段齐备」；口径现值只读自 `caliber.py`（20 / 0.02 / 0.6 / 10） |
+| **口径草稿（治理红线端到端）** | 界面把探针阈值改为 0.55 → 生成 `docs/evals/caliber-drafts/ops-caliber-draft-20260924-215447/{proposal.md,specs/evaluation/spec.md,metrics-timeline-line.md}`；**`sha1sum -c` 证实 `docs/evals/metrics.md` 与 `evals/outcome/caliber.py` 逐字节未变**；草稿未落 `openspec/changes/`；`openspec validate --all --strict` 仍 56/0（验证后草稿目录已删除） |
+| 战绩页三披露 | 灌入 12 条回避（8 胜 4 负）+ 4 条 resolved（2 条为 252 日口径）后实测：**回避正确率 66.7% · 样本 12 条（回避命中 8 / 未命中 4）**、**当前判定口径 T+20 交易日**、**另有 2 条旧口径（252 日）历史未计入头条口径**；胜率显示「—」+「样本积累中（已判定 2 条）」 |
+
+**本次实测发现（既有缺口，非本 delta 引入，交 owner 处置）**：
+
+1. **§1.9④ 红线未落到展示层**：口径要求「settled 可执行样本 <10：SHALL NOT 报任何胜率 / 平均超额」，实测 settled=2 时胜率已置「—」，但**平均超额仍显示 +0.50%（红色高亮）**，切片指标块同样显示 50.0% / +0.50%。证据：`src/finance_agent/api.py` 的 `overview` 仅对 `win_rate` 做 `insufficient` 门控（`"win_rate": None if insufficient else ...`），`avg_excess` 随 `**stats` 直接透出；该行为在 base `376db1c` 即存在（本 delta 对 `api.py` 仅 +13 行 lifespan/router，未触碰 overview）。**建议**：在 #159 或紧随的小 delta 里把 `avg_excess` 与切片读数同门槛置空（1–2 行 API + 前端渲染 + 用例），避免「样本积累中」与红色 +0.50% 并列出现。
+2. **切片块与头条口径的门槛不一致**（同源现象）：切片显示「样本 16 / 胜率 50.0%」而其 spec 要求 n<10 标注「样本不足」——分母不同（切片按桶、含存量），但同屏并列易被读成「已可下结论」。建议随第 1 项一并明确。
