@@ -52,6 +52,7 @@ from finance_agent.outcome.ops.model import (
     list_job_runs,
     set_config,
 )
+from finance_agent.outcome.ops.prereg import KNOB_KEYS
 
 BASE = "/api/v1/ops"
 
@@ -1052,3 +1053,158 @@ class TestSchedulerHandleRobustness:
         assert job["next_fire_time"] is not None
         assert job["next_fire_time"].startswith("20")  # ISO 时间戳
         assert datetime.fromisoformat(job["next_fire_time"]).tzinfo is not None
+
+
+# ── 8. 预登记版本化与口径草稿（Task 5,spec R6）──
+
+# 红线两文件(本文件在 tests/ 下,仓库根 = parents[1]):口径操作前后逐字节不变
+_LEDGER = Path(__file__).resolve().parents[1] / "docs" / "evals" / "metrics.md"
+_CALIBER_CONST = Path(__file__).resolve().parents[1] / "evals" / "outcome" / "caliber.py"
+
+
+def _prereg_fields() -> dict[str, str]:
+    """既有 ``_PREREG_BODY`` 的 `- 字段: 值` 行 → PUT body（单一真源，防两处漂移）。"""
+    return dict(line[2:].split(": ", 1) for line in _PREREG_BODY.splitlines())
+
+
+def _patch_prereg_dir(monkeypatch, prereg_dir: Path, backtests: Path) -> None:
+    monkeypatch.setattr(ops_api, "PREREGISTER_DIR", prereg_dir)
+    monkeypatch.setattr(ops_api, "BACKTEST_RESULTS_DIR", backtests)
+
+
+class TestPreregEndpoints:
+    """GET/PUT /api/v1/ops/prereg:版本列表（有效/问题/锁定）+ 新建版本（校验前置）。"""
+
+    def test_list_reports_valid_issues_and_locked(self, client, prereg_dir, tmp_path, monkeypatch):
+        backtests = tmp_path / "bt"
+        backtests.mkdir()
+        _patch_prereg_dir(monkeypatch, prereg_dir, backtests)
+        (prereg_dir / "2026-02-01-outcome-bad.md").write_text("- 主指标: x\n", encoding="utf-8")
+
+        body = client.get(f"{BASE}/prereg").json()
+
+        assert [Path(row["path"]).name for row in body] == [
+            "2026-01-01-outcome-prereg.md",
+            "2026-02-01-outcome-bad.md",
+        ]
+        row = body[0]
+        assert set(row) == {"path", "fields", "valid", "issues", "locked"}
+        assert row["valid"] is True and row["issues"] == [] and row["locked"] is False
+        assert row["fields"]["MDE"].startswith("n=30")
+        assert body[1]["valid"] is False and any("MDE" in i for i in body[1]["issues"])
+
+    def test_lock_flips_when_backtest_report_references_version(
+        self, client, prereg_dir, tmp_path, monkeypatch
+    ):
+        backtests = tmp_path / "bt"
+        backtests.mkdir()
+        _patch_prereg_dir(monkeypatch, prereg_dir, backtests)
+        path = client.get(f"{BASE}/prereg").json()[0]["path"]
+        assert client.get(f"{BASE}/prereg").json()[0]["locked"] is False
+
+        (backtests / "formal-1.md").write_text(
+            f"**status**: active\n**预登记**: {path}（valid）\n", encoding="utf-8"
+        )
+        assert client.get(f"{BASE}/prereg").json()[0]["locked"] is True
+
+    def test_put_saves_new_version_and_audits(self, client, prereg_dir, tmp_path, monkeypatch):
+        _patch_prereg_dir(monkeypatch, prereg_dir, tmp_path / "bt")
+        previous = (prereg_dir / "2026-01-01-outcome-prereg.md").as_posix()
+        history_before = sorted(p.name for p in prereg_dir.glob("*.md"))
+
+        resp = client.put(f"{BASE}/prereg", json=_prereg_fields())
+
+        assert resp.status_code == 201
+        assert set(resp.json()) == {"path"}
+        saved = Path(resp.json()["path"])
+        assert saved.parent == prereg_dir and saved.exists()
+        rows = client.get(f"{BASE}/prereg").json()
+        assert rows[-1]["path"] == saved.as_posix()
+        assert rows[-1]["valid"] is True and rows[-1]["locked"] is False
+        # 历史版本一个字节不动
+        assert sorted(p.name for p in prereg_dir.glob("*.md")) == sorted(
+            [*history_before, saved.name]
+        )
+        assert (prereg_dir / "2026-01-01-outcome-prereg.md").as_posix() == previous
+        # R6「编辑留审计」:config-change 行记旧版本 → 新版本
+        audit = list_job_runs(ops_api.PREREG_AUDIT_JOB)
+        assert audit and audit[0]["kind"] == "config-change"
+        assert audit[0]["summary"]["from"] == previous
+        assert audit[0]["summary"]["to"] == saved.as_posix()
+
+    def test_put_rejects_missing_fields_without_writing(
+        self, client, prereg_dir, tmp_path, monkeypatch
+    ):
+        _patch_prereg_dir(monkeypatch, prereg_dir, tmp_path / "bt")
+        before = sorted(p.name for p in prereg_dir.glob("*.md"))
+
+        resp = client.put(f"{BASE}/prereg", json={"主指标": "x"})
+
+        assert resp.status_code == 422
+        assert "缺字段" in resp.json()["detail"] and "MDE" in resp.json()["detail"]
+        assert sorted(p.name for p in prereg_dir.glob("*.md")) == before
+        assert list_job_runs(ops_api.PREREG_AUDIT_JOB) == []
+
+    def test_put_rejects_bare_threshold_without_rationale(
+        self, client, prereg_dir, tmp_path, monkeypatch
+    ):
+        _patch_prereg_dir(monkeypatch, prereg_dir, tmp_path / "bt")
+        resp = client.put(f"{BASE}/prereg", json={**_prereg_fields(), "决策阈值": "0.5"})
+        assert resp.status_code == 422
+        assert "换算依据" in resp.json()["detail"]
+
+
+class TestCaliberEndpoints:
+    """GET /caliber（只读当前旋钮）+ POST /caliber-draft（只出 delta 草稿）。"""
+
+    def test_get_caliber_reads_constants_readonly(self, client):
+        import evals.outcome.caliber as caliber
+
+        before = (_LEDGER.read_bytes(), _CALIBER_CONST.read_bytes())
+        body = client.get(f"{BASE}/caliber").json()
+        assert set(body) == {"knobs", "source"}
+        assert body["source"] == "evals/outcome/caliber.py"
+        assert tuple(body["knobs"]) == KNOB_KEYS
+        assert body["knobs"] == {key: getattr(caliber, key) for key in KNOB_KEYS}
+        assert (_LEDGER.read_bytes(), _CALIBER_CONST.read_bytes()) == before
+
+    def test_draft_created_then_refused_for_same_knob(self, client, tmp_path, monkeypatch):
+        changes = tmp_path / "changes"
+        monkeypatch.setattr(ops_api, "CALIBER_CHANGES_DIR", changes)
+        ledger_before = _LEDGER.read_bytes()
+        caliber_before = _CALIBER_CONST.read_bytes()
+
+        resp = client.post(f"{BASE}/caliber-draft", json={"LEAKAGE_PROBE_THRESHOLD": 0.55})
+
+        assert resp.status_code == 201
+        assert set(resp.json()) == {"draft_dir"}
+        draft = Path(resp.json()["draft_dir"])
+        assert draft.is_dir() and draft.parent == changes
+        assert (draft / "proposal.md").exists()
+        assert (draft / "specs" / "evaluation" / "spec.md").exists()
+        assert (draft / "metrics-timeline-line.md").exists()
+        assert "0.55" in (draft / "proposal.md").read_text(encoding="utf-8")
+        # 红线:台账与代码常量零改动
+        assert _LEDGER.read_bytes() == ledger_before
+        assert _CALIBER_CONST.read_bytes() == caliber_before
+        # R6「编辑留审计」:旧值→新值
+        audit = list_job_runs(ops_api.CALIBER_AUDIT_JOB)
+        assert audit and audit[0]["kind"] == "config-change"
+        assert audit[0]["summary"]["from"] == {"LEAKAGE_PROBE_THRESHOLD": 0.6}
+        assert audit[0]["summary"]["to"] == {"LEAKAGE_PROBE_THRESHOLD": 0.55}
+
+        again = client.post(f"{BASE}/caliber-draft", json={"LEAKAGE_PROBE_THRESHOLD": 0.5})
+        assert again.status_code == 409
+        assert again.json()["detail"] == "draft_exists"
+        assert len(list(changes.iterdir())) == 1  # 第二次不落任何新目录
+
+        other = client.post(f"{BASE}/caliber-draft", json={"NEUTRAL_BAND": 0.03})
+        assert other.status_code == 201
+        assert len(list(changes.iterdir())) == 2
+
+    def test_draft_unknown_knob_refused(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(ops_api, "CALIBER_CHANGES_DIR", tmp_path / "changes")
+        resp = client.post(f"{BASE}/caliber-draft", json={"NOT_A_KNOB": 1})
+        assert resp.status_code == 422
+        assert "NOT_A_KNOB" in resp.json()["detail"]
+        assert list_job_runs(ops_api.CALIBER_AUDIT_JOB) == []

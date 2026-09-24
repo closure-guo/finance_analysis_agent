@@ -1,7 +1,8 @@
-"""运维 API 端点族(delta add-eval-ops-console Task 3):``/api/v1/ops/*``。
+"""运维 API 端点族(delta add-eval-ops-console Task 3/5):``/api/v1/ops/*``。
 
-承载「日批状态 / 手动补跑 / cohort 开关与时刻 / 回测与探针 / 健康检查 / 报告注册表」
-六个面,前端设置中心「评估运维」分区按本文件契约实现(字段名逐字对齐实施计划 §Task 3)。
+承载「日批状态 / 手动补跑 / cohort 开关与时刻 / 回测与探针 / 健康检查 / 报告注册表 /
+预登记版本化 / 口径草稿」八个面,前端设置中心「评估运维」分区按本文件契约实现
+(字段名逐字对齐实施计划 §Task 3、§Task 5)。
 
 设计要点
 --------
@@ -29,9 +30,14 @@
   → 抽样 → 干净窗口(``batches.prepare_backtest``),不过 → 409 + 原因,任务不派发;
   门禁通过的结果随任务透传(不重复取数)。``CleanWindowError`` 为 Task 4 层异常,
   运行期解析(见 ``_is_clean_window_refusal``),避免本模块导入期耦合 batch 层。
+- **预登记版本化 / 口径草稿(Task 5,spec R6)**：``GET/PUT /prereg`` 列出/新建预登记版本
+  (校验复用 CLI 同一套判定,不过 → 422 且不落盘);``GET /caliber`` 只读当前旋钮;
+  ``POST /caliber-draft`` 只生成 OpenSpec delta 草稿(**不写**台账与代码常量,同旋钮已有
+  草稿 → 409)。两类编辑各记一行 ``config-change`` 审计(旧值→新值)。
 
 红线：烧钱语义(预算熔断 / 串行 / usage 真值记账)一行不改——本模块只做查看与触发,
-全部安全语义沿用既有实现;cohort 开关关闭时手动跑批拒绝且零 LLM 调用。
+全部安全语义沿用既有实现;cohort 开关关闭时手动跑批拒绝且零 LLM 调用。口径编辑只出草稿,
+台账(``docs/evals/metrics.md``)与常量(``evals/outcome/caliber.py``)本模块零写入口。
 """
 
 from __future__ import annotations
@@ -76,6 +82,15 @@ from finance_agent.outcome.ops.model import (
     list_job_runs,
     set_config,
 )
+from finance_agent.outcome.ops.prereg import (
+    KNOB_SOURCE,
+    DraftExists,
+    InvalidPreregistration,
+    current_knobs,
+    list_prereg_versions,
+    save_prereg_version,
+    write_caliber_draft,
+)
 from finance_agent.outcome.scheduler import get_scheduler, reschedule_cohort
 
 logger = logging.getLogger("finance_agent.ops_api")
@@ -90,6 +105,11 @@ BACKTEST_RESULTS_DIR = Path("evals/backtest/results")
 # 正式批预登记门禁目录 + 本实验文档过滤(与 evals.backtest.run_backtest 同源约定)
 PREREGISTER_DIR = Path("evals/ablation/preregister")
 PREREGISTER_NAME_CONTAINS = "outcome"
+# 口径 delta 草稿落点(测试可 patch;本模块对台账/代码常量零写入口)
+CALIBER_CHANGES_DIR = Path("openspec/changes")
+# R6「编辑留审计」:预登记保存与口径草稿各记一行 config-change(job_id 只作审计,不进 JOB_IDS)
+PREREG_AUDIT_JOB = "prereg_save"
+CALIBER_AUDIT_JOB = "caliber_draft"
 
 # 报告定位标签:复用 evals 的 pathway/skill 词表 + 泄漏降级态(「上界证据」)
 POSITIONING_PATHWAY = "pathway"
@@ -634,3 +654,106 @@ async def trigger_probe(req: ProbeRequest) -> dict[str, Any]:
 async def trigger_health() -> dict[str, Any]:
     """发起 outcome 收口健康检查(只读;门禁读数与阈值随结果披露)。"""
     return await _dispatch("health", {})
+
+
+# ── 端点:预登记版本化(GET 列表 / PUT 新建版本) ──
+
+
+def _prereg_payload() -> list[dict[str, Any]]:
+    """预登记版本列表(按文件名升序;valid/issues 与 fields 出自 CLI 同一解析器)。
+
+    ``locked`` = 该版本已产生读数(回测报告 ``**预登记**:`` 行引用,或 cohort 记账已成功——
+    后者为退化判定,见 ``ops.prereg._cohort_readings_lock`` 的已知风险说明)。
+    """
+    return list_prereg_versions(
+        dir=PREREGISTER_DIR,
+        name_contains=PREREGISTER_NAME_CONTAINS,
+        backtests_dir=BACKTEST_RESULTS_DIR,
+    )
+
+
+def _save_prereg_with_audit(fields: dict[str, str]) -> Path:
+    """新建预登记版本 + config-change 审计行(旧最新版本 → 新版本);校验不过不落盘。"""
+    previous = _prereg_payload()
+    path = save_prereg_version(fields, dir=PREREGISTER_DIR)
+    run_id = insert_job_run(
+        PREREG_AUDIT_JOB,
+        "config-change",
+        "ok",
+        source="manual",
+        summary={
+            "object": "prereg",
+            "from": previous[-1]["path"] if previous else None,
+            "to": path.as_posix(),
+            "fields": sorted(fields),
+        },
+    )
+    finish_job_run(run_id, status="ok")
+    logger.info("预登记新版本(界面保存): %s → %s", previous[-1]["path"] if previous else None, path)
+    return path
+
+
+@router.get("/prereg")
+async def get_prereg() -> list[dict[str, Any]]:
+    """预登记版本列表:``[{"path","fields","valid","issues","locked"}]``(锁定 = 已有读数)。"""
+    return await asyncio.to_thread(_prereg_payload)
+
+
+@router.put("/prereg", status_code=201)
+async def save_prereg(fields: dict[str, str]) -> dict[str, Any]:
+    """保存预登记**新版本**(历史版本永不覆盖);字段不齐 / 阈值缺依据 → 422 + 缺字段清单。
+
+    422 时磁盘零改动(校验在落盘之前):界面据此展示「缺哪些字段」且不会留下半成品版本。
+    """
+    try:
+        path = await asyncio.to_thread(_save_prereg_with_audit, fields)
+    except InvalidPreregistration as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"path": path.as_posix()}
+
+
+# ── 端点:口径查看(只读)+ delta 草稿 ──
+
+
+@router.get("/caliber")
+async def get_caliber() -> dict[str, Any]:
+    """当前口径旋钮值(只读):UI 在口径草稿表单旁并列展示现值,防「看不见现值就改值」。"""
+    return {"knobs": await asyncio.to_thread(current_knobs), "source": KNOB_SOURCE}
+
+
+def _draft_with_audit(knobs: dict[str, float]) -> Path:
+    """生成口径 delta 草稿 + config-change 审计行(旧值→新值);同旋钮已有草稿 → DraftExists。"""
+    before = current_knobs()
+    draft = write_caliber_draft(knobs, changes_dir=CALIBER_CHANGES_DIR)
+    run_id = insert_job_run(
+        CALIBER_AUDIT_JOB,
+        "config-change",
+        "ok",
+        source="manual",
+        summary={
+            "object": "caliber",
+            "from": {key: before[key] for key in knobs},
+            "to": dict(knobs),
+            "draft_dir": draft.as_posix(),
+        },
+    )
+    finish_job_run(run_id, status="ok")
+    logger.info("口径草稿(界面生成): %s（台账与代码常量未改动）", draft)
+    return draft
+
+
+@router.post("/caliber-draft", status_code=201)
+async def create_caliber_draft(knobs: dict[str, float]) -> dict[str, Any]:
+    """旋钮修改 → OpenSpec delta 草稿 + §2 切点行草稿(界面须明示「生效须走 delta 流程」)。
+
+    201 = 草稿已生成(**``docs/evals/metrics.md`` 与 ``evals/outcome/caliber.py`` 零改动**);
+    409 = 同一旋钮已有未处理草稿(``draft_exists``);422 = 未知旋钮 / 空变更。
+    """
+    try:
+        draft = await asyncio.to_thread(_draft_with_audit, knobs)
+    except DraftExists as exc:
+        logger.info("口径草稿已存在,拒绝重复生成: %s", exc)
+        raise HTTPException(status_code=409, detail="draft_exists") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"draft_dir": draft.as_posix()}
