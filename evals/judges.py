@@ -229,7 +229,8 @@ def _call_judge_llm(prompt: str) -> str:
     baseUrl 缺失的旧行为是 litellm 直连 provider 官方端点;迁移后仅
     deepseek/* 显式补官方端点(https://api.deepseek.com/v1),其余前缀
     由 resolver 请求分支显式报 IncompleteLLMConfigError——run_judge
-    捕获后记 judge_parse_failed,不阻塞实验(显式失败好过静默打错网关)。
+    捕获后记 judge_config_error(确定性配置缺陷不重试,与解析失败分桶,
+    #77),不阻塞实验(显式失败好过静默打错网关)。
 
     Langfuse 环境审计:judge generation 改由 gateway 统一观测,
     environment 标记经 trace.metadata 保留独立核算口径。
@@ -412,6 +413,16 @@ def run_judge(dimension: str, variables: dict[str, str]) -> dict:
                 "confidence": confidence,
                 **extra,
             }
-        except Exception:  # noqa: S112 -- 故意静默重试;解析失败已通过最终 judge_parse_failed 记录
+        except Exception as exc:  # noqa: S112 -- 解析/调用失败静默重试,最终记 judge_parse_failed
+            from finance_agent.llm.resolver import IncompleteLLMConfigError
+
+            if isinstance(exc, IncompleteLLMConfigError):
+                # 配置缺陷是确定性错误:重试无意义,且归因不得混入解析失败桶(#77)
+                return {
+                    "name": dimension,
+                    "score": None,
+                    "reason": f"judge_config_error:{exc}",
+                    "confidence": None,
+                }
             continue
     return {"name": dimension, "score": None, "reason": "judge_parse_failed", "confidence": None}
