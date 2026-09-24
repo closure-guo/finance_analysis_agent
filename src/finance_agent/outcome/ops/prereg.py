@@ -9,7 +9,7 @@
   或 cohort 记账已有成功读数。**已知风险①(实施计划 §Task 5)** 见 ``_cohort_readings_lock``:
   真实 ``cohort_runs`` 表不记录预登记路径,该腿退化为「存在任一 success 行 ⇒ 一律锁定」。
 - **口径**:``current_knobs`` 只读当前旋钮;``write_caliber_draft`` **只**在
-  ``openspec/changes/`` 下生成 delta 草稿(proposal + MODIFIED 需求骨架 + §2 切点行),
+  ``docs/evals/caliber-drafts/`` 下生成 delta 草稿(proposal + MODIFIED 需求骨架 + §2 切点行),
   **绝不**写 ``docs/evals/metrics.md`` 与 ``evals/outcome/caliber.py``——
   「口径变更先改 §1 再动代码」的纪律由人走 delta 流程,不由界面代劳。
 
@@ -40,7 +40,7 @@ PREREG_NAME_CONTAINS = "outcome"
 # 回测报告目录(报告 md 正文的 `**预登记**:` 行是「该版本已产生读数」的凭据)
 BACKTEST_RESULTS = Path("evals/backtest/results")
 # delta 草稿落点与主规范(骨架取自同名需求的所在地)
-CHANGES_DIR = Path("openspec/changes")
+CHANGES_DIR = Path("docs/evals/caliber-drafts")
 MAIN_SPEC_PATH = Path("openspec/specs/evaluation/spec.md")
 MAIN_SPEC_REQUIREMENT = "Outcome 收益指标口径与预登记"
 KNOB_SOURCE = "evals/outcome/caliber.py"
@@ -281,7 +281,7 @@ def _read_draft_text(draft_dir: Path) -> str:
 
 
 def _conflicting_draft(directory: Path, knobs: set[str]) -> tuple[Path, list[str]] | None:
-    """已有未处理草稿中,涉及本次任一旋钮者(``openspec/changes/`` 内的草稿;归档后不拦)。"""
+    """已有未处理草稿中,涉及本次任一旋钮者(``docs/evals/caliber-drafts/`` 内的草稿)。"""
     if not directory.exists():
         return None
     for draft in sorted(directory.glob(f"{DRAFT_DIR_PREFIX}*")):
@@ -452,7 +452,7 @@ def write_caliber_draft(
     ts: str | None = None,
     spec_source: Path = MAIN_SPEC_PATH,
 ) -> Path:
-    """旋钮修改 → ``openspec/changes/ops-caliber-draft-<ts>/`` delta 草稿,返回草稿目录。
+    """旋钮修改 → ``docs/evals/caliber-drafts/ops-caliber-draft-<ts>/`` 草稿,返回草稿目录。
 
     产出三件：``proposal.md``（逐旋钮现值→建议值 + 「生效须走 delta 流程」声明）、
     ``specs/evaluation/spec.md``（一条 MODIFIED 需求骨架）、``metrics-timeline-line.md``

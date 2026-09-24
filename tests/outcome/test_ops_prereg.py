@@ -381,3 +381,22 @@ def test_default_stamp_is_unique_when_two_drafts_same_second(tmp_path):
     second = write_caliber_draft({"LEAKAGE_PROBE_THRESHOLD": 0.55}, changes_dir=tmp_path)
     assert first != second and first.is_dir() and second.is_dir()
     assert len(list(tmp_path.glob("ops-caliber-draft-*"))) == 2
+
+
+class TestDraftLocationOutsideOpenspecChanges:
+    """草稿落点必须在 openspec/changes 之外。
+
+    变异实证：把 ``CHANGES_DIR`` / ``ops_api.CALIBER_CHANGES_DIR`` 改回
+    ``openspec/changes`` → 本用例 RED（并使仓库级 `openspec validate --all --strict`
+    由 56/0 变 56/1：骨架草稿会被当成正式 change 校验）。
+    """
+
+    def test_default_draft_dir_is_outside_openspec_changes(self):
+        from finance_agent.outcome.ops import prereg as mod
+
+        assert not mod.CHANGES_DIR.as_posix().startswith("openspec/changes")
+
+    def test_api_default_draft_dir_is_outside_openspec_changes(self):
+        from finance_agent import ops_api
+
+        assert not ops_api.CALIBER_CHANGES_DIR.as_posix().startswith("openspec/changes")

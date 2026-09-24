@@ -129,7 +129,10 @@ BACKTEST_RESULTS_DIR = Path("evals/backtest/results")
 PREREGISTER_DIR = Path("evals/ablation/preregister")
 PREREGISTER_NAME_CONTAINS = "outcome"
 # 口径 delta 草稿落点(测试可 patch;本模块对台账/代码常量零写入口)
-CALIBER_CHANGES_DIR = Path("openspec/changes")
+# 落在 openspec/ 之外：草稿尚未成为 change，放进 changes/ 会让仓库级
+# `openspec validate --all --strict` 因骨架不完整而报错（实测 56/0 → 56/1）。
+# 人工评审通过后再由 owner 用 openspec new change 正式立项。
+CALIBER_CHANGES_DIR = Path("docs/evals/caliber-drafts")
 # R6「编辑留审计」:预登记保存与口径草稿各记一行 config-change(job_id 只作审计,不进 JOB_IDS)
 PREREG_AUDIT_JOB = "prereg_save"
 CALIBER_AUDIT_JOB = "caliber_draft"

@@ -147,7 +147,8 @@ cohort 开关（on/off）与跑批时刻（时/分）SHALL 可在界面修改并
 #### Scenario: 口径修改生成 delta 草稿而非直接改台账
 
 - **WHEN** owner 在界面把探针阈值从 0.60 改为 0.55 并提交
-- **THEN** 系统 SHALL 在 `openspec/changes/` 生成 delta 草稿与 §2 切点行草稿
+- **THEN** 系统 SHALL 在 `docs/evals/caliber-drafts/` 生成 delta 草稿与 §2 切点行草稿
+  （草稿未成 change，SHALL NOT 落入 `openspec/changes/`——否则仓库级 `validate --all --strict` 会因骨架不完整而失败）
 - **AND** `docs/evals/metrics.md` 与代码常量 SHALL 保持原值不变
 - **AND** 界面 SHALL 明示「草稿待评审，生效须走 delta 流程」
 
