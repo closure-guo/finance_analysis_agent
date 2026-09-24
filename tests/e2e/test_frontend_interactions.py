@@ -1,19 +1,18 @@
 """E2E regression test for frontend interactions via Playwright.
 
 Focuses on:
-1. API Key modal open/close/save
-2. EmptyState mode dropdown switching and Enter submit
-3. Sidebar session selection, new analysis, search, delete
+1. API Key configuration via the settings center (LLM 配置 pane)
+2. EmptyState mode dropdown switching
+3. Sidebar collapse/expand
 4. ChatInputBar mode toggles and submission
-5. Report view rendering order
 """
 
 import os
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
-BASE_URL = "http://127.0.0.1:5173"
+BASE_URL = os.environ.get("E2E_BASE_URL", "http://127.0.0.1:5173")
 SS_DIR = "tests/e2e/diagnostic_screenshots"
 API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
 
@@ -33,48 +32,34 @@ def wait_for_stable(page, selector, timeout=10000):
         raise AssertionError(f"Selector not visible: {selector}") from e
 
 
-def test_api_key_modal(page):
-    print("\n=== API Key Modal ===")
+def test_api_key_config_flow(page):
+    print("\n=== API Key Config Flow ===")
     page.goto(BASE_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(1000)
     _screenshot(page, "interact_01_empty.png")
 
-    # Open modal via 去配置
+    # 去配置 opens the settings center with the LLM 配置 pane
     page.locator("button").filter(has_text="去配置").first.click(timeout=3000)
     wait_for_stable(page, "input[type='password']")
-    _screenshot(page, "interact_02_modal_open.png")
-    assert "配置 API Key" in _text(page), "Modal title not found"
-    print("  [PASS] 去配置 opens modal")
+    _screenshot(page, "interact_02_settings_open.png")
+    assert "LLM 配置" in _text(page), "LLM 配置 pane title not found"
+    print("  [PASS] 去配置 opens settings center")
 
-    # Close via cancel
-    page.locator("button").filter(has_text="取消").first.click(timeout=3000)
-    page.wait_for_timeout(300)
-    assert page.locator("input[type='password']").count() == 0
-    print("  [PASS] Cancel closes modal")
+    # 返回 leaves the config view
+    page.locator("button").filter(has_text="返回").first.click(timeout=3000)
+    page.wait_for_selector("input[type='password']", state="detached", timeout=5000)
+    print("  [PASS] 返回 leaves config view")
 
-    # Reopen, fill key, confirm saves key and closes modal
+    # Reopen, fill key, 确认 persists across reload
     page.locator("button").filter(has_text="去配置").first.click(timeout=3000)
     wait_for_stable(page, "input[type='password']")
     page.locator("input[type='password']").fill(API_KEY)
     page.locator("button").filter(has_text="确认").first.click(timeout=3000)
-    page.wait_for_timeout(300)
-    assert page.locator("input[type='password']").count() == 0
-    print("  [PASS] Confirm saves key and closes modal")
-
-    # Enter chat view so header settings is visible
-    textarea = page.locator("textarea").first
-    textarea.fill("hi")
-    textarea.press("Enter")
-    page.wait_for_timeout(1500)
-    _screenshot(page, "interact_02b_chat_for_settings.png")
-
-    # Reopen via header "设置" button and verify persisted
-    page.locator("button").filter(has_text="设置").first.click(timeout=3000)
+    page.reload(wait_until="domcontentloaded")
     wait_for_stable(page, "input[type='password']")
     val = page.locator("input[type='password']").input_value()
     assert val == API_KEY, f"Persisted key mismatch: {val[:10]}..."
     print("  [PASS] Key persisted in localStorage after reload")
-    page.locator("button").filter(has_text="取消").first.click(timeout=3000)
 
 
 def test_empty_state_mode_dropdown(page):
@@ -115,16 +100,8 @@ def test_empty_state_mode_dropdown(page):
     assert "股票名称或代码" in ph, f"Deep placeholder mismatch after switch: {ph}"
     print("  [PASS] Switch back to deep mode works")
 
-    # Type and submit via Enter should transition to chat state
-    textarea.fill("600519")
-    page.wait_for_timeout(300)
-    textarea.press("Enter")
-    page.wait_for_timeout(1500)
-    _screenshot(page, "interact_05_after_enter.png")
-    body = _text(page)
-    # After submit we should see chat UI header and user message or at least not empty state
-    assert page.locator("textarea").count() >= 1, "Input still exists"
-    print("  [PASS] Enter submit leaves empty state")
+    # 注：不在此处断言提交流转——未配置 LLM 时提交被守卫引导至设置页，
+    # 已配置时的分析流转由 Playwright stub 套件（tests/e2e/playwright）覆盖。
 
 
 def test_sidebar_interactions(page):
@@ -132,22 +109,18 @@ def test_sidebar_interactions(page):
     page.goto(BASE_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(800)
 
-    # Sidebar is open by default; click the close button in sidebar header
-    close_btn = page.locator("div:has-text('会话历史') + button:has(i.fa-times)")
-    if close_btn.count() == 0:
-        close_btn = page.locator("button:has(i.fa-times)").first
-    close_btn.click(timeout=3000)
-    page.wait_for_timeout(300)
+    # 套件连跑时浏览器上下文交替会造成资源尖峰，超时放宽到 10s
+    new_btn = page.get_by_test_id("sidebar-new")
+    expect(new_btn).to_be_visible(timeout=10_000)
+    page.get_by_label("折叠侧边栏", exact=True).click(timeout=10_000)
+    expect(new_btn).to_be_hidden(timeout=10_000)
+    expect(page.get_by_test_id("sidebar-new-collapsed")).to_be_visible(timeout=10_000)
     _screenshot(page, "interact_06_sidebar_collapsed.png")
-    body = _text(page)
-    assert "会话历史" not in body, "Sidebar did not collapse"
     print("  [PASS] Sidebar collapse works")
 
-    # Expand via the bars icon in the collapsed sidebar
-    expand_btn = page.locator("button:has(i.fa-bars)").first
-    expand_btn.click(timeout=3000)
-    page.wait_for_timeout(300)
-    assert "会话历史" in _text(page)
+    # Expand via the same toggle (aria-label flips with state)
+    page.get_by_label("展开侧边栏", exact=True).click(timeout=10_000)
+    expect(new_btn).to_be_visible(timeout=10_000)
     print("  [PASS] Sidebar expand works")
 
 
@@ -200,7 +173,7 @@ def main():
         context = browser.new_context(viewport={"width": 1280, "height": 900})
         page = context.new_page()
 
-        test_api_key_modal(page)
+        test_api_key_config_flow(page)
         test_empty_state_mode_dropdown(page)
         test_sidebar_interactions(page)
         test_chat_input_bar_mode_toggle(page)
