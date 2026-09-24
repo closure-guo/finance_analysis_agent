@@ -175,3 +175,14 @@
 - [x] 人工浏览器走查完成，六页签 + 未运行横幅 + 确认取消 + 门禁拒绝 + 手动补跑终态均有截图与 DOM 证据
 - [ ] **stub 全量套件未全绿**：14–15 例 LLM 流式家族既有失败（基点 worktree 同样红，非本 delta 引入，未删未放宽断言）——**需 owner 决策**：是承认该家族在本机/CI 既有红并放行本 delta，还是先立 issue 修该家族（本项目 incident 023 明确反对「带红合并」与「retry 能过就算 flaky」的错误归因，故此处显式登记而不掩盖）
 - [ ] 真实 LLM 探针 / 回测正式批 / cohort 跑批：转 owner 预算门控（本报告不声称）
+
+## 附：CI e2e job 失败归因（2026-09-24，本 delta 收口后追加）
+
+**现象**：在分支上手动触发 CI（`gh workflow run ci.yml --ref feat/batch-ops-console`）→ `lint-and-test` **success**，`e2e` **failure**：`tests/e2e/test_frontend_interactions.py::test_api_key_modal - AssertionError: Modal title not found`（`1 failed, 1 deselected`，11.56s）。
+
+**归因（对照实证，非推测）**：
+1. **在本 delta 的 base 分支上跑同一 job**（`gh workflow run ci.yml --ref feat/outcome-profitability-eval`，即 PR #159 分支，**不含本 delta 任何代码**）→ **同一用例、同一失败**（`test_api_key_modal - AssertionError: Modal title not found`）。→ **非本 delta 引入**。
+2. 该测试的期望（点「去配置」弹出标题为「配置 API Key」的**模态**）与三处代码事实逐字一致地矛盾：`git show {743ea80,376db1c,HEAD}:frontend/src/App.tsx` 的 `onOpenSettings` 在三个提交上**完全相同**（均为 `setSettingsFocus('llm'); navigate('/settings')`，即导航到设置中心而非弹窗）——设置中心化了「去配置」的语义，测试未随之更新。
+3. 本 delta 与 origin/main 的 6 个提交**都未触碰前端** `App.tsx`（`git log --oneline 376db1c..HEAD -- frontend/src/App.tsx` 为空；`git diff --name-only 743ea80 origin/main -- frontend/` 为空）。
+
+**结论**：既有陈旧用例（stale test）与既有应用行为不一致，因 `e2e` job 仅在 `push: main` 与手动触发时运行、PR 门禁跳过，故长期未被发现；**根因不在本 delta，也不在本 delta 的 base 分支**。处置建议：owner 单独立 issue（更新该用例为「去配置 → 设置中心 LLM 配置分区」或删除），**不要**在本 delta 内顺手改（避免把既有测试的语义变更混进 UI delta）。
