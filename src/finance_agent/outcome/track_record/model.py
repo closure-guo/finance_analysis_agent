@@ -2,7 +2,8 @@
 
 与 outcome/store.py 同款 SQLite(WAL + busy_timeout 短连接),db_path 调用期注入。
 冻结铁律:方向/入场价/快照/创建时间写入后不可改;判定结果只经 update_prediction_status
-更新 status/resolved_at/exit_price/raw_return/excess_return/resolution_rule。
+更新 status/resolved_at/exit_price/raw_return/excess_return/resolution_rule/
+avoidance_status/settle_entry_price。
 """
 
 from __future__ import annotations
@@ -16,6 +17,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from finance_agent.outcome.track_record.judgment import (
+    DEFAULT_HORIZON_DAYS,
+    MAX_HORIZON_DAYS,
+    direction_for_action,
+)
+
 PREDICTIONS_DDL = """
 CREATE TABLE IF NOT EXISTS predictions (
   prediction_id     TEXT PRIMARY KEY,
@@ -25,7 +32,7 @@ CREATE TABLE IF NOT EXISTS predictions (
   direction         TEXT NOT NULL CHECK (direction IN ('long','short','neutral')),
   entry_price       REAL,
   target_price      REAL,
-  horizon_days      INTEGER NOT NULL DEFAULT 252,
+  horizon_days      INTEGER NOT NULL DEFAULT 20,
   confidence        REAL CHECK (confidence BETWEEN 0 AND 1),
   benchmark         TEXT NOT NULL DEFAULT '000300.SH',
   rationale_snapshot TEXT NOT NULL,
@@ -37,6 +44,8 @@ CREATE TABLE IF NOT EXISTS predictions (
   raw_return        REAL,
   excess_return     REAL,
   resolution_rule   TEXT,
+  avoidance_status  TEXT,
+  settle_entry_price REAL,
   updated_at        TEXT NOT NULL,
   version_seq       INTEGER,
   snapshot_hash     TEXT
@@ -45,7 +54,15 @@ CREATE INDEX IF NOT EXISTS idx_predictions_status ON predictions(status);
 CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
 """
 
-PREDICTIONS_STATUSES = ("open", "resolved_win", "resolved_loss", "resolved_neutral", "unresolvable")
+PREDICTIONS_STATUSES = (
+    "open",
+    "resolved_win",
+    "resolved_loss",
+    "resolved_neutral",
+    # neutral 回避判定的生命周期终态（结果本身在 avoidance_status 列）
+    "avoidance",
+    "unresolvable",
+)
 _FROZEN_FIELDS = (
     "direction",
     "entry_price",
@@ -63,6 +80,8 @@ _MUTABLE_FIELDS = (
     "excess_return",
     "resolution_rule",
     "updated_at",
+    "avoidance_status",
+    "settle_entry_price",
 )
 
 
@@ -164,6 +183,7 @@ def init_track_record_tables(db_path: str | Path | None = None) -> None:
         conn.executescript(PREDICTIONS_DDL)
         conn.executescript(TRACK_RECORD_EXTRA_DDL)
         _migrate_stage_c_columns(conn)
+        _migrate_settlement_contract_columns(conn)
         conn.commit()
     finally:
         conn.close()
@@ -179,6 +199,20 @@ _STAGE_C_COLUMNS = (
 def _migrate_stage_c_columns(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)").fetchall()}
     for col, ddl in _STAGE_C_COLUMNS:
+        if col not in cols:
+            conn.execute(ddl)
+
+
+# ── update-decision-settlement-contract：回避判定 + 派生结算入场价（幂等迁移）──
+_SETTLEMENT_CONTRACT_COLUMNS = (
+    ("avoidance_status", "ALTER TABLE predictions ADD COLUMN avoidance_status TEXT"),
+    ("settle_entry_price", "ALTER TABLE predictions ADD COLUMN settle_entry_price REAL"),
+)
+
+
+def _migrate_settlement_contract_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+    for col, ddl in _SETTLEMENT_CONTRACT_COLUMNS:
         if col not in cols:
             conn.execute(ddl)
 
@@ -509,8 +543,10 @@ def insert_prediction(
 ) -> str:
     """插入一条观点;created_at 服务端生成;快照 JSON 序列化后冻结。
 
-    status 默认 open;缺可判定要素(如 entry_price)的存档记录由调用方传
-    status='unresolvable' + resolution_rule 说明,计入样本但不计入胜率。
+    status 默认 open。参考价(entry_price)不可得不再标 unresolvable:存档 + WARN、
+    状态保持 open——判定不依赖参考价,结算入场价届时由行情派生 settle_entry_price
+    (delta update-decision-settlement-contract)。真不可判定(长期无行情/停牌退市)
+    由判定 job 落 status='unresolvable' + resolution_rule 说明,计入样本但不计入胜率。
     """
     prediction_id = record.get("prediction_id") or f"p_{uuid.uuid4().hex[:12]}"
     created_at = record.get("created_at") or record.get("timestamp") or datetime.now().isoformat()
@@ -541,7 +577,7 @@ def insert_prediction(
                 record["direction"],
                 record.get("entry_price"),
                 record.get("target_price"),
-                int(record.get("horizon_days", 252)),
+                int(record.get("horizon_days", DEFAULT_HORIZON_DAYS)),
                 record.get("confidence"),
                 record.get("benchmark", "000300.SH"),
                 json.dumps(snapshot, ensure_ascii=False),
@@ -630,6 +666,7 @@ _STATUS_LABELS = {
     "命中": "resolved_win",
     "未中": "resolved_loss",
     "中性": "resolved_neutral",
+    "回避": "avoidance",
     "不可判定": "unresolvable",
 }
 
@@ -747,9 +784,15 @@ def prediction_stats(
     source_type: str | None = None,
     db_path: str | Path | None = None,
     version_seq: int | None = None,
+    horizon_days: int | None = None,
 ) -> dict[str, Any]:
-    """胜率/超额聚合。胜率只基于 resolved_win/resolved_loss;neutral/unresolvable 不进分母。
+    """胜率/超额聚合。胜率只基于 long/short 的 resolved_win/resolved_loss;
+    neutral/unresolvable 不进分母。avg_excess 人口 = long/short 三态
+    (resolved_win/loss/neutral,排除 unresolvable)——消除 ±2% 中性带截断偏差
+    (口径 metrics.md §1.9①);neutral 方向观点不属于主指标人口,一律排除。
 
+    horizon_days 缺省不过滤(全量存量);传值只统计该窗口(头条口径 DEFAULT_HORIZON_DAYS),
+    切点前后已结算行不混入同一读数(口径切点分段)。
     stage-c：version_seq 过滤用于分段封存（P6），缺省统计全部版本。
     """
     conn = _connect(db_path)
@@ -762,14 +805,18 @@ def prediction_stats(
         if version_seq is not None:
             cond += " AND version_seq=?"
             params.append(version_seq)
+        if horizon_days is not None:
+            cond += " AND horizon_days=?"
+            params.append(horizon_days)
         where = " WHERE 1=1" + cond
         src_cond = cond  # 除 COUNT(*) 无 WHERE 的查询外，条件部分相同
+        ls = " AND direction IN ('long','short')"  # 主指标人口限可执行决策(§1.9①)
         # where/src_cond 均为固定字面量拼装 + 值参数化
         q_total = f"SELECT COUNT(*) FROM predictions{where}"  # noqa: S608
         q_open = f"SELECT COUNT(*) FROM predictions WHERE status='open'{src_cond}"  # noqa: S608
-        q_win = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_win'{src_cond}"  # noqa: S608
-        q_loss = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_loss'{src_cond}"  # noqa: S608
-        q_avg = f"SELECT AVG(excess_return) FROM predictions WHERE status IN ('resolved_win','resolved_loss'){src_cond}"  # noqa: S608
+        q_win = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_win'{ls}{src_cond}"  # noqa: S608
+        q_loss = f"SELECT COUNT(*) FROM predictions WHERE status='resolved_loss'{ls}{src_cond}"  # noqa: S608
+        q_avg = f"SELECT AVG(excess_return) FROM predictions WHERE status IN ('resolved_win','resolved_loss','resolved_neutral'){ls}{src_cond}"  # noqa: S608
         q_counts = f"SELECT status, COUNT(*) FROM predictions{where} GROUP BY status"  # noqa: S608
         total = int(conn.execute(q_total, params).fetchone()[0])
         open_count = int(conn.execute(q_open, params).fetchone()[0])
@@ -786,6 +833,45 @@ def prediction_stats(
             "win_rate": win_rate,
             "avg_excess": avg_excess,
             "status_counts": dict(conn.execute(q_counts, params).fetchall()),
+        }
+    finally:
+        conn.close()
+
+
+def avoidance_stats(
+    source_type: str | None = None,
+    db_path: str | Path | None = None,
+    version_seq: int | None = None,
+) -> dict[str, Any]:
+    """neutral 观点回避正确率：avoidance_win/(avoidance_win+avoidance_loss)。
+
+    avoidance_neutral 与未判定(avoidance_status IS NULL)不进分母、不计 settled;
+    分母为 0 → avoidance_rate=None。作为独立辅助指标(§1.9②),SHALL NOT 混入胜率。
+    """
+    conn = _connect(db_path)
+    try:
+        cond = ""
+        params: list[Any] = []
+        if source_type:
+            cond += " AND source_type=?"
+            params.append(source_type)
+        if version_seq is not None:
+            cond += " AND version_seq=?"
+            params.append(version_seq)
+        rows = conn.execute(
+            f"SELECT avoidance_status, COUNT(*) FROM predictions WHERE avoidance_status IS NOT NULL{cond} GROUP BY avoidance_status",  # noqa: S608
+            params,
+        ).fetchall()
+        counts = dict(rows)
+        wins = int(counts.get("avoidance_win", 0))
+        losses = int(counts.get("avoidance_loss", 0))
+        settled = wins + losses
+        return {
+            "avoidance_win": wins,
+            "avoidance_loss": losses,
+            "avoidance_neutral": int(counts.get("avoidance_neutral", 0)),
+            "settled": settled,
+            "avoidance_rate": round(wins / settled, 4) if settled else None,
         }
     finally:
         conn.close()
@@ -811,7 +897,7 @@ def migrate_decision_log(db_path: str | Path | None = None) -> int:
             ).fetchall()
         for r in rows:
             action = r["action"]
-            direction = "long" if action == "buy" else ("short" if action == "sell" else "neutral")
+            direction = direction_for_action(action)
             pid = f"p_{uuid.uuid4().hex[:12]}"
             snapshot = json.dumps(
                 {
@@ -824,9 +910,9 @@ def migrate_decision_log(db_path: str | Path | None = None) -> int:
             conn.execute(
                 """INSERT INTO predictions (
                      prediction_id, source_type, symbol, symbol_name, direction,
-                     entry_price, target_price, confidence, benchmark,
+                     entry_price, target_price, horizon_days, confidence, benchmark,
                      rationale_snapshot, langfuse_trace_id, status, created_at, updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)""",
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)""",
                 (
                     pid,
                     "live",
@@ -837,6 +923,8 @@ def migrate_decision_log(db_path: str | Path | None = None) -> int:
                     direction,
                     float(r["entry_price"]),
                     r["target_price"],
+                    # 存量不追溯：迁移行按其原语义窗口（252），不吃新默认窗口 20
+                    MAX_HORIZON_DAYS,
                     r["confidence"],
                     "000300.SH",
                     snapshot,
