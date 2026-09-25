@@ -68,6 +68,36 @@ def test_top_p_passed_through_everywhere(monkeypatch: pytest.MonkeyPatch) -> Non
     assert calls[1].get("top_p") == 0.9
 
 
+def test_request_level_thinking_drops_temperature() -> None:
+    """请求级 thinking=enabled（自定义模型名）同样触发剔除（#77）。
+
+    capability_for_model 只认模型名启发（含 glm/deepseek 才判
+    reasoning_forced）；请求自带 extra_body.thinking.type=enabled 时
+    thinking 端点拒收 temperature，模型名命中不了启发就会被绕过——
+    adapter 边界按请求自身信号剔除，不依赖命名。
+    """
+    kwargs = {
+        "model": "custom-proxy/my-model",
+        "temperature": 0.3,
+        "extra_body": {"thinking": {"type": "enabled"}},
+    }
+    out = _drop_unsupported(kwargs)
+    assert "temperature" not in out
+    # thinking 信号本身不得被剔除动到
+    assert out["extra_body"] == {"thinking": {"type": "enabled"}}
+
+
+def test_request_level_thinking_disabled_keeps_temperature() -> None:
+    """thinking=disabled（非强制端点）不触发剔除：模型名未命中 + 请求未强制思考。"""
+    kwargs = {
+        "model": "custom-proxy/my-model",
+        "temperature": 0.3,
+        "extra_body": {"thinking": {"type": "disabled"}},
+    }
+    out = _drop_unsupported(kwargs)
+    assert out["temperature"] == 0.3
+
+
 def test_unknown_param_reaches_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict] = []
     _capture(monkeypatch, calls)
