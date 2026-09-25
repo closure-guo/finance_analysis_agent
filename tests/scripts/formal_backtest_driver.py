@@ -1,0 +1,111 @@
+"""回测正式批受控驱动（2026-09-25 申报单执行入口；owner 已批预算）。
+
+为什么不经 run_backtest.py CLI：CLI 的 stratified_sample 在 1500 天指数历史上
+从起点扫描，「每 regime 首个窗口」落在 2020-2021 深历史——而切点声明的
+「深历史（2025 年前样本）永久定位通路验证」在代码中无执法点（spec-代码缺口，
+issue #172）。深历史样本会带 skill 结论句产出，正是泄漏控制要防的形态。
+
+本驱动以**日期裁剪**执法该规则：决策日强制落在
+[2025-01-01, 2026-08-26]（非深历史 ∩ T+20 已结算干净窗口）。
+
+裁剪后三 regime 覆盖（沪深300 120 交易日窗口，2026-09-25 实测）：
+- sideways 2025-01-09（+8.0%）
+- bull      2025-02-28（+17.7%）
+- bear      2025-04-07（-10.2%，范围内唯一 bear 窗口；步长=1 精扫确认无更近 bear）
+
+标的池 = cohort universe-v1 同池（10 只），与 forward 腿同标的保可比；
+结论按 spec decision-backtest「干净窗口优先」条款限定于已覆盖 regime。
+报告：JSON 落 reports/backtest/（gitignored），md 落 evals/backtest/results/（入库）。
+
+用法：
+    PYTHONPATH=src:. python tests/scripts/formal_backtest_driver.py            # 全量 n=30
+    PYTHONPATH=src:. python tests/scripts/formal_backtest_driver.py --smoke    # 冒烟 3 样本×1 重复
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO))
+
+TRIM_START = "2024-08-01"  # 首个 120 交易日窗口止于 ≥2025-01（深历史执法）
+TRIM_END = "2026-08-26"  # 干净窗口：决策日距跑批日 ≥20 交易日
+DATE_LO, DATE_HI = "2025-01-01", TRIM_END
+UNIVERSE_FILE = REPO / "data" / "cohort" / "universe-v1.json"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="回测正式批受控驱动（深历史日期裁剪）")
+    parser.add_argument("--per-regime", type=int, default=10)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--smoke", action="store_true", help="冒烟：per-regime=1、repeats=1（3 次回放）"
+    )
+    parser.add_argument("--name", default=None, help="报告名主干")
+    args = parser.parse_args()
+    per_regime, repeats = (1, 1) if args.smoke else (args.per_regime, args.repeats)
+
+    from dotenv import load_dotenv
+
+    load_dotenv(REPO / ".env")
+
+    from evals.backtest.run_backtest import run_backtest, run_batch_probe
+    from evals.backtest.sampling import stratified_sample
+
+    from finance_agent.data.akshare_client import SETTLEMENT_ADJUST, AKShareClient
+
+    client = AKShareClient()
+    index_full = client.fetch_index_kline("000300", days=1500)
+
+    trimmed = index_full[
+        (index_full["日期"].astype(str).str[:10] >= TRIM_START)
+        & (index_full["日期"].astype(str).str[:10] <= TRIM_END)
+    ].reset_index(drop=True)
+    first_window_end = str(trimmed["日期"].astype(str).str[:10].iloc[119])
+    if first_window_end < DATE_LO:
+        raise AssertionError(f"深历史执法失败：裁剪后首个窗口决策日 {first_window_end} < {DATE_LO}")
+
+    import json
+
+    universe = json.loads(UNIVERSE_FILE.read_text(encoding="utf-8"))
+    codes = [str(c["ticker"]) for c in universe["constituents"]]
+
+    sample = stratified_sample(trimmed, codes, per_regime=per_regime)
+    dates = sorted({s["decision_date"] for s in sample})
+    regimes = {s["regime"] for s in sample}
+    print(f"[抽样] {len(sample)} 样本 | 决策日 {dates} | regime {sorted(regimes)}")
+    for s in sample:
+        if not (DATE_LO <= s["decision_date"] <= DATE_HI):
+            raise AssertionError(f"决策日越界（深历史/未来）: {s}")
+    if not args.smoke and regimes != {"bull", "bear", "sideways"}:
+        raise AssertionError(f"全量批 regime 覆盖不全: {sorted(regimes)}")
+
+    klines = {code: client.fetch_kline(code, days=1500, adjust=SETTLEMENT_ADJUST) for code in codes}
+    probe = run_batch_probe(codes, dates, client=client)
+    as_of = datetime.now().strftime("%Y-%m-%d")
+
+    report = run_backtest(
+        sample,
+        klines,
+        benchmark_kline=index_full,
+        repeats=repeats,
+        batch_kind="formal",
+        as_of=as_of,
+        probe=probe,
+        sanity_note="2026-09-25 申报单批：universe-v1 同池 × 3 regime 决策日；深历史日期裁剪由本驱动执法（#172）",
+        preregister_dir=REPO / "evals" / "ablation" / "preregister",
+    )
+    positioning = report.get("positioning") or report.get("batch", {}).get("positioning")
+    print(f"[完成] positioning={positioning}")
+    print(f"[结论] {report.get('conclusion')}")
+    print(f"[报告] {report.get('report_path') or 'reports/backtest/ + evals/backtest/results/'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
