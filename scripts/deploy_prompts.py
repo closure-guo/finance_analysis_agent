@@ -74,15 +74,17 @@ def precheck(
     """发布预检(add-prompt-hot-reload):Langfuse 领先(UI 编辑未收编)则拒绝盲推。
 
     判别式(以 git HEAD 为基准区分领先方向):
-    - remote == local → 一致,放行
+    - remote == local → 一致,放行（并上报 identical,主循环跳过同内容重发布,
+      #140 版本噪声:无差别新建版本使 12 个未改动 prompt 各多一个同内容版本）
     - remote == HEAD  → Langfuse 仍在上次提交状态,本地已改(正常待发布),放行
     - remote != HEAD 且 remote != local → Langfuse 有未收编变更(UI 编辑),拒绝
     - HEAD 内容未知(未跟踪/无 git) → 保守:任何差异都拒绝
-    返回 (mismatched, unreachable)。prompt 在 Langfuse 不存在(404)视为首部属不拦;
-    拉取失败(网络/凭证)保守归 unreachable。CRLF 归一后逐字比对。
+    返回 (mismatched, unreachable, identical)。prompt 在 Langfuse 不存在(404)
+    视为首部属不拦;拉取失败(网络/凭证)保守归 unreachable。CRLF 归一后逐字比对。
     """
     mismatched: list[str] = []
     unreachable: list[str] = []
+    identical: list[str] = []
     for f in files:
         name = f.stem
         if name in exclude:
@@ -98,12 +100,13 @@ def precheck(
                 unreachable.append(name)
             continue
         if local == remote:
+            identical.append(name)
             continue
         head = head_contents.get(name) if head_contents is not None else None
         if head is not None and remote == head:
             continue  # 本地领先(正常待发布)
         mismatched.append(name)
-    return mismatched, unreachable
+    return mismatched, unreachable, identical
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,6 +114,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="只打印不导入")
     p.add_argument("--labels", default="production", help="标签，逗号分隔（默认 production）")
     p.add_argument("--exclude", nargs="*", default=list(DEFAULT_EXCLUDE), help="不导入的 prompt 名")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="内容与 Langfuse production 一致时仍强制新建版本（默认跳过防版本噪声；"
+        "仅改标签不改内容的场景用）",
+    )
     return p.parse_args()
 
 
@@ -160,7 +169,7 @@ def main() -> int:
     # 预检(add-prompt-hot-reload):Langfuse 领先/不可达时拒绝整批发布,
     # 防止本地盲推创建新版本抢走 production 标签覆盖 UI 编辑。
     # 以 git HEAD 为基准区分「本地领先(正常待发布,放行)」与「Langfuse 领先(拒绝)」。
-    mismatched, unreachable = precheck(
+    mismatched, unreachable, identical = precheck(
         client,
         files,
         exclude,
@@ -186,6 +195,12 @@ def main() -> int:
         name = f.stem
         if name in exclude:
             print(f"  SKIP  {name}  (排除)")
+            skip += 1
+            continue
+        if name in identical and not args.force:
+            # 内容一致仍新建版本 = 每次发布给全部未改动 prompt 各多一个同内容
+            # 版本（#140 版本噪声）；production 标签语义不受影响（同内容）。
+            print(f"  SKIP  {name}  (与 Langfuse production 内容一致)")
             skip += 1
             continue
         try:
