@@ -140,7 +140,25 @@ def main() -> int:
     positioning = report.get("positioning") or report.get("batch", {}).get("positioning")
     print(f"[完成] positioning={positioning}")
     print(f"[结论] {report.get('conclusion')}")
-    print(f"[报告] {report.get('report_path') or 'reports/backtest/ + evals/backtest/results/'}")
+
+    # 落盘（复刻 CLI main() 写盘段：run_backtest 只返回 dict，写盘是调用方职责）。
+    # 先 JSON 后 MD：渲染失败时数据已持久化，MD 可从 JSON 重渲染。
+    import json as _json
+
+    from evals.backtest.report import render_backtest_report_md
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = args.name or f"formal-{stamp}"
+    json_dir = REPO / "reports" / "backtest"
+    json_dir.mkdir(parents=True, exist_ok=True)
+    json_path = json_dir / f"backtest-{stamp}.json"
+    json_path.write_text(_json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_dir = REPO / "evals" / "backtest" / "results"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_path = md_dir / f"{name}.md"
+    md_path.write_text(render_backtest_report_md(report, name=name), encoding="utf-8")
+    print(f"[报告] {json_path}（JSON）")
+    print(f"[报告] {md_path}（md）")
     return 0
 
 
