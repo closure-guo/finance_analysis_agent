@@ -130,6 +130,23 @@ class TestRunJudge:
         assert result["reason"] == "judge_parse_failed"
         assert mock_llm.call_count == 2
 
+    @patch(_GATEWAY)
+    def test_incomplete_config_error_distinguished(self, mock_llm):
+        """IncompleteLLMConfigError 记 judge_config_error，不混入 parse_failed（#77）。
+
+        配置缺陷是确定性错误：重试无意义（单次调用），且归因必须与「解析失败」
+        分桶（AGENTS.md 评估纪律：契约病 ≠ 解析病）；仍不向调用方抛异常
+        （「不阻塞实验」契约保留）。
+        """
+        from finance_agent.llm.resolver import IncompleteLLMConfigError
+
+        mock_llm.side_effect = IncompleteLLMConfigError("只有 model 无端点/凭据")
+        result = run_judge("report_relevance", {"query": "q", "report": "r"})
+        assert result["score"] is None
+        assert result["reason"].startswith("judge_config_error:")
+        assert "只有 model 无端点/凭据" in result["reason"]
+        assert mock_llm.call_count == 1
+
 
 class TestLazyEnvRead:
     """judge 配置必须调用时读环境（python -m evals.run 时序 bug 回归防护）。
