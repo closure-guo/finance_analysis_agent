@@ -19,7 +19,11 @@ from pydantic import ValidationError
 from finance_agent.langfuse_tracing import truncate_for_trace, update_current_span
 from finance_agent.metric_vocab import render_date
 from finance_agent.models import AnalystReport
-from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
+from finance_agent.nodes._llm_utils import (
+    call_llm_streaming_with_fallback,
+    focus_hint,
+    parse_json_response,
+)
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger(__name__)
@@ -258,7 +262,7 @@ def technical_analyst(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    response = call_llm_streaming_with_fallback(
         context,
         system=system,
         api_key=api_key,
@@ -402,7 +406,7 @@ def macro_analyst(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    response = call_llm_streaming_with_fallback(
         context,
         system=system,
         api_key=api_key,
@@ -485,7 +489,7 @@ def fundamental_analyst(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    response = call_llm_streaming_with_fallback(
         context,
         system=system,
         api_key=api_key,
@@ -684,7 +688,7 @@ def sentiment_analyst(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    response = call_llm_streaming(
+    response = call_llm_streaming_with_fallback(
         context,
         system=system,
         api_key=api_key,
