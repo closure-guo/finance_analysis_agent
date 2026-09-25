@@ -1,6 +1,7 @@
 // SettingsCenterPage 设置中心页（add-agent-settings-center Task 7）
-// 左侧垂直导航（六分区）+ 右侧内容区；initialModule 定位默认激活分区。
-// 分区组件：LLM 配置（复用弹窗抽取的 LlmConfigPane）/ 缓存管理 / 会话管理 / 运行信息 / 数据监控 / 战绩展示偏好。
+// 左侧垂直导航（七分区）+ 右侧内容区；initialModule 定位默认激活分区。
+// 分区组件：LLM 配置（复用弹窗抽取的 LlmConfigPane）/ 缓存管理 / 会话管理 / 运行信息 / 数据监控 / 战绩展示偏好 /
+// 评估运维（add-eval-ops-console Task 6：日批状态与补跑 / cohort 控制 / 回测与探针 / 健康检查 / 报告注册表 / 预登记与口径）。
 import { useState, type CSSProperties } from 'react'
 import { LlmConfigPane } from './panes/LlmConfigPane'
 import { CachePane } from './panes/CachePane'
@@ -8,9 +9,10 @@ import { SessionsPane } from './panes/SessionsPane'
 import { RunInfoPane } from './panes/RunInfoPane'
 import { DataMonitorPane } from './panes/DataMonitorPane'
 import { TrackPrefsPane } from './panes/TrackPrefsPane'
+import { EvalOpsPane } from './panes/EvalOpsPane'
 import type { LLMConfig, CapabilityMatrix, ProfileStore } from '../../llmConfig'
 
-export type ModuleId = 'llm' | 'cache' | 'sessions' | 'run' | 'monitor' | 'track'
+export type ModuleId = 'llm' | 'cache' | 'sessions' | 'run' | 'monitor' | 'track' | 'eval-ops'
 
 const MODULES: { id: ModuleId; label: string }[] = [
   { id: 'llm', label: 'LLM 配置' },
@@ -19,6 +21,7 @@ const MODULES: { id: ModuleId; label: string }[] = [
   { id: 'run', label: '运行信息' },
   { id: 'monitor', label: '数据监控' },
   { id: 'track', label: '战绩展示偏好' },
+  { id: 'eval-ops', label: '评估运维' },
 ]
 
 const navButtonStyle: CSSProperties = {
@@ -97,6 +100,7 @@ export function SettingsCenterPage(props: {
         {active === 'run' && <RunInfoPane />}
         {active === 'monitor' && <DataMonitorPane />}
         {active === 'track' && <TrackPrefsPane />}
+        {active === 'eval-ops' && <EvalOpsPane />}
       </main>
     </div>
   )
