@@ -467,3 +467,40 @@ class TestTradeDecisionOperationalParams:
         }
         md = generate_report(state)["final_report"]
         assert "价位修正" in md and "entry 偏离参考带，已修正" in md
+
+    def test_position_missing_renders_weitigong(self):
+        """spec report-decision-rendering：仓位档位为必含字段——缺失时渲染「未提供」，
+        不得整行省略（#140 终审 C-4 既有不一致的代码侧收口）。"""
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.45,
+                "reasoning": "趋势未确认",
+                "inaction_reason": "低于 0.4 执行阈值",
+                "reeval_triggers": ["放量站上 20 日线"],
+            },
+        }
+        md = generate_report(state)["final_report"]
+        assert "- **仓位**: 未提供" in md
+        # 其余必含字段不受影响
+        assert "- **方向**: watch" in md
+        assert "- **不行动原因**: 低于 0.4 执行阈值" in md
+
+    def test_reeval_triggers_beyond_ten_use_paren_form(self):
+        """触发条件超过 10 条（①-⑩ 用尽）→ 第 11 条起 (N) 形态，不越界。"""
+        state = {
+            "stock_code": "600519",
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.45,
+                "reasoning": "r",
+                "inaction_reason": "x",
+                "reeval_triggers": [f"条件{i}" for i in range(1, 12)],
+            },
+        }
+        md = generate_report(state)["final_report"]
+        trigger_line = [ln for ln in md.split("\n") if "再评估触发条件" in ln]
+        assert trigger_line, "触发条件行缺失"
+        assert "⑩ 条件10" in trigger_line[0]
+        assert "(11) 条件11" in trigger_line[0]

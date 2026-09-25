@@ -548,8 +548,9 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         triggers = decision.get("reeval_triggers") or []
 
     lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
-    if position:
-        lines.append(f"- **仓位**: {position}")
+    # spec report-decision-rendering：仓位档位为必含字段——缺失如实「未提供」，
+    # 不得整行省略（#140 终审 C-4：与「0/缺失未提供」的价格行同款约定）
+    lines.append(f"- **仓位**: {position if position else '未提供'}")
     if action in ("buy", "sell"):
         lines.append(f"- **入场价**: {_fmt_price(entry)}")
         lines.append(f"- **止损价**: {_fmt_price(stop)}")
