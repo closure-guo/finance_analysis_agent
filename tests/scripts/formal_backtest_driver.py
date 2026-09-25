@@ -8,11 +8,13 @@ issue #172）。深历史样本会带 skill 结论句产出，正是泄漏控制
 本驱动以**日期裁剪**执法该规则：决策日强制落在
 [2025-01-01, 2026-08-26]（非深历史 ∩ T+20 已结算干净窗口）。
 
-裁剪后三 regime 覆盖（沪深300 120 交易日窗口，2026-09-25 实测）：
-- sideways 2025-01-09（+8.0%）
-- bull      2025-02-28（+17.7%）
-- bear      2025-04-07（-10.2%，范围内唯一 bear 窗口；步长=1 精扫确认无更近 bear）
+裁剪后三 regime 覆盖（沪深300 120 交易日窗口，runner 同源数据步长=1 精扫，2026-09-25 实测）：
+- bull      2025-01-27（+11.6%）
+- sideways  2025-03-31（+5.0%）
+- bear      2025-04-07（-10.2%，范围内唯一 bear 窗口）
 
+注意：`stratified_sample` 的扫描步长 30 天会**跳过唯一 bear 窗口**（步长=1 才扫
+得到），故本驱动内置步长=1 的同规则约束抽样（分类阈值/随机种子与库一致）。
 标的池 = cohort universe-v1 同池（10 只），与 forward 腿同标的保可比；
 结论按 spec decision-backtest「干净窗口优先」条款限定于已覆盖 regime。
 报告：JSON 落 reports/backtest/（gitignored），md 落 evals/backtest/results/（入库）。
@@ -29,6 +31,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
@@ -37,6 +41,40 @@ TRIM_START = "2024-08-01"  # 首个 120 交易日窗口止于 ≥2025-01（深�
 TRIM_END = "2026-08-26"  # 干净窗口：决策日距跑批日 ≥20 交易日
 DATE_LO, DATE_HI = "2025-01-01", TRIM_END
 UNIVERSE_FILE = REPO / "data" / "cohort" / "universe-v1.json"
+WINDOW_DAYS = 120
+UP_THRESHOLD, DOWN_THRESHOLD = 0.10, -0.10
+
+
+def _sample_constrained(trimmed, codes: list[str], *, per_regime: int, seed: int = 42):
+    """步长=1 的分层市场状态约束抽样（stratified_sample 同规则、细步长）。
+
+    stratified_sample 步长 30 天会跳过范围内唯一的 bear 窗口（2025-04-07），
+    本函数以逐日滑窗扫描保证单窗口 regime 不被跳采；分类阈值与标的随机
+    选取（seed=42、无放回）与库实现一致。
+    """
+    dates = trimmed["日期"].astype(str).str[:10].tolist()
+    close = trimmed["收盘"].astype(float).tolist()
+    rng = np.random.default_rng(seed)
+    found: dict[str, str] = {}
+    for end in range(WINDOW_DAYS, len(trimmed) + 1):
+        d = dates[end - 1]
+        if d < DATE_LO or d > DATE_HI:
+            continue
+        seg = close[end - WINDOW_DAYS : end]
+        total = seg[-1] / seg[0] - 1
+        regime = (
+            "bull" if total > UP_THRESHOLD else ("bear" if total < DOWN_THRESHOLD else "sideways")
+        )
+        if regime not in found:
+            found[regime] = d
+    if len(codes) < per_regime:
+        raise AssertionError(f"标的池不足 per_regime={per_regime}")
+    sample = []
+    for regime, decision_date in sorted(found.items()):
+        chosen = list(rng.choice(codes, size=per_regime, replace=False))
+        for code in chosen:
+            sample.append({"code": str(code), "regime": regime, "decision_date": decision_date})
+    return sample
 
 
 def main() -> int:
@@ -55,7 +93,6 @@ def main() -> int:
     load_dotenv(REPO / ".env")
 
     from evals.backtest.run_backtest import run_backtest, run_batch_probe
-    from evals.backtest.sampling import stratified_sample
 
     from finance_agent.data.akshare_client import SETTLEMENT_ADJUST, AKShareClient
 
@@ -75,7 +112,7 @@ def main() -> int:
     universe = json.loads(UNIVERSE_FILE.read_text(encoding="utf-8"))
     codes = [str(c["ticker"]) for c in universe["constituents"]]
 
-    sample = stratified_sample(trimmed, codes, per_regime=per_regime)
+    sample = _sample_constrained(trimmed, codes, per_regime=per_regime)
     dates = sorted({s["decision_date"] for s in sample})
     regimes = {s["regime"] for s in sample}
     print(f"[抽样] {len(sample)} 样本 | 决策日 {dates} | regime {sorted(regimes)}")
