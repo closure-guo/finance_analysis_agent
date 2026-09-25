@@ -1,7 +1,10 @@
 """add-hallucination-rate-metric nightly @live：真实报告 + 真实行情校验。
 
-无 LANGFUSE key 跳过；akshare 行情失败时数据源缺失 → claim 全部 unverifiable
-（如实报告，不因网络波动硬失败）。报告落 reports/。
+@live 为显式 opt-in：仅当 RUN_LIVE=1 时运行——凭据可能被全量跑批的前序用例
+带入进程环境，「凭据在环境里」不构成运行判据（#158）。无 LANGFUSE key 跳过；
+akshare 行情失败时数据源缺失 → claim 全部 unverifiable（如实报告，不因网络
+波动硬失败）；本地 sessions.db 无深度报告属环境前置不满足 → 显式跳过。
+报告落 reports/。
 """
 
 import json
@@ -18,6 +21,10 @@ pytestmark = pytest.mark.live
 
 @pytest.fixture(scope="module")
 def live_env() -> bool:
+    # 第一道判据：显式 opt-in 开关。全量跑批时前序用例/加载器可能把凭据带入
+    # 进程环境（#158），凭据在场 ≠ 用户想跑 @live。
+    if os.environ.get("RUN_LIVE") != "1":
+        pytest.skip("RUN_LIVE 未开启（@live 为显式 opt-in），跳过")
     try:
         from dotenv import load_dotenv
 
@@ -86,7 +93,9 @@ def _latest_deep_report(db_path: Path) -> tuple[str, str] | None:
 def test_hallucination_live_report(live_env: bool):
     db_path = Path(os.environ.get("SESSIONS_DB_PATH", "data/sessions.db"))
     found = _latest_deep_report(db_path)
-    assert found, f"{db_path} 无深度会话报告可用（sample 不足）"
+    if not found:
+        # 样本不足是环境前置不满足，不是被测系统缺陷——显式跳过并说明，不硬失败
+        pytest.skip(f"{db_path} 无深度会话报告可用（sample 不足），显式跳过")
     report_text, stock_code = found
 
     data_map: dict[str, float] = {}
