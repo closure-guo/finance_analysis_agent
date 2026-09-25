@@ -555,3 +555,32 @@ async def test_tool_call_event_carries_usage(monkeypatch):
     )
     tool_ev = next(e for e in events if e.kind == "tool_call")
     assert tool_ev.usage == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+
+
+async def test_preset_passed_to_resolve_profile(monkeypatch):
+    """preset 参数透传 resolve_profile（fallback 链成员按命名 preset 选中，#77）。"""
+    import dataclasses
+    from unittest.mock import patch
+
+    from finance_agent.llm.registry import get_profile_preset
+
+    async def fake_acompletion(**kwargs):  # noqa: ARG001
+        return _AsyncIter([_chunk(text="答"), _chunk(finish="stop")])
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_acompletion", fake_acompletion
+    )
+    pinned = dataclasses.replace(
+        get_profile_preset("deepseek-official"), fallback=("openai-official",)
+    )
+    with patch("finance_agent.llm.gateway.resolve_profile", return_value=pinned) as rp_mock:
+        events = await _collect(
+            complete_stream_async(
+                [{"role": "user", "content": "hi"}],
+                llm_config=None,
+                preset="openai-official",
+            )
+        )
+    assert [e.kind for e in events] == ["text", "finished"]
+    assert rp_mock.call_args.kwargs["preset"] == "openai-official"
+    assert rp_mock.call_args.kwargs["llm_config"] is None

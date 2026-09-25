@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from finance_agent.nodes._llm_utils import call_llm_streaming, focus_hint, parse_json_response
+from finance_agent.nodes._llm_utils import (
+    call_llm_streaming_with_fallback,
+    focus_hint,
+    parse_json_response,
+)
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger("finance_agent.research_manager")
@@ -26,7 +30,7 @@ def research_manager(state: dict) -> dict:
     system = _pinfo.template
     api_key = state.get("api_key")
 
-    raw = call_llm_streaming(
+    raw = call_llm_streaming_with_fallback(
         context,
         system=system,
         api_key=api_key,

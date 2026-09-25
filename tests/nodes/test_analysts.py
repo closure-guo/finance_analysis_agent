@@ -51,7 +51,7 @@ def _mock_llm_response() -> str:
 class TestTechnicalAnalyst:
     """Layer I 技术面分析师 Agent 测试。"""
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_produces_analyst_report(self, mock_llm):
         """技术分析师返回 AnalystReport 结构化输出。"""
         mock_llm.return_value = _mock_llm_response()
@@ -70,7 +70,7 @@ class TestTechnicalAnalyst:
         assert len(report.claims) == 1
         assert report.claims[0].stated_value == 13.0
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_llm_response_with_code_block(self, mock_llm):
         """LLM 返回 markdown 代码块包裹的 JSON 也能正确解析。"""
         mock_llm.return_value = f"```json\n{_mock_llm_response()}\n```"
@@ -98,7 +98,7 @@ class TestAnalystDegradationObservability:
         "technical_indicators": {"MA": {"5": [None, None, None, None, 13.0]}},
     }
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_malformed_json_logs_warning(self, mock_llm, caplog):
         """解析失败记录 WARNING 日志，包含节点名。"""
         mock_llm.return_value = "这不是 JSON，只是一段自由文本"
@@ -108,7 +108,7 @@ class TestAnalystDegradationObservability:
             r.levelno == logging.WARNING and "technical" in r.getMessage() for r in caplog.records
         ), f"未记录含节点名的 WARNING：{[r.getMessage() for r in caplog.records]}"
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_degraded_report_carries_marker(self, mock_llm):
         """降级报告携带可识别标记，使下游能区分「解析失败的零 claim」与「正常的零 claim」。"""
         mock_llm.return_value = "坏响应"
@@ -116,14 +116,14 @@ class TestAnalystDegradationObservability:
         assert report.parse_degraded is True
         assert report.claims == []
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_successful_parse_has_no_degraded_marker(self, mock_llm):
         """正常解析的报告不带降级标记（与降级路径可区分）。"""
         mock_llm.return_value = _mock_llm_response()
         report = technical_analyst(dict(self._STATE))["analyst_reports"]["technical"]
         assert report.parse_degraded is False
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_invalid_claim_type_logs_warning(self, mock_llm, caplog):
         """非法 claim_type 改写为 entity 时记录 WARNING（含原值与改写后值）。"""
         payload = json.loads(_mock_llm_response())
@@ -139,7 +139,7 @@ class TestAnalystDegradationObservability:
             f"WARNING 未含原值与改写值：{messages}"
         )
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_invalid_source_type_logs_warning(self, mock_llm, caplog):
         """非法 source_type 改写为 data 时记录 WARNING（含原值与改写后值）。"""
         payload = json.loads(_mock_llm_response())
@@ -492,7 +492,7 @@ class TestDegradedReportHonesty:
 
     _STATE = TestAnalystDegradationObservability._STATE
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_fallback_conclusion_says_parse_failed_not_data_missing(self, mock_llm):
         mock_llm.return_value = "坏响应"
         report = technical_analyst(dict(self._STATE))["analyst_reports"]["technical"]
@@ -500,7 +500,7 @@ class TestDegradedReportHonesty:
         assert "数据缺失" not in report.plain_conclusion
         assert "解析" in report.plain_conclusion
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_salvages_summary_and_conclusion_from_truncated_json(self, mock_llm):
         """JSON 截断无法修复，但已闭合的 summary/plain_conclusion 字段应被打捞。"""
         mock_llm.return_value = (
@@ -533,7 +533,7 @@ class TestRerunKeepsValidReport:
             markdown="## 技术面\n好版本",
         )
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_degraded_rerun_keeps_existing_valid_report(self, mock_llm):
         good = self._good()
         state = {**self._STATE, "analyst_reports": {"technical": good}}
@@ -542,7 +542,7 @@ class TestRerunKeepsValidReport:
         assert out.parse_degraded is False
         assert out.summary == "好版本：短期趋势向上"
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_degraded_rerun_keeps_existing_valid_dict_report(self, mock_llm):
         """state 里的既有报告可能已是 dict 序列化形态。"""
         state = {**self._STATE, "analyst_reports": {"technical": self._good().model_dump()}}
@@ -555,14 +555,14 @@ class TestRerunKeepsValidReport:
             is False
         )
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_valid_rerun_replaces_existing(self, mock_llm):
         state = {**self._STATE, "analyst_reports": {"technical": self._good()}}
         mock_llm.return_value = _mock_llm_response()
         out = technical_analyst(state)["analyst_reports"]["technical"]
         assert out.summary == "技术面分析显示短期趋势向上"
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_first_run_degraded_still_returns_degraded(self, mock_llm):
         """没有既有报告时，降级报告照常返回（不改变首轮行为）。"""
         mock_llm.return_value = "坏响应"
@@ -615,7 +615,7 @@ class TestDegradationKeysNamespaced:
         md = next(c["metadata"] for c in captured if c["metadata"])
         assert md["degradation.technical.r1.sanitize.claim_type"] == "非法类型->entity"
 
-    @patch("finance_agent.nodes.analysts.call_llm_streaming")
+    @patch("finance_agent.nodes.analysts.call_llm_streaming_with_fallback")
     def test_node_passes_iteration_count_as_round(self, mock_llm, monkeypatch):
         """节点把 state.iteration_count（引用重试轮次）作为轮次传入。"""
         captured = self._capture(monkeypatch)

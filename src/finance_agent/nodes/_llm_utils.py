@@ -294,6 +294,79 @@ def _call_llm_for_json_once(
     return data
 
 
+def call_llm_streaming_with_fallback(
+    prompt: str,
+    system: str = "",
+    api_key: str | None = None,
+    node_name: str = "",
+    llm_config=None,
+    prompt_name: str | None = None,
+    prompt_version: str | int | None = None,
+    stock_code: str | None = None,
+) -> str:
+    """文本节点路径的 fallback 链执行（spec llm-policy-router Requirement 2，#77 接线）。
+
+    与 ``call_llm_for_json`` 的链执行器同构，差异仅在触发集与单次尝试语义：
+    纯文本输出无输出合同 → 触发集 = 四类 typed error
+    （ContentFiltered/AuthError/ModelNotFound/UnsupportedCapability；
+    OutputContractError 含于常量但本路径不会抛出）。可重试错误（截断/超时/
+    限流）的同 profile 重试与续写升级留在 ``call_llm_streaming`` 内层，不在此
+    重复。链懒解析（首次失败后才解析，解析失败上抛原错误）；每次切换落该次
+    尝试的 trace（fallback_from + fallback_path）；链长上限 3，链耗尽上抛最后
+    一个 typed error。其余参数与 call_llm_streaming 一致，原样透传。
+    """
+    from finance_agent.llm.gateway import FALLBACK_TRIGGER_ERRORS, fallback_attempt_plan
+
+    base_kwargs: dict = {
+        "system": system,
+        "api_key": api_key,
+        "node_name": node_name,
+        "prompt_name": prompt_name,
+        "prompt_version": prompt_version,
+        "stock_code": stock_code,
+    }
+    attempted: list[str] = []
+    attempts = None
+    pos = 0
+    while True:
+        if attempts:
+            att = attempts[pos]
+            cur_config, cur_preset = att.llm_config, att.preset
+            fallback_from: str | None = attempted[-1]
+            fallback_path: list[str] | None = [*attempted, att.profile]
+        else:
+            # 首次尝试沿用既有语义：请求级（或 env/preset 解析的）配置原样透传
+            cur_config, cur_preset = llm_config, None
+            fallback_from, fallback_path = None, None
+        try:
+            return call_llm_streaming(
+                prompt,
+                llm_config=cur_config,
+                preset=cur_preset,
+                fallback_from=fallback_from,
+                fallback_path=fallback_path,
+                **base_kwargs,
+            )
+        except FALLBACK_TRIGGER_ERRORS as exc:
+            if attempts:
+                attempted.append(attempts[pos].profile)
+                pos += 1
+                if pos < len(attempts):
+                    continue
+                raise
+            # 首次失败：此刻才解析链——解析失败（配置半套等）不得盖住原错误
+            try:
+                attempts = fallback_attempt_plan(
+                    purpose="deep", llm_config=_request_config_dict(llm_config, api_key)
+                ).attempts
+            except Exception:
+                raise exc from None
+            attempted.append(attempts[0].profile)
+            if len(attempts) == 1:
+                raise
+            pos = 1
+
+
 def focus_hint(state: dict) -> str:
     """从 state 提取用户关注点（深度研究意图澄清环节收集），返回 LLM context 注入行。
 

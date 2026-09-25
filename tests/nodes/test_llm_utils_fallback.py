@@ -219,3 +219,95 @@ class TestTypedErrorSwitchesProfile:
         ):
             call_llm_for_json("x")
         assert _presets(calls) == [None, None]
+
+
+# ── 文本节点路径（call_llm_streaming_with_fallback，#77 接线）──────────────
+
+
+class TestTextPathFallbackChain:
+    """文本节点直调路径的链执行：触发集 = typed error（无输出合同维度）。"""
+
+    def test_content_filtered_switches_to_fallback(self):
+        from finance_agent.nodes._llm_utils import call_llm_streaming_with_fallback
+
+        def handler(n, kw):
+            if kw.get("preset") == "openai-official":
+                return "链上成员的成功输出"
+            raise ContentFilteredError("blocked by provider")
+
+        fake, calls = _fake_streamer(handler)
+        with (
+            _pin_primary(),
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+        ):
+            result = call_llm_streaming_with_fallback("x", node_name="technical_analyst")
+
+        assert result == "链上成员的成功输出"
+        # 首次尝试请求级配置透传（preset=None），成员按 preset 名选中、不带请求级配置
+        assert _presets(calls) == [None, "openai-official"]
+        assert calls[1]["llm_config"] is None
+        # 每次切换落该次尝试的 trace
+        assert calls[1]["fallback_from"] == "deepseek-official"
+        assert calls[1]["fallback_path"] == ["deepseek-official", "openai-official"]
+        assert not calls[0].get("fallback_from")
+
+    def test_chain_exhausted_raises_last_typed_error(self):
+        from finance_agent.llm.errors import AuthError
+        from finance_agent.nodes._llm_utils import call_llm_streaming_with_fallback
+
+        def handler(n, kw):
+            raise AuthError("bad key")
+
+        fake, calls = _fake_streamer(handler)
+        with (
+            _pin_primary(),
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+            pytest.raises(AuthError),
+        ):
+            call_llm_streaming_with_fallback("x")
+        assert _presets(calls) == [None, "openai-official"]
+
+    def test_non_trigger_error_does_not_switch(self):
+        """非触发错误不在链上空转（同 profile 重试语义留在 call_llm_streaming 内层）。"""
+        from finance_agent.nodes._llm_utils import call_llm_streaming_with_fallback
+
+        def handler(n, kw):
+            raise RuntimeError("boom")
+
+        fake, calls = _fake_streamer(handler)
+        with (
+            _pin_primary(),
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+            pytest.raises(RuntimeError),
+        ):
+            call_llm_streaming_with_fallback("x")
+        assert _presets(calls) == [None]
+
+    def test_happy_path_never_resolves_chain(self):
+        from finance_agent.nodes._llm_utils import call_llm_streaming_with_fallback
+
+        fake, calls = _fake_streamer(lambda n, kw: "正文")
+        with (
+            patch("finance_agent.llm.gateway.fallback_attempt_plan") as plan_mock,
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+        ):
+            assert call_llm_streaming_with_fallback("x") == "正文"
+        assert plan_mock.call_count == 0
+        assert len(calls) == 1
+
+    def test_chain_resolution_failure_does_not_mask_original_error(self):
+        from finance_agent.nodes._llm_utils import call_llm_streaming_with_fallback
+
+        def handler(n, kw):
+            raise ContentFilteredError("blocked by provider")
+
+        fake, _ = _fake_streamer(handler)
+        with (
+            patch(
+                "finance_agent.llm.gateway.fallback_attempt_plan",
+                side_effect=IncompleteLLMConfigError("请求级 llm_config 不完整"),
+            ),
+            patch("finance_agent.nodes._llm_utils.call_llm_streaming", side_effect=fake),
+            pytest.raises(ContentFilteredError),
+        ):
+            call_llm_streaming_with_fallback("x")

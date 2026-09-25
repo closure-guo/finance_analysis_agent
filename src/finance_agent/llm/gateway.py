@@ -983,6 +983,7 @@ async def complete_stream_async(
     top_fields: list[str] | None = None,
     temperature: float | None = None,
     llm_config: dict[str, Any] | None = None,
+    preset: str | None = None,
     trace: dict[str, Any] | None = None,
     chunk_timeout: float = 60.0,
     max_retries: int = 3,
@@ -994,6 +995,9 @@ async def complete_stream_async(
     （``asyncio.wait_for``）、可重试错误指数退避重试、重试耗尽/不可重试
     直接 raise（保 Agent 主循环捕获合同）、tool_calls 增量按 index 聚合
     终态产出单条 tool_call 事件。空输出分类不在本入口（loop 自有重试）。
+
+    ``preset``（可选）：命名 preset 选中 profile——fallback 链成员按此选中
+    （与同步 complete_stream 契约一致，链执行器在 harness.chat_stream）。
 
     断点续写（llm-output-resume Task 5）：finish=length 且正文非空 → 以
     「已生成正文尾部(+进度标注) + 剩余配额」二次异步流式续发，事件序
@@ -1007,7 +1011,7 @@ async def complete_stream_async(
 
     from finance_agent.llm.types import CanonicalEvent
 
-    profile = resolve_profile(purpose=purpose, llm_config=llm_config)
+    profile = resolve_profile(purpose=purpose, llm_config=llm_config, preset=preset)
     ensure_litellm_runtime()
     guard_params_supported(profile.capability, tools=tools, tool_choice=tool_choice)
     from finance_agent.llm.adapters.litellm_adapter import (

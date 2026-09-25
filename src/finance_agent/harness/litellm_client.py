@@ -108,8 +108,24 @@ class LiteLLMClient:
         temperature: float = 0.7,
         tool_choice: str = "auto",
     ) -> AsyncIterator[LLMResponse]:
-        """流式聊天请求：包装 gateway.complete_stream_async，翻译 CanonicalEvent。"""
-        from finance_agent.llm.gateway import complete_stream_async
+        """流式聊天请求：包装 gateway.complete_stream_async，翻译 CanonicalEvent。
+
+        fallback 链执行（spec llm-policy-router Requirement 2，#77 接线收口）：
+        触发类 typed error（OutputContract/ContentFiltered/AuthError/
+        ModelNotFound/UnsupportedCapability）且**尚未向 Agent 转发任何事件**时，
+        依 ``fallback_attempt_plan`` 切换下一 profile 重试；已转发后错误照旧
+        上抛（流式中途重启会让客户端收到重复内容，无法无损续接）。链懒解析：
+        happy path 与 stub 不付解析成本，解析失败上抛原错误（不换错误面）。
+        每次切换的 trace 记 fallback_from + fallback_path（spec「每次切换
+        MUST 在 trace 记录 fallback_from」）；链长上限 3，链耗尽上抛最后一个
+        typed error。
+        """
+        from finance_agent.llm.gateway import (
+            FALLBACK_TRIGGER_ERRORS,
+            FallbackAttempt,
+            complete_stream_async,
+            fallback_attempt_plan,
+        )
 
         # 请求级配置：model/baseUrl/apiKey 三者齐备才原子下发，
         # 否则 None 交给 resolver 用 env/preset（与 legacy._request_config_dict 语义一致）。
@@ -117,90 +133,138 @@ class LiteLLMClient:
         if self.model and self.base_url and self.api_key:
             llm_config = {"model": self.model, "baseUrl": self.base_url, "apiKey": self.api_key}
 
-        trace = {
-            "name": self.agent or f"litellm:{self.model}",
-            "metadata": _generation_metadata(self.prompt_name, self.prompt_version, self.agent),
-        }
+        trace_name = self.agent or f"litellm:{self.model}"
+        trace_md = _generation_metadata(self.prompt_name, self.prompt_version, self.agent)
 
         from finance_agent.harness.ark_tool_call_text import ArkToolCallTextFilter
 
-        # 方舟 GLM 偶发把工具调用以 <tool_call>…</tool_call> 文本格式输出在
-        # content（而非结构化 tool_calls）：不识别则 XML 直接漏进正文、意图中的
-        # 调用不执行（601700 复盘，incidents 018/020 家族）。过滤器有界保持，
-        # 正常正文下发延迟不超过一个标签前缀长度。
-        _ark_tool_text = ArkToolCallTextFilter()
-        finished_yielded = False
-        _gen = complete_stream_async(
-            messages,
-            purpose="react",
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            llm_config=llm_config,
-            trace=trace,
-            max_retries=self.max_retries,
-            retry_delay=self.retry_delay,
-            # 输出预算保真：harness 为 legacy 生产 ReAct 路径，输出预算固定 16384
-            # （incident-016 类：reasoning 与正文共享配额，8192 会截断 deep 输出）。
-            # 请求级配置解析时 resolver 会强制 openai-compatible preset（max_output=8192），
-            # 此处显式下发 16384 以精确复刻旧 _build_kwargs 合同，不改 resolver 能力选择。
-            max_tokens=16384,
-        )
-        try:
-            async for ev in _gen:
-                if ev.kind == "reasoning":
-                    yield LLMResponse(reasoning_delta=ev.reasoning)
-                elif ev.kind == "text":
-                    _piece = _ark_tool_text.feed(ev.text)
-                    if _piece:
-                        yield LLMResponse(text_delta=_piece)
-                elif ev.kind == "tool_call":
-                    calls: list[ToolCallRequest] = []
-                    for i, tc in enumerate((ev.tool_call or {}).get("calls", [])):
-                        raw_args = tc.get("function", {}).get("arguments", "")
-                        try:
-                            args = json.loads(raw_args) if raw_args else {}
-                        except (json.JSONDecodeError, TypeError):
-                            logger.warning(
-                                "tool_call arguments 非法 JSON，降级空 dict: %s", raw_args
+        attempts: list[FallbackAttempt] | None = None
+        attempted: list[str] = []
+        pos = 0
+        while True:
+            if attempts:
+                att = attempts[pos]
+                cur_config, cur_preset = att.llm_config, att.preset
+                fallback_from: str | None = attempted[-1]
+                fallback_path: list[str] | None = [*attempted, att.profile]
+            else:
+                # 首次尝试沿用既有语义：请求级（或 env/preset 解析的）配置原样透传
+                cur_config, cur_preset = llm_config, None
+                fallback_from, fallback_path = None, None
+            _md = dict(trace_md)
+            if fallback_from:
+                _md["fallback_from"] = fallback_from
+            if fallback_path:
+                _md["fallback_path"] = list(fallback_path)
+            trace = {"name": trace_name, "metadata": _md}
+
+            # 方舟 GLM 偶发把工具调用以 <tool_call>…</tool_call> 文本格式输出在
+            # content（而非结构化 tool_calls）：不识别则 XML 直接漏进正文、意图中的
+            # 调用不执行（601700 复盘，incidents 018/020 家族）。过滤器有界保持，
+            # 正常正文下发延迟不超过一个标签前缀长度。每次尝试独立实例（切换
+            # profile 后过滤器状态不得跨尝试携带）。
+            _ark_tool_text = ArkToolCallTextFilter()
+            finished_yielded = False
+            _forwarded = False
+            _gen = complete_stream_async(
+                messages,
+                purpose="react",
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                llm_config=cur_config,
+                preset=cur_preset,
+                trace=trace,
+                max_retries=self.max_retries,
+                retry_delay=self.retry_delay,
+                # 输出预算保真：harness 为 legacy 生产 ReAct 路径，输出预算固定 16384
+                # （incident-016 类：reasoning 与正文共享配额，8192 会截断 deep 输出）。
+                # 请求级配置解析时 resolver 会强制 openai-compatible preset（max_output=8192），
+                # 此处显式下发 16384 以精确复刻旧 _build_kwargs 合同，不改 resolver 能力选择。
+                max_tokens=16384,
+            )
+            try:
+                async for ev in _gen:
+                    # 内层 attempt 已产出事件：此后触发错误不得切链（流式中途
+                    # 重启会重复已下发内容），交由原路径上抛
+                    _forwarded = True
+                    if ev.kind == "reasoning":
+                        yield LLMResponse(reasoning_delta=ev.reasoning)
+                    elif ev.kind == "text":
+                        _piece = _ark_tool_text.feed(ev.text)
+                        if _piece:
+                            yield LLMResponse(text_delta=_piece)
+                    elif ev.kind == "tool_call":
+                        calls: list[ToolCallRequest] = []
+                        for i, tc in enumerate((ev.tool_call or {}).get("calls", [])):
+                            raw_args = tc.get("function", {}).get("arguments", "")
+                            try:
+                                args = json.loads(raw_args) if raw_args else {}
+                            except (json.JSONDecodeError, TypeError):
+                                logger.warning(
+                                    "tool_call arguments 非法 JSON，降级空 dict: %s", raw_args
+                                )
+                                args = {}
+                            calls.append(
+                                ToolCallRequest(
+                                    id=tc.get("id") or f"call_{i}",
+                                    name=tc.get("function", {}).get("name", ""),
+                                    arguments=args,
+                                )
                             )
-                            args = {}
-                        calls.append(
-                            ToolCallRequest(
-                                id=tc.get("id") or f"call_{i}",
-                                name=tc.get("function", {}).get("name", ""),
-                                arguments=args,
-                            )
-                        )
-                    # usage 随本次响应下发：循环消费到 is_finished 即 break，
-                    # 跟在 tool_call 之后的 finished 事件读不到（预算校准的真值入口）
-                    yield LLMResponse(tool_calls=calls, is_finished=True, usage=ev.usage)
-                    finished_yielded = True
-                elif ev.kind == "finished":
-                    _tail = _ark_tool_text.finish()
-                    if _tail:
-                        yield LLMResponse(text_delta=_tail)
-                    if _ark_tool_text.calls:
-                        # 文本格式工具调用：转为结构化调用，由 Agent 主循环执行
-                        ark_calls = [
-                            ToolCallRequest(
-                                id=f"ark_text_{i}",
-                                name=c["name"],
-                                arguments=dict(c["arguments"]),
-                            )
-                            for i, c in enumerate(_ark_tool_text.calls)
-                        ]
-                        yield LLMResponse(tool_calls=ark_calls, is_finished=True, usage=ev.usage)
+                        # usage 随本次响应下发：循环消费到 is_finished 即 break，
+                        # 跟在 tool_call 之后的 finished 事件读不到（预算校准的真值入口）
+                        yield LLMResponse(tool_calls=calls, is_finished=True, usage=ev.usage)
                         finished_yielded = True
-                    if not finished_yielded:
-                        yield LLMResponse(is_finished=True, usage=ev.usage)
-                    return
-        finally:
-            # finished 后生成器仍悬挂在 yield 点：显式 aclose 使 gateway 的观测收尾
-            # （Langfuse CM __exit__）在本任务上下文执行。留给 GC 跨上下文 aclose
-            # 会触发 OTel "token created in a different Context" detach 告警。
-            with contextlib.suppress(Exception):
-                await _gen.aclose()
+                    elif ev.kind == "finished":
+                        _tail = _ark_tool_text.finish()
+                        if _tail:
+                            yield LLMResponse(text_delta=_tail)
+                        if _ark_tool_text.calls:
+                            # 文本格式工具调用：转为结构化调用，由 Agent 主循环执行
+                            ark_calls = [
+                                ToolCallRequest(
+                                    id=f"ark_text_{i}",
+                                    name=c["name"],
+                                    arguments=dict(c["arguments"]),
+                                )
+                                for i, c in enumerate(_ark_tool_text.calls)
+                            ]
+                            yield LLMResponse(
+                                tool_calls=ark_calls, is_finished=True, usage=ev.usage
+                            )
+                            finished_yielded = True
+                        if not finished_yielded:
+                            yield LLMResponse(is_finished=True, usage=ev.usage)
+                        return
+                # 正常走完事件流（finished → return 已离开），attempt 成功
+                return
+            except FALLBACK_TRIGGER_ERRORS as exc:
+                if _forwarded:
+                    raise
+                if attempts:
+                    attempted.append(attempts[pos].profile)
+                    pos += 1
+                    if pos < len(attempts):
+                        continue
+                    raise
+                # 首次失败：此刻才解析链——解析失败（配置半套等）不得盖住原错误
+                try:
+                    attempts = fallback_attempt_plan(
+                        purpose="react", llm_config=llm_config
+                    ).attempts
+                except Exception:
+                    raise exc from None
+                attempted.append(attempts[0].profile)
+                if len(attempts) == 1:
+                    raise
+                pos = 1
+            finally:
+                # finished 后生成器仍悬挂在 yield 点：显式 aclose 使 gateway 的观测收尾
+                # （Langfuse CM __exit__）在本任务上下文执行。留给 GC 跨上下文 aclose
+                # 会触发 OTel "token created in a different Context" detach 告警。
+                with contextlib.suppress(Exception):
+                    await _gen.aclose()
 
     def __repr__(self) -> str:
         return f"LiteLLMClient(model={self.model})"
