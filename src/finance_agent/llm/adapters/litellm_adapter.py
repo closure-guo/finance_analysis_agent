@@ -494,10 +494,14 @@ _SOFT_DROP_WHITELIST = {"temperature", "top_p", "frequency_penalty", "presence_p
 
 
 def _drop_unsupported(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """白名单内且 capability 明确不支持的非关键参数 → 剔除 + warning。
+    """白名单内且端点明确不支持的非关键参数 → 剔除 + warning。
 
-    YAGNI：当前唯一 capability 信号是 ``reasoning_forced``（方舟 GLM 类
-    thinking 强制端点拒收 temperature）→ 仅据此剔除 temperature；
+    触发信号（任一命中即认为端点拒收 temperature）：
+    - capability 启发：``capability_for_model`` 按模型名映射 registry preset
+      （方舟 GLM 类 thinking 强制端点）；存量调用方只有 model 字符串时的兜底。
+    - 请求级 thinking：kwargs 自带 ``extra_body.thinking.type=enabled``——
+      自定义模型名命中不了名字启发，但 thinking 端点同样拒收 temperature，
+      按请求自身信号剔除（#77：请求级 thinking 绕过抑制缺口）。
     top_p/frequency_penalty/presence_penalty 暂无 capability 信号，透传。
 
     剔除事实 SHALL 落 trace（spec llm-provider-gateway「非关键参数白名单」：
@@ -508,12 +512,27 @@ def _drop_unsupported(kwargs: dict[str, Any]) -> dict[str, Any]:
     model = kwargs.get("model")
     if not isinstance(model, str):
         return kwargs
-    if "temperature" in kwargs and capability_for_model(model).reasoning_forced:
+    extra_body = kwargs.get("extra_body")
+    thinking_type = None
+    if isinstance(extra_body, dict):
+        thinking = extra_body.get("thinking")
+        if isinstance(thinking, dict):
+            thinking_type = thinking.get("type")
+    request_thinking_forced = thinking_type == "enabled"
+    if "temperature" in kwargs and (
+        capability_for_model(model).reasoning_forced or request_thinking_forced
+    ):
         logger.warning("参数 temperature 被 adapter 白名单剔除(端点不支持)：model=%s", model)
         from finance_agent.langfuse_tracing import update_current_span
 
         update_current_span(
-            metadata={"degradation": "drop_params", "field": "temperature", "model": model},
+            metadata={
+                "degradation": "drop_params",
+                "field": "temperature",
+                "model": model,
+                # 触发来源可审计：名字启发 vs 请求级 thinking
+                "trigger": "request_thinking" if request_thinking_forced else "capability",
+            },
             level="WARNING",
         )
         kwargs.pop("temperature")
