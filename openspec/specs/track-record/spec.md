@@ -207,10 +207,10 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 
 ### Requirement: 战绩页面（总览 + 观点日志）
 
-系统 SHALL 在前端提供战绩页面：总览区（胜率、平均超额、样本量、as_of）+ 观点日志列表。页面 SHALL 固定展示风险提示「历史业绩不代表未来表现」，不可关闭；观点日志默认视图 SHALL 包含 loss 记录（不可隐藏）；进行中观点 SHALL 展示当前浮动收益并标注「未结算」；状态标签以颜色区分（命中=绿、未中=红、中性=灰、进行中=蓝、不可判定=灰斜杠、**回避=灰**——neutral 观点的回避终态 `status="avoidance"`，标签文本「回避」）。
+系统 SHALL 在前端提供战绩页面：总览区（胜率、平均超额、样本量、as_of、**回避正确率（含样本数）、当前判定口径（caliber_horizon）、存量旧口径计数（legacy_settled）**）+ 观点日志列表。回避正确率 SHALL 与胜率同门槛（settled < 10 不展示，展示「样本积累中」而非 0 值）；口径与存量计数 SHALL 常驻展示（二者为口径披露，不受样本门槛限制）。页面 SHALL 固定展示风险提示「历史业绩不代表未来表现」，不可关闭；观点日志默认视图 SHALL 包含 loss 记录（不可隐藏）；进行中观点 SHALL 展示当前浮动收益并标注「未结算」；状态标签以颜色区分（命中=绿、未中=红、中性=灰、进行中=蓝、不可判定=灰斜杠、**回避=灰**——neutral 观点的回避终态 `status="avoidance"`，标签文本「回避」）。
 
 观点日志表格 SHALL 新增「建立日期」列，展示观点创建日期，并作为可排序列之一。表格列头 SHALL 支持点击切换升/降序，可排序列 SHALL 包含建立日期/标的/方向/状态/入场价/结算价/区间收益/基准超额，当前排序 SHALL 有可见指示。表格上方 SHALL 提供过滤控件：关键字输入框（匹配代码/名称/方向/状态）与起止日期选择（按创建日，到日，含两端）；提交过滤后 SHALL 重新向后端拉取，并在服务端分页。表格 SHALL 提供分页控件以浏览过滤/排序后的完整结果。
-(Previously: 状态标签映射未含终态 `avoidance`——已结算 neutral 行会渲染空白标签。)
+(Previously: 总览区未渲染回避正确率、当前判定口径与存量旧口径计数——后端 overview 已返回这三个字段但前端未读，口径披露在界面上不可见。)
 
 #### Scenario: 页面渲染总览与观点日志
 
@@ -223,7 +223,7 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 
 - **WHEN** 用户打开观点日志默认视图
 - **THEN** SHALL 同时展示 win 与 loss 记录
-- **AND** SHALL 不存在「只看好单」类预设筛选
+- **AND** SHALL NOT 存在「只看好单」类预设筛选
 
 #### Scenario: 回避终态标签渲染
 
@@ -270,4 +270,17 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 
 - **WHEN** 行情存在缺口日
 - **THEN** 图表 SHALL 断点处理，不插值伪造
+
+#### Scenario: 回避正确率披露
+
+- **GIVEN** 回避判定已结算样本 ≥ 10
+- **WHEN** 渲染总览
+- **THEN** SHALL 展示回避正确率与其样本数（win/(win+loss) 口径）
+- **AND** 样本 < 10 时 SHALL 展示「样本积累中」而非 0 值或空白
+
+#### Scenario: 口径与存量计数披露
+
+- **WHEN** 渲染总览
+- **THEN** SHALL 展示当前判定口径（如「T+20 交易日」）与存量旧口径计数（如「另有 n 条 252 日口径历史未计入」）
+- **AND** 存量计数为 0 时 SHALL 明示「无存量」而非隐藏该披露
 

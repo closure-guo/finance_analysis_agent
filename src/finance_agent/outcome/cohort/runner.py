@@ -96,17 +96,20 @@ def run_cohort_batch(
     池路径解析：``universe_path`` 参数优先，否则 ``COHORT_UNIVERSE_PATH`` 环境变量，
     最后回退 ``DEFAULT_UNIVERSE_PATH``（``data/cohort/universe-v1.json``）。
 
-    ``enabled`` 参数优先，否则 ``COHORT_ENABLED == "1"``（默认关）；关闭时**零调用**
-    直接返回。``max_tokens`` 参数优先，否则 ``COHORT_MAX_TOKENS_PER_RUN``
+    ``enabled`` 参数优先；否则读运维配置（``ops_config`` 表值 → ``COHORT_ENABLED``
+    env → 默认关，见 ``ops.model.get_cohort_settings``）；关闭时**零调用**直接返回。
+    ``max_tokens`` 参数优先，否则 ``COHORT_MAX_TOKENS_PER_RUN``
     （默认 2_000_000，非数值时 WARN 回退默认）；累计 ``spent`` 达限或未知 usage
     达 ``_UNKNOWN_USAGE_LIMIT`` 后剩余标的记 ``skipped``（``budget`` /
     ``budget_unknown``），**已启动的分析正常完成**。``graph_runner`` 为注入缝
     （默认 ``api._run_graph_streaming``），供测试注入 fake 生成器。
     """
     if enabled is None:
-        enabled = os.getenv("COHORT_ENABLED") == "1"
+        from finance_agent.outcome.ops.model import get_cohort_settings
+
+        enabled = get_cohort_settings(db_path)["enabled"]
     if not enabled:
-        logger.info("cohort 跑批未启用（COHORT_ENABLED != 1）")
+        logger.info("cohort 跑批未启用(cohort_enabled / COHORT_ENABLED 未开)")
         return _empty_result()
 
     universe = load_universe(

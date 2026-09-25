@@ -70,6 +70,14 @@ from finance_agent.timeline_builder import apply_chat_event  # noqa: E402
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """启动时清扫悬挂 running 会话：后端重启后 PipelineRunner 内存态已丢失，置 failed 供前端恢复展示。"""
     PipelineRunner.mark_swept_failed()
+    # cohort 运维配置引导(delta add-eval-ops-console):env → ops_config 表的一次性种子,
+    # 已有表值不覆盖(界面改过的值重启保持)。旁路铁律:引导失败只记 ERROR,不阻断启动。
+    from finance_agent.outcome.ops.model import bootstrap_cohort_from_env
+
+    try:
+        bootstrap_cohort_from_env()
+    except Exception:
+        _logger.exception("cohort 运维配置引导失败(忽略,回退 env/默认)")
     # 决策结算日批 scheduler(旁路;TESTING/DECISION_SETTLE_ENABLED=0 返回 None)
     # 旁路铁律:scheduler 任何失败不得影响 API 启动,记 ERROR 降级继续
     from finance_agent.outcome.scheduler import start_scheduler, stop_scheduler
@@ -2457,6 +2465,11 @@ async def data_source_status() -> dict:
 from finance_agent.agui.endpoint import router as agui_router  # noqa: E402
 
 app.include_router(agui_router)
+
+# ── 评估运维控制台端点族（delta add-eval-ops-console：/api/v1/ops/*）──
+from finance_agent.ops_api import router as ops_router  # noqa: E402
+
+app.include_router(ops_router)
 
 
 if __name__ == "__main__":

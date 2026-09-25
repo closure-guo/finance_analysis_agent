@@ -22,6 +22,7 @@ from finance_agent.outcome.cohort.model import (
     list_cohort_runs,
 )
 from finance_agent.outcome.cohort.runner import FAILURE_CODES, run_cohort_batch
+from finance_agent.outcome.ops.model import COHORT_ENABLED_KEY, init_ops, set_config
 
 _RUNNER_LOGGER = "finance_agent.outcome.cohort.runner"
 
@@ -106,7 +107,7 @@ def test_disabled_flag_returns_zero_calls(tmp_path, monkeypatch):
     db = tmp_path / "c.db"
     universe = _universe_file(tmp_path, ["600519", "000001"])
     runner = _make_runner()
-    monkeypatch.setenv("COHORT_ENABLED", "1")  # 参数优先于 env
+    monkeypatch.setenv("COHORT_ENABLED", "1")  # 显式 enabled= 参数优先于配置表/env
 
     result = run_cohort_batch(
         trade_date=_DAY, universe_path=universe, db_path=db, enabled=False, graph_runner=runner
@@ -672,3 +673,39 @@ def test_all_failure_reasons_are_stable_codes(tmp_path, monkeypatch):
 
     reasons = {r["failure_reason"] for r in _rows(db) if r["failure_reason"]}
     assert reasons <= set(FAILURE_CODES), f"出现非稳定码: {reasons - set(FAILURE_CODES)}"
+
+
+# ── Task 2（delta add-eval-ops-console）：开关真源 = ops_config 表（表值优先） ──
+
+
+def test_config_table_disabled_beats_env_enabled(tmp_path, monkeypatch):
+    """表说关、env 说开 → 关（表值是运维在界面改过的真源），且零调用。"""
+    db = tmp_path / "c.db"
+    init_ops(db)
+    set_config(COHORT_ENABLED_KEY, "0", db)
+    monkeypatch.setenv("COHORT_ENABLED", "1")  # env 说开
+    universe = _universe_file(tmp_path, ["600519"])
+    runner = _make_runner()
+
+    result = run_cohort_batch(universe_path=universe, db_path=db, graph_runner=runner)
+
+    assert result["enabled"] is False
+    assert runner.calls == [], "表值关闸 → 零 LLM 调用（不因 env 说开而跑）"
+
+
+def test_config_table_enabled_beats_env_unset(tmp_path, monkeypatch):
+    """表说开、env 未设 → 开（界面开启后重启仍生效，不依赖 env）。"""
+    monkeypatch.delenv("COHORT_ENABLED", raising=False)
+    monkeypatch.setattr(runner_mod, "_live_trace_id", lambda: None)
+    db = tmp_path / "c.db"
+    init_ops(db)
+    set_config(COHORT_ENABLED_KEY, "1", db)
+    universe = _universe_file(tmp_path, ["600519"])
+    runner = _make_runner()
+
+    result = run_cohort_batch(
+        trade_date=_DAY, universe_path=universe, db_path=db, graph_runner=runner
+    )
+
+    assert result["enabled"] is True
+    assert runner.calls == ["600519"]
