@@ -1,12 +1,39 @@
-"""scheduler 挂载:TESTING/env 禁用、cron 注册、启停、job 异常不传播、失败重试。"""
+"""scheduler 挂载:TESTING/env 禁用、cron 注册、启停、job 异常不传播、失败重试。
+
+Task 2（delta add-eval-ops-console）新增:定时批经 ``ops.jobs.run_job`` 统一入口
+落运行历史（每次尝试一行 + 最终行记 retries）、cohort 时刻配置化、运行时重排。
+"""
 
 import logging
 import os
 from unittest.mock import MagicMock, patch
 
-from finance_agent.outcome.scheduler import start_scheduler, stop_scheduler
+import pytest
+
+from finance_agent.outcome.ops.jobs import JobAlreadyRunning
+from finance_agent.outcome.ops.model import (
+    COHORT_ENABLED_KEY,
+    COHORT_HOUR_KEY,
+    COHORT_MINUTE_KEY,
+    init_ops,
+    last_job_run,
+    list_job_runs,
+    set_config,
+)
+from finance_agent.outcome.scheduler import (
+    get_scheduler,
+    reschedule_cohort,
+    start_scheduler,
+    stop_scheduler,
+)
 
 _SCHED_LOGGER = "finance_agent.outcome.scheduler"
+
+
+@pytest.fixture(autouse=True)
+def _reset_scheduler_handle(monkeypatch):
+    """Task 2:start_scheduler 会登记进程内句柄——逐用例从 None 起步,防用例间串味。"""
+    monkeypatch.setattr("finance_agent.outcome.scheduler._scheduler", None)
 
 
 def _job_call(sched, job_id):
@@ -248,7 +275,13 @@ class TestCohortGlobalGating:
 
 
 class TestCohortJobIsolation:
-    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    # Task 2 起 cohort 开关由 ``run_job`` 在调用 runner 前判（ops_config 表 → env）：
+    # 关闭时 job 层短路记 ``skipped-disabled``、不调 runner。故本组用例显式开闸
+    # （COHORT_ENABLED=1）以覆盖「已开闸后 runner 异常/重试」路径；关闸路径见
+    # TestOpsWiring::test_scheduled_cohort_disabled_records_skip_without_calling_runner。
+    _GATE_ON = {"TESTING": "", "DECISION_SETTLE_ENABLED": "1", "COHORT_ENABLED": "1"}
+
+    @patch.dict(os.environ, _GATE_ON)
     @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
     @patch("finance_agent.outcome.scheduler.time.sleep")
     def test_cohort_job_swallows_exceptions(self, mock_sleep, mock_sched_cls):
@@ -263,7 +296,7 @@ class TestCohortJobIsolation:
         ):
             job_fn()  # 不抛异常
 
-    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch.dict(os.environ, _GATE_ON)
     @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
     @patch("finance_agent.outcome.scheduler.time.sleep")
     def test_cohort_job_retries_then_gives_up(self, mock_sleep, mock_sched_cls):
@@ -279,10 +312,11 @@ class TestCohortJobIsolation:
         assert mock_batch.call_count == 3
         assert mock_sleep.call_count == 2
 
-    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch.dict(os.environ, _GATE_ON)
     @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
     def test_cohort_job_calls_runner_without_args(self, mock_sched_cls):
-        """job 只调用无参 run_cohort_batch——门控（COHORT_ENABLED）由 runner 自担。"""
+        """job 只调用无参 run_cohort_batch——开关判定在 job 层（run_job）已过闸，
+        runner 内仍保留同源门控（双保险，任何调用方都不得绕过）。"""
         sched = MagicMock()
         mock_sched_cls.return_value = sched
         start_scheduler()
@@ -293,3 +327,182 @@ class TestCohortJobIsolation:
         ) as mock_batch:
             job_fn()
         mock_batch.assert_called_once_with()
+
+
+class TestOpsWiring:
+    """Task 2（delta add-eval-ops-console）：定时批经统一入口落运行历史 + 配置化 cohort 时刻。"""
+
+    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    @patch("finance_agent.outcome.scheduler.time.sleep")
+    def test_settle_job_success_lands_ok_row(
+        self, mock_sleep, mock_sched_cls, tmp_path, monkeypatch
+    ):
+        db = tmp_path / "s.db"
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(db))
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        start_scheduler()
+        job_fn = _job_fn(sched, "decision_settle_daily")
+        with patch(
+            "finance_agent.outcome.scheduler.settle_open_predictions",
+            return_value={"settled": 2},
+        ) as mock_settle:
+            job_fn()
+        mock_settle.assert_called_once_with()
+        rows = list_job_runs("decision_settle_daily", db_path=db)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "ok" and rows[0]["summary"] == {"settled": 2}
+        assert rows[0]["kind"] == "scheduled" and rows[0]["source"] == "scheduled"
+        assert mock_sleep.call_count == 0, "成功不得退避"
+
+    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    @patch("finance_agent.outcome.scheduler.time.sleep")
+    def test_scheduled_failure_lands_in_history_with_retries(
+        self, mock_sleep, mock_sched_cls, tmp_path, monkeypatch
+    ):
+        """3 次尝试各一行 failed，最终行记 retries；旁路铁律：不上抛。"""
+        db = tmp_path / "s.db"
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(db))
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        start_scheduler()
+        job_fn = _job_fn(sched, "decision_settle_daily")
+        with patch(
+            "finance_agent.outcome.scheduler.settle_open_predictions",
+            side_effect=RuntimeError("boom"),
+        ) as mock_settle:
+            job_fn()  # 不抛异常
+        assert mock_settle.call_count == 3
+        assert mock_sleep.call_count == 2  # 5s / 20s
+        rows = list_job_runs("decision_settle_daily", db_path=db)
+        assert [r["status"] for r in rows] == ["failed", "failed", "failed"]
+        latest = rows[0]
+        assert latest["summary"] == {"attempts": 3, "retries": 2}
+        assert "boom" in latest["error"]
+
+    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    @patch("finance_agent.outcome.scheduler.time.sleep")
+    def test_job_already_running_skips_round_without_retry(
+        self, mock_sleep, mock_sched_cls, tmp_path, monkeypatch
+    ):
+        """手动补跑占用单飞锁 → 定时轮放弃（不是失败，不重试、不抛）。"""
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(tmp_path / "s.db"))
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        start_scheduler()
+        job_fn = _job_fn(sched, "decision_settle_daily")
+        with patch(
+            "finance_agent.outcome.scheduler.run_job",
+            side_effect=JobAlreadyRunning("decision_settle_daily 已在运行"),
+        ) as mock_run:
+            job_fn()  # 不抛异常
+        assert mock_run.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    @patch("finance_agent.outcome.scheduler.time.sleep")
+    def test_job_entry_exception_is_swallowed_and_retried(
+        self, mock_sleep, mock_sched_cls, tmp_path, monkeypatch
+    ):
+        """入口自身异常（如落库故障）也按失败尝试重试且不上抛（旁路铁律）。"""
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(tmp_path / "s.db"))
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        start_scheduler()
+        job_fn = _job_fn(sched, "decision_settle_daily")
+        with patch(
+            "finance_agent.outcome.scheduler.run_job",
+            side_effect=RuntimeError("history db locked"),
+        ) as mock_run:
+            job_fn()  # 不抛异常
+        assert mock_run.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch.dict(os.environ, {"TESTING": "", "DECISION_SETTLE_ENABLED": "1"})
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    def test_scheduled_cohort_disabled_records_skip_without_calling_runner(
+        self, mock_sched_cls, tmp_path, monkeypatch
+    ):
+        """表说关（env 说开）→ 定时触发记 skipped-disabled 且零调用 runner。"""
+        db = tmp_path / "s.db"
+        init_ops(db)
+        set_config(COHORT_ENABLED_KEY, "0", db)
+        monkeypatch.setenv("COHORT_ENABLED", "1")
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(db))
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        start_scheduler()
+        job_fn = _job_fn(sched, "cohort_batch")
+        with patch("finance_agent.outcome.scheduler.run_cohort_batch") as mock_batch:
+            job_fn()
+        mock_batch.assert_not_called()
+        row = last_job_run("cohort_batch", db)
+        assert row["status"] == "skipped-disabled"
+        assert row["summary"] == {"reason": "switch_off"}
+
+    @patch.dict(
+        os.environ,
+        {
+            "TESTING": "",
+            "DECISION_SETTLE_ENABLED": "1",
+            "COHORT_HOUR": "7",
+            "COHORT_MINUTE": "30",
+        },
+    )
+    @patch("finance_agent.outcome.scheduler.BackgroundScheduler")
+    def test_cohort_hour_minute_from_config_table_beats_env(
+        self, mock_sched_cls, tmp_path, monkeypatch
+    ):
+        """Task 2：cohort 时刻真源是 ops_config（表值 19:45 压过 env 7:30）。"""
+        db = tmp_path / "s.db"
+        init_ops(db)
+        set_config(COHORT_HOUR_KEY, "19", db)
+        set_config(COHORT_MINUTE_KEY, "45", db)
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(db))
+        sched = MagicMock()
+        mock_sched_cls.return_value = sched
+        start_scheduler()
+        assert _job_field(sched, "cohort_batch", "hour") == ["19"]
+        assert _job_field(sched, "cohort_batch", "minute") == ["45"]
+
+
+class TestRescheduleCohort:
+    @patch.dict(os.environ, {"TESTING": "1"})
+    def test_start_returns_none_and_handle_stays_empty(self):
+        assert start_scheduler() is None
+        assert get_scheduler() is None
+
+    @patch.dict(os.environ, {"TESTING": "1"})
+    def test_returns_false_when_no_scheduler(self, monkeypatch):
+        """TESTING=1（无调度器）→ False 而非抛错（状态接口不得 500）。"""
+        monkeypatch.setenv("COHORT_HOUR", "19")
+        assert reschedule_cohort(19, 30) is False
+
+    def test_rejects_out_of_range(self, monkeypatch):
+        monkeypatch.setattr(
+            "finance_agent.outcome.scheduler._scheduler", MagicMock(), raising=False
+        )
+        assert reschedule_cohort(24, 0) is False
+        assert reschedule_cohort(0, 60) is False
+
+    def test_moves_next_fire_and_clears_on_stop(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TESTING", raising=False)
+        monkeypatch.delenv("DECISION_SETTLE_ENABLED", raising=False)
+        monkeypatch.setenv("SESSIONS_DB_PATH", str(tmp_path / "s.db"))
+        sched = start_scheduler()
+        assert sched is not None
+        try:
+            assert get_scheduler() is sched
+            assert reschedule_cohort(19, 30) is True
+            job = next(j for j in sched.get_jobs() if j.id == "cohort_batch")
+            field = job.trigger.fields[job.trigger.FIELD_NAMES.index("hour")]
+            assert str(field) == "19"
+            field = job.trigger.fields[job.trigger.FIELD_NAMES.index("minute")]
+            assert str(field) == "30"
+        finally:
+            stop_scheduler(sched)
+        assert get_scheduler() is None
