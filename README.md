@@ -21,7 +21,7 @@
 | L1 前端  | React 18 + Vite | 自然语言输入 + SSE 流式渲染 + 报告展示 + 文件下载 + 会话管理      |
 | L2 Agent | LangGraph + ReAct Harness | 5 层架构 + 多 Agent 辩论 + Send 并行派发 + 三模式编排     |
 | L3 数据  | pandas + SQLite | AKShare 拉取 + 指标计算 + K 线/宏观/新闻 + 报表持久化 + 行情缓存  |
-| L4 LLM   | LLM Provider Gateway | ProfileResolver 唯一解析入口 + 能力探测门禁 + LiteLLM 收口适配（默认 opencode zen 网关 deepseek-v4-flash） |
+| L4 LLM   | LLM Provider Gateway | ProfileResolver 唯一解析入口 + 能力探测门禁 + LiteLLM 收口适配 + fallback 链执行（typed error 按链自动切换 profile，每跳 trace 可审计；默认 opencode zen 网关 deepseek-v4-flash） |
 | 可观测性 | Langfuse        | LLM 调用链路追踪 + Prompt 版本管理 + 引用校验评分                 |
 
 > L2 Agent 5 层：4 分析师并行 -> Bull/Bear 辩论 -> Trader -> Risk Management 辩论 -> Fund Manager（详见 [ADR-0011](docs/adr/0011-five-layer-architecture.md)）
@@ -52,7 +52,7 @@
 
 ## 质量保障
 
-- 后端 229 个 pytest 测试文件（2,319 个用例，含 `tests/llm_contracts/` provider 合同套件）、前端 74 个 Vitest 测试文件（581 个用例）、28 个 Playwright E2E spec / 64 个用例（stub 套件为 CI 门禁，`@live` 真模型套件 nightly 防漂移）
+- 后端 266 个 pytest 测试文件（3,183 个用例，含 `tests/llm_contracts/` provider 合同套件）、前端 74 个 Vitest 测试文件（574 个用例）、29 个 Playwright E2E spec / 64 个用例（stub 套件为 CI 门禁，`@live` 标记用例不进门禁、真模型验证显式运行，nightly 防漂移）
 - `evals/` 评估框架（详见下节「评估体系」）：judge 评分与人工校准 / 版本对比 / 消融实验 / claim 验证基准 / golden set / 决策回放显著性检验
 
 ## 评估体系
