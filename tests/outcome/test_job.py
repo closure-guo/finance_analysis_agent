@@ -68,6 +68,25 @@ class TestSettleJob:
         for c in langfuse.create_score.call_args_list:
             assert c.kwargs["trace_id"] == "trace-1"
 
+    def test_settlement_fetches_hfq(self, tmp_path):
+        """旧结算链路取数显式后复权（hfq）：与 track-record 判定口径统一。
+
+        delta add-backtest-leakage-controls：个股结算取数传 hfq；基准（指数）无复权概念不传。
+        """
+        db = tmp_path / "t.db"
+        store.init_decision_log(db)
+        store.insert_decision(_open_decision(), db)
+        client = MagicMock()
+        client.fetch_kline.return_value = _kline_hit_target()
+        client.fetch_index_kline.return_value = _bench()
+
+        settle_open_decisions(client=client, db_path=db, langfuse=MagicMock())
+
+        _, kwargs = client.fetch_kline.call_args
+        assert kwargs.get("adjust") == "hfq"
+        _, bench_kwargs = client.fetch_index_kline.call_args
+        assert "adjust" not in bench_kwargs
+
     def test_idempotent_no_double_settle(self, tmp_path):
         db = tmp_path / "t.db"
         store.init_decision_log(db)
@@ -226,6 +245,22 @@ class TestReportScores:
             MagicMock(), _open_decision(langfuse_trace_id=None), self._settlement()
         )
         assert count == 0
+
+    def test_hold_watch_actions_skip(self):
+        """hold/watch 无方向语义（delta：旧链路上报同样排除），不上报任何 Score。"""
+        langfuse = MagicMock()
+        assert (
+            report_outcome_scores(langfuse, _open_decision(action="hold"), self._settlement()) == 0
+        )
+        assert (
+            report_outcome_scores(langfuse, _open_decision(action="watch"), self._settlement()) == 0
+        )
+        assert langfuse.create_score.call_count == 0
+
+    def test_missing_action_still_reports(self):
+        """action 缺失不误判为 hold（守卫只认 hold/watch 字面量）。"""
+        langfuse = MagicMock()
+        assert report_outcome_scores(langfuse, _open_decision(action=None), self._settlement()) == 3
 
     def test_excess_none_skips_excess_score(self):
         settlement = self._settlement()

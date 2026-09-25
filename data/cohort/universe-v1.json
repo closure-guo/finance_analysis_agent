@@ -1,0 +1,110 @@
+{
+  "version": "v1",
+  "effective_date": "2026-09-23",
+  "seed": 42,
+  "strata": {
+    "by": "market_cap(quota)+industry(dedup)",
+    "n": 10,
+    "quota": {
+      "large": 4,
+      "mid": 3,
+      "small": 3
+    }
+  },
+  "pool_ref": "universe-v1.pool.json",
+  "pool_hash": "9ec46b765a87",
+  "pool_size": 296,
+  "cut_points": {
+    "low": 782.6733333333333,
+    "high": 1493.0566666666662
+  },
+  "excluded": {
+    "missing_market_cap": 4
+  },
+  "unknown_industry": 9,
+  "sources": {
+    "constituents": [
+      "csindex"
+    ],
+    "industry": [
+      "cninfo",
+      "missing"
+    ],
+    "market_cap": [
+      "baidu",
+      "missing"
+    ]
+  },
+  "constituents": [
+    {
+      "ticker": "002916",
+      "name": "深南电路",
+      "industry": "印制电路板",
+      "market_cap_bucket": "large",
+      "market_cap": 2825.27
+    },
+    {
+      "ticker": "300033",
+      "name": "同花顺",
+      "industry": "软件开发及服务",
+      "market_cap_bucket": "large",
+      "market_cap": 1570.31
+    },
+    {
+      "ticker": "600015",
+      "name": "华夏银行",
+      "industry": "综合性银行",
+      "market_cap_bucket": "mid",
+      "market_cap": 991.5
+    },
+    {
+      "ticker": "600026",
+      "name": "中远海能",
+      "industry": "水上运输",
+      "market_cap_bucket": "mid",
+      "market_cap": 1153.33
+    },
+    {
+      "ticker": "600029",
+      "name": "南方航空",
+      "industry": "航空运输",
+      "market_cap_bucket": "mid",
+      "market_cap": 900.61
+    },
+    {
+      "ticker": "600515",
+      "name": "海南机场",
+      "industry": "多业态零售",
+      "market_cap_bucket": "small",
+      "market_cap": 311.91
+    },
+    {
+      "ticker": "600845",
+      "name": "宝信软件",
+      "industry": "IT服务",
+      "market_cap_bucket": "small",
+      "market_cap": 524.14
+    },
+    {
+      "ticker": "601058",
+      "name": "赛轮轮胎",
+      "industry": "基础化工",
+      "market_cap_bucket": "small",
+      "market_cap": 457.7
+    },
+    {
+      "ticker": "601066",
+      "name": "中信建投",
+      "industry": "证券Ⅲ",
+      "market_cap_bucket": "large",
+      "market_cap": 1836.01
+    },
+    {
+      "ticker": "601818",
+      "name": "光大银行",
+      "industry": "银行",
+      "market_cap_bucket": "large",
+      "market_cap": 1772.57
+    }
+  ]
+}

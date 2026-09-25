@@ -13,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from finance_agent.data.akshare_client import SETTLEMENT_ADJUST
 from finance_agent.outcome import store
 from finance_agent.outcome.settle import (
     BENCHMARK_CODE,
@@ -30,8 +31,11 @@ def report_outcome_scores(langfuse: Any, decision: dict[str, Any], settlement: S
 
     trace 不存在/已过期 → WARN 不阻断(spec「trace 不可查容错」);
     trace_id 为 None 或 langfuse 为 None → 直接跳过;
-    excess 为 None(基准缺失)→ 不上报 excess。
+    excess 为 None(基准缺失)→ 不上报 excess;
+    hold/watch 无方向语义 → 不上报(delta update-decision-settlement-contract)。
     """
+    if str(decision.get("action") or "") in ("hold", "watch"):
+        return 0
     trace_id = decision.get("langfuse_trace_id")
     if not trace_id or langfuse is None:
         return 0
@@ -118,7 +122,7 @@ def settle_open_decisions(
 
     for decision in open_decisions:
         try:
-            kline = client.fetch_kline(decision["ticker"], days=days)
+            kline = client.fetch_kline(decision["ticker"], days=days, adjust=SETTLEMENT_ADJUST)
             decision_date = str(decision["timestamp"])[:10]
             if kline is not None and not kline.empty:
                 kline = _normalize_dates(kline)

@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
+import logging
 import os
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from finance_agent.llm.gateway import FallbackAttempt
+
+logger = logging.getLogger(__name__)
 
 # ── 管线确定性 stub（agent-turn-box-display delta task 5.5）──
 #
@@ -397,6 +404,110 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
     return cfg
 
 
+# ── Δ3 Task 3：usage 收集器（contextvar，默认 noop）——cohort 记账真值来源 ──
+#
+# cohort 记账需要「一次 deep 分析的 token 真值」（spec：非估算）。provider usage
+# 经 gateway._canonical_usage 挂在 CanonicalEvent.usage（键 prompt_tokens/
+# completion_tokens/total_tokens），但本模块的流式消费循环此前只处理
+# reasoning/text/error，usage 被丢弃。runner 用 ``with usage_collector() as acc:``
+# 包裹一次 deep 分析，本上下文内所有 call_llm_streaming 的 finished 事件把
+# provider usage 汇入 acc。
+# 默认（未激活）行为与加收集器之前完全一致：contextvar 默认 None，
+# 消费循环仅多一次 get()。
+
+
+@dataclass
+class UsageAccumulator:
+    """provider usage 累加器（真值，非估算）。
+
+    **并发安全**：实例级 ``threading.Lock``，``add`` 全程持锁。LangGraph 的并行
+    分支（如 4 分析师 fan-out）经 executor 的 ``copy_context`` 把本 contextvar
+    传播到 worker 线程，多个分支会**并发**调用同一实例的 ``add``——无锁时
+    ``calls`` / token 计数会丢失（读-改-写竞态）。
+    """
+
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    # 实例级互斥（并发 fan-out 下保护读-改-写；不参与构造/相等/repr）
+    _lock: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+
+    def add(self, usage: dict | None) -> None:
+        """汇入一次 LLM 调用（对 None / 空 / 缺键 / 畸形值安全，计数项不可解析记 0）。
+
+        usage 为 ``CanonicalEvent.usage``（dict | None）。None、空 dict 或形态
+        违约（非 dict）只计 ``calls``（provider 未返回计数时保持 calls 真值、
+        tokens 记 0，**不估算填充**）；计数项不可解析为整数时该项记 0
+        （``_coerce_int`` 吞 ``TypeError`` / ``ValueError`` / ``OverflowError``，
+        含 ``float('inf')`` 的 ``int()`` 溢出）；``total_tokens`` 缺失/为 0 时按
+        prompt+completion 兜底——与 gateway ``_canonical_usage`` 的
+        ``int(total or (p + c))`` 逐字同语义。
+
+        记账是旁路观测：调用点位于只捕 LLM 错误的 try 内且另有 ``except
+        Exception`` 兜底，任何记账异常都不得中断业务节点。
+        """
+        with self._lock:
+            self.calls += 1
+            if not isinstance(usage, dict) or not usage:
+                return
+            prompt = _coerce_int(usage.get("prompt_tokens"))
+            completion = _coerce_int(usage.get("completion_tokens"))
+            self.prompt_tokens += prompt
+            self.completion_tokens += completion
+            self.total_tokens += _coerce_int(usage.get("total_tokens")) or (prompt + completion)
+
+
+def _coerce_int(value: Any) -> int:
+    """usage 计数 → int；None / 畸形值（非数值字符串、容器、对象、inf）记 0。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+_usage_acc: contextvars.ContextVar[UsageAccumulator | None] = contextvars.ContextVar(
+    "llm_usage_acc", default=None
+)
+
+
+@contextlib.contextmanager
+def usage_collector() -> Iterator[UsageAccumulator]:
+    """激活后，本上下文内所有 LLM 调用的 provider usage 汇入累加器（默认 noop）。
+
+    用法（runner 包裹一次 deep 分析）::
+
+        with usage_collector() as acc:
+            run_pipeline(...)
+        record(acc.calls, acc.total_tokens)
+
+    嵌套时内层独立记账（内层退出后外层恢复收集）；退出上下文后事件不再累加。
+
+    **上下文传播（准确表述）**：累加器经 ``contextvars`` 传递，**凡复制了当前
+    上下文的执行流都能看到它**——包括 LangGraph 的并行分支：其 executor 用
+    ``copy_context`` 把 contextvar 传播进 worker 线程，故 4 分析师 fan-out 内部
+    的 ``call_llm_streaming`` 会**正常汇入**（多线程并发调用 ``add``，由
+    ``UsageAccumulator`` 的实例级锁保证不丢计数）。
+
+    真正失效的是**外部**「不复制上下文」地起线程执行**整个生成器**：
+    ``loop.run_in_executor`` / 裸 ``threading.Thread``（不继承 contextvar）→
+    ``_usage_acc.get()`` 返回 None，收集结果为 0 calls / 0 tokens 且**静默**
+    （不报错）。注意 ``api._stream_from_sync``（``api.py:360``）与
+    ``PipelineRunner.start`` 走的正是这类 executor/后台线程路径——调用方若经
+    这两处执行**整个**分析，须自行在同一上下文内激活收集器，或显式把累加器
+    对象传入线程。**runner 因此直接同线程迭代生成器**（不经 executor）。
+
+    另：``TESTING=1`` 时 ``call_llm_streaming`` 走确定性 stub 分支，不产生任何
+    ``CanonicalEvent``，故收集结果恒为 0（stub 非真实调用，语义正确）。
+    """
+    acc = UsageAccumulator()
+    token = _usage_acc.set(acc)
+    try:
+        yield acc
+    finally:
+        _usage_acc.reset(token)
+
+
 def call_llm_streaming(
     prompt: str,
     system: str = "",
@@ -518,6 +629,17 @@ def call_llm_streaming(
             # 截断续写的翻倍剩余配额）。不能在调用处裸拼 **_call_base, **escalate——
             # 两处同键（max_tokens）会抛 TypeError，须先经 dict display 合并。
             for ev in complete_stream(attempt_messages, **{**_call_base, **escalate}):
+                # Δ3 Task 3：usage 收集（仅激活时非 None；未激活零行为变化）。
+                # 只认 finished 事件（tool_call 与 finished 携带同一份 usage，
+                # 双认会重复计数）；error 路径无 finished → 失败尝试不计 calls。
+                acc = _usage_acc.get()
+                if acc is not None and ev.kind == "finished":
+                    # 记账是旁路观测：调用点位于只捕 OutputTruncatedError/LLMError
+                    # 的 try 内，任何记账异常都不得中断原本正常的节点。
+                    try:
+                        acc.add(getattr(ev, "usage", None))
+                    except Exception:  # noqa: BLE001 -- 观测旁路，失败仅 WARN
+                        logger.warning("usage 记账失败（已忽略，不影响本次分析）", exc_info=True)
                 if ev.kind == "reasoning" and writer:
                     writer({"type": "thinking", "node": node_name, "token": ev.reasoning})
                 elif ev.kind == "text":

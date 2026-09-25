@@ -135,6 +135,8 @@ def resolve_reports_path(file_name: str) -> Path:
 init_db()
 
 # 决策日志表(幂等建表,decision_log 与 sessions 同库;decision-outcome-tracking)
+# cohort 跑批记账表(delta add-forward-paper-trading-cohort;独立于 predictions)
+from finance_agent.outcome.cohort.model import init_cohort_runs  # noqa: E402
 from finance_agent.outcome.store import (  # noqa: E402
     DECISION_STATUSES,
     decision_stats,
@@ -147,7 +149,11 @@ from finance_agent.outcome.track_record.calibration import calibration_table  # 
 from finance_agent.outcome.track_record.ingest import (  # noqa: E402
     persist_prediction_from_accumulated,
 )
+from finance_agent.outcome.track_record.judgment import (  # noqa: E402
+    DEFAULT_HORIZON_DAYS,
+)
 from finance_agent.outcome.track_record.model import (  # noqa: E402
+    avoidance_stats,
     count_predictions,
     get_active_agent,
     get_latest_metrics,
@@ -166,6 +172,7 @@ from finance_agent.outcome.track_record.segments import segment_all  # noqa: E40
 init_decision_log()
 init_predictions()
 init_track_record_tables()
+init_cohort_runs()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
@@ -2094,13 +2101,23 @@ async def track_record_overview(
     最新快照;无快照时 portfolio.available=false)。
     stage-c(P6):统计按版本分段——version 缺省取当前活跃 agent 版本
     (无登记 agent 时统计全部);响应带 version_seq 与可用版本列表。
+    Δ2(update-decision-settlement-contract):头条口径限 T+20(`caliber_horizon`),
+    252 存量经 `legacy_settled` 披露;neutral 回避正确率独立成 `avoidance` 字段
+    (门控与胜率一致:settled<10 不展示),不混入胜率。
     """
     if version is None:
         active = await asyncio.to_thread(get_active_agent)
         version = active["version_seq"] if active else None
-    stats = await asyncio.to_thread(prediction_stats, source_type=source, version_seq=version)
+    stats = await asyncio.to_thread(
+        prediction_stats,
+        source_type=source,
+        version_seq=version,
+        horizon_days=DEFAULT_HORIZON_DAYS,
+    )
     settled = stats["settled"]
     insufficient = settled < 10
+    avoidance = await asyncio.to_thread(avoidance_stats, source, None, version)
+    legacy_all = await asyncio.to_thread(prediction_stats, source, None, version)
     metrics = await asyncio.to_thread(get_latest_metrics)
     portfolio = {
         "available": metrics is not None,
@@ -2122,6 +2139,15 @@ async def track_record_overview(
         "portfolio": portfolio,
         "version_seq": version,
         "versions": await asyncio.to_thread(list_agents),
+        # Δ2 口径字段：回避正确率独立（门控同胜率）+ 头条窗口 + 跨口径存量披露
+        # 门槛 10 = evals/outcome/caliber.MIN_SETTLED_FOR_WINRATE（生产侧不可 import evals，
+        # 故此处按字面同步；口径变更先改 metrics.md §1.9④ 再同步本常量与 evals 侧）。
+        "avoidance": {
+            **avoidance,
+            "avoidance_rate": None if avoidance["settled"] < 10 else avoidance["avoidance_rate"],
+        },
+        "caliber_horizon": DEFAULT_HORIZON_DAYS,
+        "legacy_settled": legacy_all["settled"] - stats["settled"],
     }
 
 
@@ -2152,8 +2178,11 @@ async def track_record_equity_curve() -> dict[str, Any]:
 async def track_record_calibration() -> dict[str, Any]:
     """add-track-record-stage-c:置信度校准（分桶 + Brier Score）。
 
-    桶含中值/样本数/实际命中率；Brier 越低校准越好。neutral 按 0.5 计，
-    unresolvable 与 open 不进桶。
+    桶含中值/样本数/实际命中率；Brier 越低校准越好。命中值按终态取：
+    resolved_win→1.0 / resolved_loss→0.0 / resolved_neutral→neutral_prob（默认 0.5）；
+    neutral 回避终态（status='avoidance'）按 avoidance_status 映射——
+    avoidance_win→1.0 / avoidance_loss→0.0 / avoidance_neutral→neutral_prob；
+    avoidance_status 为空（未判定）与 unresolvable/open 不进桶。
     """
     preds = await asyncio.to_thread(list_predictions, limit=10000)
     result = await asyncio.to_thread(calibration_table, preds)
