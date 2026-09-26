@@ -33,6 +33,9 @@ RUN sed '/^-e \./d' requirements.txt > /tmp/reqs.txt && \
 
 # 拷贝源码
 COPY src ./src
+# evals/ 顶层包：ops_api 模块级依赖（预登记门禁解析 + status_index），
+# 缺失时后端在容器内启动即崩（2026-09-26 部署事故：ModuleNotFoundError: evals）
+COPY evals ./evals
 COPY pyproject.toml ./
 
 # 安装当前项目 + fastapi/uvicorn
