@@ -104,6 +104,9 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
         quote, profitability, solvency, ind, net_profit_growth, latest_year
     )
 
+    # ── 估值快照（PE/PB/市值 + PE_ttm 推导口径标注）──
+    result["valuation_snapshot"] = _build_valuation_snapshot(state)
+
     # ── 季度趋势 ──
     q_income = state.get("quarterly_income")
     if q_income is not None and not q_income.empty:
@@ -236,6 +239,75 @@ def _calc_net_profit_growth(
     if latest_np is not None and prev_np is not None and prev_np != 0:
         return (latest_np - prev_np) / abs(prev_np)
     return None
+
+
+def _derive_pe_ttm(
+    market_cap_yi: float | None,
+    annual_np_yi: float | None,
+    snapshot: dict | None,
+) -> tuple[float | None, str | None]:
+    """TTM PE 推导（纯规则）。市值与净利润均亿元口径。
+
+    TTM = 年报归母净利 − 上年同期累计 + 最新累计；最新期即年报时直取年报值。
+    返回 (pe_ttm, 失败原因)；输入缺失/TTM 非正 → (None, reason)。
+    """
+    if market_cap_yi is None or market_cap_yi <= 0:
+        return None, "market_cap 缺失或非正"
+    if annual_np_yi is None or annual_np_yi <= 0:
+        return None, "年报归母净利润缺失或非正"
+    snap = snapshot or {}
+    if snap.get("期类型") == "年报":
+        ttm = annual_np_yi
+    else:
+        cur = snap.get("归母净利润(累计)")
+        prev = snap.get("上年同期归母净利润")
+        if cur is None or prev is None:
+            return None, "最新报告期快照缺失或同期数据缺失，无法拼合 TTM"
+        ttm = annual_np_yi - prev + cur
+    if ttm is None or ttm <= 0:
+        return None, f"TTM 归母净利润({ttm})非正，PE 无意义"
+    return round(market_cap_yi / ttm, 2), None
+
+
+def _build_valuation_snapshot(state: AnalysisState) -> dict:
+    """估值快照：PE/PB/市值 + PE_ttm 推导与口径标注。"""
+    quote = state.get("stock_quote") or {}
+    inc = state.get("income_statement")
+    annual_np_yi: float | None = None
+    if inc is not None and not inc.empty and "归母净利润" in inc.columns:
+        v = inc.iloc[0].get("归母净利润")
+        if v is not None and not (isinstance(v, float) and pd.isna(v)):
+            annual_np_yi = round(float(v) / 1e8, 2)
+
+    snap = state.get("latest_period_snapshot")
+    pe_ttm, reason = _derive_pe_ttm(
+        quote.get("market_cap"),
+        annual_np_yi,
+        snap if isinstance(snap, dict) else None,
+    )
+    static_pe = quote.get("PE") or quote.get("pe")
+    if static_pe is not None:
+        caliber = "static"
+    elif pe_ttm is not None:
+        caliber = "derived_ttm"
+    else:
+        caliber = None
+
+    missing: list[str] = []
+    if quote.get("market_cap") is None:
+        missing.append("market_cap 缺失")
+    if static_pe is None and pe_ttm is None and reason:
+        missing.append(reason)
+    if quote.get("PB") is None:
+        missing.append("PB 缺失")
+    return {
+        "market_cap": quote.get("market_cap"),
+        "PE": static_pe,
+        "PE_ttm": pe_ttm,
+        "PE_caliber": caliber,
+        "PB": quote.get("PB"),
+        "missing_reasons": missing,
+    }
 
 
 def _try_garp(
