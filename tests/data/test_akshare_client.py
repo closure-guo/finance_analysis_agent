@@ -714,3 +714,33 @@ class TestFetchLatestPeriodSnapshot:
         assert snap["营收同比(%)"] is None
         assert snap["归母净利同比(%)"] is None
         assert "上年同期数据缺失" in " ".join(snap["missing"])
+
+
+class TestFetchIndustryCninfoLatest:
+    """cninfo 行业变更史取现行条目：按变更日期降序取最新非空行业中类。
+
+    bug 实录（Task 12 验收发现）：变更史 iloc[0] 是最旧条目——拓荆科技拿到
+    2021 年「其它专用机械」而非现行「半导体设备」，行业阈值覆盖永不命中。
+    """
+
+    @staticmethod
+    def _history() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "变更日期": ["2021-07-12", "2022-03-29"],
+                "行业中类": ["其它专用机械", "半导体设备"],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_latest_change_date_wins(self, mock_ak, client):
+        mock_ak.stock_industry_change_cninfo.return_value = self._history()
+        assert client._fetch_industry_cninfo("688072") == "半导体设备"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_nan_industry_skipped(self, mock_ak, client):
+        df = pd.DataFrame(
+            {"变更日期": ["2022-03-29", "2022-03-29"], "行业中类": [float("nan"), "半导体设备"]}
+        )
+        mock_ak.stock_industry_change_cninfo.return_value = df
+        assert client._fetch_industry_cninfo("688072") == "半导体设备"

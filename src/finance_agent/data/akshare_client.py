@@ -251,11 +251,19 @@ class AKShareClient:
         return {}
 
     def _fetch_industry_cninfo(self, stock_code: str) -> str | None:
-        """当东方财富接口不可用时，用 cninfo 获取行业名称（行业中类）。"""
+        """当东方财富接口不可用时，用 cninfo 获取行业名称（行业中类）。
+
+        变更史按变更日期降序取最新非空条目——此前 iloc[0] 拿到最旧分类
+        （拓荆科技 688072 返回「其它专用机械」2021 而非现行「半导体设备」），
+        行业阈值覆盖因此永不命中。
+        """
         try:
             df = ak.stock_industry_change_cninfo(symbol=stock_code)
-            if not df.empty and "行业中类" in df.columns:
-                return str(df.iloc[0]["行业中类"])
+            if not df.empty and "行业中类" in df.columns and "变更日期" in df.columns:
+                df = df.sort_values("变更日期", ascending=False)
+                series = df["行业中类"].dropna()
+                if not series.empty:
+                    return str(series.iloc[0])
         except Exception:
             logger.warning("stock_industry_change_cninfo failed for %s", stock_code)
         return None
