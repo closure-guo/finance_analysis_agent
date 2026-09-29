@@ -86,21 +86,24 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
 
     # ── 相对估值（需要同业数据）──
     peer_financials = state.get("peer_financials")
-    quote = state.get("stock_quote") or {}
-    if peer_financials is not None and quote:
-        pe = quote.get("PE") or quote.get("pe")
-        pb = quote.get("PB") or quote.get("pb")
-        if pe is not None or pb is not None:
-            target = {"PE": pe, "PB": pb}
-            peers_list = _build_peers_list(peer_financials)
-            if peers_list:
-                result["relative_valuation"] = calc_relative_valuation(target, peers_list)
 
     # ── 净利润增长率（用于 GARP）──
     net_profit_growth = _calc_net_profit_growth(inc, latest_year, years)
 
     # ── 估值快照（PE/PB/市值 + PE_ttm 推导口径标注）──
     result["valuation_snapshot"] = _build_valuation_snapshot(state)
+
+    # ── 相对估值（valuation_snapshot 装配后：quote PE 缺失时用推导 PE_ttm，估值维度不再整体跳过）──
+    quote = state.get("stock_quote") or {}
+    vs = result["valuation_snapshot"] or {}
+    effective_pe = vs.get("PE") or vs.get("PE_ttm")
+    if peer_financials is not None and quote:
+        pb = quote.get("PB") or quote.get("pb")
+        if effective_pe is not None or pb is not None:
+            target = {"PE": effective_pe, "PB": pb}
+            peers_list = _build_peers_list(peer_financials)
+            if peers_list:
+                result["relative_valuation"] = calc_relative_valuation(target, peers_list)
 
     # ── GARP（估值快照装配后调用：PE 取快照已选好口径的值，行业 PE 取 state.industry_pe）──
     result["garp_result"] = _try_garp(

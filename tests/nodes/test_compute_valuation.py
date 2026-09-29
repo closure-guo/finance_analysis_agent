@@ -182,3 +182,38 @@ class TestTryGarp:
         assert result["pass"] is False
         assert "PE >= 行业平均" in result["failures"]
         assert "PE_missing" not in result["details"]
+
+
+class TestRelativeValuationWithDerivedPe:
+    """Task 7：quote PE 缺失（东财封锁走百度回退）时相对估值用 PE_ttm，不再整体跳过。"""
+
+    def test_relative_uses_ttm_when_static_missing(
+        self, balance_sheet, income_statement, cash_flow, indicators
+    ):
+        from finance_agent.nodes.compute import compute_metrics
+
+        inc = income_statement.rename(columns={"归属于母公司所有者的净利润": "归母净利润"})
+        inc["归母净利润"] = [9.27e8, 6.88e8, 6.34e8]
+        state = {
+            "balance_sheet": balance_sheet,
+            "income_statement": inc,
+            "cash_flow_statement": cash_flow,
+            "financial_indicators": indicators,
+            "stock_quote": {"market_cap": 1910.23, "PB": 15.02},
+            "industry_info": {},
+            "latest_period_snapshot": SNAP_H1,
+            # _build_peers_list 契约为 DataFrame（fetch.fetch_peer_data 产出形状）
+            "peer_financials": pd.DataFrame(
+                {
+                    "name": ["中微公司", "北方华创"],
+                    "PE": [60.0, 50.0],
+                    "PB": [10.0, 9.0],
+                }
+            ),
+        }
+        result = compute_metrics(state)
+        rel = result["relative_valuation"]["PE"]
+        # TTM = 9.27-0.94+13.43 = 21.76；1910.23/21.76 = 87.79；同业均值 55 → overvalued
+        assert rel["target"] == 87.79
+        assert rel["peer_avg"] == 55.0
+        assert rel["conclusion"] == "overvalued"
