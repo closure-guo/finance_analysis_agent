@@ -168,6 +168,7 @@ from finance_agent.outcome.track_record.model import (  # noqa: E402
     get_prediction,
     init_predictions,
     init_track_record_tables,
+    latest_equity_date,
     list_agents,
     list_audit,
     list_daily_marks,
@@ -2207,8 +2208,10 @@ async def track_record_overview(
     avoidance = await asyncio.to_thread(avoidance_stats, source, None, version)
     legacy_all = await asyncio.to_thread(prediction_stats, source, None, version)
     metrics = await asyncio.to_thread(get_latest_metrics)
+    # as_of = 指标所依据净值数据日期，SHALL NOT 用快照写入日期冒充（incident 032）。
+    latest_curve_date = await asyncio.to_thread(latest_equity_date)
     portfolio = {
-        "available": metrics is not None,
+        "available": metrics is not None and latest_curve_date is not None,
         "annual_return": metrics.get("annual_return") if metrics else None,
         "volatility": metrics.get("volatility") if metrics else None,
         "sharpe": metrics.get("sharpe") if metrics else None,
@@ -2217,7 +2220,7 @@ async def track_record_overview(
         "risk_label": metrics.get("risk_label") if metrics else None,
         "beta": metrics.get("beta") if metrics else None,
         "jensen_alpha": metrics.get("jensen_alpha") if metrics else None,
-        "as_of": metrics.get("metric_date") if metrics else None,
+        "as_of": latest_curve_date,
     }
     return {
         **stats,
