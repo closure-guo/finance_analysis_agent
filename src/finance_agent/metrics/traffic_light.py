@@ -56,6 +56,14 @@ INDUSTRY_OVERRIDES: dict[str, dict[str, tuple]] = {
     "酿酒": {
         "存货周转率": (0.5, 0.2, True),
     },
+    # 半导体设备：验收确认收入+合同负债预收模式，通用制造业阈值系统性误判红灯
+    # 校准：北方华创/中微/拓荆/芯源微/华海清科 FY2025 分布（delta design.md）：
+    # 存货周转 0.56-1.06 / 速动 0.74-1.90 / 应付周转 2.08-4.26
+    "半导体设备": {
+        "存货周转率": (1.2, 0.5, True),
+        "速动比率": (1.5, 0.6, True),
+        "应付账款周转率": (4.5, 1.5, True),
+    },
 }
 
 LIGHT_ORDER = {"green": 0, "yellow": 1, "red": 2}
@@ -82,6 +90,16 @@ def _get_thresholds(metric_name: str, industry: str | None) -> tuple | None:
         if key in industry and metric_name in overrides:
             return overrides[metric_name]
     return ABSOLUTE_THRESHOLDS.get(metric_name)
+
+
+def matched_industry_overrides(industry: str | None) -> dict[str, tuple]:
+    """返回该行业命中的阈值覆盖指标集合（用于健康度口径披露）。"""
+    if not industry:
+        return {}
+    for key, overrides in INDUSTRY_OVERRIDES.items():
+        if key in industry:
+            return {m: t for m, t in overrides.items() if m in ABSOLUTE_THRESHOLDS}
+    return {}
 
 
 def _assess_absolute(metric_name: str, value: float, industry: str | None = None) -> str | None:
@@ -237,11 +255,13 @@ def assess_traffic_lights(
 def compute_health_score(
     traffic_lights: dict[str, dict[str, dict[str, dict]]],
     year: str,
+    industry: str | None = None,
 ) -> dict:
     """计算四维度健康度评分。
 
     四维度各 25 分，🟢=满分 🟡=半分 🔴=零分。
     None 不计入。
+    行业阈值覆盖命中时结果携带 industry_override 口径标注（industry-threshold-coverage）。
     """
     dimension_weight = 25
     dimension_scores = {}
@@ -277,9 +297,15 @@ def compute_health_score(
     else:
         rating = "warning"
 
+    matched = matched_industry_overrides(industry)
+
     return {
         "total": round(total, 1),
         "rating": rating,
         "dimensions": {k: round(v, 1) for k, v in dimension_scores.items()},
         "red_metrics": red_metrics,
+        "industry_override": {
+            "industry": industry if matched else None,
+            "metrics": sorted(matched),
+        },
     }

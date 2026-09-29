@@ -66,7 +66,9 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     )
     latest_year = years[0] if years else None
     if latest_year:
-        result["health_score"] = compute_health_score(traffic_lights, latest_year)
+        result["health_score"] = compute_health_score(
+            traffic_lights, latest_year, industry=industry
+        )
 
     # ── 增长率 ──
     growth = _calc_growth_rates(all_metrics, years)

@@ -385,3 +385,49 @@ class TestIndustryOverride:
         # 白酒行业 → 覆盖阈值 (>=0.5🟢) → 0.3 >= 0.2 且 < 0.5 → 🟡
         result_liquor = assess_traffic_lights(m, industry="白酒")
         assert result_liquor["efficiency"]["存货周转率"]["2024"]["absolute"] == "yellow"
+
+
+class TestSemiconductorEquipmentCoverage:
+    """Task 9：半导体设备行业阈值覆盖 + health_score 口径披露。"""
+
+    def test_inventory_turnover_industry_thresholds(self):
+        from finance_agent.metrics.traffic_light import _assess_absolute
+
+        # 拓荆 0.56：通用阈值红灯，行业覆盖黄灯（>=0.5）
+        assert _assess_absolute("存货周转率", 0.56, industry="半导体设备") == "yellow"
+        assert _assess_absolute("存货周转率", 0.56, industry=None) == "red"
+
+    def test_quick_ratio_industry_thresholds(self):
+        from finance_agent.metrics.traffic_light import _assess_absolute
+
+        assert _assess_absolute("速动比率", 0.74, industry="半导体设备") == "yellow"
+        assert _assess_absolute("速动比率", 0.30, industry="半导体设备") == "red"
+
+    def test_ap_turnover_industry_thresholds(self):
+        from finance_agent.metrics.traffic_light import _assess_absolute
+
+        assert _assess_absolute("应付账款周转率", 2.45, industry="半导体设备") == "yellow"
+
+    def test_matched_overrides_listing(self):
+        from finance_agent.metrics.traffic_light import matched_industry_overrides
+
+        m = matched_industry_overrides("半导体设备")
+        assert set(m) == {"存货周转率", "速动比率", "应付账款周转率"}
+        assert matched_industry_overrides("白酒")["存货周转率"] == (0.5, 0.2, True)
+        assert matched_industry_overrides(None) == {}
+
+    def test_health_score_carries_industry_override(self):
+        from finance_agent.metrics.traffic_light import compute_health_score
+
+        lights = {
+            "solvency": {
+                "速动比率": {"2025": {"absolute": "yellow", "change": None, "final": "yellow"}}
+            }
+        }
+        hs = compute_health_score(lights, "2025", industry="半导体设备")
+        assert hs["industry_override"]["industry"] == "半导体设备"
+        assert "速动比率" in hs["industry_override"]["metrics"]
+
+        hs_generic = compute_health_score(lights, "2025", industry=None)
+        assert hs_generic["industry_override"]["industry"] is None
+        assert hs_generic["industry_override"]["metrics"] == []

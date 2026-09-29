@@ -342,6 +342,8 @@ _COMPUTATIONAL_RECALC: dict[str, Callable[[dict], object]] = {
     "traffic_lights": lambda s: _recompute_snapshot(s, "traffic_lights"),
     "peer_comparison": lambda s: _recompute_snapshot(s, "peer_comparison"),
     "quarterly_trend": lambda s: _recompute_snapshot(s, "quarterly_trend"),
+    # update-financial-freshness-and-valuation Task 7/11：估值快照为 compute 确定性产出
+    "valuation_snapshot": lambda s: _recompute_snapshot(s, "valuation_snapshot"),
 }
 
 # 派生键豁免表（键 → 理由）。空 = 当前无豁免；加入豁免必须写清为什么不能重算，
