@@ -39,12 +39,16 @@ def test_full_section_with_industry_override():
     }
     section = _format_freshness_section(state)
     assert section is not None
+    assert (
+        "###" not in section and "财务数据口径披露" not in section
+    )  # 标题由 generate_report 编号注入
     assert "最新报告期快照" in section and "2026-06-30" in section and "中报" in section
     assert "41.0" in section and "47.85" in section and "88.33" in section and "51.31" in section
     assert "累计口径" in section
     assert "1918.64" in section and "88.17" in section and "TTM 推导口径" in section
     assert "48.8" in section
     assert "半导体设备" in section and "存货周转率" in section and "行业口径" in section
+    assert "暂缺" not in section  # 全字段在位时无暂缺
 
 
 def test_generic_caliber_when_no_override():
@@ -74,6 +78,22 @@ def test_valuation_missing_declared():
     section = _format_freshness_section(state)
     assert section is not None
     assert "估值数据缺失" in section and "market_cap 缺失" in section
+
+
+def test_missing_fields_render_without_unit_suffix():
+    state = {
+        "latest_period_snapshot": {
+            "报告日": "2026-06-30",
+            "期类型": "中报",
+            "毛利率(%)": None,
+            "存货": None,
+        },
+    }
+    section = _format_freshness_section(state)
+    assert section is not None
+    assert "毛利率 暂缺" in section and "存货 暂缺" in section
+    assert "暂缺%" not in section and "暂缺 亿" not in section
+    assert "None" not in section
 
 
 def test_empty_state_returns_none():

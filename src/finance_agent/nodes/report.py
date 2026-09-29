@@ -136,11 +136,24 @@ def _format_freshness_section(state: dict) -> str | None:
     if snap:
         missing = snap.get("missing") or []
         missing_note = f"；缺失项：{'、'.join(missing)}" if missing else ""
+
+        def _item(label: str, val, unit: str = "") -> str:
+            # clear-valuation-chain-debts D4：缺失渲染「<label> 暂缺」，
+            # 单位后缀不跟在暂缺后面（「暂缺%」是文案病）
+            return f"{label} 暂缺" if val is None else f"{label} {val}{unit}"
+
         lines.append(
-            f"- 最新报告期快照：{_v(snap.get('报告日', '?'))}（{_v(snap.get('期类型', '?'))}，利润表累计口径）— "
-            f"毛利率 {_v(snap.get('毛利率(%)'))}%、资产负债率 {_v(snap.get('资产负债率(%)'))}%、"
-            f"存货 {_v(snap.get('存货'))} 亿、合同负债 {_v(snap.get('合同负债'))} 亿，"
-            f"营收同比 {_v(snap.get('营收同比(%)'))}%、归母净利同比 {_v(snap.get('归母净利同比(%)'))}%{missing_note}"
+            "- 最新报告期快照：{date}（{ptype}，利润表累计口径）— {gm}、{dr}、{inv}、{cl}，{rg}、{ng}{note}".format(
+                date=_v(snap.get("报告日", "?")),
+                ptype=_v(snap.get("期类型", "?")),
+                gm=_item("毛利率", snap.get("毛利率(%)"), "%"),
+                dr=_item("资产负债率", snap.get("资产负债率(%)"), "%"),
+                inv=_item("存货", snap.get("存货"), " 亿"),
+                cl=_item("合同负债", snap.get("合同负债"), " 亿"),
+                rg=_item("营收同比", snap.get("营收同比(%)"), "%"),
+                ng=_item("归母净利同比", snap.get("归母净利同比(%)"), "%"),
+                note=missing_note,
+            )
         )
 
     vsnap = state.get("valuation_snapshot")
@@ -176,10 +189,9 @@ def _format_freshness_section(state: dict) -> str | None:
     if not lines:
         return None
     body = "\n".join(lines)
-    return (
-        f"### 财务数据口径披露\n\n"
-        f"以下为管线确定性计算的数据快照与评分口径（非 LLM 生成，供交叉核对）：\n\n{body}\n"
-    )
+    # clear-valuation-chain-debts D4：返回纯正文（无标题）——标题由 generate_report
+    # 经 next_title 编号注入，避免裸「###」插在「##」编号章节之间破坏导出切章
+    return f"以下为管线确定性计算的数据快照与评分口径（非 LLM 生成，供交叉核对）：\n\n{body}\n"
 
 
 # ── 研究聚焦摘要（LLM 生成，有兜底） ──
@@ -427,7 +439,8 @@ def generate_report(state: dict) -> dict:
     # ── 后续固定章节（编号自动顺延） ──
     freshness_section = _format_freshness_section(state)
     if freshness_section:
-        sections.append(freshness_section)
+        # D4：披露节并入编号章节体系（export 按 level-2 切章，裸 ### 会破坏章节结构）
+        sections.append(f"{next_title('财务数据口径披露')}\n{freshness_section}\n")
 
     conclusion = state.get("research_manager_conclusion")
     if conclusion:
