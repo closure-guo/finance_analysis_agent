@@ -35,6 +35,9 @@ class AnalysisState(TypedDict, total=False):
     cash_flow_statement: pd.DataFrame
     stock_quote: dict
     industry_info: dict
+    # 最新报告期快照（update-financial-freshness-and-valuation Task 4）：fetch 产出、
+    # cache HIT 随附；未声明会被图合并静默丢弃（incident 027 同型补声明）
+    latest_period_snapshot: dict | None
 
     # ── Layer 2: 分析导向 (MVP: 仅预计算指标) ──
     financial_indicators: pd.DataFrame | None
@@ -56,6 +59,9 @@ class AnalysisState(TypedDict, total=False):
     peer_comparison: dict | None
     relative_valuation: dict | None
     garp_result: dict | None
+    # 估值快照（update-financial-freshness-and-valuation Task 5）：compute_metrics 产出，
+    # {market_cap, PE, PE_ttm, PE_caliber, PB, missing_reasons}；GARP/相对估值/上下文注入消费
+    valuation_snapshot: dict | None
 
     # ── Layer 3 扩展: 季度趋势 ──
     quarterly_income: pd.DataFrame | None
