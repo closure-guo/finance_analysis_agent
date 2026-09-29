@@ -42,6 +42,37 @@ class TestDerivePeTtm:
         pe, reason = _derive_pe_ttm(100.0, 9.27, snap)
         assert pe is None and "非正" in reason
 
+    def test_non_positive_market_cap_returns_reason(self):
+        # 审查 F2：market_cap 非 None 但 <= 0（0 / -5）→ (None, reason 含 market_cap)
+        for bad in (0, -5.0):
+            pe, reason = _derive_pe_ttm(bad, 9.27, SNAP_H1)
+            assert pe is None
+            assert "market_cap" in reason
+
+    def test_non_positive_annual_np_returns_reason(self):
+        # 审查 F2：annual_np 非 None 但 <= 0 → (None, reason 含 年报归母净利润)
+        pe, reason = _derive_pe_ttm(1910.23, 0, SNAP_H1)
+        assert pe is None
+        assert "年报归母净利润" in reason
+
+    def test_nan_market_cap_returns_none(self):
+        # 审查 F1：东财 spot 停牌股 总市值=NaN 直达 quote，NaN<=0 恒 False 不得产出 NaN PE
+        pe, reason = _derive_pe_ttm(float("nan"), 9.27, SNAP_H1)
+        assert pe is None
+        assert reason
+
+    def test_nan_snapshot_cum_np_returns_none(self):
+        # 审查 F1：快照累计归母净利 NaN → ttm=NaN，NaN<=0 恒 False 不得产出 NaN PE
+        snap = {
+            "报告日": "2026-06-30",
+            "期类型": "中报",
+            "归母净利润(累计)": float("nan"),
+            "上年同期归母净利润": 0.94,
+        }
+        pe, reason = _derive_pe_ttm(1910.23, 9.27, snap)
+        assert pe is None
+        assert reason is not None
+
 
 class TestBuildValuationSnapshot:
     def _state(self, quote):
@@ -66,4 +97,15 @@ class TestBuildValuationSnapshot:
     def test_all_missing_reasons_listed(self):
         vs = _build_valuation_snapshot(self._state({}))
         assert vs["PE_caliber"] is None
+        assert any("market_cap" in r for r in vs["missing_reasons"])
+
+    def test_nan_quote_values_treated_as_missing(self):
+        # 审查 F1 装配层：static PE=NaN 不得标 static 口径、NaN 市值视同缺失
+        vs = _build_valuation_snapshot(
+            self._state({"market_cap": float("nan"), "PE": float("nan")})
+        )
+        assert vs["PE"] is None
+        assert vs["PE_ttm"] is None
+        assert vs["PE_caliber"] is None
+        assert vs["market_cap"] is None
         assert any("market_cap" in r for r in vs["missing_reasons"])

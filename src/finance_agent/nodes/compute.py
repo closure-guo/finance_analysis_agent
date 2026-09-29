@@ -251,9 +251,15 @@ def _derive_pe_ttm(
     TTM = 年报归母净利 − 上年同期累计 + 最新累计；最新期即年报时直取年报值。
     返回 (pe_ttm, 失败原因)；输入缺失/TTM 非正 → (None, reason)。
     """
-    if market_cap_yi is None or market_cap_yi <= 0:
+    if market_cap_yi is None or (isinstance(market_cap_yi, float) and pd.isna(market_cap_yi)):
+        # NaN 视同缺失（东财 spot 停牌股 总市值=NaN 直达 quote）；NaN<=0 恒 False，
+        # 不守卫会产出 NaN PE（审查 F1）
         return None, "market_cap 缺失或非正"
-    if annual_np_yi is None or annual_np_yi <= 0:
+    if market_cap_yi <= 0:
+        return None, "market_cap 缺失或非正"
+    if annual_np_yi is None or (isinstance(annual_np_yi, float) and pd.isna(annual_np_yi)):
+        return None, "年报归母净利润缺失或非正"
+    if annual_np_yi <= 0:
         return None, "年报归母净利润缺失或非正"
     snap = snapshot or {}
     if snap.get("期类型") == "年报":
@@ -264,13 +270,16 @@ def _derive_pe_ttm(
         if cur is None or prev is None:
             return None, "最新报告期快照缺失或同期数据缺失，无法拼合 TTM"
         ttm = annual_np_yi - prev + cur
-    if ttm is None or ttm <= 0:
+    if ttm is None or (isinstance(ttm, float) and pd.isna(ttm)):
+        # NaN 同样不得外泄（审查 F1）
+        return None, "TTM 归母净利润非正或缺失，PE 无意义"
+    if ttm <= 0:
         return None, f"TTM 归母净利润({ttm})非正，PE 无意义"
     return round(market_cap_yi / ttm, 2), None
 
 
 def _build_valuation_snapshot(state: AnalysisState) -> dict:
-    """估值快照：PE/PB/市值 + PE_ttm 推导与口径标注。"""
+    """估值快照：PE/PB/市值 + PE_ttm 推导与口径标注。NaN 一律视同缺失。"""
     quote = state.get("stock_quote") or {}
     inc = state.get("income_statement")
     annual_np_yi: float | None = None
@@ -279,13 +288,21 @@ def _build_valuation_snapshot(state: AnalysisState) -> dict:
         if v is not None and not (isinstance(v, float) and pd.isna(v)):
             annual_np_yi = round(float(v) / 1e8, 2)
 
+    market_cap = quote.get("market_cap")
+    if isinstance(market_cap, float) and pd.isna(market_cap):
+        # 东财 spot 停牌股 总市值=NaN 原样直达 quote——视同缺失（审查 F1）
+        market_cap = None
+
     snap = state.get("latest_period_snapshot")
     pe_ttm, reason = _derive_pe_ttm(
-        quote.get("market_cap"),
+        market_cap,
         annual_np_yi,
         snap if isinstance(snap, dict) else None,
     )
     static_pe = quote.get("PE") or quote.get("pe")
+    if isinstance(static_pe, float) and pd.isna(static_pe):
+        # NaN PE 不得标 static 口径外泄（审查 F1）
+        static_pe = None
     if static_pe is not None:
         caliber = "static"
     elif pe_ttm is not None:
@@ -294,14 +311,14 @@ def _build_valuation_snapshot(state: AnalysisState) -> dict:
         caliber = None
 
     missing: list[str] = []
-    if quote.get("market_cap") is None:
+    if market_cap is None:
         missing.append("market_cap 缺失")
     if static_pe is None and pe_ttm is None and reason:
         missing.append(reason)
     if quote.get("PB") is None:
         missing.append("PB 缺失")
     return {
-        "market_cap": quote.get("market_cap"),
+        "market_cap": market_cap,
         "PE": static_pe,
         "PE_ttm": pe_ttm,
         "PE_caliber": caliber,
