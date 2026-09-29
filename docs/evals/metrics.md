@@ -123,6 +123,14 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 首个预登记：`evals/ablation/preregister/2026-09-23-outcome-forward-and-backtest.md`（门禁字段：主指标 / MDE / 决策阈值 / 样本量依据 / 停止规则 / 成本分型 / 泄漏控制；解析见 `evals/causal_ablation/preregister.py::OUTCOME_REQUIRED_FIELDS`，与因果消融的差异 = 无 rubric、增成本分型与泄漏控制）。
 
+### 1.10 健康度/红黄绿灯行业口径（delta `update-financial-freshness-and-valuation`，2026-09-29 登记）
+
+| 项 | 口径 |
+|---|---|
+| 定义 | 红黄绿灯/健康度评分新增行业阈值覆盖机制的行业实例：半导体设备（存货周转率 (1.2, 0.5) / 速动比率 (1.5, 0.6) / 应付账款周转率 (4.5, 1.5)，higher_is_better），校准依据 = 5 家代表公司（北方华创/中微/拓荆/芯源微/华海清科）FY2025 指标分布（design.md 附表） |
+| 切点 | 覆盖生效起，健康度评分输出携带 `industry_override`（行业名+覆盖指标清单）；无覆盖时标注通用口径。**跨切点健康度分数不可直接对照**（拓荆 40 分为旧口径值） |
+| 影响范围 | 仅灯色评判定性，不改四维度指标数值与年报序列口径 |
+
 ---
 
 ## 2. 时间线（每轮一行，收口时追加）
