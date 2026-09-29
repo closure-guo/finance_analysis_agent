@@ -1,6 +1,6 @@
 import pandas as pd
 
-from finance_agent.nodes.compute import _build_valuation_snapshot, _derive_pe_ttm
+from finance_agent.nodes.compute import _build_valuation_snapshot, _derive_pe_ttm, _try_garp
 
 SNAP_H1 = {
     "报告日": "2026-06-30",
@@ -109,3 +109,49 @@ class TestBuildValuationSnapshot:
         assert vs["PE_caliber"] is None
         assert vs["market_cap"] is None
         assert any("market_cap" in r for r in vs["missing_reasons"])
+
+
+class TestTryGarp:
+    """_try_garp 接线：PE 取自 valuation_snapshot（口径已选好），行业 PE 来自 state.industry_pe。"""
+
+    @staticmethod
+    def _deps(roe=0.20, debt_pct=45.0):
+        return (
+            {"ROE": {"2024": roe}},
+            {"资产负债率": {"2024": debt_pct}},
+        )
+
+    def test_pe_from_snapshot_with_industry_pe_passes(self):
+        # PE=20 < 行业平均 25，growth/ROE/debt 均达标 → 全过
+        profitability, solvency = self._deps()
+        vs = {"PE": 20.0, "PE_ttm": None}
+        result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=25.0)
+        assert result["pass"] is True
+        assert result["failures"] == []
+        assert "PE_missing" not in result["details"]
+
+    def test_pe_ttm_fallback_when_static_missing(self):
+        # 快照 static PE 缺失 → 回落 PE_ttm（Task 5 已选好口径）
+        profitability, solvency = self._deps()
+        vs = {"PE": None, "PE_ttm": 20.0}
+        result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=25.0)
+        assert result["pass"] is True
+
+    def test_missing_industry_pe_honest_not_fake_failure(self):
+        # 无行业 PE → 诚实缺数分桶，不再恒定假性失败 PE 项
+        profitability, solvency = self._deps()
+        vs = {"PE": 20.0, "PE_ttm": None}
+        result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=None)
+        assert result["pass"] is False
+        assert "行业平均 PE 数据缺失（未参与比较）" in result["failures"]
+        assert "PE >= 行业平均" not in result["failures"]
+        assert result["details"]["PE_missing"] is True
+
+    def test_real_comparison_failure_via_industry_pe(self):
+        # PE=30 >= 行业平均 25 → 真实比较失败文案
+        profitability, solvency = self._deps()
+        vs = {"PE": 30.0, "PE_ttm": None}
+        result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=25.0)
+        assert result["pass"] is False
+        assert "PE >= 行业平均" in result["failures"]
+        assert "PE_missing" not in result["details"]

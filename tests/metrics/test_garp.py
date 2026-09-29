@@ -70,6 +70,45 @@ class TestGARP:
         assert result["pass"] is False
         assert len(result["failures"]) == 2  # PE None and growth None
 
+    def test_pe_missing_honest_message(self):
+        # 数据缺失 ≠ 比较失败：缺 PE 不得谎报「PE >= 行业平均」
+        data = {
+            "PE": None,
+            "industry_avg_PE": 25.0,
+            "net_profit_growth": 0.25,
+            "ROE": 0.20,
+            "debt_ratio": 0.45,
+        }
+        result = calc_garp(data)
+        assert "PE 数据缺失（未参与比较）" in result["failures"]
+        assert "PE >= 行业平均" not in result["failures"]
+        assert result["details"]["PE_missing"] is True
+
+    def test_industry_pe_missing_honest_message(self):
+        data = {
+            "PE": 20.0,
+            "industry_avg_PE": None,
+            "net_profit_growth": 0.25,
+            "ROE": 0.20,
+            "debt_ratio": 0.45,
+        }
+        result = calc_garp(data)
+        assert "行业平均 PE 数据缺失（未参与比较）" in result["failures"]
+        assert result["details"]["PE_missing"] is True
+
+    def test_real_comparison_failure_kept(self):
+        # 真实比较失败仍保留原文案，且不标 missing
+        data = {
+            "PE": 30.0,
+            "industry_avg_PE": 25.0,
+            "net_profit_growth": 0.25,
+            "ROE": 0.20,
+            "debt_ratio": 0.45,
+        }
+        result = calc_garp(data)
+        assert "PE >= 行业平均" in result["failures"]
+        assert "PE_missing" not in result["details"]
+
     def test_boundary_values(self):
         # Exactly at boundaries should pass
         result = calc_garp(

@@ -32,9 +32,15 @@ def calc_garp(data: dict) -> dict:
     roe = data.get("ROE")
     debt = data.get("debt_ratio")
 
-    if pe is None or industry_pe is None:
-        failures.append("PE >= 行业平均")
+    if pe is None:
+        # 数据缺失 ≠ 比较失败：缺输入不得谎报比较结论（诚实分桶）
+        failures.append("PE 数据缺失（未参与比较）")
         details["PE"] = None
+        details["PE_missing"] = True
+    elif industry_pe is None:
+        failures.append("行业平均 PE 数据缺失（未参与比较）")
+        details["PE"] = pe
+        details["PE_missing"] = True
     elif pe >= industry_pe:
         failures.append("PE >= 行业平均")
         details["PE"] = pe

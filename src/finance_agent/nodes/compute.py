@@ -99,13 +99,19 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     # ── 净利润增长率（用于 GARP）──
     net_profit_growth = _calc_net_profit_growth(inc, latest_year, years)
 
-    # ── GARP（需要估值数据）──
-    result["garp_result"] = _try_garp(
-        quote, profitability, solvency, ind, net_profit_growth, latest_year
-    )
-
     # ── 估值快照（PE/PB/市值 + PE_ttm 推导口径标注）──
     result["valuation_snapshot"] = _build_valuation_snapshot(state)
+
+    # ── GARP（估值快照装配后调用：PE 取快照已选好口径的值，行业 PE 取 state.industry_pe）──
+    result["garp_result"] = _try_garp(
+        result["valuation_snapshot"],
+        profitability,
+        solvency,
+        ind,
+        net_profit_growth,
+        latest_year,
+        industry_pe_avg=(state.get("industry_pe") or {}).get("avg_pe"),
+    )
 
     # ── 季度趋势 ──
     q_income = state.get("quarterly_income")
@@ -328,15 +334,17 @@ def _build_valuation_snapshot(state: AnalysisState) -> dict:
 
 
 def _try_garp(
-    quote,
+    valuation_snapshot: dict | None,
     profitability,
     solvency,
     indicators,
     net_profit_growth: float | None,
     latest_year: str | None,
+    industry_pe_avg: float | None = None,
 ) -> dict | None:
-    pe = (quote or {}).get("PE") or (quote or {}).get("pe")
-    industry_pe = (quote or {}).get("industry_avg_PE")
+    vs = valuation_snapshot or {}
+    # PE 取 valuation_snapshot 已选好口径的值（static 优先，回落 PE_ttm；NaN 已守卫为 None）
+    pe = vs.get("PE") or vs.get("PE_ttm")
     if not latest_year:
         return None
     roe = profitability.get("ROE", {}).get(latest_year)
@@ -345,7 +353,7 @@ def _try_garp(
     debt = debt_pct / 100 if debt_pct is not None else None
     data = {
         "PE": pe,
-        "industry_avg_PE": industry_pe,
+        "industry_avg_PE": industry_pe_avg,
         "net_profit_growth": net_profit_growth,
         "ROE": roe,
         "debt_ratio": debt,
