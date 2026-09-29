@@ -81,9 +81,11 @@ TBD - created by archiving change data-source-benchmark-fallback. Update Purpose
 
 - 百度估值取 `总市值`（→ `market_cap`）与 `市净率`（→ `PB`），各独立 try/except（任一失败不影响其余）；取值最后一行（最新日）。
 - 腾讯日线用 `_to_sina_symbol` 前缀（`688072`→`sh688072`）、recent 最新收盘 → `price`。
-- PE/市值推导 SHALL NOT 在 quote 内进行（PE 语义依赖财务口径，留给下游 compute/charts 处理）；PE 缺失时下游 `or` 守卫照常跳过估值维度。
+- PE/市值推导 SHALL NOT 在 quote 内进行（PE 语义依赖财务口径）；PE 缺失时下游 compute SHALL 按 valuation-signal-integrity 规范的 TTM 规则确定性推导 `PE_ttm` 并以推导值参与估值维度（GARP/相对估值/上下文注入），SHALL NOT 静默跳过估值维度。
 - 主源（东财）可用时 SHALL NOT 触发任何回退，行为与无回退版本一致。
 - 全部回退后仅剩名称时保留 ERROR 日志（维度缺失可观测）。
+
+(Previously: PE/市值推导 SHALL NOT 在 quote 内进行（PE 语义依赖财务口径，留给下游 compute/charts 处理）；PE 缺失时下游 `or` 守卫照常跳过估值维度。)
 
 #### Scenario: 东财失败回退百度+腾讯
 
@@ -97,12 +99,9 @@ TBD - created by archiving change data-source-benchmark-fallback. Update Purpose
 - **WHEN** 百度 `总市值` 成功而 `市净率` 抛异常
 - **THEN** 结果 SHALL 含 `market_cap`，SHALL NOT 抛异常，`PB` 保持缺失
 
-#### Scenario: 全部回退失败仅名称
+#### Scenario: 回退后 PE 缺失不静默跳过估值
 
-- **WHEN** 百度与腾讯均失败（网络异常）
-- **THEN** 系统 SHALL 返回仅名称 fallback，SHALL 留 ERROR 日志（行情各维度缺失）
-
-#### Scenario: 东财正常不触发回退
-
-- **WHEN** 东财 `stock_zh_a_spot_em` 返回非空且匹配到股票
-- **THEN** 系统 SHALL 直接返回全字段 quote，SHALL NOT 调用百度/腾讯
+- **WHEN** quote 经百度回退返回（含 `market_cap`/`PB`/`price`、无 `PE`）
+- **AND** 下游 compute 拥有年报与最新累计报告期归母净利润
+- **THEN** compute SHALL 推导 `PE_ttm` 并注入估值维度
+- **AND** 相对估值与 GARP SHALL 以 `PE_ttm` 参与，SHALL NOT 因 `PE` 缺失整体跳过
