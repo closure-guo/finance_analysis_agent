@@ -250,17 +250,41 @@ class AKShareClient:
             logger.warning("stock_info_a_code_name fallback failed for %s", stock_code)
         return {}
 
+    # 同日多分类标准 tie-break：申万（券商研报事实标准）> 中证 > 巨潮 > 证监会
+    _INDUSTRY_STANDARD_PRIORITY = (
+        ("申银万国", 0),
+        ("中证", 1),
+        ("巨潮", 2),
+        ("证监会", 3),
+    )
+
     def _fetch_industry_cninfo(self, stock_code: str) -> str | None:
         """当东方财富接口不可用时，用 cninfo 获取行业名称（行业中类）。
 
-        变更史按变更日期降序取最新非空条目——此前 iloc[0] 拿到最旧分类
-        （拓荆科技 688072 返回「其它专用机械」2021 而非现行「半导体设备」），
-        行业阈值覆盖因此永不命中。
+        变更史含多套分类标准：按变更日期降序 + 标准优先级 tie-break（稳定排序）
+        取最新非空条目。此前 iloc[0] 拿最旧分类（688072 →「其它专用机械」）；
+        仅按日期排序则同日随机（688072 2022-04-20 巨潮「集成电路」vs 中证
+        「半导体设备」并存）——两种形态都会让行业阈值覆盖永不命中。
         """
         try:
             df = ak.stock_industry_change_cninfo(symbol=stock_code)
-            if not df.empty and "行业中类" in df.columns and "变更日期" in df.columns:
-                df = df.sort_values("变更日期", ascending=False)
+            if not df.empty and "行业中类" in df.columns:
+                df = df.copy()
+                if "分类标准" in df.columns:
+                    df["_std_pri"] = df["分类标准"].apply(
+                        lambda s: next(
+                            (pri for key, pri in self._INDUSTRY_STANDARD_PRIORITY if key in str(s)),
+                            4,
+                        )
+                    )
+                else:
+                    df["_std_pri"] = 4
+                if "变更日期" in df.columns:
+                    df = df.sort_values(
+                        ["变更日期", "_std_pri"], ascending=[False, True], kind="mergesort"
+                    )
+                else:
+                    df = df.sort_values("_std_pri", kind="mergesort")
                 series = df["行业中类"].dropna()
                 if not series.empty:
                     return str(series.iloc[0])

@@ -744,3 +744,23 @@ class TestFetchIndustryCninfoLatest:
         )
         mock_ak.stock_industry_change_cninfo.return_value = df
         assert client._fetch_industry_cninfo("688072") == "半导体设备"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_same_date_multi_standard_prefers_shenwan_zhongzheng(self, mock_ak, client):
+        # 688072 实录：同日 2022-04-20 巨潮「集成电路」与中证「半导体设备」并存，
+        # 无 tie-break 时不稳定排序随机取「集成电路」→ 行业阈值覆盖不命中
+        df = pd.DataFrame(
+            {
+                "变更日期": ["2021-07-12", "2022-03-29", "2022-03-29", "2022-04-20", "2022-04-20"],
+                "行业中类": ["其它专用机械", "半导体设备", float("nan"), "集成电路", "半导体设备"],
+                "分类标准": [
+                    "申银万国行业分类标准(旧)",
+                    "申银万国行业分类标准",
+                    "证监会行业分类标准（2012）",
+                    "巨潮行业分类标准",
+                    "中证行业分类标准",
+                ],
+            }
+        )
+        mock_ak.stock_industry_change_cninfo.return_value = df
+        assert client._fetch_industry_cninfo("688072") == "半导体设备"
