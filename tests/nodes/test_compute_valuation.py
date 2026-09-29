@@ -80,7 +80,7 @@ class TestBuildValuationSnapshot:
         return {"stock_quote": quote, "income_statement": inc, "latest_period_snapshot": SNAP_H1}
 
     def test_assembly_with_derived_ttm(self):
-        vs = _build_valuation_snapshot(self._state({"market_cap": 1910.23, "PB": 15.02}))
+        vs = _build_valuation_snapshot(self._state({"market_cap": 191023000000.0, "PB": 15.02}))
         assert vs["PE"] is None
         assert vs["PE_ttm"] == 87.79
         assert vs["PE_caliber"] == "derived_ttm"
@@ -90,7 +90,7 @@ class TestBuildValuationSnapshot:
 
     def test_static_pe_wins_caliber_static(self):
         vs = _build_valuation_snapshot(
-            self._state({"market_cap": 1910.23, "PE": 95.0, "PB": 15.02})
+            self._state({"market_cap": 191023000000.0, "PE": 95.0, "PB": 15.02})
         )
         assert vs["PE"] == 95.0 and vs["PE_caliber"] == "static"
 
@@ -199,7 +199,7 @@ class TestRelativeValuationWithDerivedPe:
             "income_statement": inc,
             "cash_flow_statement": cash_flow,
             "financial_indicators": indicators,
-            "stock_quote": {"market_cap": 1910.23, "PB": 15.02},
+            "stock_quote": {"market_cap": 191023000000.0, "PB": 15.02},  # 元口径（东财形）
             "industry_info": {},
             "latest_period_snapshot": SNAP_H1,
             # _build_peers_list 契约为 DataFrame（fetch.fetch_peer_data 产出形状）
@@ -217,3 +217,85 @@ class TestRelativeValuationWithDerivedPe:
         assert rel["target"] == 87.79
         assert rel["peer_avg"] == 55.0
         assert rel["conclusion"] == "overvalued"
+
+
+class TestMarketCapUnitNormalization:
+    """终审 C1：东财主源 market_cap 单位=元、百度回退=亿元。
+
+    state 契约统一为元（前端 Charts.tsx 除 1e8 显示「亿」的既有约定），
+    _build_valuation_snapshot 消费时 元→亿。主源（元）路径必须有测试钉死，
+    否则量级错 1 亿倍的 PE_ttm 伪值直达报告（四轮验证全走百度回退而漏网）。
+    """
+
+    def test_eastmoney_shaped_yuan_market_cap_yields_correct_pe_ttm(self):
+        # 东财形：总市值原样透传（元）。1910.23 亿 = 191023000000 元
+        state = {
+            "stock_quote": {"market_cap": 191023000000.0, "PE": None, "PB": 15.02},
+            "income_statement": pd.DataFrame(
+                {"报告日": ["20251231", "20241231"], "归母净利润": [9.27e8, 6.88e8]}
+            ),
+            "latest_period_snapshot": SNAP_H1,
+        }
+        vs = _build_valuation_snapshot(state)
+        assert vs["market_cap"] == 1910.23  # 亿元口径输出
+        assert vs["PE_ttm"] == 87.79
+        assert vs["PE_caliber"] == "derived_ttm"
+
+    def test_baidu_shaped_yi_market_cap_after_fetch_normalization(self):
+        # 百度回退在 fetch 层 ×1e8 归一到元（与东财同构）；此处验证归一后的元值
+        state = {
+            "stock_quote": {"market_cap": 1918.64e8, "PB": 15.09},
+            "income_statement": pd.DataFrame(
+                {"报告日": ["20251231", "20241231"], "归母净利润": [9.27e8, 6.88e8]}
+            ),
+            "latest_period_snapshot": SNAP_H1,
+        }
+        vs = _build_valuation_snapshot(state)
+        assert vs["market_cap"] == 1918.64
+        assert vs["PE_ttm"] == 88.17
+
+
+class TestRelativeCaliberNote:
+    """终审 I1：静态 PE 缺失回落 PE_ttm 时，relative_valuation 须注明跨口径。"""
+
+    def test_relative_pe_carries_caliber_note_when_derived(self):
+        from finance_agent.nodes.compute import compute_metrics
+
+        state = {
+            "balance_sheet": pd.DataFrame(
+                {"报告日": ["20251231", "20241231"], "资产总计": [200.0, 180.0]}
+            ),
+            "income_statement": pd.DataFrame(
+                {"报告日": ["20251231", "20241231"], "归母净利润": [9.27e8, 6.88e8]}
+            ),
+            "cash_flow_statement": pd.DataFrame({"报告日": ["20251231", "20241231"]}),
+            "stock_quote": {"market_cap": 191023000000.0, "PB": 15.02},
+            "latest_period_snapshot": SNAP_H1,
+            "peer_financials": pd.DataFrame(
+                {"name": ["中微公司", "北方华创"], "PE": [60.0, 50.0], "PB": [10.0, 9.0]}
+            ),
+        }
+        result = compute_metrics(state)
+        rel_pe = result["relative_valuation"]["PE"]
+        assert "caliber_note" in rel_pe
+        assert "TTM" in rel_pe["caliber_note"] and "静态" in rel_pe["caliber_note"]
+
+    def test_relative_pe_no_note_when_static(self):
+        from finance_agent.nodes.compute import compute_metrics
+
+        state = {
+            "balance_sheet": pd.DataFrame(
+                {"报告日": ["20251231", "20241231"], "资产总计": [200.0, 180.0]}
+            ),
+            "income_statement": pd.DataFrame(
+                {"报告日": ["20251231", "20241231"], "归母净利润": [9.27e8, 6.88e8]}
+            ),
+            "cash_flow_statement": pd.DataFrame({"报告日": ["20251231", "20241231"]}),
+            "stock_quote": {"market_cap": 191023000000.0, "PE": 95.0, "PB": 15.02},
+            "latest_period_snapshot": SNAP_H1,
+            "peer_financials": pd.DataFrame(
+                {"name": ["中微公司", "北方华创"], "PE": [60.0, 50.0], "PB": [10.0, 9.0]}
+            ),
+        }
+        result = compute_metrics(state)
+        assert "caliber_note" not in result["relative_valuation"]["PE"]

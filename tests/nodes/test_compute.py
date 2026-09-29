@@ -121,7 +121,7 @@ class TestComputeMetrics:
         from finance_agent.nodes.compute import compute_metrics
 
         # valuation_snapshot 有 PE_ttm（年报直取：927 / 9.27 = 100.0）
-        sample_state["stock_quote"] = {"market_cap": 927.0}
+        sample_state["stock_quote"] = {"market_cap": 927e8}  # 元口径（东财形）→ 927 亿
         sample_state["latest_period_snapshot"] = {"期类型": "年报"}
         inc = sample_state["income_statement"].rename(
             columns={"归属于母公司所有者的净利润": "归母净利润"}

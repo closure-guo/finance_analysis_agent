@@ -343,13 +343,15 @@ class AKShareClient:
             result["code"] = stock_code
 
         # 百度估值：总市值 → market_cap；市净率 → PB（各指标末行最新）
-        for indicator, key in (("总市值", "market_cap"), ("市净率", "PB")):
+        # 单位归一（终审 C1）：百度总市值单位为亿元，东财主源为元——
+        # ×1e8 归一到元，与 state 既有契约一致（前端 Charts 除 1e8 显示「亿」）
+        for indicator, key, scale in (("总市值", "market_cap", 1e8), ("市净率", "PB", 1.0)):
             try:
                 df_val = _call_ak(
                     ak.stock_zh_valuation_baidu, symbol=stock_code, indicator=indicator
                 )
                 if df_val is not None and not df_val.empty and "value" in df_val.columns:
-                    result[key] = float(df_val.iloc[-1]["value"])
+                    result[key] = float(df_val.iloc[-1]["value"]) * scale
             except Exception:
                 logger.warning("百度估值 %s 拉取失败: %s", indicator, stock_code)
 

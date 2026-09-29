@@ -128,15 +128,19 @@ def _format_freshness_section(state: dict) -> str | None:
     """
     lines: list[str] = []
 
+    def _v(x) -> str:
+        # 终审 M1：缺失字段不得渲染字面 None 进中文报告
+        return "暂缺" if x is None else str(x)
+
     snap = state.get("latest_period_snapshot")
     if snap:
         missing = snap.get("missing") or []
         missing_note = f"；缺失项：{'、'.join(missing)}" if missing else ""
         lines.append(
-            f"- 最新报告期快照：{snap.get('报告日', '?')}（{snap.get('期类型', '?')}，利润表累计口径）— "
-            f"毛利率 {snap.get('毛利率(%)')}%、资产负债率 {snap.get('资产负债率(%)')}%、"
-            f"存货 {snap.get('存货')} 亿、合同负债 {snap.get('合同负债')} 亿，"
-            f"营收同比 {snap.get('营收同比(%)')}%、归母净利同比 {snap.get('归母净利同比(%)')}%{missing_note}"
+            f"- 最新报告期快照：{_v(snap.get('报告日', '?'))}（{_v(snap.get('期类型', '?'))}，利润表累计口径）— "
+            f"毛利率 {_v(snap.get('毛利率(%)'))}%、资产负债率 {_v(snap.get('资产负债率(%)'))}%、"
+            f"存货 {_v(snap.get('存货'))} 亿、合同负债 {_v(snap.get('合同负债'))} 亿，"
+            f"营收同比 {_v(snap.get('营收同比(%)'))}%、归母净利同比 {_v(snap.get('归母净利同比(%)'))}%{missing_note}"
         )
 
     vsnap = state.get("valuation_snapshot")

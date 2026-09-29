@@ -431,3 +431,16 @@ class TestSemiconductorEquipmentCoverage:
         hs_generic = compute_health_score(lights, "2025", industry=None)
         assert hs_generic["industry_override"]["industry"] is None
         assert hs_generic["industry_override"]["metrics"] == []
+
+
+class TestCoverageFallthroughUncoveredMetric:
+    """终审 M2：spec Scenario「未命中指标沿用通用阈值」的组合原义用例。"""
+
+    def test_uncovered_metric_uses_generic_thresholds_under_industry(self):
+        from finance_agent.metrics.traffic_light import _assess_absolute
+
+        # ROE 无半导体设备覆盖 → 与通用阈值同判（16→green，9→yellow）
+        assert _assess_absolute("ROE", 16.0, industry="半导体设备") == "green"
+        assert _assess_absolute("ROE", 16.0, industry=None) == "green"
+        assert _assess_absolute("ROE", 9.0, industry="半导体设备") == "yellow"
+        assert _assess_absolute("ROE", 9.0, industry=None) == "yellow"

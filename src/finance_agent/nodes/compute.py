@@ -106,6 +106,12 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
             peers_list = _build_peers_list(peer_financials)
             if peers_list:
                 result["relative_valuation"] = calc_relative_valuation(target, peers_list)
+                # 终审 I1：静态 PE 缺失回落 PE_ttm 时，行业均值（cninfo 静态市盈率）
+                # 是跨口径比较——spec「与同业口径一致的那个并注明」
+                if vs.get("PE") is None and vs.get("PE_ttm") is not None:
+                    result["relative_valuation"]["PE"]["caliber_note"] = (
+                        "目标 PE 为 TTM 推导口径，行业均值为静态口径，跨口径比较仅供参考"
+                    )
 
     # ── GARP（估值快照装配后调用：PE 取快照已选好口径的值，行业 PE 取 state.industry_pe）──
     result["garp_result"] = _try_garp(
@@ -299,10 +305,13 @@ def _build_valuation_snapshot(state: AnalysisState) -> dict:
         if v is not None and not (isinstance(v, float) and pd.isna(v)):
             annual_np_yi = round(float(v) / 1e8, 2)
 
-    market_cap = quote.get("market_cap")
-    if isinstance(market_cap, float) and pd.isna(market_cap):
+    market_cap_raw = quote.get("market_cap")
+    if isinstance(market_cap_raw, float) and pd.isna(market_cap_raw):
         # 东财 spot 停牌股 总市值=NaN 原样直达 quote——视同缺失（审查 F1）
-        market_cap = None
+        market_cap_raw = None
+    # state 契约：quote.market_cap 统一为元（东财主源原样透传；百度回退已在
+    # fetch 层 ×1e8 归一——终审 C1）。估值链路亿元口径，此处 元→亿。
+    market_cap = round(market_cap_raw / 1e8, 2) if market_cap_raw is not None else None
 
     snap = state.get("latest_period_snapshot")
     pe_ttm, reason = _derive_pe_ttm(

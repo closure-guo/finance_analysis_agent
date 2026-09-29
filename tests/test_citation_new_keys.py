@@ -64,7 +64,7 @@ def state():
                 "同比": [220.08, 488.29],
             }
         ),
-        "stock_quote": {"market_cap": 1910.23, "PB": 15.02},
+        "stock_quote": {"market_cap": 191023000000.0, "PB": 15.02},  # 元口径
     }
 
 

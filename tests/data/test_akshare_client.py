@@ -510,7 +510,7 @@ class TestFetchStockQuoteBaiduFallback:
 
         result = client.fetch_stock_quote("688072")
 
-        assert result.get("market_cap") == 1846.54
+        assert result.get("market_cap") == 1846.54e8  # 百度亿元 ×1e8 归一到元（终审 C1）
         assert result.get("PB") == 14.52
         assert result.get("price") == 632.0
         assert result.get("name") == "拓荆科技"
@@ -536,7 +536,9 @@ class TestFetchStockQuoteBaiduFallback:
 
         result = client.fetch_stock_quote("688072")
 
-        assert result.get("market_cap") == 1846.54  # 总市值保留
+        assert (
+            result.get("market_cap") == 1846.54e8
+        )  # 百度亿元 ×1e8 归一到元（终审 C1）  # 总市值保留
         assert "PB" not in result or result["PB"] is None  # PB 缺失不抛
         assert result.get("price") == 632.0
 
