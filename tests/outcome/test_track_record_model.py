@@ -494,6 +494,7 @@ def test_avoidance_stats_source_and_version_filter(db):
     assert live["avoidance_win"] == 1 and live["settled"] == 1
 
 
+<<<<<<< HEAD
 class TestMetricsBetaAlphaColumns:
     def test_old_db_migrated_idempotent(self, tmp_path):
         """旧 schema(无 beta/jensen_alpha 列)→ init 补列,重跑不加列。"""
@@ -544,3 +545,16 @@ class TestMetricsBetaAlphaColumns:
         upsert_metrics_daily("2026-10-03", {"beta": None, "jensen_alpha": None}, db_path=db)
         row = get_latest_metrics(db_path=db)
         assert row["beta"] is None and row["jensen_alpha"] is None
+
+
+def test_prediction_ids_by_direction(db):
+    """组合聚合排除 neutral 的取数辅助（incident 032 根因 A）。"""
+    from finance_agent.outcome.track_record.model import prediction_ids_by_direction
+
+    long_id = _insert(db, direction="long")
+    neutral_id = _insert(db, direction="neutral")
+    got = prediction_ids_by_direction("neutral", db_path=db)
+    assert got == {neutral_id}
+    assert prediction_ids_by_direction("long", db_path=db) == {long_id}
+    assert prediction_ids_by_direction("short", db_path=db) == set()
+>>>>>>> bac57d45 (fix: [track-record] neutral 盯市改多头口径并排除出组合聚合 (incident 032 根因 A))
