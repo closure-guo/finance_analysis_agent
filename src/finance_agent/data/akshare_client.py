@@ -346,7 +346,7 @@ class AKShareClient:
         使用 stock_profit_sheet_by_quarterly_em（东方财富），返回数据中的
         PARENT_NETPROFIT 为单季度归母净利润。
 
-        返回列：报告日, 归母净利润(单季), 环比(%), 同比(%)
+        返回列：报告日, 季度, 归母净利润(单季), 营业收入(单季), 营业成本(单季), 环比, 同比
         """
         # symbol 需要大写 SH/SZ 前缀
         prefix = "SH" if stock_code.startswith(("6", "9")) else "SZ"

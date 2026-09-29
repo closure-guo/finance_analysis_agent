@@ -272,6 +272,9 @@ def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
     trend: dict = {
         "quarters": [],
         "net_profit": [],
+        "revenue": [],
+        "revenue_yoy": [],
+        "gross_margin": [],
         "qoq": [],
         "yoy": [],
         "warnings": [],
@@ -281,10 +284,28 @@ def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
         trend["quarters"].append(row.get("季度", ""))
         np_val = row.get("归母净利润(单季)")
         trend["net_profit"].append(round(np_val / 1e8, 2) if pd.notna(np_val) else None)
+        rev = row.get("营业收入(单季)")
+        cost = row.get("营业成本(单季)")
+        trend["revenue"].append(round(rev / 1e8, 2) if pd.notna(rev) else None)
+        if pd.notna(rev) and pd.notna(cost) and rev:
+            trend["gross_margin"].append(round((1 - cost / rev) * 100, 2))
+        else:
+            trend["gross_margin"].append(None)
         qoq = row.get("环比")
         trend["qoq"].append(qoq)
         yoy = row.get("同比")
         trend["yoy"].append(yoy)
+
+    # 营收同比：去年同期（同季度标签上一年）
+    rev_by_q = {
+        q: r for q, r in zip(trend["quarters"], trend["revenue"], strict=False) if r is not None
+    }
+    for q, r in zip(trend["quarters"], trend["revenue"], strict=False):
+        prev = None
+        if r is not None and q:
+            prev_q = f"{int(q[:4]) - 1}{q[4:]}"
+            prev = rev_by_q.get(prev_q)
+        trend["revenue_yoy"].append(round((r - prev) / prev * 100, 2) if prev else None)
 
     # 拐点检测
     yoy_vals = [v for v in trend["yoy"] if v is not None]
