@@ -40,9 +40,9 @@ def calc_garp(data: dict) -> dict:
     pe = _clean_num(data.get("PE"))
     industry_pe = _clean_num(data.get("industry_avg_PE"))
     caliber = data.get("PE_caliber")
-    growth = data.get("net_profit_growth")
-    roe = data.get("ROE")
-    debt = data.get("debt_ratio")
+    growth = _clean_num(data.get("net_profit_growth"))
+    roe = _clean_num(data.get("ROE"))
+    debt = _clean_num(data.get("debt_ratio"))
 
     if pe is None:
         # 数据缺失 ≠ 比较失败：缺输入不得谎报比较结论（诚实分桶）
@@ -63,8 +63,10 @@ def calc_garp(data: dict) -> dict:
         details["PE_caliber"] = caliber
 
     if growth is None:
-        failures.append("净利润增长率 <= 15%")
+        # 数据缺失 ≠ 比较失败（D1：与 PE 同款诚实分桶）
+        failures.append("净利润增长率 数据缺失（未参与比较）")
         details["净利润增长率"] = None
+        details["净利润增长率_missing"] = True
     elif growth <= 0.15:
         failures.append("净利润增长率 <= 15%")
         details["净利润增长率"] = growth
@@ -72,8 +74,10 @@ def calc_garp(data: dict) -> dict:
         details["净利润增长率"] = growth
 
     if roe is None:
-        failures.append("ROE <= 15%")
+        # 数据缺失 ≠ 比较失败（D1：与 PE 同款诚实分桶）
+        failures.append("ROE 数据缺失（未参与比较）")
         details["ROE"] = None
+        details["ROE_missing"] = True
     elif roe <= 0.15:
         failures.append("ROE <= 15%")
         details["ROE"] = roe
@@ -81,8 +85,10 @@ def calc_garp(data: dict) -> dict:
         details["ROE"] = roe
 
     if debt is None:
-        failures.append("负债率 >= 60%")
+        # 数据缺失 ≠ 比较失败（D1：与 PE 同款诚实分桶）
+        failures.append("负债率 数据缺失（未参与比较）")
         details["负债率"] = None
+        details["负债率_missing"] = True
     elif debt >= 0.60:
         failures.append("负债率 >= 60%")
         details["负债率"] = debt

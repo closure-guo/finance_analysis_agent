@@ -140,3 +140,44 @@ class TestGARP:
         )
         assert result["pass"] is False
         assert len(result["failures"]) == 4
+
+
+class TestGarpHonestBucketAllInputs:
+    """delta clear-valuation-chain-debts D1：诚实分桶从 PE 推广到全部输入。"""
+
+    def _data(self, **overrides):
+        base = {
+            "PE": 20.0,
+            "industry_avg_PE": 25.0,
+            "net_profit_growth": 0.25,
+            "ROE": 0.20,
+            "debt_ratio": 0.45,
+        }
+        base.update(overrides)
+        return base
+
+    def test_roe_missing_honest(self):
+        result = calc_garp(self._data(ROE=None))
+        assert "ROE 数据缺失（未参与比较）" in result["failures"]
+        assert "ROE <= 15%" not in result["failures"]
+        assert result["details"]["ROE_missing"] is True
+
+    def test_debt_nan_treated_as_missing_not_pass(self):
+        result = calc_garp(self._data(debt_ratio=float("nan")))
+        assert "负债率 数据缺失（未参与比较）" in result["failures"]
+        assert "负债率 >= 60%" not in result["failures"]
+        assert result["details"]["负债率_missing"] is True
+
+    def test_growth_missing_honest(self):
+        result = calc_garp(self._data(net_profit_growth=None))
+        assert "净利润增长率 数据缺失（未参与比较）" in result["failures"]
+        assert "净利润增长率 <= 15%" not in result["failures"]
+        assert result["details"]["净利润增长率_missing"] is True
+
+    def test_real_comparison_failures_unchanged(self):
+        result = calc_garp(self._data(net_profit_growth=0.10, ROE=0.10, debt_ratio=0.70))
+        assert "净利润增长率 <= 15%" in result["failures"]
+        assert "ROE <= 15%" in result["failures"]
+        assert "负债率 >= 60%" in result["failures"]
+        for key in ("净利润增长率_missing", "ROE_missing", "负债率_missing"):
+            assert key not in result["details"]
