@@ -9,6 +9,17 @@
 
 from __future__ import annotations
 
+import math
+
+
+def _clean_num(v) -> float | None:
+    """NaN 视同缺失：NaN 参与比较恒 False，会把缺数伪装成比较通过。"""
+    if v is None:
+        return None
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    return float(v)
+
 
 def calc_garp(data: dict) -> dict:
     """执行 GARP 筛选。
@@ -16,7 +27,7 @@ def calc_garp(data: dict) -> dict:
     Parameters
     ----------
     data : dict
-        PE, industry_avg_PE, net_profit_growth, ROE, debt_ratio
+        PE, industry_avg_PE, net_profit_growth, ROE, debt_ratio, PE_caliber(可选)
 
     Returns
     -------
@@ -24,10 +35,11 @@ def calc_garp(data: dict) -> dict:
         {"pass": bool, "failures": [str], "details": dict}
     """
     failures: list[str] = []
-    details: dict[str, float | None] = {}
+    details: dict[str, float | None | bool | str] = {}
 
-    pe = data.get("PE")
-    industry_pe = data.get("industry_avg_PE")
+    pe = _clean_num(data.get("PE"))
+    industry_pe = _clean_num(data.get("industry_avg_PE"))
+    caliber = data.get("PE_caliber")
     growth = data.get("net_profit_growth")
     roe = data.get("ROE")
     debt = data.get("debt_ratio")
@@ -41,11 +53,14 @@ def calc_garp(data: dict) -> dict:
         failures.append("行业平均 PE 数据缺失（未参与比较）")
         details["PE"] = pe
         details["PE_missing"] = True
+        details["PE_caliber"] = caliber
     elif pe >= industry_pe:
         failures.append("PE >= 行业平均")
         details["PE"] = pe
+        details["PE_caliber"] = caliber
     else:
         details["PE"] = pe
+        details["PE_caliber"] = caliber
 
     if growth is None:
         failures.append("净利润增长率 <= 15%")

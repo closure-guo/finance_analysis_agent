@@ -122,20 +122,23 @@ class TestTryGarp:
         )
 
     def test_pe_from_snapshot_with_industry_pe_passes(self):
-        # PE=20 < 行业平均 25，growth/ROE/debt 均达标 → 全过
+        # PE=20 < 行业平均 25，growth/ROE/debt 均达标 → 全过；static 口径随 details 记录
         profitability, solvency = self._deps()
-        vs = {"PE": 20.0, "PE_ttm": None}
+        vs = {"PE": 20.0, "PE_ttm": None, "PE_caliber": "static"}
         result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=25.0)
         assert result["pass"] is True
         assert result["failures"] == []
         assert "PE_missing" not in result["details"]
+        assert result["details"]["PE_caliber"] == "static"
 
     def test_pe_ttm_fallback_when_static_missing(self):
         # 快照 static PE 缺失 → 回落 PE_ttm（Task 5 已选好口径）
         profitability, solvency = self._deps()
-        vs = {"PE": None, "PE_ttm": 20.0}
+        vs = {"PE": None, "PE_ttm": 20.0, "PE_caliber": "derived_ttm"}
         result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=25.0)
         assert result["pass"] is True
+        assert result["details"]["PE"] == 20.0
+        assert result["details"]["PE_caliber"] == "derived_ttm"
 
     def test_missing_industry_pe_honest_not_fake_failure(self):
         # 无行业 PE → 诚实缺数分桶，不再恒定假性失败 PE 项
@@ -146,6 +149,30 @@ class TestTryGarp:
         assert "行业平均 PE 数据缺失（未参与比较）" in result["failures"]
         assert "PE >= 行业平均" not in result["failures"]
         assert result["details"]["PE_missing"] is True
+
+    def test_nan_industry_pe_avg_treated_as_missing(self):
+        # 复审 F2：avg_pe=NaN 直达时 NaN 比较恒 False，会把行业 PE 缺数伪装成 PE 达标——视同缺失
+        profitability, solvency = self._deps()
+        vs = {"PE": None, "PE_ttm": 87.8, "PE_caliber": "derived_ttm"}
+        result = _try_garp(
+            vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=float("nan")
+        )
+        assert result["pass"] is False
+        assert "行业平均 PE 数据缺失（未参与比较）" in result["failures"]
+        assert "PE >= 行业平均" not in result["failures"]
+        assert result["details"]["PE_missing"] is True
+
+    def test_pe_caliber_recorded_on_real_comparison_failure(self):
+        # spec scenario「有 PE_ttm 时 GARP 正常比较」：PE_ttm=87.8 vs 行业平均 45
+        # → 真实比较失败，details SHALL 记录 PE=87.8 与口径 derived_ttm
+        profitability, solvency = self._deps()
+        vs = {"PE": None, "PE_ttm": 87.8, "PE_caliber": "derived_ttm"}
+        result = _try_garp(vs, profitability, solvency, None, 0.25, "2024", industry_pe_avg=45.0)
+        assert result["pass"] is False
+        assert "PE >= 行业平均" in result["failures"]
+        assert result["details"]["PE"] == 87.8
+        assert result["details"]["PE_caliber"] == "derived_ttm"
+        assert "PE_missing" not in result["details"]
 
     def test_real_comparison_failure_via_industry_pe(self):
         # PE=30 >= 行业平均 25 → 真实比较失败文案

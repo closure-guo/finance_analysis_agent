@@ -95,6 +95,8 @@ class TestGARP:
         result = calc_garp(data)
         assert "行业平均 PE 数据缺失（未参与比较）" in result["failures"]
         assert result["details"]["PE_missing"] is True
+        # PE 本身有值 → 口径一并记录（未传时为 None）
+        assert result["details"]["PE_caliber"] is None
 
     def test_real_comparison_failure_kept(self):
         # 真实比较失败仍保留原文案，且不标 missing
@@ -108,6 +110,22 @@ class TestGARP:
         result = calc_garp(data)
         assert "PE >= 行业平均" in result["failures"]
         assert "PE_missing" not in result["details"]
+        # 口径未传时 PE 有值分支仍写入 PE_caliber，值为 None（锁定约定）
+        assert result["details"]["PE_caliber"] is None
+
+    def test_pe_caliber_recorded_when_present(self):
+        # spec：details SHALL 记录 PE 与口径——PE 有值分支透传 PE_caliber
+        data = {
+            "PE": 20.0,
+            "industry_avg_PE": 25.0,
+            "PE_caliber": "static",
+            "net_profit_growth": 0.25,
+            "ROE": 0.20,
+            "debt_ratio": 0.45,
+        }
+        result = calc_garp(data)
+        assert result["details"]["PE"] == 20.0
+        assert result["details"]["PE_caliber"] == "static"
 
     def test_boundary_values(self):
         # Exactly at boundaries should pass

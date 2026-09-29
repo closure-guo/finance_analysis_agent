@@ -357,6 +357,7 @@ def _try_garp(
         "net_profit_growth": net_profit_growth,
         "ROE": roe,
         "debt_ratio": debt,
+        "PE_caliber": vs.get("PE_caliber"),
     }
     return calc_garp(data)
 
