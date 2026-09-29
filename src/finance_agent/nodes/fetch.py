@@ -103,6 +103,24 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "research_reports": [],
         "share_unlock": [],
         "block_trades": [],
+        # update-financial-freshness-and-valuation Task 4：最新报告期快照
+        # （估值外的最新期关键科目 + 同比；失败降级空 dict，ERROR 日志见抓取循环特判）
+        "latest_period_snapshot": {
+            "报告日": "2025-12-31",
+            "期类型": "年报",
+            "营业总收入(累计)": 65.19,
+            "归母净利润(累计)": 9.27,
+            "营业成本(累计)": 42.41,
+            "毛利率(%)": 34.95,
+            "资产负债率(%)": 64.11,
+            "存货": 78.26,
+            "合同负债": 48.52,
+            "上年同期营业总收入": 41.03,
+            "上年同期归母净利润": 6.88,
+            "营收同比(%)": 58.87,
+            "归母净利同比(%)": 34.74,
+            "missing": [],
+        },
     }
 
 
@@ -141,6 +159,8 @@ def _set_optional_fallback(result: dict, label: str) -> None:
         "research_reports": [],
         "share_unlock": [],
         "block_trades": [],
+        # update-financial-freshness-and-valuation Task 4：快照失败降级空 dict
+        "latest_period_snapshot": {},
     }
     result[label] = fallbacks.get(label)
 
@@ -198,6 +218,9 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
         futures[pool.submit(ak.fetch_research_reports, code)] = "research_reports"
         futures[pool.submit(ak.fetch_share_unlock, code)] = "share_unlock"
         futures[pool.submit(ak.fetch_block_trades, code)] = "block_trades"
+        # update-financial-freshness-and-valuation Task 4：最新报告期快照
+        # （非必需，失败降级空 dict + ERROR 日志；与报表同为 30 天慢变）
+        futures[pool.submit(ak.fetch_latest_period_snapshot, code)] = "latest_period_snapshot"
 
         # ── 收集结果（每个调用带 Langfuse span 追踪）──
         for future in as_completed(futures):
@@ -215,7 +238,12 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                         obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
                     if label in ("balance_sheet", "income_statement", "cash_flow_statement"):
                         raise  # 必需数据异常传播，终止管线
-                    logger.warning("%s 拉取失败: %s", label, e)
+                    if label == "latest_period_snapshot":
+                        # 快照供估值外的最新期分析消费，缺失比其他 optional 更刺眼：
+                        # ERROR 级别（其余 optional 保持 warning）
+                        logger.error("latest_period_snapshot 拉取失败，最新期快照缺失: %s", e)
+                    else:
+                        logger.warning("%s 拉取失败: %s", label, e)
                     _set_optional_fallback(result, label)
                     continue
 
@@ -278,6 +306,10 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
             elif label == "block_trades":
                 c.set(f"{code}:block_trades", value, ttl_seconds=3600)
                 result["block_trades"] = value
+            elif label == "latest_period_snapshot":
+                # 与报表同 30 天 TTL：快照随最新财报慢变，无需更高频刷新
+                c.set(f"{code}:latest_period_snapshot", value, ttl_seconds=2_592_000)
+                result["latest_period_snapshot"] = value
 
     # ── Step 2: 依赖 industry_info 的串行调用 ──
     # 关键非财务事件（需要股票名称）
