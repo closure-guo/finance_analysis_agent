@@ -96,10 +96,19 @@ _INT_SEGMENT = re.compile(r"^-?\d+$")
 
 
 def canonical_metric(name: str | None) -> str | None:
-    """别名 → 规范键；None/空串/未收录返回 None。"""
+    """别名 → 规范键；None/空串/未收录返回 None。
+
+    单位后缀形态（毛利率(%)、存货周转率(次)）先剥后缀再查——单位是记法不是
+    语义，state 键照抄带单位不得被判术语不一致（update-financial-freshness-
+    and-valuation：latest_period_snapshot 键名即带 (%) 后缀）。
+    """
     if not name:
         return None
-    return _ALIAS_TO_CANONICAL.get(name.strip().lower())
+    n = name.strip().lower()
+    if n in _ALIAS_TO_CANONICAL:
+        return _ALIAS_TO_CANONICAL[n]
+    n = re.sub(r"[（(][^）)]*[）)]$", "", n).rstrip("%").strip()
+    return _ALIAS_TO_CANONICAL.get(n)
 
 
 def _is_period_segment(seg: str) -> bool:

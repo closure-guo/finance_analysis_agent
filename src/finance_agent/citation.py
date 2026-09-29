@@ -369,7 +369,9 @@ def _recomputable_root(claim: Claim) -> bool:
 
 def _verify_computational(claim: Claim, state: dict) -> CitationResult:
     """计算型 claim：从原始数据重算指标，用相对容差 0.5% 比对。"""
-    parts = _apply_root_alias(claim.field_ref.split("."))
+    # 括号索引与直读路径同源展开（quarterly_trend.gross_margin[0] 类 claim）：
+    # 此前仅 split(".")，[N] 段落 dict.get 必 None → 假 FAIL path_unresolvable
+    parts = _apply_root_alias(_expand_brackets(claim.field_ref))
     root = parts[0]
     sub_path = parts[1:]
 
