@@ -603,3 +603,87 @@ class TestFetchQuarterlyIncomeExtended:
         assert "营收同比" in df.columns
         assert len(df) == 1  # 最终截断到最近 1 季
         assert df.iloc[0]["营收同比"] == pytest.approx(89.47, abs=0.01)
+
+
+class TestFetchLatestPeriodSnapshot:
+    """最新报告期快照：不限年报，取最新已披露报告期。"""
+
+    @staticmethod
+    def _inc_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "报告日": ["20260630", "20251231", "20250630", "20241231"],
+                "营业总收入": [2912864261.46, 6519094874.63, 1954146173.65, 5000000000.0],
+                "营业成本": [1718464963.55, 4240523945.89, 1329638462.72, 3200000000.0],
+                "归母净利润": [1342753980.93, 927000000.0, 94000000.0, 700000000.0],
+            }
+        )
+
+    @staticmethod
+    def _bs_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "报告日": ["20260630", "20251231", "20250630"],
+                "资产总计": [25312149848.91, 19823566917.19, 17553660550.0],
+                "负债合计": [12112639298.53, 12708096577.24, 12127248749.77],
+                "存货": [8832503986.79, 7825778934.48, 8322530306.59],
+                "合同负债": [5130654458.79, 4851847248.0, 4535774320.25],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_snapshot_from_h1_report(self, mock_ak, client):
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["报告日"] == "2026-06-30"
+        assert snap["期类型"] == "中报"
+        assert snap["营业总收入(累计)"] == 29.13
+        assert snap["归母净利润(累计)"] == 13.43
+        # 毛利率 = 1 - 17.18/29.13 = 41.0%
+        assert snap["毛利率(%)"] == 41.0
+        # 负债率 = 121.13/253.12 = 47.85%
+        assert snap["资产负债率(%)"] == 47.85
+        assert snap["存货"] == 88.33
+        assert snap["合同负债"] == 51.31
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_yoy_vs_same_period_prior_year(self, mock_ak, client):
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        # 营收同比 = (29.13 - 19.54)/19.54 = 49.08%
+        assert snap["营收同比(%)"] == 49.08
+        assert snap["上年同期归母净利润"] == 0.94
+        # 归母净利同比 = (13.43 - 0.94)/0.94 = 1328.72%
+        assert snap["归母净利同比(%)"] == 1328.72
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_no_prior_period_yoy_none_marked_missing(self, mock_ak, client):
+        inc = self._inc_df()[self._inc_df()["报告日"] != "20250630"]
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            inc if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["营收同比(%)"] is None
+        assert "上年同期数据缺失" in " ".join(snap["missing"])
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_balance_sheet_missing_fields_partial_snapshot(self, mock_ak, client):
+        bs = pd.DataFrame({"报告日": ["20260630"]})
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else bs
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["存货"] is None
+        assert "存货" in snap["missing"]
+        assert snap["毛利率(%)"] == 41.0  # 利润表部分照常装配
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_income_statement_failure_raises(self, mock_ak, client):
+        """利润表整体不可用 → _sina_report 重试后抛 RuntimeError（由 fetch 层降级）。"""
+        mock_ak.stock_financial_report_sina.side_effect = ConnectionError("RST")
+        with pytest.raises(RuntimeError):
+            client.fetch_latest_period_snapshot("688072")

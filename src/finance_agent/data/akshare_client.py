@@ -423,7 +423,7 @@ class AKShareClient:
                     "营业成本(单季)": float(cost) if not pd.isna(cost) else None,
                     "环比": float(qoq) if not pd.isna(qoq) else None,
                     "同比": yoy,
-                    "营收同比": rev_yoy,
+                    "营收同比": round(rev_yoy, 2) if rev_yoy is not None else None,
                 }
             )
 
@@ -431,6 +431,127 @@ class AKShareClient:
         # 只保留最近 N 个季度
         result = result.head(quarters)
         return self._normalize_nan(result)
+
+    # ── 最新报告期快照（update-financial-freshness-and-valuation Task 3）──
+
+    # 报告日尾码 → 期类型
+    _PERIOD_TYPE = {"1231": "年报", "0630": "中报", "0331": "一季报", "0930": "三季报"}
+
+    @staticmethod
+    def _compact_date(v) -> str:
+        """报告日归一化为紧凑 YYYYMMDD 字符串。
+
+        新浪接口返回 "20260630"，部分源/夹具用 "2026-06-30" 或 date 对象——
+        统一归一后再做排序与同期匹配，避免两种格式混用时匹配失效。
+        """
+        digits = re.sub(r"\D", "", str(v))
+        return digits[:8]
+
+    @staticmethod
+    def _yi(v) -> float | None:
+        """元 → 亿元，round 2；缺失返回 None。"""
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        return round(float(v) / 1e8, 2)
+
+    def fetch_latest_period_snapshot(self, stock_code: str) -> dict:
+        """最新报告期快照（不限年报）：中报/季报关键科目 + 同比，供基本面分析消费。
+
+        金额单位亿元、比率%；同期数据缺失时同比为 None 并在 missing 标注。
+        利润表整体不可用时 raise（由 fetch 层降级）；资产负债表缺失降级为部分快照。
+        """
+        stock = _add_prefix(stock_code)
+        inc = _sina_report(stock, "利润表")
+        if inc.empty:
+            raise ValueError(f"股票 {stock_code} 利润表数据不可用")
+        inc = self._rename_parent_cols(inc).copy()
+        inc["_ymd"] = inc["报告日"].map(self._compact_date)
+        inc = inc.sort_values("_ymd", ascending=False).reset_index(drop=True)
+        latest = inc.iloc[0]
+        ymd = str(latest["_ymd"])
+        report_date = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}"
+        period_type = self._PERIOD_TYPE.get(ymd[4:], "定期报告")
+
+        missing: list[str] = []
+
+        raw_rev = latest.get("营业总收入")
+        raw_cost = latest.get("营业成本")
+        revenue = self._yi(raw_rev)
+        cost = self._yi(raw_cost)
+        np_attr = self._yi(latest.get("归母净利润") or latest.get("归属于母公司股东的净利润"))
+        # 毛利率按原始值计算（先 round 成亿元再算比值会引入截断误差）；
+        # revenue/cost 守卫排除缺失与零营收，raw 守卫收窄 pandas-stubs 的 Any|None
+        gross_margin: float | None = None
+        if (
+            revenue not in (None, 0)
+            and cost is not None
+            and raw_rev is not None
+            and raw_cost is not None
+        ):
+            gross_margin = round((1 - raw_cost / raw_rev) * 100, 2)
+        if gross_margin is None:
+            missing.append("毛利率")
+
+        # 同期数据（上一年同月日，如 20260630 → 20250630）
+        prior_mask = (inc["_ymd"].str.slice(4) == ymd[4:]) & (
+            inc["_ymd"].str.slice(0, 4) == str(int(ymd[:4]) - 1)
+        )
+        prior_rows = inc[prior_mask]
+        prior_rev: float | None = None
+        prior_np: float | None = None
+        if prior_rows.empty:
+            missing.append("上年同期数据缺失")
+        else:
+            prior = prior_rows.iloc[0]
+            prior_rev = self._yi(prior.get("营业总收入"))
+            prior_np = self._yi(prior.get("归母净利润") or prior.get("归属于母公司股东的净利润"))
+        rev_yoy: float | None = None
+        if revenue is not None and prior_rev is not None and prior_rev != 0:
+            rev_yoy = round((revenue - prior_rev) / abs(prior_rev) * 100, 2)
+        np_yoy: float | None = None
+        if np_attr is not None and prior_np is not None and prior_np != 0:
+            np_yoy = round((np_attr - prior_np) / abs(prior_np) * 100, 2)
+
+        # 资产负债表（取同一报告日；该期缺失取最新一期并标注）
+        snap: dict = {
+            "报告日": report_date,
+            "期类型": period_type,
+            "营业总收入(累计)": revenue,
+            "归母净利润(累计)": np_attr,
+            "营业成本(累计)": cost,
+            "毛利率(%)": gross_margin,
+            "资产负债率(%)": None,
+            "存货": None,
+            "合同负债": None,
+            "上年同期营业总收入": prior_rev,
+            "上年同期归母净利润": prior_np,
+            "营收同比(%)": rev_yoy,
+            "归母净利同比(%)": np_yoy,
+            "missing": missing,
+        }
+
+        bs = _sina_report(stock, "资产负债表")
+        if not bs.empty:
+            bs = bs.copy()
+            bs["_ymd"] = bs["报告日"].map(self._compact_date)
+            bs = bs.sort_values("_ymd", ascending=False).reset_index(drop=True)
+            bs_rows = bs[bs["_ymd"] == ymd]
+            row_bs = bs_rows.iloc[0] if not bs_rows.empty else bs.iloc[0]
+            assets = self._yi(row_bs.get("资产总计"))
+            liab = self._yi(row_bs.get("负债合计"))
+            snap["存货"] = self._yi(row_bs.get("存货"))
+            snap["合同负债"] = self._yi(row_bs.get("合同负债"))
+            if assets is not None and assets != 0 and liab is not None:
+                snap["资产负债率(%)"] = round(liab / assets * 100, 2)
+            else:
+                missing.append("资产负债率")
+            if snap["存货"] is None:
+                missing.append("存货")
+            if snap["合同负债"] is None:
+                missing.append("合同负债")
+        else:
+            missing.extend(["资产负债率", "存货", "合同负债"])
+        return snap
 
     def fetch_industry_pe(self, stock_code: str) -> dict | None:
         """获取个股所属行业的平均静态PE。
