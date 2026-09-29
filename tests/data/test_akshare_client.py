@@ -792,6 +792,27 @@ class TestFetchPeerData:
         df = client.fetch_peer_data(["600001"])
         assert df is None
 
+    def test_quote_nan_pe_pb_skipped(self, client, monkeypatch):
+        """停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数处理，不得写入行毒化均值。"""
+        monkeypatch.setattr(
+            client,
+            "fetch_stock_quote",
+            lambda code: {"name": "X", "PE": float("nan"), "PB": float("nan")},
+        )
+        assert client.fetch_peer_data(["600001"]) is None
+
+    def test_nan_pe_with_valid_pb_normalized(self, client, monkeypatch):
+        """NaN PE 但 PB 有值：行内 PE 归一为 None，PB 保留。"""
+        monkeypatch.setattr(
+            client,
+            "fetch_stock_quote",
+            lambda code: {"name": "X", "PE": float("nan"), "PB": 3.2},
+        )
+        df = client.fetch_peer_data(["600001"])
+        assert df is not None and len(df) == 1
+        assert df.iloc[0]["PE"] is None
+        assert df.iloc[0]["PB"] == 3.2
+
     def test_all_failed_returns_none(self, client, monkeypatch):
         def fail(code):
             raise ConnectionError("down")

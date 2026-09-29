@@ -1050,6 +1050,13 @@ class AKShareClient:
                 continue
             pe = q.get("PE") or q.get("pe")
             pb = q.get("PB") or q.get("pb")
+            # 停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数归一——NaN 真值
+            # 直通会被 _build_peers_list 的 is not None 放行，毒化同业均值
+            # （Task 2 复审 ⚠️，与 compute._derive_pe_ttm F1 守卫同源问题）
+            if pe is not None and pd.isna(pe):
+                pe = None
+            if pb is not None and pd.isna(pb):
+                pb = None
             if pe is None and pb is None:
                 logger.warning("同业 %s 无 PE/PB（全回退失败），跳过", code)
                 continue
