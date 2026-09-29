@@ -499,12 +499,13 @@ class AKShareClient:
         prior_rows = inc[prior_mask]
         prior_rev: float | None = None
         prior_np: float | None = None
-        if prior_rows.empty:
-            missing.append("上年同期数据缺失")
-        else:
+        if not prior_rows.empty:
             prior = prior_rows.iloc[0]
             prior_rev = self._yi(prior.get("营业总收入"))
             prior_np = self._yi(prior.get("归母净利润") or prior.get("归属于母公司股东的净利润"))
+        if prior_rev is None and prior_np is None:
+            # 无同期行，或同期行存在但值全缺（审查 M2）——同比无从计算，均须标注
+            missing.append("上年同期数据缺失")
         rev_yoy: float | None = None
         if revenue is not None and prior_rev is not None and prior_rev != 0:
             rev_yoy = round((revenue - prior_rev) / abs(prior_rev) * 100, 2)
@@ -536,7 +537,12 @@ class AKShareClient:
             bs["_ymd"] = bs["报告日"].map(self._compact_date)
             bs = bs.sort_values("_ymd", ascending=False).reset_index(drop=True)
             bs_rows = bs[bs["_ymd"] == ymd]
-            row_bs = bs_rows.iloc[0] if not bs_rows.empty else bs.iloc[0]
+            if bs_rows.empty:
+                # 无同报告日行：回退取最新一期，但必须标注（审查 M1）——邻期值不得伪装同期值
+                row_bs = bs.iloc[0]
+                missing.append("资产负债表非同期（取最新一期）")
+            else:
+                row_bs = bs_rows.iloc[0]
             assets = self._yi(row_bs.get("资产总计"))
             liab = self._yi(row_bs.get("负债合计"))
             snap["存货"] = self._yi(row_bs.get("存货"))

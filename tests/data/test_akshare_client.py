@@ -687,3 +687,30 @@ class TestFetchLatestPeriodSnapshot:
         mock_ak.stock_financial_report_sina.side_effect = ConnectionError("RST")
         with pytest.raises(RuntimeError):
             client.fetch_latest_period_snapshot("688072")
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_balance_sheet_neighbor_period_fallback_marked_missing(self, mock_ak, client):
+        """BS 无同报告日行回退最新一期 → missing 标注（M1，邻期值不得伪装同期值）。"""
+        bs = self._bs_df()[self._bs_df()["报告日"] == "20251231"]
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else bs
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["报告日"] == "2026-06-30"  # 快照期仍为中报
+        assert snap["存货"] == 78.26  # 回退取 20251231 行
+        assert "资产负债表非同期" in " ".join(snap["missing"])
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_prior_period_nan_values_marked_missing(self, mock_ak, client):
+        """同期行存在但营收/归母净利全为 NaN → 同比 None 且 missing 标注（M2）。"""
+        inc = self._inc_df()
+        inc.loc[inc["报告日"] == "20250630", ["营业总收入", "归母净利润"]] = float("nan")
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            inc if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["上年同期营业总收入"] is None
+        assert snap["上年同期归母净利润"] is None
+        assert snap["营收同比(%)"] is None
+        assert snap["归母净利同比(%)"] is None
+        assert "上年同期数据缺失" in " ".join(snap["missing"])
