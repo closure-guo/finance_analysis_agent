@@ -41,3 +41,11 @@
 - [ ] 存在失败项，需修复后重新验证
 
 **遗留（不阻断 archive，待 owner 裁决）**：fetch_peer_data 死链（相对估值同业段）；revenue_yoy round 口径与 fetch 层 NaN 非 None 语义（与既有环比/同比列同病）；missing_reasons 重复文案；decision-integrity-gates 在途 delta 的推进归属。
+
+## 终审记录（2026-09-29 22:35）
+
+独立终审（全分支 a5b5e84..HEAD）裁决 Needs fixes → 修复 commit 31faee40 → 复核 **Approved**。
+
+- **C1（Critical，终审发现）**：quote.market_cap 两源单位不一致（东财主源=元、百度回退=亿元），新估值链路无条件按亿元消费——东财可用路径 PE_ttm 量级错 1 亿倍。四轮验证 run 恰逢东财被封全部走百度回退而漏网。修复：fetch 层百度 ×1e8 归一到元（与前端 Charts 除 1e8 约定同构）+ compute 元→亿单点换算 + 双源形单测钉死。**保留意见**：C1 实跑验证在东财被封环境完成，merge 后首次东财可用的 run 须抽验披露节「市值 … 亿」量级与 static 口径 GARP。
+- **I1/M1/M2（Important/Minor）**：relative_valuation 跨口径注（TTM vs 行业静态）、披露节缺失字段「暂缺」化、行业覆盖未命中组合用例——同 commit 修复并复核。
+- 终审确认的 spec 覆盖：22 Scenario 中 21 有实现+测试（1 个以 M2 补齐），全局约束（年报口径零改动/§1.10 登记/prompt 发布/五处 schema 一致/降级矩阵）全部核查通过。
