@@ -115,6 +115,69 @@ _FUND_MANAGER_ANNOTATIONS: dict[str, str] = {
 }
 
 
+# ── 财务口径披露（确定性渲染，不依赖 LLM 引用） ──
+
+
+def _format_freshness_section(state: dict) -> str | None:
+    """确定性渲染最新报告期快照 / 估值快照 / 健康度行业口径。
+
+    spec industry-threshold-coverage「健康度评分行业口径披露」：报告渲染层 SHALL
+    使读者可见评分所用口径。三轮 688072 实跑证明 LLM markdown 引用有方差
+    （有数据不引用），故此处程序化渲染，不经过任何 LLM。
+    三个数据源全缺时返回 None（不出现在报告中，零回归）。
+    """
+    lines: list[str] = []
+
+    snap = state.get("latest_period_snapshot")
+    if snap:
+        missing = snap.get("missing") or []
+        missing_note = f"；缺失项：{'、'.join(missing)}" if missing else ""
+        lines.append(
+            f"- 最新报告期快照：{snap.get('报告日', '?')}（{snap.get('期类型', '?')}，利润表累计口径）— "
+            f"毛利率 {snap.get('毛利率(%)')}%、资产负债率 {snap.get('资产负债率(%)')}%、"
+            f"存货 {snap.get('存货')} 亿、合同负债 {snap.get('合同负债')} 亿，"
+            f"营收同比 {snap.get('营收同比(%)')}%、归母净利同比 {snap.get('归母净利同比(%)')}%{missing_note}"
+        )
+
+    vsnap = state.get("valuation_snapshot")
+    if vsnap:
+        reasons = vsnap.get("missing_reasons") or []
+        if reasons:
+            lines.append(f"- 估值数据缺失（{'；'.join(reasons)}），无法判断贵贱")
+        else:
+            pe_caliber = vsnap.get("PE_caliber")
+            caliber_note = {
+                "static": "主源静态口径",
+                "derived_ttm": "TTM 推导口径",
+            }.get(pe_caliber, "口径未知")
+            pe_disp = vsnap.get("PE") if pe_caliber == "static" else vsnap.get("PE_ttm")
+            lines.append(
+                f"- 估值快照：市值 {vsnap.get('market_cap')} 亿、"
+                f"PE {pe_disp}（{caliber_note}）、PB {vsnap.get('PB')}"
+            )
+
+    health = state.get("health_score")
+    if health:
+        override = health.get("industry_override") or {}
+        industry = override.get("industry")
+        metrics = override.get("metrics") or []
+        if industry and metrics:
+            caliber_line = f"行业口径：{industry}（行业阈值覆盖：{'、'.join(metrics)}）"
+        else:
+            caliber_line = "通用口径（无行业阈值覆盖）"
+        lines.append(
+            f"- 财务健康度：{health.get('total')} 分（{health.get('rating')}），评分采用 {caliber_line}"
+        )
+
+    if not lines:
+        return None
+    body = "\n".join(lines)
+    return (
+        f"### 财务数据口径披露\n\n"
+        f"以下为管线确定性计算的数据快照与评分口径（非 LLM 生成，供交叉核对）：\n\n{body}\n"
+    )
+
+
 # ── 研究聚焦摘要（LLM 生成，有兜底） ──
 
 
@@ -358,6 +421,10 @@ def generate_report(state: dict) -> dict:
                 sections.append(_format_analyst_report(name, report))
 
     # ── 后续固定章节（编号自动顺延） ──
+    freshness_section = _format_freshness_section(state)
+    if freshness_section:
+        sections.append(freshness_section)
+
     conclusion = state.get("research_manager_conclusion")
     if conclusion:
         sections.append(f"{next_title('多空辩论结论')}\n{conclusion}\n")
