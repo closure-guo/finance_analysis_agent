@@ -161,7 +161,10 @@ class AKShareClient:
         return df[mask].sort_values("报告日", ascending=False).reset_index(drop=True)
 
     def _normalize_nan(self, df: pd.DataFrame) -> pd.DataFrame:
-        return df.where(df.notna(), other=None)  # pyrefly: ignore[no-matching-overload]
+        # D3：float64 列上 where(other=None) 会把 None 重新强转回 NaN（归一不生效），
+        # 先 astype(object) 再归一，保证出口全列 NaN → None、消费端 `is None` 判空可靠
+        # （「不产出伪值」契约）
+        return df.astype(object).where(df.notna(), None)  # pyrefly: ignore[no-matching-overload]
 
     def _check_min_years(self, df: pd.DataFrame, stock_code: str) -> None:
         if len(df) < 2:

@@ -606,6 +606,34 @@ class TestFetchQuarterlyIncomeExtended:
         assert len(df) == 1  # 最终截断到最近 1 季
         assert df.iloc[0]["营收同比"] == pytest.approx(89.47, abs=0.01)
 
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_nan_normalized_to_none_at_exit(self, mock_ak, client):
+        """D3：出口 NaN 归一——records 中 None 经 pd.DataFrame 构造变 float64 NaN，
+        消费端 `is None` 判空失效，违反「不产出伪值」契约；出口必须归回 None。
+
+        宽窗口仅 2 行（2026-06-30 与 2025-06-30）：2026Q2 的同比/营收同比可算
+        （float），2025Q2 找不到 2024 同期 → 同比/营收同比为 None。同比列因
+        float 与 None 混列被构造成 float64+NaN——正是判空失效的场景。
+        """
+        df = pd.DataFrame(
+            {
+                "REPORT_DATE": pd.to_datetime(["2026-06-30", "2025-06-30"]),
+                "PARENT_NETPROFIT": [7.72e8, 0.94e8],
+                "OPERATE_INCOME": [1.80e9, 0.95e9],
+                "OPERATE_COST": [1.07e9, 0.65e9],
+            }
+        )
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = df
+        out = client.fetch_quarterly_income("688072", quarters=2)
+
+        # 混列场景成立：2026Q2 同比确实算出（非恒 None），2025Q2 缺同期必须 None
+        assert isinstance(out.iloc[0]["同比"], float)
+        assert out.iloc[1]["同比"] is None
+        # 核心断言：出口全列不允许残留 float NaN——None 是唯一合法「缺失」表示
+        for col in out.columns:
+            for v in out[col].tolist():
+                assert not (isinstance(v, float) and pd.isna(v)), f"列 {col} 残留 NaN: {v!r}"
+
 
 class TestFetchLatestPeriodSnapshot:
     """最新报告期快照：不限年报，取最新已披露报告期。"""
