@@ -589,3 +589,17 @@ class TestFetchQuarterlyIncomeExtended:
         df = client.fetch_quarterly_income("688072", quarters=4)
         assert df["营业成本(单季)"].isna().all()
         assert df["营业收入(单季)"].notna().all()
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_revenue_yoy_computed_in_wide_window(self, mock_ak, client):
+        """营收同比在宽窗口（截断前）算好随行携带。
+
+        quarters=1 时最终只保留 2026Q2，但宽窗口 head(1*2+2)=4 行仍含
+        2025Q2（OPERATE_INCOME=0.95e9），故截断后 2026Q2 行仍携带
+        (1.80e9 - 0.95e9) / 0.95e9 * 100 ≈ 89.47。
+        """
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = self._quarterly_df()
+        df = client.fetch_quarterly_income("688072", quarters=1)
+        assert "营收同比" in df.columns
+        assert len(df) == 1  # 最终截断到最近 1 季
+        assert df.iloc[0]["营收同比"] == pytest.approx(89.47, abs=0.01)

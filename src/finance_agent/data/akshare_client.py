@@ -346,7 +346,9 @@ class AKShareClient:
         使用 stock_profit_sheet_by_quarterly_em（东方财富），返回数据中的
         PARENT_NETPROFIT 为单季度归母净利润。
 
-        返回列：报告日, 季度, 归母净利润(单季), 营业收入(单季), 营业成本(单季), 环比, 同比
+        返回列：报告日, 季度, 归母净利润(单季), 营业收入(单季), 营业成本(单季), 环比, 同比, 营收同比
+        营收同比在宽窗口（截断前）计算后随行携带——compute 层只见最近 quarters
+        季，结构性找不到去年同期，必须在此处（head(quarters) 之前）算好。
         """
         # symbol 需要大写 SH/SZ 前缀
         prefix = "SH" if stock_code.startswith(("6", "9")) else "SZ"
@@ -393,10 +395,22 @@ class AKShareClient:
             prev_year_q = f"{curr_year - 1}{curr_q[4:]}"
             prev_rows = df[df["季度"] == prev_year_q]
             yoy = None
+            rev_yoy = None
             if not prev_rows.empty:
                 prev_np = prev_rows.iloc[0]["PARENT_NETPROFIT"]
                 if not pd.isna(prev_np) and prev_np != 0:
                     yoy = (float(curr_np) - float(prev_np)) / abs(float(prev_np)) * 100
+                # 营收同比：复用同一去年同期行（列可能缺失或值为 NaN/None，均需防）
+                prev_rev = prev_rows.iloc[0].get("OPERATE_INCOME")
+                curr_rev = row.get("OPERATE_INCOME")
+                if (
+                    prev_rev is not None
+                    and curr_rev is not None
+                    and not pd.isna(prev_rev)
+                    and not pd.isna(curr_rev)
+                    and prev_rev != 0
+                ):
+                    rev_yoy = (float(curr_rev) - float(prev_rev)) / abs(float(prev_rev)) * 100
 
             rev = row.get("OPERATE_INCOME")
             cost = row.get("OPERATE_COST")
@@ -409,6 +423,7 @@ class AKShareClient:
                     "营业成本(单季)": float(cost) if not pd.isna(cost) else None,
                     "环比": float(qoq) if not pd.isna(qoq) else None,
                     "同比": yoy,
+                    "营收同比": rev_yoy,
                 }
             )
 

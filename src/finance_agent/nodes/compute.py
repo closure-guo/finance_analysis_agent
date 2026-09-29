@@ -295,17 +295,9 @@ def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
         trend["qoq"].append(qoq)
         yoy = row.get("同比")
         trend["yoy"].append(yoy)
-
-    # 营收同比：去年同期（同季度标签上一年）
-    rev_by_q = {
-        q: r for q, r in zip(trend["quarters"], trend["revenue"], strict=False) if r is not None
-    }
-    for q, r in zip(trend["quarters"], trend["revenue"], strict=False):
-        prev = None
-        if r is not None and q:
-            prev_q = f"{int(q[:4]) - 1}{q[4:]}"
-            prev = rev_by_q.get(prev_q)
-        trend["revenue_yoy"].append(round((r - prev) / prev * 100, 2) if prev else None)
+        # 营收同比由 fetch 层在宽窗口（截断前）算好随行携带，这里仅透传——
+        # 本层只见最近 quarters 季，结构性找不到去年同期
+        trend["revenue_yoy"].append(row.get("营收同比"))
 
     # 拐点检测
     yoy_vals = [v for v in trend["yoy"] if v is not None]
