@@ -398,11 +398,15 @@ class AKShareClient:
                 if not pd.isna(prev_np) and prev_np != 0:
                     yoy = (float(curr_np) - float(prev_np)) / abs(float(prev_np)) * 100
 
+            rev = row.get("OPERATE_INCOME")
+            cost = row.get("OPERATE_COST")
             records.append(
                 {
                     "报告日": str(row["REPORT_DATE"])[:10],
                     "季度": curr_q,
                     "归母净利润(单季)": float(curr_np),
+                    "营业收入(单季)": float(rev) if not pd.isna(rev) else None,
+                    "营业成本(单季)": float(cost) if not pd.isna(cost) else None,
                     "环比": float(qoq) if not pd.isna(qoq) else None,
                     "同比": yoy,
                 }

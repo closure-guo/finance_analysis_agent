@@ -554,3 +554,38 @@ class TestFetchStockQuoteBaiduFallback:
         assert result.get("name") == "拓荆科技"
         assert "PE" not in result or result["PE"] is None
         assert any("行情" in r.message for r in caplog.records), "全部回退失败无 ERROR 日志"
+
+
+class TestFetchQuarterlyIncomeExtended:
+    """季度利润表扩展：单季营收/营业成本列。"""
+
+    @staticmethod
+    def _quarterly_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "REPORT_DATE": pd.to_datetime(
+                    ["2026-06-30", "2026-03-31", "2025-12-31", "2025-06-30"]
+                ),
+                "PARENT_NETPROFIT": [7.72e8, 5.71e8, 3.70e8, 0.94e8],
+                "OPERATE_INCOME": [1.80e9, 1.12e9, 2.10e9, 0.95e9],
+                "OPERATE_COST": [1.07e9, 0.68e9, 1.30e9, 0.65e9],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_revenue_and_cost_columns_present(self, mock_ak, client):
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = self._quarterly_df()
+        df = client.fetch_quarterly_income("688072", quarters=2)
+        assert "营业收入(单季)" in df.columns
+        assert "营业成本(单季)" in df.columns
+        row = df[df["季度"] == "2026Q2"].iloc[0]
+        assert row["营业收入(单季)"] == 1.80e9
+        assert row["营业成本(单季)"] == 1.07e9
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_missing_cost_yields_none_not_zero(self, mock_ak, client):
+        df_partial = self._quarterly_df().drop(columns=["OPERATE_COST"])
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = df_partial
+        df = client.fetch_quarterly_income("688072", quarters=4)
+        assert df["营业成本(单季)"].isna().all()
+        assert df["营业收入(单季)"].notna().all()
