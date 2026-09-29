@@ -1031,3 +1031,29 @@ class AKShareClient:
                 }
             )
         return rows
+
+    def fetch_peer_data(self, stock_codes: list[str]) -> pd.DataFrame | None:
+        """逐标的抓取同业名称/PE/PB（复用 fetch_stock_quote 主源+回退链）。
+
+        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None
+        （delta clear-valuation-chain-debts ADDED「同业财务数据获取」）。
+        """
+        codes = [str(c).strip() for c in (stock_codes or []) if str(c).strip()]
+        if not codes:
+            return None
+        rows: list[dict] = []
+        for code in codes:
+            try:
+                q = self.fetch_stock_quote(code)
+            except Exception as e:
+                logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
+                continue
+            pe = q.get("PE") or q.get("pe")
+            pb = q.get("PB") or q.get("pb")
+            if pe is None and pb is None:
+                logger.warning("同业 %s 无 PE/PB（全回退失败），跳过", code)
+                continue
+            rows.append({"name": q.get("name") or code, "code": code, "PE": pe, "PB": pb})
+        if not rows:
+            return None
+        return pd.DataFrame(rows, columns=["name", "code", "PE", "PB"])

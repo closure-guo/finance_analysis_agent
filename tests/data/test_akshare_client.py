@@ -766,3 +766,38 @@ class TestFetchIndustryCninfoLatest:
         )
         mock_ak.stock_industry_change_cninfo.return_value = df
         assert client._fetch_industry_cninfo("688072") == "半导体设备"
+
+
+class TestFetchPeerData:
+    """delta clear-valuation-chain-debts D2：同业财务数据抓取。"""
+
+    def test_mixed_success_skips_failed_peer(self, client, monkeypatch):
+        calls = []
+
+        def fake_quote(code):
+            calls.append(code)
+            if code == "688012":
+                return {"name": "中微公司", "PE": 60.0, "PB": 10.0}
+            raise ConnectionError("全源失败")
+
+        monkeypatch.setattr(client, "fetch_stock_quote", fake_quote)
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 1
+        assert df.iloc[0]["name"] == "中微公司"
+        assert df.iloc[0]["PE"] == 60.0
+        assert calls == ["688012", "002371"]
+
+    def test_quote_without_pe_pb_skipped(self, client, monkeypatch):
+        monkeypatch.setattr(client, "fetch_stock_quote", lambda code: {"name": "X", "code": code})
+        df = client.fetch_peer_data(["600001"])
+        assert df is None
+
+    def test_all_failed_returns_none(self, client, monkeypatch):
+        def fail(code):
+            raise ConnectionError("down")
+
+        monkeypatch.setattr(client, "fetch_stock_quote", fail)
+        assert client.fetch_peer_data(["600001", "600002"]) is None
+
+    def test_empty_input_returns_none(self, client):
+        assert client.fetch_peer_data([]) is None

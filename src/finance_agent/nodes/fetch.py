@@ -359,4 +359,10 @@ def _fetch_peers(ak, code, state, industry_info):
     peer_codes = state.get("peer_codes")
     if not peer_codes or not industry_info:
         return None
-    return ak.fetch_peer_data(peer_codes)
+    df = ak.fetch_peer_data(peer_codes)
+    # clear-valuation-chain-debts D2：空表（全标的失败/无 PE/PB）归一 None，
+    # 与「全部失败降级 None」spec 语义一致——上游 span 走 skipped 分支，
+    # peer_financials 键不写入，下游 state.get 默认 None。
+    if df is None or df.empty:
+        return None
+    return df
