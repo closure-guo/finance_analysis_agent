@@ -494,7 +494,6 @@ def test_avoidance_stats_source_and_version_filter(db):
     assert live["avoidance_win"] == 1 and live["settled"] == 1
 
 
-<<<<<<< HEAD
 class TestMetricsBetaAlphaColumns:
     def test_old_db_migrated_idempotent(self, tmp_path):
         """旧 schema(无 beta/jensen_alpha 列)→ init 补列,重跑不加列。"""
@@ -557,4 +556,3 @@ def test_prediction_ids_by_direction(db):
     assert got == {neutral_id}
     assert prediction_ids_by_direction("long", db_path=db) == {long_id}
     assert prediction_ids_by_direction("short", db_path=db) == set()
->>>>>>> bac57d45 (fix: [track-record] neutral 盯市改多头口径并排除出组合聚合 (incident 032 根因 A))
