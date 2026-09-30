@@ -7,14 +7,19 @@ Risk Judge 综合辩论给出最终 TradeDecision。
 from __future__ import annotations
 
 import json
+import logging
+import math
 
 from finance_agent.debate_anchors import anchor_stats, check_argument_anchors
 from finance_agent.langfuse_tracing import update_current_span
+from finance_agent.metrics.decision_price_check import check_decision_prices
 from finance_agent.models import DebateMessage, TradeDecision
 from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.nodes.validate import apply_payout_self_check as _apply_payout_self_check
 from finance_agent.nodes.validate import final_price_missing, inaction_rationale_missing
 from finance_agent.prompts.loader import load_prompt_with_meta
+
+logger = logging.getLogger(__name__)
 
 
 def _risk_debater(state: dict, role: str, prompt_name: str, node_name: str = "") -> dict:
@@ -167,6 +172,20 @@ def risk_judge(state: dict) -> dict:
     )
     if _payout_fixed:
         decision = decision.model_copy(update={"reasoning": _reasoning})
+    # 决策文本价位交叉校验（update-decision-integrity-gates Task 1）：reeval_triggers/
+    # inaction_reason/reasoning 的自由文本价位 vs state 已验证技术指标。在 payout
+    # self-check 之后调用（此时 reasoning 已定型），纯观测——anomaly 只登记供报告
+    # 「再评估触发条件/不行动原因」旁标注（Task 3 渲染），决策照常放行
+    try:
+        decision_price_anomalies: list[dict] = check_decision_prices(
+            decision,
+            state.get("technical_indicators") or {},
+            state.get("price_levels") or {},
+            _latest_close_for_price_check(state),
+        )
+    except Exception:  # noqa: BLE001 -- 观测旁路：校验自身异常不得打断决策放行
+        logger.warning("decision_price_check 执行失败（已忽略，不影响决策放行）", exc_info=True)
+        decision_price_anomalies = []
 
     return {
         "final_trade_decision": decision,
@@ -174,7 +193,31 @@ def risk_judge(state: dict) -> dict:
         "payout_ratio_conflict_skipped": _payout_skipped,
         "final_price_check": final_price_check,
         "final_inaction_check": final_inaction_check,
+        "decision_price_anomalies": decision_price_anomalies,
     }
+
+
+def _latest_close_for_price_check(state: dict) -> float | None:
+    """最新收盘最稳取法：kline 尾行收盘（与 validate 同源）→ price_levels.entry_ref → None。
+
+    形态噪声（空表/缺列/NaN/非数）一律回落下一级，取不到传 None——校验器据此
+    跳过空洞检测、仅做偏差核对，MUST NOT 因行情缺位抛异常。
+    """
+    kline = state.get("kline")
+    try:
+        if kline is not None and len(kline) > 0:
+            value = float(kline["收盘"].iloc[-1])
+            if math.isfinite(value) and value > 0:
+                return value
+    except Exception:  # noqa: BLE001 -- 行情形态噪声回落 entry_ref，不阻断观测
+        logger.debug(
+            "latest_close 从 kline 尾行取值失败，回落 price_levels.entry_ref", exc_info=True
+        )
+    entry_ref = (state.get("price_levels") or {}).get("entry_ref")
+    converted = float(entry_ref) if isinstance(entry_ref, (int, float)) else None
+    if converted is not None and math.isfinite(converted) and converted > 0:
+        return converted
+    return None
 
 
 def _build_risk_context(state: dict) -> str:

@@ -192,6 +192,10 @@ class AnalysisState(TypedDict, total=False):
     final_inaction_check: (
         dict  # 终稿非执行动作理由完整性（require-watch-hold-rationale）：{result, note}
     )
+    # 决策文本价位交叉校验（update-decision-integrity-gates Task 1）：risk_judge 产出
+    # 的 anomaly 登记（reeval_triggers/inaction_reason/reasoning 自由文本价位 vs 已验证
+    # 技术指标；纯观测不参与路由），报告「再评估触发条件/不行动原因」旁标注消费
+    decision_price_anomalies: list[dict]
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──
