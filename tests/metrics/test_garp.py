@@ -5,6 +5,7 @@ GARP = Growth at a Reasonable Price
 全部满足 → pass, 否则 → fail（附带哪些条件未满足）
 """
 
+import numpy as np
 import pytest
 
 from finance_agent.metrics.garp import calc_garp
@@ -181,3 +182,20 @@ class TestGarpHonestBucketAllInputs:
         assert "负债率 >= 60%" in result["failures"]
         for key in ("净利润增长率_missing", "ROE_missing", "负债率_missing"):
             assert key not in result["details"]
+
+
+class TestCleanNumNumpyScalars:
+    """终审 nit 收口：numpy 标量 NaN（np.float32/np.float64）不得穿透守卫伪装通过。"""
+
+    @pytest.mark.parametrize("nan", [float("nan"), np.float32("nan"), np.float64("nan")])
+    def test_numpy_nan_debt_treated_as_missing(self, nan):
+        data = {
+            "PE": 20.0,
+            "industry_avg_PE": 25.0,
+            "net_profit_growth": 0.25,
+            "ROE": 0.20,
+            "debt_ratio": nan,
+        }
+        result = calc_garp(data)
+        assert "负债率 数据缺失（未参与比较）" in result["failures"]
+        assert result["details"]["负债率_missing"] is True

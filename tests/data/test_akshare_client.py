@@ -797,7 +797,20 @@ class TestFetchIndustryCninfoLatest:
 
 
 class TestFetchPeerData:
-    """delta clear-valuation-chain-debts D2：同业财务数据抓取。"""
+    """delta clear-valuation-chain-debts D2：同业财务数据抓取。
+
+    共享 spot 表引入后，本类用例统一让共享表拉取快速失败（走逐标的
+    fetch_stock_quote mock 路径）；spot 命中路径见 TestFetchPeerDataSharedSpot。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fast_spot_failure(self, monkeypatch):
+        """共享 spot 表拉取快速失败 → 逐标的走本类 mock 的 fetch_stock_quote。"""
+        with patch("finance_agent.data.akshare_client.ak") as mock_ak:
+            mock_ak.stock_zh_a_spot_em.side_effect = ConnectionError("RST")
+            monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+            monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+            yield
 
     def test_mixed_success_skips_failed_peer(self, client, monkeypatch):
         calls = []
@@ -871,3 +884,49 @@ class TestFetchPeerDataHeterogeneousRows:
         assert df.iloc[1]["PE"] is None
         assert df.iloc[0]["PE"] == 60.0
         assert not any(isinstance(v, float) and pd.isna(v) for v in df["PE"].tolist())
+
+
+class TestFetchPeerDataSharedSpot:
+    """同业批抓取共享单次全市场 spot 表（效率挂账收口：N×spot → 1×）。"""
+
+    @staticmethod
+    def _spot_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "名称": ["中微公司", "北方华创", "贵州茅台"],
+                "代码": ["688012", "002371", "600519"],
+                "最新价": [200.0, 300.0, 1800.0],
+                "总市值": [1.5e11, 2.0e11, 2.0e12],
+                "市盈率-动态": [55.0, 48.0, 25.0],
+                "市净率": [9.0, 8.0, 8.5],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_spot_table_serves_all_peers_without_fallback(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_spot_em.return_value = self._spot_df()
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 2
+        assert df.iloc[0]["PE"] == 55.0 and df.iloc[0]["PB"] == 9.0
+        # spot 表全覆盖 → 不触发百度/腾讯回退
+        mock_ak.stock_zh_valuation_baidu.assert_not_called()
+        mock_ak.stock_zh_a_hist_tx.assert_not_called()
+        # 共享断言：N peer 只拉 1 次全市场 spot 表（效率挂账：N× → 1×）
+        assert mock_ak.stock_zh_a_spot_em.call_count == 1
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_spot_miss_peer_falls_back_to_quote_chain(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_spot_em.return_value = self._spot_df()
+        mock_ak.stock_zh_valuation_baidu.return_value = pd.DataFrame({"value": [11.26]})
+        mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame(
+            {"date": ["2026-09-29"], "open": [1.0], "close": [1.1], "high": [1.2], "low": [0.9]}
+        )
+        df = client.fetch_peer_data(["688012", "600300"])
+        assert df is not None and len(df) == 2
+        # 688012 来自 spot 表；600300 表未命中 → 走 quote 回退链（百度 PB，PE 缺）
+        assert df.iloc[0]["PE"] == 55.0
+        assert df.iloc[1]["PE"] is None and df.iloc[1]["PB"] == 11.26

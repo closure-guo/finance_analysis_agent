@@ -134,3 +134,30 @@ def _fill_fresh_keys_except(cache: DataCache, skip: str) -> None:
         cache.set("macro_indicators", {"pmi": []}, ttl_seconds=86_400)
     if skip != "news":
         cache.set(f"{CODE}:news", [{"title": "x"}], ttl_seconds=3600)
+
+
+class TestCacheReadsideNanNormalization:
+    """终审 M1 收口：D3 修复前写入的 quarterly_income 缓存条目（30 天 TTL）
+    读回仍含 float64 NaN——check_cache 读出口归一，消费端 is None 判空可靠。"""
+
+    def test_legacy_nan_quarterly_income_normalized_on_read(self, cache):
+        import pandas as pd
+
+        _fill_slow_keys(cache, CODE)
+        _fill_fresh_keys(cache, CODE)
+        legacy = pd.DataFrame(
+            {
+                "季度": ["2025Q3", "2025Q4"],
+                "归母净利润(单季)": [4.62, 3.70],
+                "环比": [float("nan"), -19.91],
+                "同比": [float("nan"), -11.20],
+            }
+        )
+        cache.set(f"{CODE}:quarterly_income", legacy, ttl_seconds=2_592_000)
+
+        result = check_cache({"stock_code": CODE}, cache=cache)
+        qi = result["quarterly_income"]
+        assert not any(
+            isinstance(v, float) and pd.isna(v) for col in ("环比", "同比") for v in qi[col]
+        )
+        assert qi.iloc[0]["环比"] is None

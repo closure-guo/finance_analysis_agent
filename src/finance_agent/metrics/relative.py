@@ -40,7 +40,8 @@ def calc_relative_valuation(
             p[metric] for p in peers if p.get(metric) is not None and not pd.isna(p[metric])
         ]
 
-        if not peer_values or target_val is None:
+        # NaN target：三向比较恒 False 会伪装成 fair（终审 C1 纵深守卫）
+        if not peer_values or target_val is None or pd.isna(target_val):
             result[metric] = {
                 "target": target_val,
                 "peer_avg": None,

@@ -24,6 +24,8 @@ TTL 策略（ADR-0004 + 收窄）：
 
 from __future__ import annotations
 
+import pandas as pd
+
 from finance_agent.data.cache import DataCache, get_shared_cache
 from finance_agent.data.monitoring import get_monitor
 
@@ -95,9 +97,12 @@ def check_cache(state: dict, cache=None) -> dict:
     if key_events is not None:
         result["key_events"] = key_events
 
-    # 季度利润（永久缓存）有则附带
+    # 季度利润（永久缓存）有则附带；读出口 NaN 归一——D3 修复前写入的旧条目
+    # （30 天 TTL 内）仍含 float64 NaN，消费端 is None 判空不可靠（终审 M1）
     quarterly_income = c.get(f"{code}:quarterly_income")
     if quarterly_income is not None:
+        if isinstance(quarterly_income, pd.DataFrame):
+            quarterly_income = quarterly_income.astype(object).where(quarterly_income.notna(), None)
         result["quarterly_income"] = quarterly_income
 
     # 数据源监控：命中计数（非侵入，不改 HIT 判定与返回结构）

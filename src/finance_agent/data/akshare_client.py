@@ -318,22 +318,38 @@ class AKShareClient:
             self.sources_seen["industry"].update({"cninfo", "missing"})
         return result
 
-    def fetch_stock_quote(self, stock_code: str) -> dict:
-        # 主源：东方财富实时行情（含 PE/PB/市值/价格）
-        df = _call_ak(ak.stock_zh_a_spot_em)
-        if df is not None and not df.empty:
-            # 尝试多种格式匹配（纯数字 / 带前缀）
-            for code_key in (stock_code, stock_code.lstrip("sh").lstrip("sz")):
-                row = df[df["代码"] == code_key]
-                if not row.empty:
-                    break
+    @staticmethod
+    def _quote_from_spot_df(df, stock_code: str) -> dict | None:
+        """东财全市场 spot 表 → 单标的 quote 映射。
+
+        fetch_stock_quote 与 fetch_peer_data 共享的主源映射逻辑（同业批抓取
+        共享单次 spot 表，N 标的从 N× 全市场拉取降到 1×）。
+        """
+        if df is None or df.empty:
+            return None
+        # 尝试多种格式匹配（纯数字 / 带前缀）
+        row = pd.DataFrame()
+        for code_key in (stock_code, stock_code.lstrip("sh").lstrip("sz")):
+            row = df[df["代码"] == code_key]
             if not row.empty:
-                raw = row.iloc[0].to_dict()
-                mapped = {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
-                self.sources_seen["market_cap"].add(
-                    "eastmoney" if mapped.get("market_cap") is not None else "missing"
-                )
-                return mapped
+                break
+        if row.empty:
+            return None
+        raw = row.iloc[0].to_dict()
+        return {
+            _QUOTE_KEY_MAP.get(str(k), k): v  # spot 表列名 Any → str 后再查映射
+            for k, v in raw.items()
+        }
+
+    def fetch_stock_quote(self, stock_code: str) -> dict:
+        # 主源：东方财富实时行情（含 PE/PB/市值/价格全字段）
+        df = _call_ak(ak.stock_zh_a_spot_em)
+        mapped = self._quote_from_spot_df(df, stock_code)
+        if mapped is not None:
+            self.sources_seen["market_cap"].add(
+                "eastmoney" if mapped.get("market_cap") is not None else "missing"
+            )
+            return mapped
 
         # ── 二级回退（add-quote-baidu-fallback）：东财被 TLS 风控封锁时，
         # 用百度估值补 market_cap/PB、腾讯日线补 price——恢复估值与价格维度
@@ -1040,19 +1056,33 @@ class AKShareClient:
 
         单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None
         （delta clear-valuation-chain-debts ADDED「同业财务数据获取」）。
+        共享单次全市场 spot 表：N 标的的主源查询从 N× 全市场拉取降到 1×，
+        表未命中/失败的标的再逐个走 fetch_stock_quote 完整回退链。
         """
         codes = [str(c).strip() for c in (stock_codes or []) if str(c).strip()]
         if not codes:
             return None
+        try:
+            spot_df = _call_ak(ak.stock_zh_a_spot_em)
+        except Exception as e:
+            logger.warning("同业共享行情表拉取失败，逐标的走完整回退链: %s", e)
+            spot_df = None
         rows: list[dict] = []
         for code in codes:
-            try:
-                q = self.fetch_stock_quote(code)
-            except Exception as e:
-                logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
-                continue
+            q: dict = {}
+            if spot_df is not None:
+                q = self._quote_from_spot_df(spot_df, code) or {}
             pe = q.get("PE") or q.get("pe")
             pb = q.get("PB") or q.get("pb")
+            if (pe is None or pd.isna(pe)) and (pb is None or pd.isna(pb)):
+                # spot 表未命中或无 PE/PB → 单标的走完整主源+回退链
+                try:
+                    q = self.fetch_stock_quote(code)
+                except Exception as e:
+                    logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
+                    continue
+                pe = q.get("PE") or q.get("pe")
+                pb = q.get("PB") or q.get("pb")
             # 停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数归一——NaN 真值
             # 直通会被 _build_peers_list 的 is not None 放行，毒化同业均值
             # （Task 2 复审 ⚠️，与 compute._derive_pe_ttm F1 守卫同源问题）

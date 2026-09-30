@@ -9,14 +9,16 @@
 
 from __future__ import annotations
 
-import math
-
 
 def _clean_num(v) -> float | None:
-    """NaN 视同缺失：NaN 参与比较恒 False，会把缺数伪装成比较通过。"""
+    """NaN 视同缺失：NaN 参与比较恒 False，会把缺数伪装成比较通过。
+
+    v != v 为 IEEE NaN 判定，类型无关——np.float32 等 numpy 标量（非 float
+    子类）同样命中，不再被 isinstance 守卫漏过（终审 nit）。
+    """
     if v is None:
         return None
-    if isinstance(v, float) and math.isnan(v):
+    if v != v:
         return None
     return float(v)
 
