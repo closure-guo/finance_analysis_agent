@@ -449,7 +449,9 @@ def _node_summary(node_name: str, accumulated: dict, update: dict) -> str:
         parts = [f"计算 {count} 项核心指标"]
         hs = accumulated.get("health_score")
         if isinstance(hs, dict) and hs:
-            score = hs.get("score", hs.get("health_score"))
+            # health_score 的分值键是 total（无 score 键——旧取值恒 None 死代码，
+            # clear-valuation-chain-debts D5）
+            score = hs.get("total")
             if score is not None:
                 parts.append(f"健康度 {score}")
         anomalies = accumulated.get("anomalies") or []

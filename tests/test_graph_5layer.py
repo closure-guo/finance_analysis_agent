@@ -138,3 +138,27 @@ class TestNodeOutputChannels:
         channels = set(build_5layer_graph().channels)
         missing_channel = produced - channels
         assert not missing_channel, f"已声明但未建图通道：{sorted(missing_channel)}"
+
+    def test_fetch_outputs_all_declared_and_channeled(self, monkeypatch):
+        """门禁扩展（clear-valuation-chain-debts D6）：fetch_data 产出键同检。
+
+        agent-node-contracts 门禁条款原文「至少 compute_metrics」——fetch 是
+        latest_period_snapshot 等新键的产出节点，同样受静默丢弃风险约束。
+        TESTING=1 stub 走 fetch_data 不触网；stub 键集与真实输出一致性由
+        test_pipeline_stub 另行约束。
+        """
+        from finance_agent.graph import build_5layer_graph
+        from finance_agent.nodes.fetch import fetch_data
+        from finance_agent.state import AnalysisState
+
+        monkeypatch.setenv("TESTING", "1")
+        produced = set(fetch_data({"stock_code": "600519", "stock_name": "贵州茅台"}).keys())
+        declared = set(AnalysisState.__annotations__)
+        missing_declared = produced - declared
+        assert not missing_declared, (
+            f"fetch 产出未声明键会被 LangGraph 静默丢弃（027 教训）：{sorted(missing_declared)}"
+        )
+
+        channels = set(build_5layer_graph().channels)
+        missing_channel = produced - channels
+        assert not missing_channel, f"已声明但未建图通道：{sorted(missing_channel)}"
