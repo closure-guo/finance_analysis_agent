@@ -39,3 +39,12 @@
 - [ ] 存在失败项，需修复后重新验证
 
 **遗留（挂账，非阻断）**：SSE 断开误标 failed（见异常 2，建议 A 类或 session-streaming 小 delta）；同业批抓取共享 spot 表优化；GARP `_clean_num` numpy 标量 nit；报告估值「有值」分支 None 内插文案病（backlog）。
+
+## 终审记录（2026-09-30）
+
+独立终审裁决 Needs fixes（1 Critical）→ 修复 commit 1689e435 → 复核 **Approved（可 archive）**。
+
+- **C1（终审发现，端到端实证）**：fetch_peer_data 行级 NaN 归一在 DataFrame 构造边界失效——混合双行（一 peer PE=None + 一 peer PE 有值）时 None 被强转回 float64 NaN，毒化同业均值（peer_avg=nan）且三向比较恒 False 伪装成 "fair"。修复：出口复用 `_normalize_nan` 根因归一（与 D3 同法）+ relative.py 纵深守卫 + 混合双行用例。
+- **I1**：D6 门禁盲区——stub 缺真实路径 4 键（kline/benchmark_kline/industry_pe/quarterly_income）且 docstring 声明失实。修复：stub 键集与真实路径同构（19 键）+ docstring 修正；连带修复 stub 空 kline 引起的两个全图测试失败（改有效 80 期 kline）。
+- **I2**：ADDED 四场景测试映射缺口补齐（_fetch_peers 节点级守卫直测 ×2）。
+- 终审独立复现确认：修复前同输入 `peer_avg: nan, conclusion: 'fair'` → 修复后 `peer_avg: 60.0` 结论正确。挂账定性复核：SSE 断开误标 failed 确认为存量（blame 2026-07-09，早于本 delta）。
