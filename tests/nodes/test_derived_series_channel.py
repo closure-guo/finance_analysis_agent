@@ -54,6 +54,14 @@ class TestDerivedSeriesChannel:
         # 非 live 测试不得写默认 reports/：全图跑到终止节点 generate_file 会落盘
         # ~760KB × 3 格式（docx/pptx/md）。同 test_export_api.py 隔离手法。
         monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+        # 缓存隔离（incident 031 同族）：check_cache 读共享 cache.db 时，本地
+        # 缓存预热状态会改变 HIT/MISS 路径并覆盖注入 state——stub 测试必须与
+        # 共享缓存状态解耦（同 test_pipeline_stub.testing_env 手法）。
+        from finance_agent.data.cache import DataCache
+
+        monkeypatch.setattr(
+            "finance_agent.nodes.cache.get_shared_cache", lambda: DataCache(db_path=":memory:")
+        )
         import finance_agent.nodes.analysts as analysts_mod
 
         captured: dict = {}
