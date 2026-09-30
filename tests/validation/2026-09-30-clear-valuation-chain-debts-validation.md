@@ -30,7 +30,7 @@
 ## 异常记录
 
 1. **带 peer_codes 的 LLM 全管线 run 失败（fetch 超慢）**：东财全封日每标的回退链 ~90s+，fetch 阶段 15 分钟未完成（主标的+2 peer+kline+行业 PE 全在回退）。**非本 delta 引入**（回退链是既有设计；fetch_peer_data 复用之，Task 2 审查已备注成本可接受）。处置：验收改离线驱动（如上）。改进候选（挂账）：同业批抓取共享单次 spot 表。
-2. **既有 bug 暴露：SSE 客户端断开误标会话 failed**（api.py:1175 except Exception 兜底把 curl --max-time 断开当管线失败，failure_reason=None；管线线程实际仍在跑）。非本 delta 引入（fetch 慢放大了断开落在生成窗口的概率）。**挂账**：建议 A 类修复（SSE 连接异常 SHALL NOT 覆写会话终态，终态由 pipeline_runner 全权负责）——属 session-streaming 域，未入本 delta 范围。
+2. **（定性已更正 2026-09-30）管线瞬态异常 + 终态观测洞**：journal 错误事件实证 4c038a41 的 failed 来自管线执行体自身异常（fetch 阶段「DataFrame truth value ambiguous」，瞬态网络形态，graph 层重放未能复现），**并非** SSE 断开误标——`_run_graph_streaming` 是管线本体，其 except 写 failed 是正确职责。真缺陷是观测洞：①update_session_status 未带 failure_reason（库中 None）②error 事件 traceback 字段存对象 repr 零信息。**已修**（api.py 终态补 reason + format_exc，契约测试 test_pipeline_exception_observability 2 用例）；瞬态根因待下次发生用新 traceback 定位（挂账）。fetch 线程池 future 在生成器死后继续跑造成「管线还活着」假象，扩大了排查成本——已知现象，无行动项。
 3. Task 5 派发代理被环境取消（无产出），controller 内联实施完成；Task 3 实施者的根因修复偏差（修 `_normalize_nan` 而非简报插行）经审查三项核实裁定成立。
 
 ## 结论
@@ -38,7 +38,7 @@
 - [x] 全部通过，可 archive（前置条件：tasks.md 全勾 ✅、静态门禁 ✅、人工验证报告本件 ✅、openspec validate --strict ✅）
 - [ ] 存在失败项，需修复后重新验证
 
-**遗留（挂账，非阻断）**：SSE 断开误标 failed（见异常 2，建议 A 类或 session-streaming 小 delta）；同业批抓取共享 spot 表优化；GARP `_clean_num` numpy 标量 nit；报告估值「有值」分支 None 内插文案病（backlog）。
+**遗留（挂账，非阻断；2026-09-30 清偿状态）**：~~同业批抓取共享 spot 表~~（已修 626a56c8）、~~GARP `_clean_num` numpy 标量~~（已修 v!=v）、~~缓存读出口 30 天 NaN 窗口~~（已修 check_cache 读出口归一）、~~SSE 误标~~（定性更正为管线瞬态异常，观测洞已修）；仍开：瞬态 DataFrame 异常根因（待复现用新 traceback 定位）、报告估值「有值」分支 None 内插文案病（backlog）、fetch_peer_data 无整批 deadline（共享 spot 后总时长可控，暂不做）。
 
 ## 终审记录（2026-09-30）
 
