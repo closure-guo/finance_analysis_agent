@@ -582,6 +582,22 @@ def _fmt_derived_metrics(action: str, entry: object, stop: object, target: objec
 
 _TRIGGER_MARKS = "①②③④⑤⑥⑦⑧⑨⑩"
 
+# 仓位档位词表（update-decision-integrity-gates Task 2，spec
+# report-decision-rendering「参数缺失时诚实标注」MODIFIED）
+_POSITION_VOCAB = frozenset({"light", "moderate", "heavy"})
+
+
+def _fmt_position_size(value: object) -> str:
+    """仓位档位渲染：词表 light/moderate/heavy 大小写不敏感。
+
+    None/空串/不在词表的非法字面量（600515 的 "none"、"null" 等）渲染前归一为缺失
+    「未提供」，不以 LLM 原始字面量冒充有效值；合法档位（含大小写变体如 Light）按
+    原值渲染。归一只作用于渲染，MUST NOT 回写决策对象（落库与 trace 保留原值）。
+    """
+    if isinstance(value, str) and value.strip().lower() in _POSITION_VOCAB:
+        return value
+    return "未提供"
+
 
 def _fmt_reeval_triggers(triggers: object) -> str:
     """再评估触发条件渲染：编号条目；无有效条目 → 未申报（require-watch-hold-rationale）。"""
@@ -632,9 +648,10 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         triggers = decision.get("reeval_triggers") or []
 
     lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
-    # spec report-decision-rendering：仓位档位为必含字段——缺失如实「未提供」，
-    # 不得整行省略（#140 终审 C-4：与「0/缺失未提供」的价格行同款约定）
-    lines.append(f"- **仓位**: {position if position else '未提供'}")
+    # spec report-decision-rendering：仓位档位为必含字段——缺失/非法字面量如实
+    # 「未提供」，不得整行省略（#140 终审 C-4；Task 2：词表外字面量渲染前归一，
+    # 不回写决策对象）
+    lines.append(f"- **仓位**: {_fmt_position_size(position)}")
     if action in ("buy", "sell"):
         lines.append(f"- **入场价**: {_fmt_price(entry)}")
         lines.append(f"- **止损价**: {_fmt_price(stop)}")
