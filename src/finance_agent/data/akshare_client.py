@@ -1066,4 +1066,7 @@ class AKShareClient:
             rows.append({"name": q.get("name") or code, "code": code, "PE": pe, "PB": pb})
         if not rows:
             return None
-        return pd.DataFrame(rows, columns=["name", "code", "PE", "PB"])
+        # 出口根因归一（终审 C1）：混合行（一 peer PE=None、一 peer PE 有值）时
+        # DataFrame 构造把 None 强转回 float64 NaN——与 _normalize_nan 修的
+        # quarterly_income 同源；NaN 毒化同业均值并伪装成 fair
+        return self._normalize_nan(pd.DataFrame(rows, columns=["name", "code", "PE", "PB"]))

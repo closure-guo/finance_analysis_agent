@@ -144,8 +144,9 @@ class TestNodeOutputChannels:
 
         agent-node-contracts 门禁条款原文「至少 compute_metrics」——fetch 是
         latest_period_snapshot 等新键的产出节点，同样受静默丢弃风险约束。
-        TESTING=1 stub 走 fetch_data 不触网；stub 键集与真实输出一致性由
-        test_pipeline_stub 另行约束。
+        TESTING=1 stub 走 fetch_data 不触网；stub 键集与真实路径同构
+        （真实路径的全部产出键均在 stub 中，见 fetch.py _stub_fetch_data 的
+        终审 I1 注记）。
         """
         from finance_agent.graph import build_5layer_graph
         from finance_agent.nodes.fetch import fetch_data

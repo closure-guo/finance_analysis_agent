@@ -850,3 +850,24 @@ class TestFetchPeerData:
 
     def test_empty_input_returns_none(self, client):
         assert client.fetch_peer_data([]) is None
+
+
+class TestFetchPeerDataHeterogeneousRows:
+    """终审 C1/I2：混合双行（一 peer 回退链无 PE、一 peer 东财 PE 有值）时
+    DataFrame 构造把 None 强转回 float64 NaN——行级归一在构造边界失效，
+    NaN 毒化同业均值并伪装成 fair。出口必须复用 _normalize_nan 根因归一。
+    """
+
+    def test_mixed_none_and_value_pe_no_nan_leak(self, client, monkeypatch):
+        def fake_quote(code):
+            if code == "688012":
+                return {"name": "中微公司", "PE": 60.0, "PB": 10.0}  # 东财成功
+            return {"name": "北方华创", "PE": None, "PB": 11.26}  # 回退链无 PE
+
+        monkeypatch.setattr(client, "fetch_stock_quote", fake_quote)
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 2
+        # 出口无 NaN（is None 可靠判空），数值保留
+        assert df.iloc[1]["PE"] is None
+        assert df.iloc[0]["PE"] == 60.0
+        assert not any(isinstance(v, float) and pd.isna(v) for v in df["PE"].tolist())

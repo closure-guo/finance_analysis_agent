@@ -346,3 +346,36 @@ class TestFetchDataCoverageSources:
         client.fetch_announcements.side_effect = RuntimeError("boom")
         result = fetch_data({"stock_code": "600519"}, cache=MagicMock(), client=client)
         assert result["announcements"] == []
+
+
+class TestFetchPeersGuard:
+    """终审 I2：_fetch_peers 节点级守卫直测——未指定 peer_codes 不抓取；空表归一 None。"""
+
+    def test_no_peer_codes_no_fetch_call(self):
+        from finance_agent.nodes.fetch import _fetch_peers
+
+        calls = []
+
+        class _Ak:
+            def fetch_peer_data(self, codes):
+                calls.append(codes)
+                return None
+
+        assert (
+            _fetch_peers(_Ak(), "688072", {"peer_codes": None}, {"industry": "半导体设备"}) is None
+        )
+        assert calls == []
+
+    def test_empty_df_normalized_to_none(self):
+        import pandas as pd
+
+        from finance_agent.nodes.fetch import _fetch_peers
+
+        class _Ak:
+            def fetch_peer_data(self, codes):
+                return pd.DataFrame({"name": [], "code": [], "PE": [], "PB": []})
+
+        assert (
+            _fetch_peers(_Ak(), "688072", {"peer_codes": ["688012"]}, {"industry": "半导体设备"})
+            is None
+        )

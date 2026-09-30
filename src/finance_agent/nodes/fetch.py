@@ -85,6 +85,22 @@ def _make_stub_cash_flow() -> pd.DataFrame:
     )
 
 
+def _make_stub_kline(rows: int = 80) -> pd.DataFrame:
+    """有效日 K 线（日期/开盘/收盘/最高/最低）。默认 80 期 ≥ 60 日窗口：
+    全图 stub 管线的 derived_series 5/20/60 窗口全部可算，且与注入型
+    全图测试（如 derived_series_channel）的期望窗口一致。"""
+    return pd.DataFrame(
+        {
+            "日期": pd.date_range("2026-01-01", periods=rows, freq="B").strftime("%Y-%m-%d"),
+            "开盘": [100.0 + i for i in range(rows)],
+            "收盘": [101.0 + i for i in range(rows)],
+            "最高": [102.0 + i for i in range(rows)],
+            "最低": [99.0 + i for i in range(rows)],
+            "成交量": [1000.0] * rows,
+        }
+    )
+
+
 def _stub_fetch_data(state: dict) -> dict[str, Any]:
     """TESTING=1 专用的确定性数据：不触网，字段与真实 fetch_data 输出一致。"""
     stock_name = state.get("stock_name", "") or state.get("stock_code", "")
@@ -103,6 +119,14 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "research_reports": [],
         "share_unlock": [],
         "block_trades": [],
+        # 终审 I1（clear-valuation-chain-debts）：真实路径另产出 kline/benchmark_kline/
+        # industry_pe/quarterly_income——stub 键集须与之同构，图通道门禁（D6）才覆盖全部产出
+        # 有效小窗口 kline（≥ ATR 周期+1）：真实路径 kline 常态在场（回退成功时），
+        # 空 DataFrame 会覆盖全图测试注入的 kline 并令 price_levels 误判 insufficient
+        "kline": _make_stub_kline(),
+        "benchmark_kline": _make_stub_kline(),
+        "industry_pe": None,
+        "quarterly_income": None,
         # update-financial-freshness-and-valuation Task 4：最新报告期快照
         # （估值外的最新期关键科目 + 同比；失败降级空 dict，ERROR 日志见抓取循环特判）
         "latest_period_snapshot": {

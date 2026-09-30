@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from statistics import mean
 
+import pandas as pd
+
 
 def calc_relative_valuation(
     target: dict[str, float | None],
@@ -33,7 +35,10 @@ def calc_relative_valuation(
     for metric in ["PE", "PB"]:
         target_val = target.get(metric)
 
-        peer_values = [p[metric] for p in peers if p.get(metric) is not None]
+        # 纵深守卫（终审 C1）：NaN 不得混入均值（is not None 放行 NaN → mean 毒化 → 比较恒 False 伪装 fair）
+        peer_values = [
+            p[metric] for p in peers if p.get(metric) is not None and not pd.isna(p[metric])
+        ]
 
         if not peer_values or target_val is None:
             result[metric] = {
