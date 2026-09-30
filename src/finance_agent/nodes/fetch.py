@@ -112,7 +112,6 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "industry_info": {"industry": "白酒", "name": stock_name},
         "stock_quote": {"price": 1800.0, "name": stock_name, "code": state.get("stock_code", "")},
         "key_events": [],
-        "peer_financials": None,
         "macro_indicators": {},
         "news_list": [],
         "announcements": [],
