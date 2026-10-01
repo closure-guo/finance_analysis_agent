@@ -121,6 +121,12 @@ class TestFetchBlockTrades:
         kwargs = mock.call_args.kwargs
         assert "start_date" in kwargs and "end_date" in kwargs
 
+    def test_missing_column_variant_returns_empty(self):
+        """信源返回非空 df 但缺「股票代码」列（空数据日变体），按契约降级 []，不抛 KeyError（#178）。"""
+        df = pd.DataFrame({"交易日期": ["2026-09-10"], "成交价格": [1270.0]})
+        with patch("finance_agent.data.akshare_client._call_ak", return_value=df):
+            assert AKShareClient().fetch_block_trades("600519") == []
+
     def test_none_returns_empty(self):
         """_call_ak 失败语义为返回 None（非抛异常），fetcher 降级空列表。"""
         with patch("finance_agent.data.akshare_client._call_ak", return_value=None):
