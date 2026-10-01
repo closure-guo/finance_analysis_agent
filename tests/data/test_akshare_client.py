@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+import requests
 
 from finance_agent.data.akshare_client import AKShareClient
 
@@ -930,3 +931,78 @@ class TestFetchPeerDataSharedSpot:
         # 688012 来自 spot 表；600300 表未命中 → 走 quote 回退链（百度 PB，PE 缺）
         assert df.iloc[0]["PE"] == 55.0
         assert df.iloc[1]["PE"] is None and df.iloc[1]["PB"] == 11.26
+
+
+class TestFetchTencentQuote:
+    """update-quote-primary-source：腾讯 qt.gtimg.cn 单标的行情直查（新主源）。
+
+    金样本：2026-10-01 sh688072 实抓串（field 位序见 _TENCENT_FIELD_IDX）。
+    总市值/流通市值单位=亿 ×1e8 归一到元；PE 字段（TTM 口径）MUST NOT 消费。
+    """
+
+    GOLDEN = (
+        'v_sh688072="1~拓荆科技~688072~640.00~656.68~663.00~3387770~1660152~1727618'
+        "~639.79~9~639.75~3~639.47~2~639.00~8~638.99~39~640.00~6~640.04~2~640.14~2"
+        "~640.30~10~640.32~4~~20260930161437~-16.68~-2.54~675.00~635.73"
+        "~640.00/3387770/2200617467~3387770~220062~1.19~85.97~~675.00~635.73~5.98"
+        "~1818.80~1869.91~14.55~788.02~525.34~0.81~~20260930~161437"
+    )
+
+    @staticmethod
+    def _gbk_response(payload: str):
+        resp = requests.Response()
+        resp.status_code = 200
+        resp._content = payload.encode("gbk")
+        return resp
+
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_golden_sample_mapping(self, mock_get, client):
+        mock_get.return_value = self._gbk_response(self.GOLDEN)
+        result = client._fetch_tencent_quote("688072")
+        assert result is not None
+        assert result["name"] == "拓荆科技"
+        assert result["code"] == "688072"
+        assert result["price"] == 640.00
+        assert result["change"] == -16.68
+        assert result["pct_change"] == -2.54
+        assert result["high"] == 675.00
+        assert result["low"] == 635.73
+        assert result["turnover_rate"] == 1.19
+        assert result["market_cap"] == pytest.approx(1869.91e8)  # 亿 → 元
+        assert result["float_market_cap"] == pytest.approx(1818.80e8)
+        assert result["PB"] == 14.55
+
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_pe_field_not_consumed(self, mock_get, client):
+        """腾讯串携带 TTM 口径市盈率（field 39=85.97），quote MUST NOT 输出 PE 键。"""
+        mock_get.return_value = self._gbk_response(self.GOLDEN)
+        result = client._fetch_tencent_quote("688072")
+        assert "PE" not in result
+        assert "PE_ttm" not in result
+        assert "PE_static" not in result
+
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_truncated_string_missing_market_cap_returns_none(self, mock_get, client):
+        """关键字段（price/market_cap）缺失 → None（触发回退），不抛异常。"""
+        truncated = 'v_sh688072="1~拓荆科技~688072~640.00'  # 只有 4 段
+        mock_get.return_value = self._gbk_response(truncated)
+        assert client._fetch_tencent_quote("688072") is None
+
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_request_exception_returns_none(self, mock_get, client):
+        mock_get.side_effect = ConnectionError("refused")
+        assert client._fetch_tencent_quote("688072") is None
+
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_non_numeric_optional_field_skipped(self, mock_get, client):
+        """可选字段非数值（如换手率位是 '-'）跳过该键，不炸解析。"""
+        bad = self.GOLDEN.replace("~1.19~85.97~", "~-~85.97~")
+        mock_get.return_value = self._gbk_response(bad)
+        result = client._fetch_tencent_quote("688072")
+        assert result is not None
+        assert "turnover_rate" not in result
+        assert result["market_cap"] == pytest.approx(1869.91e8)
+
+    def test_symbol_prefix(self, client):
+        """深市代码走 sz 前缀（_to_sina_symbol 复用）。"""
+        assert client._to_sina_symbol("002371") == "sz002371"

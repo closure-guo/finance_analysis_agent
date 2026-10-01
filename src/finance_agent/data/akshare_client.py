@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 
 import akshare as ak
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,27 @@ _INDUSTRY_KEY_MAP = {
 #   东财回退 ak.index_stock_cons        → '品种代码' / '品种名称'
 _CONSTITUENT_CODE_COLS = ("成分券代码", "品种代码", "代码")
 _CONSTITUENT_NAME_COLS = ("成分券名称", "品种名称", "名称", "股票名称", "股票简称")
+
+# 腾讯 qt.gtimg.cn 单标的行情串字段位序（2026-10-01 金样本 sh688072 实抓钉死，
+# update-quote-primary-source）。field 39 市盈率为 TTM 口径——腾讯无静态 PE，
+# 按 delta spec MUST NOT 进入 quote 输出（PE 推导留给 compute derived_ttm）。
+_TENCENT_FIELD_IDX: dict[str, int] = {
+    "name": 1,
+    "code": 2,
+    "price": 3,
+    "change": 31,
+    "pct_change": 32,
+    "high": 33,
+    "low": 34,
+    "turnover_rate": 38,
+    "float_market_cap": 44,  # 亿
+    "market_cap": 45,  # 亿
+    "PB": 46,
+}
+# 亿 → 元归一字段（quote 层统一元契约，前端 Charts /1e8 显示「亿」）
+_TENCENT_YI_FIELDS = frozenset({"float_market_cap", "market_cap"})
+# 关键字段缺失即视为主源失败（触发回退）
+_TENCENT_REQUIRED = ("price", "market_cap")
 
 
 def _add_prefix(code: str) -> str:
@@ -340,6 +362,44 @@ class AKShareClient:
             _QUOTE_KEY_MAP.get(str(k), k): v  # spot 表列名 Any → str 后再查映射
             for k, v in raw.items()
         }
+
+    def _fetch_tencent_quote(self, stock_code: str) -> dict | None:
+        """腾讯 qt.gtimg.cn 单标的行情直查（update-quote-primary-source 新主源）。
+
+        1 请求/标的，替代东财全市场 spot 翻页主源（~50 请求/次拿单只股票——
+        本机 IP 被东财行情域封禁的直接成因，实测为 IP 级封禁、浏览器指纹伪装
+        无效）。GBK 解码 + `~` 分割，字段位序见 _TENCENT_FIELD_IDX（金样本单测
+        钉死）。总市值/流通市值单位为亿，×1e8 归一到元。解析失败/关键字段缺失
+        返回 None 触发既有回退链，MUST NOT 抛异常。
+        """
+        symbol = self._to_sina_symbol(stock_code)
+        try:
+            resp = requests.get(f"https://qt.gtimg.cn/q={symbol}", timeout=10)
+            text = resp.content.decode("gbk")
+        except Exception as e:
+            logger.warning("腾讯行情直查失败: %s %s", stock_code, e)
+            return None
+        fields = text.split("~")
+        if len(fields) <= max(_TENCENT_FIELD_IDX.values()):
+            logger.warning("腾讯行情串字段不足（%d 段）: %s", len(fields), stock_code)
+            return None
+        result: dict = {"name": fields[_TENCENT_FIELD_IDX["name"]], "code": stock_code}
+        for key, idx in _TENCENT_FIELD_IDX.items():
+            if key in ("name", "code"):  # code 保持入参字符串，不走 float 转换
+                continue
+            raw = fields[idx].strip()
+            if not raw:
+                continue
+            try:
+                value = float(raw)
+            except ValueError:
+                continue
+            result[key] = value * 1e8 if key in _TENCENT_YI_FIELDS else value
+        missing = [k for k in _TENCENT_REQUIRED if result.get(k) is None]
+        if missing:
+            logger.warning("腾讯行情关键字段缺失 %s: %s", missing, stock_code)
+            return None
+        return result
 
     def fetch_stock_quote(self, stock_code: str) -> dict:
         # 主源：东方财富实时行情（含 PE/PB/市值/价格全字段）
