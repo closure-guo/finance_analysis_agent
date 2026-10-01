@@ -194,7 +194,13 @@ class TestFinalPriceIntegrity:
         """首次缺价位 → 打回重试一次（第二次补齐）。"""
         mock_llm.side_effect = [
             self._resp(),  # 第一次：无价位
-            self._resp(entry_price=51.05, stop_loss=49.5, target_price=54.5),
+            # 第二次：补齐价位；触发条件一并申报，避免误入再评估触发条件打回回路
+            self._resp(
+                entry_price=51.05,
+                stop_loss=49.5,
+                target_price=54.5,
+                reeval_triggers=["跌破 49.5 元止损离场"],
+            ),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 2
@@ -207,7 +213,8 @@ class TestFinalPriceIntegrity:
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_retry_exhausted_passes_with_note(self, mock_llm):
         """重试仍缺 → 放行（不虚构价位）+ 如实标注。"""
-        mock_llm.return_value = self._resp()  # 两次都缺价位
+        # 触发条件申报齐备，隔离价位回路（再评估触发条件打回由 TestFinalReevalCheck 覆盖）
+        mock_llm.return_value = self._resp(reeval_triggers=["跌破止损位离场"])
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 2
         assert result["final_trade_decision"].entry_price is None
@@ -217,7 +224,12 @@ class TestFinalPriceIntegrity:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_complete_prices_no_extra_call(self, mock_llm):
-        mock_llm.return_value = self._resp(entry_price=26.35, stop_loss=25.3, target_price=28.0)
+        mock_llm.return_value = self._resp(
+            entry_price=26.35,
+            stop_loss=25.3,
+            target_price=28.0,
+            reeval_triggers=["跌破止损位离场"],
+        )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
         assert result["final_price_check"] == {"result": "pass", "note": ""}
@@ -305,7 +317,10 @@ class TestFinalInactionRationale:
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_buy_unaffected(self, mock_llm):
         mock_llm.return_value = TestFinalPriceIntegrity._resp(
-            entry_price=26.35, stop_loss=25.3, target_price=28.0
+            entry_price=26.35,
+            stop_loss=25.3,
+            target_price=28.0,
+            reeval_triggers=["跌破止损位离场"],
         )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
@@ -320,7 +335,8 @@ class TestFinalInactionRationale:
         """
         mock_llm.side_effect = [
             TestFinalPriceIntegrity._resp(action="watch"),
-            TestFinalPriceIntegrity._resp(action="buy"),
+            # 理由重试换代为 buy：价位缺失；触发条件申报齐备，隔离再评估触发条件打回回路
+            TestFinalPriceIntegrity._resp(action="buy", reeval_triggers=["跌破止损位离场"]),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 2
@@ -377,8 +393,12 @@ class TestFinalInactionRationale:
         mock_llm.side_effect = [
             TestFinalPriceIntegrity._resp(action="buy"),
             TestFinalPriceIntegrity._resp(action="watch"),
+            # 第三次换代回 buy 且价位齐备；触发条件申报齐备，隔离再评估触发条件打回回路
             TestFinalPriceIntegrity._resp(
-                entry_price=26.0, stop_loss=25.0, target_price=28.0
+                entry_price=26.0,
+                stop_loss=25.0,
+                target_price=28.0,
+                reeval_triggers=["跌破止损位离场"],
             ),  # 默认 action=buy，价位齐备
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})

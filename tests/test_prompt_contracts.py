@@ -239,3 +239,22 @@ class TestCoverageSourcesPrompts:
         text = _load("sentiment_analyst.md")
         assert "限售解禁" in text
         assert "大宗交易" in text
+
+
+class TestFreshnessAndValuationPrompt:
+    """prompt 契约：最新报告期校验 + 估值数字依据（update-financial-freshness-and-valuation）。"""
+
+    def test_fundamental_mandates_latest_period_crosscheck(self):
+        text = _load("fundamental_analyst.md")
+        # 输入清单含两个新数据段
+        assert "估值快照" in text
+        assert "最新报告期快照" in text
+        # 分析要点：年报趋势与最新报告期冲突必须并陈
+        assert "最新报告期" in text
+        assert "MUST" in text
+
+    def test_fundamental_mandates_valuation_numbers(self):
+        text = _load("fundamental_analyst.md")
+        assert "PE_caliber" in text
+        # 缺估值数据时显式声明，不得无数值断言贵贱
+        assert "估值数据缺失" in text

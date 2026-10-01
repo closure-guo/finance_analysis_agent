@@ -161,7 +161,10 @@ class AKShareClient:
         return df[mask].sort_values("报告日", ascending=False).reset_index(drop=True)
 
     def _normalize_nan(self, df: pd.DataFrame) -> pd.DataFrame:
-        return df.where(df.notna(), other=None)  # pyrefly: ignore[no-matching-overload]
+        # D3：float64 列上 where(other=None) 会把 None 重新强转回 NaN（归一不生效），
+        # 先 astype(object) 再归一，保证出口全列 NaN → None、消费端 `is None` 判空可靠
+        # （「不产出伪值」契约）
+        return df.astype(object).where(df.notna(), None)  # pyrefly: ignore[no-matching-overload]
 
     def _check_min_years(self, df: pd.DataFrame, stock_code: str) -> None:
         if len(df) < 2:
@@ -250,12 +253,44 @@ class AKShareClient:
             logger.warning("stock_info_a_code_name fallback failed for %s", stock_code)
         return {}
 
+    # 同日多分类标准 tie-break：申万（券商研报事实标准）> 中证 > 巨潮 > 证监会
+    _INDUSTRY_STANDARD_PRIORITY = (
+        ("申银万国", 0),
+        ("中证", 1),
+        ("巨潮", 2),
+        ("证监会", 3),
+    )
+
     def _fetch_industry_cninfo(self, stock_code: str) -> str | None:
-        """当东方财富接口不可用时，用 cninfo 获取行业名称（行业中类）。"""
+        """当东方财富接口不可用时，用 cninfo 获取行业名称（行业中类）。
+
+        变更史含多套分类标准：按变更日期降序 + 标准优先级 tie-break（稳定排序）
+        取最新非空条目。此前 iloc[0] 拿最旧分类（688072 →「其它专用机械」）；
+        仅按日期排序则同日随机（688072 2022-04-20 巨潮「集成电路」vs 中证
+        「半导体设备」并存）——两种形态都会让行业阈值覆盖永不命中。
+        """
         try:
             df = ak.stock_industry_change_cninfo(symbol=stock_code)
             if not df.empty and "行业中类" in df.columns:
-                return str(df.iloc[0]["行业中类"])
+                df = df.copy()
+                if "分类标准" in df.columns:
+                    df["_std_pri"] = df["分类标准"].apply(
+                        lambda s: next(
+                            (pri for key, pri in self._INDUSTRY_STANDARD_PRIORITY if key in str(s)),
+                            4,
+                        )
+                    )
+                else:
+                    df["_std_pri"] = 4
+                if "变更日期" in df.columns:
+                    df = df.sort_values(
+                        ["变更日期", "_std_pri"], ascending=[False, True], kind="mergesort"
+                    )
+                else:
+                    df = df.sort_values("_std_pri", kind="mergesort")
+                series = df["行业中类"].dropna()
+                if not series.empty:
+                    return str(series.iloc[0])
         except Exception:
             logger.warning("stock_industry_change_cninfo failed for %s", stock_code)
         return None
@@ -283,22 +318,38 @@ class AKShareClient:
             self.sources_seen["industry"].update({"cninfo", "missing"})
         return result
 
-    def fetch_stock_quote(self, stock_code: str) -> dict:
-        # 主源：东方财富实时行情（含 PE/PB/市值/价格）
-        df = _call_ak(ak.stock_zh_a_spot_em)
-        if df is not None and not df.empty:
-            # 尝试多种格式匹配（纯数字 / 带前缀）
-            for code_key in (stock_code, stock_code.lstrip("sh").lstrip("sz")):
-                row = df[df["代码"] == code_key]
-                if not row.empty:
-                    break
+    @staticmethod
+    def _quote_from_spot_df(df, stock_code: str) -> dict | None:
+        """东财全市场 spot 表 → 单标的 quote 映射。
+
+        fetch_stock_quote 与 fetch_peer_data 共享的主源映射逻辑（同业批抓取
+        共享单次 spot 表，N 标的从 N× 全市场拉取降到 1×）。
+        """
+        if df is None or df.empty:
+            return None
+        # 尝试多种格式匹配（纯数字 / 带前缀）
+        row = pd.DataFrame()
+        for code_key in (stock_code, stock_code.lstrip("sh").lstrip("sz")):
+            row = df[df["代码"] == code_key]
             if not row.empty:
-                raw = row.iloc[0].to_dict()
-                mapped = {_QUOTE_KEY_MAP.get(k, k): v for k, v in raw.items()}
-                self.sources_seen["market_cap"].add(
-                    "eastmoney" if mapped.get("market_cap") is not None else "missing"
-                )
-                return mapped
+                break
+        if row.empty:
+            return None
+        raw = row.iloc[0].to_dict()
+        return {
+            _QUOTE_KEY_MAP.get(str(k), k): v  # spot 表列名 Any → str 后再查映射
+            for k, v in raw.items()
+        }
+
+    def fetch_stock_quote(self, stock_code: str) -> dict:
+        # 主源：东方财富实时行情（含 PE/PB/市值/价格全字段）
+        df = _call_ak(ak.stock_zh_a_spot_em)
+        mapped = self._quote_from_spot_df(df, stock_code)
+        if mapped is not None:
+            self.sources_seen["market_cap"].add(
+                "eastmoney" if mapped.get("market_cap") is not None else "missing"
+            )
+            return mapped
 
         # ── 二级回退（add-quote-baidu-fallback）：东财被 TLS 风控封锁时，
         # 用百度估值补 market_cap/PB、腾讯日线补 price——恢复估值与价格维度
@@ -311,13 +362,15 @@ class AKShareClient:
             result["code"] = stock_code
 
         # 百度估值：总市值 → market_cap；市净率 → PB（各指标末行最新）
-        for indicator, key in (("总市值", "market_cap"), ("市净率", "PB")):
+        # 单位归一（终审 C1）：百度总市值单位为亿元，东财主源为元——
+        # ×1e8 归一到元，与 state 既有契约一致（前端 Charts 除 1e8 显示「亿」）
+        for indicator, key, scale in (("总市值", "market_cap", 1e8), ("市净率", "PB", 1.0)):
             try:
                 df_val = _call_ak(
                     ak.stock_zh_valuation_baidu, symbol=stock_code, indicator=indicator
                 )
                 if df_val is not None and not df_val.empty and "value" in df_val.columns:
-                    result[key] = float(df_val.iloc[-1]["value"])
+                    result[key] = float(df_val.iloc[-1]["value"]) * scale
             except Exception:
                 logger.warning("百度估值 %s 拉取失败: %s", indicator, stock_code)
 
@@ -346,7 +399,9 @@ class AKShareClient:
         使用 stock_profit_sheet_by_quarterly_em（东方财富），返回数据中的
         PARENT_NETPROFIT 为单季度归母净利润。
 
-        返回列：报告日, 归母净利润(单季), 环比(%), 同比(%)
+        返回列：报告日, 季度, 归母净利润(单季), 营业收入(单季), 营业成本(单季), 环比, 同比, 营收同比
+        营收同比在宽窗口（截断前）计算后随行携带——compute 层只见最近 quarters
+        季，结构性找不到去年同期，必须在此处（head(quarters) 之前）算好。
         """
         # symbol 需要大写 SH/SZ 前缀
         prefix = "SH" if stock_code.startswith(("6", "9")) else "SZ"
@@ -393,18 +448,35 @@ class AKShareClient:
             prev_year_q = f"{curr_year - 1}{curr_q[4:]}"
             prev_rows = df[df["季度"] == prev_year_q]
             yoy = None
+            rev_yoy = None
             if not prev_rows.empty:
                 prev_np = prev_rows.iloc[0]["PARENT_NETPROFIT"]
                 if not pd.isna(prev_np) and prev_np != 0:
                     yoy = (float(curr_np) - float(prev_np)) / abs(float(prev_np)) * 100
+                # 营收同比：复用同一去年同期行（列可能缺失或值为 NaN/None，均需防）
+                prev_rev = prev_rows.iloc[0].get("OPERATE_INCOME")
+                curr_rev = row.get("OPERATE_INCOME")
+                if (
+                    prev_rev is not None
+                    and curr_rev is not None
+                    and not pd.isna(prev_rev)
+                    and not pd.isna(curr_rev)
+                    and prev_rev != 0
+                ):
+                    rev_yoy = (float(curr_rev) - float(prev_rev)) / abs(float(prev_rev)) * 100
 
+            rev = row.get("OPERATE_INCOME")
+            cost = row.get("OPERATE_COST")
             records.append(
                 {
                     "报告日": str(row["REPORT_DATE"])[:10],
                     "季度": curr_q,
                     "归母净利润(单季)": float(curr_np),
+                    "营业收入(单季)": float(rev) if not pd.isna(rev) else None,
+                    "营业成本(单季)": float(cost) if not pd.isna(cost) else None,
                     "环比": float(qoq) if not pd.isna(qoq) else None,
                     "同比": yoy,
+                    "营收同比": round(rev_yoy, 2) if rev_yoy is not None else None,
                 }
             )
 
@@ -412,6 +484,133 @@ class AKShareClient:
         # 只保留最近 N 个季度
         result = result.head(quarters)
         return self._normalize_nan(result)
+
+    # ── 最新报告期快照（update-financial-freshness-and-valuation Task 3）──
+
+    # 报告日尾码 → 期类型
+    _PERIOD_TYPE = {"1231": "年报", "0630": "中报", "0331": "一季报", "0930": "三季报"}
+
+    @staticmethod
+    def _compact_date(v) -> str:
+        """报告日归一化为紧凑 YYYYMMDD 字符串。
+
+        新浪接口返回 "20260630"，部分源/夹具用 "2026-06-30" 或 date 对象——
+        统一归一后再做排序与同期匹配，避免两种格式混用时匹配失效。
+        """
+        digits = re.sub(r"\D", "", str(v))
+        return digits[:8]
+
+    @staticmethod
+    def _yi(v) -> float | None:
+        """元 → 亿元，round 2；缺失返回 None。"""
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        return round(float(v) / 1e8, 2)
+
+    def fetch_latest_period_snapshot(self, stock_code: str) -> dict:
+        """最新报告期快照（不限年报）：中报/季报关键科目 + 同比，供基本面分析消费。
+
+        金额单位亿元、比率%；同期数据缺失时同比为 None 并在 missing 标注。
+        利润表整体不可用时 raise（由 fetch 层降级）；资产负债表缺失降级为部分快照。
+        """
+        stock = _add_prefix(stock_code)
+        inc = _sina_report(stock, "利润表")
+        if inc.empty:
+            raise ValueError(f"股票 {stock_code} 利润表数据不可用")
+        inc = self._rename_parent_cols(inc).copy()
+        inc["_ymd"] = inc["报告日"].map(self._compact_date)
+        inc = inc.sort_values("_ymd", ascending=False).reset_index(drop=True)
+        latest = inc.iloc[0]
+        ymd = str(latest["_ymd"])
+        report_date = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}"
+        period_type = self._PERIOD_TYPE.get(ymd[4:], "定期报告")
+
+        missing: list[str] = []
+
+        raw_rev = latest.get("营业总收入")
+        raw_cost = latest.get("营业成本")
+        revenue = self._yi(raw_rev)
+        cost = self._yi(raw_cost)
+        np_attr = self._yi(latest.get("归母净利润") or latest.get("归属于母公司股东的净利润"))
+        # 毛利率按原始值计算（先 round 成亿元再算比值会引入截断误差）；
+        # revenue/cost 守卫排除缺失与零营收，raw 守卫收窄 pandas-stubs 的 Any|None
+        gross_margin: float | None = None
+        if (
+            revenue not in (None, 0)
+            and cost is not None
+            and raw_rev is not None
+            and raw_cost is not None
+        ):
+            gross_margin = round((1 - raw_cost / raw_rev) * 100, 2)
+        if gross_margin is None:
+            missing.append("毛利率")
+
+        # 同期数据（上一年同月日，如 20260630 → 20250630）
+        prior_mask = (inc["_ymd"].str.slice(4) == ymd[4:]) & (
+            inc["_ymd"].str.slice(0, 4) == str(int(ymd[:4]) - 1)
+        )
+        prior_rows = inc[prior_mask]
+        prior_rev: float | None = None
+        prior_np: float | None = None
+        if not prior_rows.empty:
+            prior = prior_rows.iloc[0]
+            prior_rev = self._yi(prior.get("营业总收入"))
+            prior_np = self._yi(prior.get("归母净利润") or prior.get("归属于母公司股东的净利润"))
+        if prior_rev is None and prior_np is None:
+            # 无同期行，或同期行存在但值全缺（审查 M2）——同比无从计算，均须标注
+            missing.append("上年同期数据缺失")
+        rev_yoy: float | None = None
+        if revenue is not None and prior_rev is not None and prior_rev != 0:
+            rev_yoy = round((revenue - prior_rev) / abs(prior_rev) * 100, 2)
+        np_yoy: float | None = None
+        if np_attr is not None and prior_np is not None and prior_np != 0:
+            np_yoy = round((np_attr - prior_np) / abs(prior_np) * 100, 2)
+
+        # 资产负债表（取同一报告日；该期缺失取最新一期并标注）
+        snap: dict = {
+            "报告日": report_date,
+            "期类型": period_type,
+            "营业总收入(累计)": revenue,
+            "归母净利润(累计)": np_attr,
+            "营业成本(累计)": cost,
+            "毛利率(%)": gross_margin,
+            "资产负债率(%)": None,
+            "存货": None,
+            "合同负债": None,
+            "上年同期营业总收入": prior_rev,
+            "上年同期归母净利润": prior_np,
+            "营收同比(%)": rev_yoy,
+            "归母净利同比(%)": np_yoy,
+            "missing": missing,
+        }
+
+        bs = _sina_report(stock, "资产负债表")
+        if not bs.empty:
+            bs = bs.copy()
+            bs["_ymd"] = bs["报告日"].map(self._compact_date)
+            bs = bs.sort_values("_ymd", ascending=False).reset_index(drop=True)
+            bs_rows = bs[bs["_ymd"] == ymd]
+            if bs_rows.empty:
+                # 无同报告日行：回退取最新一期，但必须标注（审查 M1）——邻期值不得伪装同期值
+                row_bs = bs.iloc[0]
+                missing.append("资产负债表非同期（取最新一期）")
+            else:
+                row_bs = bs_rows.iloc[0]
+            assets = self._yi(row_bs.get("资产总计"))
+            liab = self._yi(row_bs.get("负债合计"))
+            snap["存货"] = self._yi(row_bs.get("存货"))
+            snap["合同负债"] = self._yi(row_bs.get("合同负债"))
+            if assets is not None and assets != 0 and liab is not None:
+                snap["资产负债率(%)"] = round(liab / assets * 100, 2)
+            else:
+                missing.append("资产负债率")
+            if snap["存货"] is None:
+                missing.append("存货")
+            if snap["合同负债"] is None:
+                missing.append("合同负债")
+        else:
+            missing.extend(["资产负债率", "存货", "合同负债"])
+        return snap
 
     def fetch_industry_pe(self, stock_code: str) -> dict | None:
         """获取个股所属行业的平均静态PE。
@@ -851,3 +1050,53 @@ class AKShareClient:
                 }
             )
         return rows
+
+    def fetch_peer_data(self, stock_codes: list[str]) -> pd.DataFrame | None:
+        """逐标的抓取同业名称/PE/PB（复用 fetch_stock_quote 主源+回退链）。
+
+        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None
+        （delta clear-valuation-chain-debts ADDED「同业财务数据获取」）。
+        共享单次全市场 spot 表：N 标的的主源查询从 N× 全市场拉取降到 1×，
+        表未命中/失败的标的再逐个走 fetch_stock_quote 完整回退链。
+        """
+        codes = [str(c).strip() for c in (stock_codes or []) if str(c).strip()]
+        if not codes:
+            return None
+        try:
+            spot_df = _call_ak(ak.stock_zh_a_spot_em)
+        except Exception as e:
+            logger.warning("同业共享行情表拉取失败，逐标的走完整回退链: %s", e)
+            spot_df = None
+        rows: list[dict] = []
+        for code in codes:
+            q: dict = {}
+            if spot_df is not None:
+                q = self._quote_from_spot_df(spot_df, code) or {}
+            pe = q.get("PE") or q.get("pe")
+            pb = q.get("PB") or q.get("pb")
+            if (pe is None or pd.isna(pe)) and (pb is None or pd.isna(pb)):
+                # spot 表未命中或无 PE/PB → 单标的走完整主源+回退链
+                try:
+                    q = self.fetch_stock_quote(code)
+                except Exception as e:
+                    logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
+                    continue
+                pe = q.get("PE") or q.get("pe")
+                pb = q.get("PB") or q.get("pb")
+            # 停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数归一——NaN 真值
+            # 直通会被 _build_peers_list 的 is not None 放行，毒化同业均值
+            # （Task 2 复审 ⚠️，与 compute._derive_pe_ttm F1 守卫同源问题）
+            if pe is not None and pd.isna(pe):
+                pe = None
+            if pb is not None and pd.isna(pb):
+                pb = None
+            if pe is None and pb is None:
+                logger.warning("同业 %s 无 PE/PB（全回退失败），跳过", code)
+                continue
+            rows.append({"name": q.get("name") or code, "code": code, "PE": pe, "PB": pb})
+        if not rows:
+            return None
+        # 出口根因归一（终审 C1）：混合行（一 peer PE=None、一 peer PE 有值）时
+        # DataFrame 构造把 None 强转回 float64 NaN——与 _normalize_nan 修的
+        # quarterly_income 同源；NaN 毒化同业均值并伪装成 fair
+        return self._normalize_nan(pd.DataFrame(rows, columns=["name", "code", "PE", "PB"]))

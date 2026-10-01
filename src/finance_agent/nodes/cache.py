@@ -1,7 +1,7 @@
 """check_cache: 查缓存，返回 HIT / MISS。
 
 HIT = 分析所需核心数据全部缓存命中且未过期：三大报表 + 行业归属 +
-行情 + K线 + 基准 + 宏观 + 新闻。
+行情 + K线 + 基准 + 宏观 + 新闻 + 最新报告期快照。
 MISS = 任一 key 缺失或过期。
 
 修复（2026-09-08 二轮审计）：此前 HIT 判定只含 5 key（报表/行业/行情），
@@ -18,9 +18,13 @@ TTL 策略（ADR-0004 + 收窄）：
 - K线 / 基准 / 新闻：1 小时
 - 宏观：1 天
 - 预计算指标：同三大报表（30 天）
+- 最新报告期快照：30 天（Task 4 补入——与报表同为财报季慢变数据，
+  纳入 HIT 必需键后存量缓存一次性 MISS 重拉，可接受）
 """
 
 from __future__ import annotations
+
+import pandas as pd
 
 from finance_agent.data.cache import DataCache, get_shared_cache
 from finance_agent.data.monitoring import get_monitor
@@ -44,6 +48,9 @@ def check_cache(state: dict, cache=None) -> dict:
         f"{code}:cash_flow_statement",
         f"{code}:industry_info",
         f"{code}:stock_quote",
+        # 最新报告期快照（update-financial-freshness-and-valuation Task 4）：
+        # 估值外最新期关键科目，30 天慢变核心数据，缺失即 MISS 重拉
+        f"{code}:latest_period_snapshot",
         # 时效性核心数据（2026-09-08 补入 HIT 判定）：任一缺失/过期 → MISS，
         # 否则同股复析跳过 fetch_data 会得到技术面/宏观/舆情全缺的残缺报告。
         f"{code}:kline",
@@ -68,6 +75,8 @@ def check_cache(state: dict, cache=None) -> dict:
         "cash_flow_statement": cached[f"{code}:cash_flow_statement"],
         "industry_info": cached.get(f"{code}:industry_info", {}),
         "stock_quote": cached.get(f"{code}:stock_quote", {}),
+        # 最新报告期快照随 HIT 附带（update-financial-freshness-and-valuation Task 4）
+        "latest_period_snapshot": cached[f"{code}:latest_period_snapshot"],
         # 时效性核心数据随 HIT 附带（此前全部缺失）
         "kline": cached[f"{code}:kline"],
         "benchmark_kline": cached["benchmark_kline"],
@@ -88,9 +97,12 @@ def check_cache(state: dict, cache=None) -> dict:
     if key_events is not None:
         result["key_events"] = key_events
 
-    # 季度利润（永久缓存）有则附带
+    # 季度利润（永久缓存）有则附带；读出口 NaN 归一——D3 修复前写入的旧条目
+    # （30 天 TTL 内）仍含 float64 NaN，消费端 is None 判空不可靠（终审 M1）
     quarterly_income = c.get(f"{code}:quarterly_income")
     if quarterly_income is not None:
+        if isinstance(quarterly_income, pd.DataFrame):
+            quarterly_income = quarterly_income.astype(object).where(quarterly_income.notna(), None)
         result["quarterly_income"] = quarterly_income
 
     # 数据源监控：命中计数（非侵入，不改 HIT 判定与返回结构）

@@ -342,6 +342,8 @@ _COMPUTATIONAL_RECALC: dict[str, Callable[[dict], object]] = {
     "traffic_lights": lambda s: _recompute_snapshot(s, "traffic_lights"),
     "peer_comparison": lambda s: _recompute_snapshot(s, "peer_comparison"),
     "quarterly_trend": lambda s: _recompute_snapshot(s, "quarterly_trend"),
+    # update-financial-freshness-and-valuation Task 7/11：估值快照为 compute 确定性产出
+    "valuation_snapshot": lambda s: _recompute_snapshot(s, "valuation_snapshot"),
 }
 
 # 派生键豁免表（键 → 理由）。空 = 当前无豁免；加入豁免必须写清为什么不能重算，
@@ -367,7 +369,9 @@ def _recomputable_root(claim: Claim) -> bool:
 
 def _verify_computational(claim: Claim, state: dict) -> CitationResult:
     """计算型 claim：从原始数据重算指标，用相对容差 0.5% 比对。"""
-    parts = _apply_root_alias(claim.field_ref.split("."))
+    # 括号索引与直读路径同源展开（quarterly_trend.gross_margin[0] 类 claim）：
+    # 此前仅 split(".")，[N] 段落 dict.get 必 None → 假 FAIL path_unresolvable
+    parts = _apply_root_alias(_expand_brackets(claim.field_ref))
     root = parts[0]
     sub_path = parts[1:]
 

@@ -510,7 +510,7 @@ class TestFetchStockQuoteBaiduFallback:
 
         result = client.fetch_stock_quote("688072")
 
-        assert result.get("market_cap") == 1846.54
+        assert result.get("market_cap") == 1846.54e8  # 百度亿元 ×1e8 归一到元（终审 C1）
         assert result.get("PB") == 14.52
         assert result.get("price") == 632.0
         assert result.get("name") == "拓荆科技"
@@ -536,7 +536,9 @@ class TestFetchStockQuoteBaiduFallback:
 
         result = client.fetch_stock_quote("688072")
 
-        assert result.get("market_cap") == 1846.54  # 总市值保留
+        assert (
+            result.get("market_cap") == 1846.54e8
+        )  # 百度亿元 ×1e8 归一到元（终审 C1）  # 总市值保留
         assert "PB" not in result or result["PB"] is None  # PB 缺失不抛
         assert result.get("price") == 632.0
 
@@ -554,3 +556,377 @@ class TestFetchStockQuoteBaiduFallback:
         assert result.get("name") == "拓荆科技"
         assert "PE" not in result or result["PE"] is None
         assert any("行情" in r.message for r in caplog.records), "全部回退失败无 ERROR 日志"
+
+
+class TestFetchQuarterlyIncomeExtended:
+    """季度利润表扩展：单季营收/营业成本列。"""
+
+    @staticmethod
+    def _quarterly_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "REPORT_DATE": pd.to_datetime(
+                    ["2026-06-30", "2026-03-31", "2025-12-31", "2025-06-30"]
+                ),
+                "PARENT_NETPROFIT": [7.72e8, 5.71e8, 3.70e8, 0.94e8],
+                "OPERATE_INCOME": [1.80e9, 1.12e9, 2.10e9, 0.95e9],
+                "OPERATE_COST": [1.07e9, 0.68e9, 1.30e9, 0.65e9],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_revenue_and_cost_columns_present(self, mock_ak, client):
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = self._quarterly_df()
+        df = client.fetch_quarterly_income("688072", quarters=2)
+        assert "营业收入(单季)" in df.columns
+        assert "营业成本(单季)" in df.columns
+        row = df[df["季度"] == "2026Q2"].iloc[0]
+        assert row["营业收入(单季)"] == 1.80e9
+        assert row["营业成本(单季)"] == 1.07e9
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_missing_cost_yields_none_not_zero(self, mock_ak, client):
+        df_partial = self._quarterly_df().drop(columns=["OPERATE_COST"])
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = df_partial
+        df = client.fetch_quarterly_income("688072", quarters=4)
+        assert df["营业成本(单季)"].isna().all()
+        assert df["营业收入(单季)"].notna().all()
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_revenue_yoy_computed_in_wide_window(self, mock_ak, client):
+        """营收同比在宽窗口（截断前）算好随行携带。
+
+        quarters=1 时最终只保留 2026Q2，但宽窗口 head(1*2+2)=4 行仍含
+        2025Q2（OPERATE_INCOME=0.95e9），故截断后 2026Q2 行仍携带
+        (1.80e9 - 0.95e9) / 0.95e9 * 100 ≈ 89.47。
+        """
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = self._quarterly_df()
+        df = client.fetch_quarterly_income("688072", quarters=1)
+        assert "营收同比" in df.columns
+        assert len(df) == 1  # 最终截断到最近 1 季
+        assert df.iloc[0]["营收同比"] == pytest.approx(89.47, abs=0.01)
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_nan_normalized_to_none_at_exit(self, mock_ak, client):
+        """D3：出口 NaN 归一——records 中 None 经 pd.DataFrame 构造变 float64 NaN，
+        消费端 `is None` 判空失效，违反「不产出伪值」契约；出口必须归回 None。
+
+        宽窗口仅 2 行（2026-06-30 与 2025-06-30）：2026Q2 的同比/营收同比可算
+        （float），2025Q2 找不到 2024 同期 → 同比/营收同比为 None。同比列因
+        float 与 None 混列被构造成 float64+NaN——正是判空失效的场景。
+        """
+        df = pd.DataFrame(
+            {
+                "REPORT_DATE": pd.to_datetime(["2026-06-30", "2025-06-30"]),
+                "PARENT_NETPROFIT": [7.72e8, 0.94e8],
+                "OPERATE_INCOME": [1.80e9, 0.95e9],
+                "OPERATE_COST": [1.07e9, 0.65e9],
+            }
+        )
+        mock_ak.stock_profit_sheet_by_quarterly_em.return_value = df
+        out = client.fetch_quarterly_income("688072", quarters=2)
+
+        # 混列场景成立：2026Q2 同比确实算出（非恒 None），2025Q2 缺同期必须 None
+        assert isinstance(out.iloc[0]["同比"], float)
+        assert out.iloc[1]["同比"] is None
+        # 核心断言：出口全列不允许残留 float NaN——None 是唯一合法「缺失」表示
+        for col in out.columns:
+            for v in out[col].tolist():
+                assert not (isinstance(v, float) and pd.isna(v)), f"列 {col} 残留 NaN: {v!r}"
+
+
+class TestFetchLatestPeriodSnapshot:
+    """最新报告期快照：不限年报，取最新已披露报告期。"""
+
+    @staticmethod
+    def _inc_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "报告日": ["20260630", "20251231", "20250630", "20241231"],
+                "营业总收入": [2912864261.46, 6519094874.63, 1954146173.65, 5000000000.0],
+                "营业成本": [1718464963.55, 4240523945.89, 1329638462.72, 3200000000.0],
+                "归母净利润": [1342753980.93, 927000000.0, 94000000.0, 700000000.0],
+            }
+        )
+
+    @staticmethod
+    def _bs_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "报告日": ["20260630", "20251231", "20250630"],
+                "资产总计": [25312149848.91, 19823566917.19, 17553660550.0],
+                "负债合计": [12112639298.53, 12708096577.24, 12127248749.77],
+                "存货": [8832503986.79, 7825778934.48, 8322530306.59],
+                "合同负债": [5130654458.79, 4851847248.0, 4535774320.25],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_snapshot_from_h1_report(self, mock_ak, client):
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["报告日"] == "2026-06-30"
+        assert snap["期类型"] == "中报"
+        assert snap["营业总收入(累计)"] == 29.13
+        assert snap["归母净利润(累计)"] == 13.43
+        # 毛利率 = 1 - 17.18/29.13 = 41.0%
+        assert snap["毛利率(%)"] == 41.0
+        # 负债率 = 121.13/253.12 = 47.85%
+        assert snap["资产负债率(%)"] == 47.85
+        assert snap["存货"] == 88.33
+        assert snap["合同负债"] == 51.31
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_yoy_vs_same_period_prior_year(self, mock_ak, client):
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        # 营收同比 = (29.13 - 19.54)/19.54 = 49.08%
+        assert snap["营收同比(%)"] == 49.08
+        assert snap["上年同期归母净利润"] == 0.94
+        # 归母净利同比 = (13.43 - 0.94)/0.94 = 1328.72%
+        assert snap["归母净利同比(%)"] == 1328.72
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_no_prior_period_yoy_none_marked_missing(self, mock_ak, client):
+        inc = self._inc_df()[self._inc_df()["报告日"] != "20250630"]
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            inc if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["营收同比(%)"] is None
+        assert "上年同期数据缺失" in " ".join(snap["missing"])
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_balance_sheet_missing_fields_partial_snapshot(self, mock_ak, client):
+        bs = pd.DataFrame({"报告日": ["20260630"]})
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else bs
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["存货"] is None
+        assert "存货" in snap["missing"]
+        assert snap["毛利率(%)"] == 41.0  # 利润表部分照常装配
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_income_statement_failure_raises(self, mock_ak, client):
+        """利润表整体不可用 → _sina_report 重试后抛 RuntimeError（由 fetch 层降级）。"""
+        mock_ak.stock_financial_report_sina.side_effect = ConnectionError("RST")
+        with pytest.raises(RuntimeError):
+            client.fetch_latest_period_snapshot("688072")
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_balance_sheet_neighbor_period_fallback_marked_missing(self, mock_ak, client):
+        """BS 无同报告日行回退最新一期 → missing 标注（M1，邻期值不得伪装同期值）。"""
+        bs = self._bs_df()[self._bs_df()["报告日"] == "20251231"]
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            self._inc_df() if symbol == "利润表" else bs
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["报告日"] == "2026-06-30"  # 快照期仍为中报
+        assert snap["存货"] == 78.26  # 回退取 20251231 行
+        assert "资产负债表非同期" in " ".join(snap["missing"])
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_prior_period_nan_values_marked_missing(self, mock_ak, client):
+        """同期行存在但营收/归母净利全为 NaN → 同比 None 且 missing 标注（M2）。"""
+        inc = self._inc_df()
+        inc.loc[inc["报告日"] == "20250630", ["营业总收入", "归母净利润"]] = float("nan")
+        mock_ak.stock_financial_report_sina.side_effect = lambda stock, symbol: (
+            inc if symbol == "利润表" else self._bs_df()
+        )
+        snap = client.fetch_latest_period_snapshot("688072")
+        assert snap["上年同期营业总收入"] is None
+        assert snap["上年同期归母净利润"] is None
+        assert snap["营收同比(%)"] is None
+        assert snap["归母净利同比(%)"] is None
+        assert "上年同期数据缺失" in " ".join(snap["missing"])
+
+
+class TestFetchIndustryCninfoLatest:
+    """cninfo 行业变更史取现行条目：按变更日期降序取最新非空行业中类。
+
+    bug 实录（Task 12 验收发现）：变更史 iloc[0] 是最旧条目——拓荆科技拿到
+    2021 年「其它专用机械」而非现行「半导体设备」，行业阈值覆盖永不命中。
+    """
+
+    @staticmethod
+    def _history() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "变更日期": ["2021-07-12", "2022-03-29"],
+                "行业中类": ["其它专用机械", "半导体设备"],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_latest_change_date_wins(self, mock_ak, client):
+        mock_ak.stock_industry_change_cninfo.return_value = self._history()
+        assert client._fetch_industry_cninfo("688072") == "半导体设备"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_nan_industry_skipped(self, mock_ak, client):
+        df = pd.DataFrame(
+            {"变更日期": ["2022-03-29", "2022-03-29"], "行业中类": [float("nan"), "半导体设备"]}
+        )
+        mock_ak.stock_industry_change_cninfo.return_value = df
+        assert client._fetch_industry_cninfo("688072") == "半导体设备"
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_same_date_multi_standard_prefers_shenwan_zhongzheng(self, mock_ak, client):
+        # 688072 实录：同日 2022-04-20 巨潮「集成电路」与中证「半导体设备」并存，
+        # 无 tie-break 时不稳定排序随机取「集成电路」→ 行业阈值覆盖不命中
+        df = pd.DataFrame(
+            {
+                "变更日期": ["2021-07-12", "2022-03-29", "2022-03-29", "2022-04-20", "2022-04-20"],
+                "行业中类": ["其它专用机械", "半导体设备", float("nan"), "集成电路", "半导体设备"],
+                "分类标准": [
+                    "申银万国行业分类标准(旧)",
+                    "申银万国行业分类标准",
+                    "证监会行业分类标准（2012）",
+                    "巨潮行业分类标准",
+                    "中证行业分类标准",
+                ],
+            }
+        )
+        mock_ak.stock_industry_change_cninfo.return_value = df
+        assert client._fetch_industry_cninfo("688072") == "半导体设备"
+
+
+class TestFetchPeerData:
+    """delta clear-valuation-chain-debts D2：同业财务数据抓取。
+
+    共享 spot 表引入后，本类用例统一让共享表拉取快速失败（走逐标的
+    fetch_stock_quote mock 路径）；spot 命中路径见 TestFetchPeerDataSharedSpot。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fast_spot_failure(self, monkeypatch):
+        """共享 spot 表拉取快速失败 → 逐标的走本类 mock 的 fetch_stock_quote。"""
+        with patch("finance_agent.data.akshare_client.ak") as mock_ak:
+            mock_ak.stock_zh_a_spot_em.side_effect = ConnectionError("RST")
+            monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+            monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+            yield
+
+    def test_mixed_success_skips_failed_peer(self, client, monkeypatch):
+        calls = []
+
+        def fake_quote(code):
+            calls.append(code)
+            if code == "688012":
+                return {"name": "中微公司", "PE": 60.0, "PB": 10.0}
+            raise ConnectionError("全源失败")
+
+        monkeypatch.setattr(client, "fetch_stock_quote", fake_quote)
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 1
+        assert df.iloc[0]["name"] == "中微公司"
+        assert df.iloc[0]["PE"] == 60.0
+        assert calls == ["688012", "002371"]
+
+    def test_quote_without_pe_pb_skipped(self, client, monkeypatch):
+        monkeypatch.setattr(client, "fetch_stock_quote", lambda code: {"name": "X", "code": code})
+        df = client.fetch_peer_data(["600001"])
+        assert df is None
+
+    def test_quote_nan_pe_pb_skipped(self, client, monkeypatch):
+        """停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数处理，不得写入行毒化均值。"""
+        monkeypatch.setattr(
+            client,
+            "fetch_stock_quote",
+            lambda code: {"name": "X", "PE": float("nan"), "PB": float("nan")},
+        )
+        assert client.fetch_peer_data(["600001"]) is None
+
+    def test_nan_pe_with_valid_pb_normalized(self, client, monkeypatch):
+        """NaN PE 但 PB 有值：行内 PE 归一为 None，PB 保留。"""
+        monkeypatch.setattr(
+            client,
+            "fetch_stock_quote",
+            lambda code: {"name": "X", "PE": float("nan"), "PB": 3.2},
+        )
+        df = client.fetch_peer_data(["600001"])
+        assert df is not None and len(df) == 1
+        assert df.iloc[0]["PE"] is None
+        assert df.iloc[0]["PB"] == 3.2
+
+    def test_all_failed_returns_none(self, client, monkeypatch):
+        def fail(code):
+            raise ConnectionError("down")
+
+        monkeypatch.setattr(client, "fetch_stock_quote", fail)
+        assert client.fetch_peer_data(["600001", "600002"]) is None
+
+    def test_empty_input_returns_none(self, client):
+        assert client.fetch_peer_data([]) is None
+
+
+class TestFetchPeerDataHeterogeneousRows:
+    """终审 C1/I2：混合双行（一 peer 回退链无 PE、一 peer 东财 PE 有值）时
+    DataFrame 构造把 None 强转回 float64 NaN——行级归一在构造边界失效，
+    NaN 毒化同业均值并伪装成 fair。出口必须复用 _normalize_nan 根因归一。
+    """
+
+    def test_mixed_none_and_value_pe_no_nan_leak(self, client, monkeypatch):
+        def fake_quote(code):
+            if code == "688012":
+                return {"name": "中微公司", "PE": 60.0, "PB": 10.0}  # 东财成功
+            return {"name": "北方华创", "PE": None, "PB": 11.26}  # 回退链无 PE
+
+        monkeypatch.setattr(client, "fetch_stock_quote", fake_quote)
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 2
+        # 出口无 NaN（is None 可靠判空），数值保留
+        assert df.iloc[1]["PE"] is None
+        assert df.iloc[0]["PE"] == 60.0
+        assert not any(isinstance(v, float) and pd.isna(v) for v in df["PE"].tolist())
+
+
+class TestFetchPeerDataSharedSpot:
+    """同业批抓取共享单次全市场 spot 表（效率挂账收口：N×spot → 1×）。"""
+
+    @staticmethod
+    def _spot_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "名称": ["中微公司", "北方华创", "贵州茅台"],
+                "代码": ["688012", "002371", "600519"],
+                "最新价": [200.0, 300.0, 1800.0],
+                "总市值": [1.5e11, 2.0e11, 2.0e12],
+                "市盈率-动态": [55.0, 48.0, 25.0],
+                "市净率": [9.0, 8.0, 8.5],
+            }
+        )
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_spot_table_serves_all_peers_without_fallback(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_spot_em.return_value = self._spot_df()
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 2
+        assert df.iloc[0]["PE"] == 55.0 and df.iloc[0]["PB"] == 9.0
+        # spot 表全覆盖 → 不触发百度/腾讯回退
+        mock_ak.stock_zh_valuation_baidu.assert_not_called()
+        mock_ak.stock_zh_a_hist_tx.assert_not_called()
+        # 共享断言：N peer 只拉 1 次全市场 spot 表（效率挂账：N× → 1×）
+        assert mock_ak.stock_zh_a_spot_em.call_count == 1
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_spot_miss_peer_falls_back_to_quote_chain(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_spot_em.return_value = self._spot_df()
+        mock_ak.stock_zh_valuation_baidu.return_value = pd.DataFrame({"value": [11.26]})
+        mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame(
+            {"date": ["2026-09-29"], "open": [1.0], "close": [1.1], "high": [1.2], "low": [0.9]}
+        )
+        df = client.fetch_peer_data(["688012", "600300"])
+        assert df is not None and len(df) == 2
+        # 688012 来自 spot 表；600300 表未命中 → 走 quote 回退链（百度 PB，PE 缺）
+        assert df.iloc[0]["PE"] == 55.0
+        assert df.iloc[1]["PE"] is None and df.iloc[1]["PB"] == 11.26

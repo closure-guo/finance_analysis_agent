@@ -85,6 +85,22 @@ def _make_stub_cash_flow() -> pd.DataFrame:
     )
 
 
+def _make_stub_kline(rows: int = 80) -> pd.DataFrame:
+    """有效日 K 线（日期/开盘/收盘/最高/最低）。默认 80 期 ≥ 60 日窗口：
+    全图 stub 管线的 derived_series 5/20/60 窗口全部可算，且与注入型
+    全图测试（如 derived_series_channel）的期望窗口一致。"""
+    return pd.DataFrame(
+        {
+            "日期": pd.date_range("2026-01-01", periods=rows, freq="B").strftime("%Y-%m-%d"),
+            "开盘": [100.0 + i for i in range(rows)],
+            "收盘": [101.0 + i for i in range(rows)],
+            "最高": [102.0 + i for i in range(rows)],
+            "最低": [99.0 + i for i in range(rows)],
+            "成交量": [1000.0] * rows,
+        }
+    )
+
+
 def _stub_fetch_data(state: dict) -> dict[str, Any]:
     """TESTING=1 专用的确定性数据：不触网，字段与真实 fetch_data 输出一致。"""
     stock_name = state.get("stock_name", "") or state.get("stock_code", "")
@@ -96,13 +112,38 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "industry_info": {"industry": "白酒", "name": stock_name},
         "stock_quote": {"price": 1800.0, "name": stock_name, "code": state.get("stock_code", "")},
         "key_events": [],
-        "peer_financials": None,
         "macro_indicators": {},
         "news_list": [],
         "announcements": [],
         "research_reports": [],
         "share_unlock": [],
         "block_trades": [],
+        # 终审 I1（clear-valuation-chain-debts）：真实路径另产出 kline/benchmark_kline/
+        # industry_pe/quarterly_income——stub 键集须与之同构，图通道门禁（D6）才覆盖全部产出
+        # 有效小窗口 kline（≥ ATR 周期+1）：真实路径 kline 常态在场（回退成功时），
+        # 空 DataFrame 会覆盖全图测试注入的 kline 并令 price_levels 误判 insufficient
+        "kline": _make_stub_kline(),
+        "benchmark_kline": _make_stub_kline(),
+        "industry_pe": None,
+        "quarterly_income": None,
+        # update-financial-freshness-and-valuation Task 4：最新报告期快照
+        # （估值外的最新期关键科目 + 同比；失败降级空 dict，ERROR 日志见抓取循环特判）
+        "latest_period_snapshot": {
+            "报告日": "2025-12-31",
+            "期类型": "年报",
+            "营业总收入(累计)": 65.19,
+            "归母净利润(累计)": 9.27,
+            "营业成本(累计)": 42.41,
+            "毛利率(%)": 34.95,
+            "资产负债率(%)": 64.11,
+            "存货": 78.26,
+            "合同负债": 48.52,
+            "上年同期营业总收入": 41.03,
+            "上年同期归母净利润": 6.88,
+            "营收同比(%)": 58.87,
+            "归母净利同比(%)": 34.74,
+            "missing": [],
+        },
     }
 
 
@@ -141,6 +182,8 @@ def _set_optional_fallback(result: dict, label: str) -> None:
         "research_reports": [],
         "share_unlock": [],
         "block_trades": [],
+        # update-financial-freshness-and-valuation Task 4：快照失败降级空 dict
+        "latest_period_snapshot": {},
     }
     result[label] = fallbacks.get(label)
 
@@ -198,6 +241,9 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
         futures[pool.submit(ak.fetch_research_reports, code)] = "research_reports"
         futures[pool.submit(ak.fetch_share_unlock, code)] = "share_unlock"
         futures[pool.submit(ak.fetch_block_trades, code)] = "block_trades"
+        # update-financial-freshness-and-valuation Task 4：最新报告期快照
+        # （非必需，失败降级空 dict + ERROR 日志；与报表同为 30 天慢变）
+        futures[pool.submit(ak.fetch_latest_period_snapshot, code)] = "latest_period_snapshot"
 
         # ── 收集结果（每个调用带 Langfuse span 追踪）──
         for future in as_completed(futures):
@@ -215,7 +261,12 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
                         obs.update(output={"status": "error", "error": str(e)}, level="ERROR")
                     if label in ("balance_sheet", "income_statement", "cash_flow_statement"):
                         raise  # 必需数据异常传播，终止管线
-                    logger.warning("%s 拉取失败: %s", label, e)
+                    if label == "latest_period_snapshot":
+                        # 快照供估值外的最新期分析消费，缺失比其他 optional 更刺眼：
+                        # ERROR 级别（其余 optional 保持 warning）
+                        logger.error("latest_period_snapshot 拉取失败，最新期快照缺失: %s", e)
+                    else:
+                        logger.warning("%s 拉取失败: %s", label, e)
                     _set_optional_fallback(result, label)
                     continue
 
@@ -278,6 +329,10 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
             elif label == "block_trades":
                 c.set(f"{code}:block_trades", value, ttl_seconds=3600)
                 result["block_trades"] = value
+            elif label == "latest_period_snapshot":
+                # 与报表同 30 天 TTL：快照随最新财报慢变，无需更高频刷新
+                c.set(f"{code}:latest_period_snapshot", value, ttl_seconds=2_592_000)
+                result["latest_period_snapshot"] = value
 
     # ── Step 2: 依赖 industry_info 的串行调用 ──
     # 关键非财务事件（需要股票名称）
@@ -327,4 +382,10 @@ def _fetch_peers(ak, code, state, industry_info):
     peer_codes = state.get("peer_codes")
     if not peer_codes or not industry_info:
         return None
-    return ak.fetch_peer_data(peer_codes)
+    df = ak.fetch_peer_data(peer_codes)
+    # clear-valuation-chain-debts D2：空表（全标的失败/无 PE/PB）归一 None，
+    # 与「全部失败降级 None」spec 语义一致——上游 span 走 skipped 分支，
+    # peer_financials 键不写入，下游 state.get 默认 None。
+    if df is None or df.empty:
+        return None
+    return df

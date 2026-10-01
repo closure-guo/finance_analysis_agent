@@ -1,143 +1,37 @@
 # price-level-tooling Specification
 
 ## Purpose
-TBD - created by archiving change toolize-price-levels. Update Purpose after archive.
+由 delta update-decision-integrity-gates 归档建立（2026-09-30 实施完毕并通过逐任务审查与全量回归）。
 ## Requirements
-### Requirement: 价位预算工具
+### Requirement: 决策文本价位与已验证技术指标交叉校验
 
-系统 SHALL 由 K 线以确定性工具计算价位参考（`price_levels`）：近期高低点、ATR、
-支撑/阻力参考带、建议止损带与目标参考带，供 Trader 解读与引用；Trader 产出的
-entry/stop/target SHALL 经过该工具数据支撑，不得无依据产出。
+决策层产出的自由文本价位（`reeval_triggers` 条目与 `inaction_reason`/`reasoning` 中出现的数值价位）SHALL 由确定性代码与 state 中已验证的技术指标值（最新收盘价、各周期 MA、近期高低点、布林轨道）交叉核对，MUST NOT 仅因数值出现在决策文本即视为可信。以下两种形态 SHALL 各登记一条 anomaly（复用既有 anomalies 通道，附原始文本片段与最接近的已验证指标值），并在报告「再评估触发条件」/「不行动原因」旁以「价位待核实」类标注呈现：
 
-#### Scenario: 价位参考注入 trader context
+- **偏差形态**：文本价位与语义最接近的已验证指标值偏差超过配置阈值（默认 2%），且不落在 `price_levels` 参考带内；
+- **空洞形态**：上破类触发（「站上/突破/收复 X」）中 X 不高于最新收盘价，或下破类触发（「跌破/回落至 X」）中 X 不低于最新收盘价——即触发条件在当前时点已经满足，不构成有效的再评估门槛。
 
-- **WHEN** Trader 节点构建 context
-- **THEN** SHALL 包含 price_levels JSON（参考带而非单点指令）
-- **AND** Trader 保留决策权（可偏离参考带，但受 sanity 校验约束）
+校验 SHALL NOT 硬中断管线：决策照常放行前进，校验结果以 anomaly + 报告标注呈现（可观测优先，与「非执行动作结构化理由契约」的放行标注语义同型）。无法与任何已验证指标建立归属对应的数值（如财报降幅阈值、赔率比值）SHALL NOT 被误报——归属匹配 SHALL 区分价格量纲与百分比/比值量纲。
 
-### Requirement: 交易价位 sanity 校验
+#### Scenario: 触发价幻觉检测（偏差形态）
 
-系统 SHALL 在 Trader 产出后运行确定性校验：long 须 stop<entry<target（short 对称）；entry 距最新收盘偏差 ≤ 配置上限（默认 15%）；stop/target 落在工具参考带内（±2ATR 放宽带）。校验 SHALL NOT 由 LLM 执行。
+- **WHEN** watch 决策的 `reeval_triggers` 含「放量突破 MA60 并站稳 18.8 以上」，state 已验证技术指标中 MA60 = 18.066（偏差 4.1%，超过默认阈值 2%）
+- **THEN** 系统 SHALL 登记一条偏差形态 anomaly，内容含触发原文、指标名（MA60）、已验证值 18.066 与偏差幅度
+- **THEN** 报告该触发条目旁 SHALL 渲染价位待核实标注，标注内容含已验证值
+- **AND** 决策本身 SHALL 照常放行，管线 MUST NOT 中断
 
-buy/sell 决策 SHALL 申报数值价位：entry_price、stop_loss、target_price 任一缺失（None、≤0）SHALL 视为价位不合法——首次 SHALL 打回并要求申报数值价位（打回 feedback SHALL 列明缺失项）；已打回一次仍缺失 SHALL 放行并如实标注（`price_check` note 记录「已打回仍未申报」，报告端按「未提供」渲染，不静默、不虚构数值）。watch/hold 决策无价位要求，维持直通。
+#### Scenario: 空洞触发条件检测
 
-**覆盖面（2026-09-21 扩展，证据：601888 终稿 action=buy 且 entry/stop/target 全 None——价位埋在 reasoning 文本，管线放行）**：价位完整性要求 SHALL 同样作用于 risk_judge 写入的 `final_trade_decision`——action 为 buy/sell 而价位任一缺失时，SHALL 打回 risk_judge 重试一次（feedback 列明缺失项与理由「价位须随终稿结构化申报」）；重试后仍缺失 SHALL 放行并在 telemetry 如实标注（`final_price_check` note「已打回仍未申报」），报告端按「未提供」渲染，SHALL NOT 虚构数值。该完整性校验 SHALL NOT 重跑 Trader 侧的关系/参考带校验（终稿价位以 Trader 校验通过的价位为基线，仅补缺失）。
+- **WHEN** watch 决策的 `reeval_triggers` 含「价格放量站上止损参考带上沿 22.61」，最新收盘价为 23.03（高于 22.61）
+- **THEN** 系统 SHALL 登记一条空洞形态 anomaly（上破触发价不高于现价，条件已满足）
+- **THEN** 报告该触发条目旁 SHALL 渲染对应标注
+- **AND** 决策照常放行
 
-(Previously: 系统 SHALL 在 Trader 产出后运行确定性校验：long 须 stop<entry<target（short 对称）；entry 距最新收盘偏差 ≤ 配置上限（默认 15%）；stop/target 落在工具参考带内（±2ATR 放宽带）。校验 SHALL NOT 由 LLM 执行。buy/sell 决策 SHALL 申报数值价位：entry_price、stop_loss、target_price 任一缺失（None、≤0）SHALL 视为价位不合法——首次 SHALL 打回并要求申报数值价位；已打回一次仍缺失 SHALL 放行并如实标注。watch/hold 决策无价位要求，维持直通。)
+#### Scenario: 正常触发价直通
 
-#### Scenario: 首次不合法打回
+- **WHEN** `reeval_triggers` 中的价位与已验证指标偏差在阈值内且方向语义有效（如「跌破近期低点 22.94」且现价 23.03）
+- **THEN** SHALL 不产生 anomaly，报告渲染形态与现状一致
 
-- **GIVEN** Trader 首次产出的价位不通过校验
-- **WHEN** 路由判定
-- **THEN** SHALL 携带失败原因与 price_levels 参考带打回 Trader 重出（上限 1 次）
+#### Scenario: 非价格量纲数值不误报
 
-#### Scenario: 二次不合法工具修正
-
-- **GIVEN** 打回后产出的价位仍不通过校验
-- **WHEN** 路由判定
-- **THEN** 系统 SHALL 按工具参考带修正价位
-- **AND** 置 `price_level_corrected=true` 与修正原因（报告与 trace 可观测，不静默）
-
-#### Scenario: 合法价位直通
-
-- **WHEN** 价位通过全部校验
-- **THEN** SHALL 原样放行，不产生修正标注
-
-#### Scenario: buy/sell 价位缺失首次打回
-
-- **GIVEN** Trader 产出 action=buy 或 sell，且 entry/stop/target 任一缺失（None 或 ≤0）
-- **WHEN** 路由判定
-- **THEN** SHALL 判 fail 并打回，feedback SHALL 列明缺失项并要求申报数值价位
-- **AND** SHALL NOT 静默跳过校验
-
-#### Scenario: 价位缺失打回后仍未申报放行
-
-- **GIVEN** 已打回一次（price_check_attempts ≥ 1）后 buy/sell 决策价位仍缺失
-- **WHEN** 路由判定
-- **THEN** SHALL 放行（避免死循环）并在 price_check note 如实记录「已打回仍未申报」
-- **AND** 报告端渲染「未提供」，SHALL NOT 虚构或估算数值
-
-#### Scenario: watch/hold 无价位要求
-
-（同旧行为，见主规范）
-
-#### Scenario: 终稿 buy 价位缺失打回 risk_judge
-
-- **GIVEN** risk_judge 产出 final_trade_decision 且 action=buy，entry/stop/target 任一缺失
-- **WHEN** risk_judge 出口校验
-- **THEN** SHALL 打回 risk_judge 重试一次，feedback 列明缺失项与「价位须随终稿结构化申报」
-- **AND** SHALL NOT 由代码虚构价位填充
-
-#### Scenario: 终稿打回后仍缺失放行标注
-
-- **GIVEN** 终稿价检已打回一次，重试产出仍缺失价位
-- **WHEN** risk_judge 出口校验
-- **THEN** SHALL 放行并在 `final_price_check` note 如实记录「已打回仍未申报」
-- **AND** 报告端按「未提供」渲染
-
-#### Scenario: 终稿价位完整直通
-
-- **GIVEN** final_trade_decision 的 buy/sell 三价位齐全
-- **WHEN** risk_judge 出口校验
-- **THEN** SHALL 原样放行，不触发打回
-
-### Requirement: quick 模式行情快照
-
-quick 模式的 search_stock 工具结果 SHALL 附带现价与涨跌幅快照（工具计算），
-LLM 对价格事实的陈述 SHALL 以快照为据。
-
-#### Scenario: 查股附带快照
-
-- **WHEN** quick 模式调用 search_stock 命中标的
-- **THEN** 结果 SHALL 含 price 与 pct_change 字段（数据缺失时如实标注缺失）
-
-### Requirement: 分析师派生值预生成
-
-系统 SHALL 由工具预计算常用派生值——5/20/60 日区间涨跌幅、距 250 日高点回撤、距 250 日低点反弹，**以及均线间差幅**（`ma_spread_5_20_pct`、`ma_spread_20_60_pct`、`close_vs_ma20_pct`、`close_vs_ma60_pct`，百分比，正 = 前者高于后者）——并与 technical_indicators 并列注入技术面分析师 context；分析师对上述派生值的陈述 SHALL 引用预生成值而非自行计算。
-
-派生值 SHALL 存放于 `AnalysisState` 中**已声明**的 channel `derived_series`（未声明键被图合并静默丢弃——incident 027），该键 SHALL 出现在图通道契约测试的断言集合中。context 中的派生值块 SHALL 标注**真实可引用**的 field_ref 前缀 `derived_series.`，SHALL NOT 标注与 state 键不一致的前缀；SHALL NOT 以别名映射代替真实键（沿「上下文与校验单一词表」）。
-
-`derived_series` SHALL 注册进计算型 claim 重算注册表（以同一份 `calc_derived_series(kline)` 重算，配独立重算 fixture 测试）与有符号量根键集合（`direction` 申报参与符号比对）。均线差幅 SHALL 复用既有技术指标的均线计算口径，SHALL NOT 另算一份均线。任一操作数缺失或分母为 0 的派生项 SHALL 为 None 并在 context 如实标注缺失，SHALL NOT 伪造。
-
-派生值预生成 SHALL 有端到端验收：经编译后的真实图执行一次，技术面分析师 context SHALL 实际包含派生值块，且以 `derived_series.<字段>` 为 field_ref 的 numerical claim SHALL 经引用校验 PASS。
-(Previously: 派生值清单为区间涨跌幅与距高低点回撤/反弹五项；「随 technical_indicators 注入」但未钉死存放键与可引用前缀；实现将其写入未声明的 `derived_series` 键且 context 标注前缀 `derived.`，导致在真实图中从未注入且不可引用；无重算注册、无有符号量注册、无端到端验收)
-
-#### Scenario: 派生值注入
-
-- **WHEN** 技术面分析师 context 构建
-- **THEN** SHALL 包含派生值表（带 field_ref 可引用）
-- **AND** 数据不足的派生项 SHALL 如实标注缺失
-
-#### Scenario: 真实图中派生值可见且可引用
-
-- **WHEN** 以编译后的 5 层图执行一次 deep 全流程（或消融变体图）
-- **THEN** 技术面分析师 context SHALL 含「常用派生值」块且前缀标注为 `derived_series.`
-- **AND** 以 `derived_series.chg_5d` 为 field_ref、stated_value 等于预生成值的 numerical claim 经 `verify_claims` SHALL 判 PASS
-- **AND** `build_5layer_graph().builder.channels` SHALL 含 `derived_series`
-
-#### Scenario: 均线差幅预生成
-
-- **GIVEN** K 线 ≥ 60 期，MA5 / MA20 / MA60 最新值分别为 10.30 / 10.00 / 9.50，收盘 10.20
-- **WHEN** 计算派生值
-- **THEN** `ma_spread_5_20_pct` SHALL 为 3.0、`ma_spread_20_60_pct` SHALL 约 5.263、`close_vs_ma20_pct` SHALL 为 2.0、`close_vs_ma60_pct` SHALL 约 7.368（相对容差 0.5% 内）
-- **AND** 均线取值 SHALL 与 `technical_indicators.MA.<w>.-1` 一致（同一计算口径）
-
-#### Scenario: 数据不足如实标缺
-
-- **GIVEN** K 线仅 30 期（MA60 不可得）
-- **WHEN** 计算派生值
-- **THEN** `ma_spread_20_60_pct` 与 `close_vs_ma60_pct` SHALL 为 None，context 渲染「数据不足」
-- **AND** `ma_spread_5_20_pct`、`close_vs_ma20_pct` SHALL 正常计算
-
-#### Scenario: 派生值计算型 claim 可重算
-
-- **WHEN** 报告含 computational claim `field_ref=derived_series.ma_spread_5_20_pct`
-- **THEN** 校验器 SHALL 以 `calc_derived_series(state["kline"])` 重算 ground truth 并按相对容差判 PASS/FAIL，SHALL NOT 判 UNVERIFIABLE
-
-#### Scenario: 派生值方向申报参与符号比对
-
-- **WHEN** claim `field_ref=derived_series.ma_spread_5_20_pct`，`stated_value=2.3`，`direction="negative"`，真值 -2.3
-- **THEN** 校验 SHALL 判 PASS（有符号量，direction 修饰后符号一致）
-- **WHEN** 同 claim `direction="positive"`
-- **THEN** 校验 SHALL 判 FAIL，bucket `direction_mismatch`
-
+- **WHEN** `reeval_triggers` 含「单季净利降幅收敛至 18.35% 以下」「赔率修复至 1:1」等百分比/比值表述
+- **THEN** 归属匹配 SHALL 识别其为非价格量纲，SHALL NOT 按价位偏差误报 anomaly

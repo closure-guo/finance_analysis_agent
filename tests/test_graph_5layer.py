@@ -138,3 +138,129 @@ class TestNodeOutputChannels:
         channels = set(build_5layer_graph().channels)
         missing_channel = produced - channels
         assert not missing_channel, f"已声明但未建图通道：{sorted(missing_channel)}"
+
+    def test_fetch_outputs_all_declared_and_channeled(self, monkeypatch):
+        """门禁扩展（clear-valuation-chain-debts D6）：fetch_data 产出键同检。
+
+        agent-node-contracts 门禁条款原文「至少 compute_metrics」——fetch 是
+        latest_period_snapshot 等新键的产出节点，同样受静默丢弃风险约束。
+        TESTING=1 stub 走 fetch_data 不触网；stub 键集与真实路径同构
+        （真实路径的全部产出键均在 stub 中，见 fetch.py _stub_fetch_data 的
+        终审 I1 注记）。
+        """
+        from finance_agent.graph import build_5layer_graph
+        from finance_agent.nodes.fetch import fetch_data
+        from finance_agent.state import AnalysisState
+
+        monkeypatch.setenv("TESTING", "1")
+        produced = set(fetch_data({"stock_code": "600519", "stock_name": "贵州茅台"}).keys())
+        declared = set(AnalysisState.__annotations__)
+        missing_declared = produced - declared
+        assert not missing_declared, (
+            f"fetch 产出未声明键会被 LangGraph 静默丢弃（027 教训）：{sorted(missing_declared)}"
+        )
+
+        channels = set(build_5layer_graph().channels)
+        missing_channel = produced - channels
+        assert not missing_channel, f"已声明但未建图通道：{sorted(missing_channel)}"
+
+
+class TestStubRealKeysetParity:
+    """终审 I1 收口：stub 键集 ≡ 真实 fetch_data 全成功键集（结构化相等断言）。
+
+    D6 门禁测的是 stub 产出——若真实路径新增产出键而 stub 漏补，门禁盲区
+    静默重现。此处用全成功 FakeClient 驱动真实 fetch_data（不触网），断言
+    两键集相等，堵住「注释约定」的失效模式。
+    """
+
+    def test_stub_keys_equal_real_fetch_keys(self, monkeypatch):
+        import pandas as pd
+
+        from finance_agent.nodes.fetch import _stub_fetch_data, fetch_data
+
+        monkeypatch.delenv("TESTING", raising=False)
+
+        class _AllSuccessClient:
+            """全数据源成功（最小合法返回）的真实 client 替身。"""
+
+            def fetch_balance_sheet(self, code):
+                return pd.DataFrame(
+                    {"报告日": ["20251231", "20241231"], "资产总计": [200.0, 180.0]}
+                )
+
+            def fetch_income_statement(self, code):
+                return pd.DataFrame({"报告日": ["20251231", "20241231"], "营业收入": [100.0, 90.0]})
+
+            def fetch_cash_flow(self, code):
+                return pd.DataFrame({"报告日": ["20251231", "20241231"], "经营现金流": [10.0, 9.0]})
+
+            def fetch_indicators(self, code):
+                return pd.DataFrame({"日期": ["2025-12-31"]})
+
+            def fetch_industry(self, code):
+                return {"industry": "半导体设备", "name": "X"}
+
+            def fetch_stock_quote(self, code):
+                return {"name": "X", "PE": 20.0, "PB": 3.0, "market_cap": 100.0, "price": 10.0}
+
+            def fetch_kline(self, code, days=250):
+                return pd.DataFrame(
+                    {
+                        "日期": pd.date_range("2026-01-01", periods=80, freq="B").strftime(
+                            "%Y-%m-%d"
+                        ),
+                        "开盘": [1.0] * 80,
+                        "收盘": [1.1] * 80,
+                        "最高": [1.2] * 80,
+                        "最低": [0.9] * 80,
+                        "成交量": [100.0] * 80,
+                    }
+                )
+
+            def fetch_benchmark_kline(self, days=250):
+                return self.fetch_kline("000300")
+
+            def fetch_industry_pe(self, code):
+                return {"industry_name": "半导体设备", "avg_pe": 45.0}
+
+            def fetch_quarterly_income(self, code):
+                return pd.DataFrame(
+                    {
+                        "季度": ["2026Q2"],
+                        "归母净利润(单季)": [1.0e8],
+                        "营业收入(单季)": [3.0e8],
+                        "营业成本(单季)": [2.0e8],
+                        "环比": [10.0],
+                        "同比": [20.0],
+                    }
+                )
+
+            def fetch_macro_indicators(self):
+                return {}
+
+            def fetch_news(self, code):
+                return [{"title": "t"}]
+
+            def fetch_announcements(self, code):
+                return []
+
+            def fetch_research_reports(self, code):
+                return []
+
+            def fetch_share_unlock(self, code):
+                return []
+
+            def fetch_block_trades(self, code):
+                return []
+
+            def fetch_latest_period_snapshot(self, code):
+                return {"报告日": "2025-12-31", "期类型": "年报", "missing": []}
+
+        real_keys = set(
+            fetch_data({"stock_code": "600519"}, cache=None, client=_AllSuccessClient()).keys()
+        )
+        stub_keys = set(_stub_fetch_data({"stock_code": "600519"}).keys())
+        assert real_keys == stub_keys, (
+            f"stub 与真实 fetch_data 键集漂移：仅真实有 {sorted(real_keys - stub_keys)}，"
+            f"仅 stub 有 {sorted(stub_keys - real_keys)}"
+        )

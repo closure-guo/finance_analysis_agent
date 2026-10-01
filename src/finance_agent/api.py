@@ -449,7 +449,9 @@ def _node_summary(node_name: str, accumulated: dict, update: dict) -> str:
         parts = [f"计算 {count} 项核心指标"]
         hs = accumulated.get("health_score")
         if isinstance(hs, dict) and hs:
-            score = hs.get("score", hs.get("health_score"))
+            # health_score 的分值键是 total（无 score 键——旧取值恒 None 死代码，
+            # clear-valuation-chain-debts D5）
+            score = hs.get("total")
             if score is not None:
                 parts.append(f"健康度 {score}")
         anomalies = accumulated.get("anomalies") or []
@@ -1170,14 +1172,20 @@ def _run_graph_streaming(
                 )
 
     except Exception as e:
-        update_session_status(session_id, "failed")
+        # 管线执行体异常终态 MUST 携带 failure_reason 与可读 traceback——
+        # 此前无 reason（库中 failure_reason=None）且 traceback 字段存对象
+        # repr（"<traceback object at 0x...>"），瞬态异常（如 4c038a41 的
+        # DataFrame truth value ambiguous）完全无法定位
+        import traceback as _tb
+
+        update_session_status(session_id, "failed", failure_reason=f"{type(e).__name__}: {e}")
         yield _sse(
             {
                 "type": "error",
                 "node_id": "unknown",
                 "session_id": session_id,
                 "message": str(e),
-                "traceback": str(e.__traceback__),
+                "traceback": _tb.format_exc(),
                 "timestamp": _now(),
             }
         )

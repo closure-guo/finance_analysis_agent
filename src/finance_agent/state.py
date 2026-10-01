@@ -35,6 +35,9 @@ class AnalysisState(TypedDict, total=False):
     cash_flow_statement: pd.DataFrame
     stock_quote: dict
     industry_info: dict
+    # 最新报告期快照（update-financial-freshness-and-valuation Task 4）：fetch 产出、
+    # cache HIT 随附；未声明会被图合并静默丢弃（incident 027 同型补声明）
+    latest_period_snapshot: dict | None
 
     # ── Layer 2: 分析导向 (MVP: 仅预计算指标) ──
     financial_indicators: pd.DataFrame | None
@@ -56,6 +59,9 @@ class AnalysisState(TypedDict, total=False):
     peer_comparison: dict | None
     relative_valuation: dict | None
     garp_result: dict | None
+    # 估值快照（update-financial-freshness-and-valuation Task 5）：compute_metrics 产出，
+    # {market_cap, PE, PE_ttm, PE_caliber, PB, missing_reasons}；GARP/相对估值/上下文注入消费
+    valuation_snapshot: dict | None
 
     # ── Layer 3 扩展: 季度趋势 ──
     quarterly_income: pd.DataFrame | None
@@ -186,6 +192,13 @@ class AnalysisState(TypedDict, total=False):
     final_inaction_check: (
         dict  # 终稿非执行动作理由完整性（require-watch-hold-rationale）：{result, note}
     )
+    # 终稿执行动作再评估触发条件必填化（update-decision-integrity-gates Task 3）：
+    # {result, note}——打回后申报/「已打回仍未申报」如实标注
+    final_reeval_check: dict
+    # 决策文本价位交叉校验（update-decision-integrity-gates Task 1）：risk_judge 产出
+    # 的 anomaly 登记（reeval_triggers/inaction_reason/reasoning 自由文本价位 vs 已验证
+    # 技术指标；纯观测不参与路由），报告「再评估触发条件/不行动原因」旁标注消费
+    decision_price_anomalies: list[dict]
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──

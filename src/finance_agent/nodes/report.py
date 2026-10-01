@@ -18,6 +18,7 @@ from typing import Any
 from finance_agent.charts import collect_chart_data, generate_all_charts
 from finance_agent.llm.gateway import complete_text
 from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
+from finance_agent.nodes.fund_manager import final_integrity_notes
 
 # ── focus -> 结构化标签（规则驱动，可测试） ──
 
@@ -113,6 +114,120 @@ _FUND_MANAGER_ANNOTATIONS: dict[str, str] = {
     "reject": "未通过审批",
     "return": "已退回交易员重新评估",
 }
+
+# 置信度漂移披露阈值（update-decision-integrity-gates Task 4，spec「置信度漂移披露」）
+_CONFIDENCE_DRIFT_THRESHOLD = 0.15
+# 结构不完整标注的判定标记：note 含其一才算「不完整」——「打回后已申报」等复核性
+# 标注属完整方案，零增量不渲染（spec Scenario「方案完整时不产生额外渲染」）
+_FM_INCOMPLETE_MARKERS: tuple[str, ...] = ("仍未申报", "缺失")
+
+
+def _fm_incomplete_integrity_block(state: dict) -> str:
+    """审批对象结构不完整标注块（update-decision-integrity-gates Task 4）。
+
+    从终稿三个完整性检查（final_price_check/final_inaction_check/final_reeval_check）
+    挑出标记「不完整」的 note 原文逐项列出；无不完整标注返回空串（零增量，无空标注行）。
+    """
+    fragments = [
+        f"{label}——{note}"
+        for label, note in final_integrity_notes(state)
+        if any(marker in note for marker in _FM_INCOMPLETE_MARKERS)
+    ]
+    if not fragments:
+        return ""
+    return f"> **审批对象结构不完整标注**：{'；'.join(fragments)}\n\n"
+
+
+def _ruling_confidence(state: dict) -> float | None:
+    """读终稿置信度（TradeDecision 对象或 dict 均可；缺失/噪声返回 None）。"""
+    ruling = state.get("final_trade_decision")
+    conf = (
+        ruling.get("confidence")
+        if isinstance(ruling, dict)
+        else getattr(ruling, "confidence", None)
+    )
+    if isinstance(conf, bool) or not isinstance(conf, (int, float)):
+        return None
+    return float(conf)
+
+
+# ── 财务口径披露（确定性渲染，不依赖 LLM 引用） ──
+
+
+def _format_freshness_section(state: dict) -> str | None:
+    """确定性渲染最新报告期快照 / 估值快照 / 健康度行业口径。
+
+    spec industry-threshold-coverage「健康度评分行业口径披露」：报告渲染层 SHALL
+    使读者可见评分所用口径。三轮 688072 实跑证明 LLM markdown 引用有方差
+    （有数据不引用），故此处程序化渲染，不经过任何 LLM。
+    三个数据源全缺时返回 None（不出现在报告中，零回归）。
+    """
+    lines: list[str] = []
+
+    def _v(x) -> str:
+        # 终审 M1：缺失字段不得渲染字面 None 进中文报告
+        return "暂缺" if x is None else str(x)
+
+    snap = state.get("latest_period_snapshot")
+    if snap:
+        missing = snap.get("missing") or []
+        missing_note = f"；缺失项：{'、'.join(missing)}" if missing else ""
+
+        def _item(label: str, val, unit: str = "") -> str:
+            # clear-valuation-chain-debts D4：缺失渲染「<label> 暂缺」，
+            # 单位后缀不跟在暂缺后面（「暂缺%」是文案病）
+            return f"{label} 暂缺" if val is None else f"{label} {val}{unit}"
+
+        lines.append(
+            "- 最新报告期快照：{date}（{ptype}，利润表累计口径）— {gm}、{dr}、{inv}、{cl}，{rg}、{ng}{note}".format(
+                date=_v(snap.get("报告日", "?")),
+                ptype=_v(snap.get("期类型", "?")),
+                gm=_item("毛利率", snap.get("毛利率(%)"), "%"),
+                dr=_item("资产负债率", snap.get("资产负债率(%)"), "%"),
+                inv=_item("存货", snap.get("存货"), " 亿"),
+                cl=_item("合同负债", snap.get("合同负债"), " 亿"),
+                rg=_item("营收同比", snap.get("营收同比(%)"), "%"),
+                ng=_item("归母净利同比", snap.get("归母净利同比(%)"), "%"),
+                note=missing_note,
+            )
+        )
+
+    vsnap = state.get("valuation_snapshot")
+    if vsnap:
+        reasons = vsnap.get("missing_reasons") or []
+        if reasons:
+            lines.append(f"- 估值数据缺失（{'；'.join(reasons)}），无法判断贵贱")
+        else:
+            pe_caliber = vsnap.get("PE_caliber")
+            caliber_note = {
+                "static": "主源静态口径",
+                "derived_ttm": "TTM 推导口径",
+            }.get(pe_caliber, "口径未知")
+            pe_disp = vsnap.get("PE") if pe_caliber == "static" else vsnap.get("PE_ttm")
+            lines.append(
+                f"- 估值快照：市值 {vsnap.get('market_cap')} 亿、"
+                f"PE {pe_disp}（{caliber_note}）、PB {vsnap.get('PB')}"
+            )
+
+    health = state.get("health_score")
+    if health:
+        override = health.get("industry_override") or {}
+        industry = override.get("industry")
+        metrics = override.get("metrics") or []
+        if industry and metrics:
+            caliber_line = f"行业口径：{industry}（行业阈值覆盖：{'、'.join(metrics)}）"
+        else:
+            caliber_line = "通用口径（无行业阈值覆盖）"
+        lines.append(
+            f"- 财务健康度：{health.get('total')} 分（{health.get('rating')}），评分采用 {caliber_line}"
+        )
+
+    if not lines:
+        return None
+    body = "\n".join(lines)
+    # clear-valuation-chain-debts D4：返回纯正文（无标题）——标题由 generate_report
+    # 经 next_title 编号注入，避免裸「###」插在「##」编号章节之间破坏导出切章
+    return f"以下为管线确定性计算的数据快照与评分口径（非 LLM 生成，供交叉核对）：\n\n{body}\n"
 
 
 # ── 研究聚焦摘要（LLM 生成，有兜底） ──
@@ -358,13 +473,23 @@ def generate_report(state: dict) -> dict:
                 sections.append(_format_analyst_report(name, report))
 
     # ── 后续固定章节（编号自动顺延） ──
+    freshness_section = _format_freshness_section(state)
+    if freshness_section:
+        # D4：披露节并入编号章节体系（export 按 level-2 切章，裸 ### 会破坏章节结构）
+        sections.append(f"{next_title('财务数据口径披露')}\n{freshness_section}\n")
+
     conclusion = state.get("research_manager_conclusion")
     if conclusion:
         sections.append(f"{next_title('多空辩论结论')}\n{conclusion}\n")
 
     decision = state.get("final_trade_decision") or state.get("trader_plan")
     if decision:
-        sections.append(f"{next_title('交易决策')}\n{_format_trade_decision(decision)}\n")
+        # Task 1 产出的决策文本价位异常登记随 state 全量进入本节点，渲染时与决策
+        # 文本同源标注（update-decision-integrity-gates Task 3）
+        sections.append(
+            f"{next_title('交易决策')}\n"
+            f"{_format_trade_decision(decision, state.get('decision_price_anomalies'))}\n"
+        )
 
     risk_history = state.get("risk_debate_history") or []
     if risk_history:
@@ -377,15 +502,19 @@ def generate_report(state: dict) -> dict:
         # 中文标注呈现（ADR-0011 Layer V）：reject 需明确标注「未通过审批」，
         # 而非仅显示原始英文枚举值。未命中时回退原始值，容忍加固前写入的历史非法值
         annotation = _FUND_MANAGER_ANNOTATIONS.get(fm_decision, fm_decision)
+        # 审批对象结构不完整标注（update-decision-integrity-gates Task 4）：先渲染
+        # 标注再渲染 FM 审批意见——「方案事实」与「FM 论断」的矛盾直接可见
+        # （spec「报告并排渲染不完整标注与 FM 论断」）；方案完整时空串零增量
+        integrity_block = _fm_incomplete_integrity_block(state)
         # #111：审批理由随决策渲染（在场时）；缺失时保持仅标注（历史 state 兼容）
         fm_reasoning = (state.get("fund_manager_decision_reasoning") or "").strip()
         # D1：FM 操作定性（action/置信度）与裁决 action 并排展示——「批准的是什么
         # 方案」直接可见，方向相悖时矛盾自明；历史 state 无字段时保持旧行为
+        fm_confidence = state.get("fund_manager_confidence")
         qualifier = ""
         fm_action = state.get("fund_manager_action")
         if fm_action:
             qualifier = f"（操作定性 {fm_action}"
-            fm_confidence = state.get("fund_manager_confidence")
             if fm_confidence is not None:
                 qualifier += f"，置信度 {fm_confidence}"
             qualifier += "）"
@@ -397,9 +526,25 @@ def generate_report(state: dict) -> dict:
             )
             if ruling_action:
                 qualifier += f" · 裁决: {ruling_action}"
+        # 置信度漂移披露（update-decision-integrity-gates Task 4，spec「置信度漂移
+        # 披露」）：仅 approve 产漂移标注（reject/return 无操作定性可比），偏差
+        # >0.15 时在操作定性旁渲染两值；MUST NOT 硬拦截，FM reasoning 全文本就
+        # 随决策渲染供标注人判读
+        drift = ""
+        if (
+            fm_decision == "approve"
+            and isinstance(fm_confidence, (int, float))
+            and not isinstance(fm_confidence, bool)
+        ):
+            ruling_conf = _ruling_confidence(state)
+            if (
+                ruling_conf is not None
+                and round(abs(fm_confidence - ruling_conf), 6) > _CONFIDENCE_DRIFT_THRESHOLD
+            ):
+                drift = f" · 置信度漂移：FM {fm_confidence:g} / 终稿 {ruling_conf:g}"
         reasoning_block = f"\n\n{fm_reasoning}\n" if fm_reasoning else "\n"
         sections.append(
-            f"{next_title('基金经理决策')}\n\n**{annotation}**{qualifier}{reasoning_block}"
+            f"{next_title('基金经理决策')}\n\n{integrity_block}**{annotation}**{qualifier}{drift}{reasoning_block}"
         )
 
     # ── 参考资料信源（Kimi 风格 URL 引用溯源）──
@@ -498,9 +643,54 @@ def _fmt_derived_metrics(action: str, entry: object, stop: object, target: objec
 
 _TRIGGER_MARKS = "①②③④⑤⑥⑦⑧⑨⑩"
 
+# 仓位档位词表（update-decision-integrity-gates Task 2，spec
+# report-decision-rendering「参数缺失时诚实标注」MODIFIED）
+_POSITION_VOCAB = frozenset({"light", "moderate", "heavy"})
 
-def _fmt_reeval_triggers(triggers: object) -> str:
-    """再评估触发条件渲染：编号条目；无有效条目 → 未申报（require-watch-hold-rationale）。"""
+
+def _fmt_position_size(value: object) -> str:
+    """仓位档位渲染：词表 light/moderate/heavy 大小写不敏感。
+
+    None/空串/不在词表的非法字面量（600515 的 "none"、"null" 等）渲染前归一为缺失
+    「未提供」，不以 LLM 原始字面量冒充有效值；合法档位（含大小写变体如 Light）按
+    原值渲染。归一只作用于渲染，MUST NOT 回写决策对象（落库与 trace 保留原值）。
+    """
+    if isinstance(value, str) and value.strip().lower() in _POSITION_VOCAB:
+        return value
+    return "未提供"
+
+
+def _price_anomaly_notes(text: object, anomalies: list[dict] | None) -> str:
+    """决策文本价位异常同源标注（update-decision-integrity-gates Task 3）。
+
+    text（reeval_triggers 条目 / inaction_reason / reasoning）与 Task 1 登记的
+    anomaly ``source_text`` 呈字符串包含关系时，条目旁追加「（价位待核实：<message>）」
+    （source_text 的省略号是 _excerpt 渲染产物，匹配前剥除）。纯渲染旁注：不参与
+    路由、不改写决策；anomalies 形态噪声（非 dict / 缺键）不炸渲染。
+    """
+    if not text or not anomalies:
+        return ""
+    notes: list[str] = []
+    for anomaly in anomalies:
+        if not isinstance(anomaly, dict):
+            continue
+        source = anomaly.get("source_text")
+        message = anomaly.get("message")
+        if not (isinstance(source, str) and isinstance(message, str) and source and message):
+            continue
+        core = source.strip("…")
+        if core and core in str(text):
+            note = f"（价位待核实：{message}）"
+            if note not in notes:
+                notes.append(note)
+    return "".join(notes)
+
+
+def _fmt_reeval_triggers(triggers: object, anomalies: list[dict] | None = None) -> str:
+    """再评估触发条件渲染：编号条目；无有效条目 → 未申报（require-watch-hold-rationale）。
+
+    Task 3：与 decision_price_anomalies source_text 同源的条目旁标注「价位待核实」。
+    """
     items: list[str] = []
     if isinstance(triggers, str):
         items = [triggers.strip()] if triggers.strip() else []
@@ -511,16 +701,22 @@ def _fmt_reeval_triggers(triggers: object) -> str:
     parts = []
     for i, t in enumerate(items):
         mark = _TRIGGER_MARKS[i] if i < len(_TRIGGER_MARKS) else f"({i + 1})"
-        parts.append(f"{mark} {t}")
+        parts.append(f"{mark} {t}{_price_anomaly_notes(t, anomalies)}")
     return "；".join(parts)
 
 
-def _format_trade_decision(decision: TradeDecision | dict) -> str:
+def _format_trade_decision(
+    decision: TradeDecision | dict, price_anomalies: list[dict] | None = None
+) -> str:
     """格式化交易决策（report-render-operational-params：渲染完整操作参数）。
 
-    buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）；watch/hold 语义上无建仓
-    参数，不渲染硬价格行，渲染结构化「不行动原因」与「再评估触发条件」（缺失如实
-    标注「未申报」，require-watch-hold-rationale）。
+    buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）与「再评估触发条件」行
+    （update-decision-integrity-gates Task 3，601818 实证：sell 终稿无触发条件时
+    报告无任何可见缺口——缺失如实标注「未申报」，MUST NOT 整行省略或编造条目）；
+    watch/hold 语义上无建仓参数，不渲染硬价格行，渲染结构化「不行动原因」与
+    「再评估触发条件」（缺失如实标注「未申报」，require-watch-hold-rationale）。
+    price_anomalies：Task 1 决策文本价位交叉校验登记（state 决策文本与 anomaly
+    source_text 同源时条目旁标注「价位待核实」，纯渲染旁注）。
     """
     if isinstance(decision, TradeDecision):
         action = decision.action
@@ -548,9 +744,10 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         triggers = decision.get("reeval_triggers") or []
 
     lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
-    # spec report-decision-rendering：仓位档位为必含字段——缺失如实「未提供」，
-    # 不得整行省略（#140 终审 C-4：与「0/缺失未提供」的价格行同款约定）
-    lines.append(f"- **仓位**: {position if position else '未提供'}")
+    # spec report-decision-rendering：仓位档位为必含字段——缺失/非法字面量如实
+    # 「未提供」，不得整行省略（#140 终审 C-4；Task 2：词表外字面量渲染前归一，
+    # 不回写决策对象）
+    lines.append(f"- **仓位**: {_fmt_position_size(position)}")
     if action in ("buy", "sell"):
         lines.append(f"- **入场价**: {_fmt_price(entry)}")
         lines.append(f"- **止损价**: {_fmt_price(stop)}")
@@ -559,11 +756,17 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         if derived:
             lines.append(derived)
     else:
-        lines.append(
-            f"- **不行动原因**: {inaction if isinstance(inaction, str) and inaction.strip() else '未申报'}"
-        )
-        lines.append(f"- **再评估触发条件**: {_fmt_reeval_triggers(triggers)}")
-    lines.append(f"- **理由**: {reasoning}")
+        if isinstance(inaction, str) and inaction.strip():
+            lines.append(
+                f"- **不行动原因**: {inaction}{_price_anomaly_notes(inaction, price_anomalies)}"
+            )
+        else:
+            lines.append("- **不行动原因**: 未申报")
+    # Task 3：reeval_triggers 为全部 action 的必渲染对象——buy/sell 清洗后为空时
+    # 「未申报」行保留（601818 形态），MUST NOT 整行省略或编造条目
+    lines.append(f"- **再评估触发条件**: {_fmt_reeval_triggers(triggers, price_anomalies)}")
+    reasoning_text = reasoning if isinstance(reasoning, str) else ""
+    lines.append(f"- **理由**: {reasoning}{_price_anomaly_notes(reasoning_text, price_anomalies)}")
     if corrected:
         # toolize-price-levels：价位经工具参考带修正（可观测，不静默）
         lines.append(

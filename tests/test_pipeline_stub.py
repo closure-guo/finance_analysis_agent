@@ -37,6 +37,14 @@ def testing_env(monkeypatch):
     monkeypatch.setenv("TESTING", "1")
     monkeypatch.setenv("STUB_SCENARIO", "pipeline")
     monkeypatch.setattr(api_mod, "TESTING", True)
+    # 缓存隔离（incident 031 同族卫生）：check_cache 走共享 cache.db 时测试
+    # 结果依赖该库预热状态（冷缓存 MISS → stub fetch 覆盖注入 state；warm HIT
+    # 则整段跳过）——测试顺序耦合。强制内存缓存，与导入顺序/库状态解耦。
+    from finance_agent.data.cache import DataCache
+
+    monkeypatch.setattr(
+        "finance_agent.nodes.cache.get_shared_cache", lambda: DataCache(db_path=":memory:")
+    )
     yield
 
 

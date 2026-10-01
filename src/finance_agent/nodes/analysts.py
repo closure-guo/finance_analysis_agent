@@ -661,6 +661,34 @@ def _build_fundamental_context(state: dict) -> str:
             f"GARP估值（state 键 garp_result）:\n{json.dumps(garp, ensure_ascii=False, default=str)}"
         )
 
+    # 估值快照（PE/PB/市值 + 推导口径）——缺失时显式声明，不得让估值维度静默不可知
+    vsnap = state.get("valuation_snapshot")
+    if vsnap:
+        sections.append(
+            "估值快照（state 键 valuation_snapshot，市值单位亿元，"
+            "PE_caliber 标注口径：static=主源 / derived_ttm=TTM推导）:\n"
+            f"{json.dumps(vsnap, ensure_ascii=False, default=str)}"
+        )
+    else:
+        sections.append(
+            "估值数据缺失（valuation_snapshot 未生成）：估值维度不可知，"
+            "报告中 MUST 显式声明，MUST NOT 在无数值情况下断言贵贱"
+        )
+
+    # 最新报告期快照（利润表科目为累计口径）——论断以最新报告期校验年报趋势
+    snap = state.get("latest_period_snapshot")
+    if snap:
+        sections.append(
+            "最新报告期快照（state 键 latest_period_snapshot，利润表科目为累计口径，"
+            "金额单位亿元，missing 列表标注缺失项）:\n"
+            f"{json.dumps(snap, ensure_ascii=False, default=str)}"
+        )
+    else:
+        sections.append(
+            "最新报告期快照缺失（latest_period_snapshot 为空）："
+            "年报趋势论断 MUST 附「最新报告期数据缺失」限定，MUST NOT 默认年报趋势仍然成立"
+        )
+
     # 季度趋势
     qtrend = state.get("quarterly_trend")
     if qtrend:

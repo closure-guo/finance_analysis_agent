@@ -51,6 +51,8 @@ class TestCheckCacheHit:
             "600519:cash_flow_statement": pd.DataFrame({"报告日": ["20241231"]}),
             "600519:industry_info": {"industry": "白酒"},
             "600519:stock_quote": {"price": 1800.0},
+            # Task 4 补入 HIT 必需键：最新报告期快照随 HIT 附带
+            "600519:latest_period_snapshot": {"报告日": "2025-12-31", "期类型": "年报"},
             "600519:kline": pd.DataFrame({"收盘": [1800.0]}),
             "benchmark_kline": pd.DataFrame({"收盘": [4000.0]}),
             "macro_indicators": {"pmi": []},
@@ -68,6 +70,8 @@ class TestCheckCacheHit:
         assert "benchmark_kline" in result
         assert "macro_indicators" in result
         assert "news_list" in result
+        # 最新报告期快照随 HIT 附带（Task 4 契约）
+        assert result["latest_period_snapshot"] == {"报告日": "2025-12-31", "期类型": "年报"}
 
     def test_hit_fills_data(self):
         mock_cache = MagicMock()
@@ -133,6 +137,8 @@ class TestCheckCacheMonitoring:
             "600519:cash_flow_statement": pd.DataFrame({"报告日": ["20241231"]}),
             "600519:industry_info": {"industry": "白酒"},
             "600519:stock_quote": {"price": 1800.0},
+            # Task 4 补入 HIT 必需键：最新报告期快照
+            "600519:latest_period_snapshot": {"报告日": "2025-12-31", "期类型": "年报"},
             "600519:kline": pd.DataFrame({"收盘": [1800.0]}),
             "benchmark_kline": pd.DataFrame({"收盘": [4000.0]}),
             "macro_indicators": {"pmi": []},

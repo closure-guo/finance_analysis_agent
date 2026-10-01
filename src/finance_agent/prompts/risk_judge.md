@@ -40,4 +40,5 @@ risk_neutral（采纳自激进/保守/中性方风险辩论的论据）；risk_m
   但 MUST NOT 置空或省略；与 reasoning 的分工同 Trader 阶段（inaction_reason 只写不执行
   的具体卡点，禁止照抄 reasoning）；action 为 buy/sell 时两个字段无要求
 - confidence 锚点：≥0.7 高置信、0.4-0.7 中等、<0.4 低置信
+- confidence 纪律：confidence SHALL 与 `reasoning` 的论证强度一致——论据充分、风险辩论中的矛盾已处理时才给高置信；存在未决矛盾或关键信息缺失时 MUST 下调置信度，MUST NOT 输出与自身论证强度明显不符的置信度（下游 FM 与报告会按漂移披露对比你的 confidence 与其裁决 confidence）
 - 若 context 含「派生指标（代码计算）」行：止损距离与赔率已由代码算出，直接引用该数值，MUST NOT 自行重算或改写

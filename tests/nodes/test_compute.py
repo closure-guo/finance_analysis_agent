@@ -113,6 +113,31 @@ class TestComputeMetrics:
         assert "garp_result" in result
         assert "pass" in result["garp_result"]
 
+    def test_garp_industry_pe_nan_avg_treated_as_missing(self, sample_state):
+        """复审 F2：state.industry_pe.avg_pe=NaN 不得让 PE 项假性通过。
+
+        NaN 参与比较恒 False，不守卫会把「行业 PE 缺失」伪装成 PE 达标（与诚实性反向）。
+        """
+        from finance_agent.nodes.compute import compute_metrics
+
+        # valuation_snapshot 有 PE_ttm（年报直取：927 / 9.27 = 100.0）
+        sample_state["stock_quote"] = {"market_cap": 927e8}  # 元口径（东财形）→ 927 亿
+        sample_state["latest_period_snapshot"] = {"期类型": "年报"}
+        inc = sample_state["income_statement"].rename(
+            columns={"归属于母公司所有者的净利润": "归母净利润"}
+        )
+        inc["归母净利润"] = [9.27e8, 6.88e8, 6.34e8]
+        sample_state["income_statement"] = inc
+        sample_state["industry_pe"] = {"avg_pe": float("nan")}
+
+        result = compute_metrics(sample_state)
+        garp = result["garp_result"]
+        assert "行业平均 PE 数据缺失（未参与比较）" in garp["failures"]
+        assert "PE >= 行业平均" not in garp["failures"]
+        # PE 本身有值（PE_ttm 路径），只缺行业均值 → 缺数桶而非缺 PE 桶
+        assert garp["details"]["PE"] == 100.0
+        assert garp["details"]["PE_caliber"] == "derived_ttm"
+
     def test_technical_indicators_when_kline_present(self, kline_state):
         """有 K 线数据时计算技术指标。"""
         from finance_agent.nodes.compute import compute_metrics

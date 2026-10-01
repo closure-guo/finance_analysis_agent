@@ -26,13 +26,19 @@ def cache():
     return DataCache(db_path=":memory:")
 
 
-def _fill_slow_keys(cache: DataCache, code: str = CODE) -> None:
-    """填充慢变 key（报表/行业/行情）——旧 HIT 判定的全部 5 key。"""
+def _fill_slow_keys(cache: DataCache, code: str = CODE, with_snapshot: bool = True) -> None:
+    """填充慢变 key（报表/行业/行情 + 最新报告期快照）——30 天 TTL 慢变组。
+
+    latest_period_snapshot 自 Task 4（update-financial-freshness-and-valuation）
+    起纳入 HIT 必需键；with_snapshot=False 供「快照缺失」用例构造残缺慢键组。
+    """
     cache.set(f"{code}:balance_sheet", {"bs": 1})
     cache.set(f"{code}:income_statement", {"inc": 1})
     cache.set(f"{code}:cash_flow_statement", {"cf": 1})
     cache.set(f"{code}:industry_info", {"industry": "半导体"})
     cache.set(f"{code}:stock_quote", {"name": "拓荆科技"}, ttl_seconds=86_400)
+    if with_snapshot:
+        cache.set(f"{code}:latest_period_snapshot", {"报告日": "2026-06-30", "期类型": "中报"})
 
 
 def _fill_fresh_keys(cache: DataCache, code: str = CODE) -> None:
@@ -84,6 +90,13 @@ class TestCacheHitCompleteness:
         result = check_cache({"stock_code": CODE}, cache=cache)
         assert result["cache_result"] == "MISS", "宏观缺失仍判 HIT"
 
+    def test_snapshot_missing_misses(self, cache):
+        """latest_period_snapshot 缺失 → MISS（最新期快照属分析核心数据，30 天慢变）。"""
+        _fill_slow_keys(cache, with_snapshot=False)
+        _fill_fresh_keys(cache)
+        result = check_cache({"stock_code": CODE}, cache=cache)
+        assert result["cache_result"] == "MISS", "快照缺失仍判 HIT——估值外最新期数据将全缺"
+
     def test_full_hit_carries_all_data(self, cache):
         """全 key 命中 → HIT 且附带 kline/benchmark/macro/news/quarterly。"""
         _fill_slow_keys(cache)
@@ -99,6 +112,8 @@ class TestCacheHitCompleteness:
         assert result.get("news_list") == [{"title": "中报净利大增"}]
         # 永久缓存的季度数据附带
         assert result.get("quarterly_income") is not None
+        # 最新报告期快照（Task 4 纳入 HIT 必需键）随 HIT 附带
+        assert result.get("latest_period_snapshot") == {"报告日": "2026-06-30", "期类型": "中报"}
         # 慢数据照旧附带
         assert result.get("stock_quote", {}).get("name") == "拓荆科技"
         assert result.get("industry_info", {}).get("industry") == "半导体"
@@ -119,3 +134,30 @@ def _fill_fresh_keys_except(cache: DataCache, skip: str) -> None:
         cache.set("macro_indicators", {"pmi": []}, ttl_seconds=86_400)
     if skip != "news":
         cache.set(f"{CODE}:news", [{"title": "x"}], ttl_seconds=3600)
+
+
+class TestCacheReadsideNanNormalization:
+    """终审 M1 收口：D3 修复前写入的 quarterly_income 缓存条目（30 天 TTL）
+    读回仍含 float64 NaN——check_cache 读出口归一，消费端 is None 判空可靠。"""
+
+    def test_legacy_nan_quarterly_income_normalized_on_read(self, cache):
+        import pandas as pd
+
+        _fill_slow_keys(cache, CODE)
+        _fill_fresh_keys(cache, CODE)
+        legacy = pd.DataFrame(
+            {
+                "季度": ["2025Q3", "2025Q4"],
+                "归母净利润(单季)": [4.62, 3.70],
+                "环比": [float("nan"), -19.91],
+                "同比": [float("nan"), -11.20],
+            }
+        )
+        cache.set(f"{CODE}:quarterly_income", legacy, ttl_seconds=2_592_000)
+
+        result = check_cache({"stock_code": CODE}, cache=cache)
+        qi = result["quarterly_income"]
+        assert not any(
+            isinstance(v, float) and pd.isna(v) for col in ("环比", "同比") for v in qi[col]
+        )
+        assert qi.iloc[0]["环比"] is None

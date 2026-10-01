@@ -88,3 +88,22 @@ class TestRelativeValuation:
             [{"name": "A", "PE": 20.0, "PB": 2.5}],
         )
         assert result["PE"]["conclusion"] == "N/A"
+
+
+class TestNanDefense:
+    """clear-valuation-chain-debts 终审 C1 纵深守卫直测：NaN 不得混入均值/伪装 fair。"""
+
+    def test_nan_peer_excluded_from_mean(self):
+        peers = [
+            {"name": "A", "PE": float("nan"), "PB": 10.0},
+            {"name": "B", "PE": 60.0, "PB": 10.0},
+        ]
+        result = calc_relative_valuation({"PE": 88.0, "PB": 15.0}, peers)
+        assert result["PE"]["peer_avg"] == 60.0
+        assert result["PE"]["conclusion"] == "overvalued"
+
+    def test_nan_target_not_disguised_as_fair(self):
+        # NaN target：三向比较恒 False → 不得伪装成 fair，应 N/A
+        peers = [{"name": "B", "PE": 60.0, "PB": 10.0}]
+        result = calc_relative_valuation({"PE": float("nan"), "PB": 15.0}, peers)
+        assert result["PE"]["conclusion"] == "N/A"

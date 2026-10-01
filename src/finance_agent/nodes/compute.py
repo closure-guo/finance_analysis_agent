@@ -66,7 +66,9 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     )
     latest_year = years[0] if years else None
     if latest_year:
-        result["health_score"] = compute_health_score(traffic_lights, latest_year)
+        result["health_score"] = compute_health_score(
+            traffic_lights, latest_year, industry=industry
+        )
 
     # ── 增长率 ──
     growth = _calc_growth_rates(all_metrics, years)
@@ -86,22 +88,40 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
 
     # ── 相对估值（需要同业数据）──
     peer_financials = state.get("peer_financials")
-    quote = state.get("stock_quote") or {}
-    if peer_financials is not None and quote:
-        pe = quote.get("PE") or quote.get("pe")
-        pb = quote.get("PB") or quote.get("pb")
-        if pe is not None or pb is not None:
-            target = {"PE": pe, "PB": pb}
-            peers_list = _build_peers_list(peer_financials)
-            if peers_list:
-                result["relative_valuation"] = calc_relative_valuation(target, peers_list)
 
     # ── 净利润增长率（用于 GARP）──
     net_profit_growth = _calc_net_profit_growth(inc, latest_year, years)
 
-    # ── GARP（需要估值数据）──
+    # ── 估值快照（PE/PB/市值 + PE_ttm 推导口径标注）──
+    result["valuation_snapshot"] = _build_valuation_snapshot(state)
+
+    # ── 相对估值（valuation_snapshot 装配后：quote PE 缺失时用推导 PE_ttm，估值维度不再整体跳过）──
+    quote = state.get("stock_quote") or {}
+    vs = result["valuation_snapshot"] or {}
+    effective_pe = vs.get("PE") or vs.get("PE_ttm")
+    if peer_financials is not None and quote:
+        pb = quote.get("PB") or quote.get("pb")
+        if effective_pe is not None or pb is not None:
+            target = {"PE": effective_pe, "PB": pb}
+            peers_list = _build_peers_list(peer_financials)
+            if peers_list:
+                result["relative_valuation"] = calc_relative_valuation(target, peers_list)
+                # 终审 I1：静态 PE 缺失回落 PE_ttm 时，行业均值（cninfo 静态市盈率）
+                # 是跨口径比较——spec「与同业口径一致的那个并注明」
+                if vs.get("PE") is None and vs.get("PE_ttm") is not None:
+                    result["relative_valuation"]["PE"]["caliber_note"] = (
+                        "目标 PE 为 TTM 推导口径，行业均值为静态口径，跨口径比较仅供参考"
+                    )
+
+    # ── GARP（估值快照装配后调用：PE 取快照已选好口径的值，行业 PE 取 state.industry_pe）──
     result["garp_result"] = _try_garp(
-        quote, profitability, solvency, ind, net_profit_growth, latest_year
+        result["valuation_snapshot"],
+        profitability,
+        solvency,
+        ind,
+        net_profit_growth,
+        latest_year,
+        industry_pe_avg=(state.get("industry_pe") or {}).get("avg_pe"),
     )
 
     # ── 季度趋势 ──
@@ -238,16 +258,107 @@ def _calc_net_profit_growth(
     return None
 
 
+def _derive_pe_ttm(
+    market_cap_yi: float | None,
+    annual_np_yi: float | None,
+    snapshot: dict | None,
+) -> tuple[float | None, str | None]:
+    """TTM PE 推导（纯规则）。市值与净利润均亿元口径。
+
+    TTM = 年报归母净利 − 上年同期累计 + 最新累计；最新期即年报时直取年报值。
+    返回 (pe_ttm, 失败原因)；输入缺失/TTM 非正 → (None, reason)。
+    """
+    if market_cap_yi is None or (isinstance(market_cap_yi, float) and pd.isna(market_cap_yi)):
+        # NaN 视同缺失（东财 spot 停牌股 总市值=NaN 直达 quote）；NaN<=0 恒 False，
+        # 不守卫会产出 NaN PE（审查 F1）
+        return None, "market_cap 缺失或非正"
+    if market_cap_yi <= 0:
+        return None, "market_cap 缺失或非正"
+    if annual_np_yi is None or (isinstance(annual_np_yi, float) and pd.isna(annual_np_yi)):
+        return None, "年报归母净利润缺失或非正"
+    if annual_np_yi <= 0:
+        return None, "年报归母净利润缺失或非正"
+    snap = snapshot or {}
+    if snap.get("期类型") == "年报":
+        ttm = annual_np_yi
+    else:
+        cur = snap.get("归母净利润(累计)")
+        prev = snap.get("上年同期归母净利润")
+        if cur is None or prev is None:
+            return None, "最新报告期快照缺失或同期数据缺失，无法拼合 TTM"
+        ttm = annual_np_yi - prev + cur
+    if ttm is None or (isinstance(ttm, float) and pd.isna(ttm)):
+        # NaN 同样不得外泄（审查 F1）
+        return None, "TTM 归母净利润非正或缺失，PE 无意义"
+    if ttm <= 0:
+        return None, f"TTM 归母净利润({ttm})非正，PE 无意义"
+    return round(market_cap_yi / ttm, 2), None
+
+
+def _build_valuation_snapshot(state: AnalysisState) -> dict:
+    """估值快照：PE/PB/市值 + PE_ttm 推导与口径标注。NaN 一律视同缺失。"""
+    quote = state.get("stock_quote") or {}
+    inc = state.get("income_statement")
+    annual_np_yi: float | None = None
+    if inc is not None and not inc.empty and "归母净利润" in inc.columns:
+        v = inc.iloc[0].get("归母净利润")
+        if v is not None and not (isinstance(v, float) and pd.isna(v)):
+            annual_np_yi = round(float(v) / 1e8, 2)
+
+    market_cap_raw = quote.get("market_cap")
+    if isinstance(market_cap_raw, float) and pd.isna(market_cap_raw):
+        # 东财 spot 停牌股 总市值=NaN 原样直达 quote——视同缺失（审查 F1）
+        market_cap_raw = None
+    # state 契约：quote.market_cap 统一为元（东财主源原样透传；百度回退已在
+    # fetch 层 ×1e8 归一——终审 C1）。估值链路亿元口径，此处 元→亿。
+    market_cap = round(market_cap_raw / 1e8, 2) if market_cap_raw is not None else None
+
+    snap = state.get("latest_period_snapshot")
+    pe_ttm, reason = _derive_pe_ttm(
+        market_cap,
+        annual_np_yi,
+        snap if isinstance(snap, dict) else None,
+    )
+    static_pe = quote.get("PE") or quote.get("pe")
+    if isinstance(static_pe, float) and pd.isna(static_pe):
+        # NaN PE 不得标 static 口径外泄（审查 F1）
+        static_pe = None
+    if static_pe is not None:
+        caliber = "static"
+    elif pe_ttm is not None:
+        caliber = "derived_ttm"
+    else:
+        caliber = None
+
+    missing: list[str] = []
+    if market_cap is None:
+        missing.append("market_cap 缺失")
+    if static_pe is None and pe_ttm is None and reason:
+        missing.append(reason)
+    if quote.get("PB") is None:
+        missing.append("PB 缺失")
+    return {
+        "market_cap": market_cap,
+        "PE": static_pe,
+        "PE_ttm": pe_ttm,
+        "PE_caliber": caliber,
+        "PB": quote.get("PB"),
+        "missing_reasons": missing,
+    }
+
+
 def _try_garp(
-    quote,
+    valuation_snapshot: dict | None,
     profitability,
     solvency,
     indicators,
     net_profit_growth: float | None,
     latest_year: str | None,
+    industry_pe_avg: float | None = None,
 ) -> dict | None:
-    pe = (quote or {}).get("PE") or (quote or {}).get("pe")
-    industry_pe = (quote or {}).get("industry_avg_PE")
+    vs = valuation_snapshot or {}
+    # PE 取 valuation_snapshot 已选好口径的值（static 优先，回落 PE_ttm；NaN 已守卫为 None）
+    pe = vs.get("PE") or vs.get("PE_ttm")
     if not latest_year:
         return None
     roe = profitability.get("ROE", {}).get(latest_year)
@@ -256,10 +367,11 @@ def _try_garp(
     debt = debt_pct / 100 if debt_pct is not None else None
     data = {
         "PE": pe,
-        "industry_avg_PE": industry_pe,
+        "industry_avg_PE": industry_pe_avg,
         "net_profit_growth": net_profit_growth,
         "ROE": roe,
         "debt_ratio": debt,
+        "PE_caliber": vs.get("PE_caliber"),
     }
     return calc_garp(data)
 
@@ -272,6 +384,9 @@ def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
     trend: dict = {
         "quarters": [],
         "net_profit": [],
+        "revenue": [],
+        "revenue_yoy": [],
+        "gross_margin": [],
         "qoq": [],
         "yoy": [],
         "warnings": [],
@@ -281,10 +396,20 @@ def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
         trend["quarters"].append(row.get("季度", ""))
         np_val = row.get("归母净利润(单季)")
         trend["net_profit"].append(round(np_val / 1e8, 2) if pd.notna(np_val) else None)
+        rev = row.get("营业收入(单季)")
+        cost = row.get("营业成本(单季)")
+        trend["revenue"].append(round(rev / 1e8, 2) if pd.notna(rev) else None)
+        if pd.notna(rev) and pd.notna(cost) and rev:
+            trend["gross_margin"].append(round((1 - cost / rev) * 100, 2))
+        else:
+            trend["gross_margin"].append(None)
         qoq = row.get("环比")
         trend["qoq"].append(qoq)
         yoy = row.get("同比")
         trend["yoy"].append(yoy)
+        # 营收同比由 fetch 层在宽窗口（截断前）算好随行携带，这里仅透传——
+        # 本层只见最近 quarters 季，结构性找不到去年同期
+        trend["revenue_yoy"].append(row.get("营收同比"))
 
     # 拐点检测
     yoy_vals = [v for v in trend["yoy"] if v is not None]
