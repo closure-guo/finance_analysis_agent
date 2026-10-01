@@ -151,8 +151,11 @@ class TestFetchIndustry:
 
 
 class TestFetchStockQuote:
+    """update-quote-primary-source：东财 spot 降为回退1（腾讯主源 down 前提钉死）。"""
+
     @patch("finance_agent.data.akshare_client.ak")
-    def test_returns_quote(self, mock_ak, client):
+    def test_eastmoney_fallback_after_tencent_fail(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
         mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame(
             {
                 "代码": ["600519", "000858"],
@@ -434,8 +437,9 @@ class TestDataGapLogging:
     """
 
     @patch("finance_agent.data.akshare_client.ak")
-    def test_quote_degraded_to_name_only_logs_error(self, mock_ak, client, caplog):
+    def test_quote_degraded_to_name_only_logs_error(self, mock_ak, client, caplog, monkeypatch):
         """行情主源失败、降级为仅名称时 MUST 留 ERROR 日志（PE/PB 丢失可观测）。"""
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
         mock_ak.stock_zh_a_spot_em.return_value = None  # 主源全失败
         mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
             {"code": ["600519"], "name": ["贵州茅台"]}
@@ -485,8 +489,69 @@ class TestDataGapLogging:
         ), "行业 fallback 无 WARNING 日志"
 
 
+class TestFetchStockQuoteTencentPrimary:
+    """update-quote-primary-source：腾讯单标的直查为主源。
+
+    GOLDEN 内联（与 TestFetchTencentQuote.GOLDEN 同串）——本类在文件中
+    位于该类之前，类体执行期不可前向引用。
+    """
+
+    GOLDEN = (
+        'v_sh688072="1~拓荆科技~688072~640.00~656.68~663.00~3387770~1660152~1727618'
+        "~639.79~9~639.75~3~639.47~2~639.00~8~638.99~39~640.00~6~640.04~2~640.14~2"
+        "~640.30~10~640.32~4~~20260930161437~-16.68~-2.54~675.00~635.73"
+        "~640.00/3387770/2200617467~3387770~220062~1.19~85.97~~675.00~635.73~5.98"
+        "~1818.80~1869.91~14.55~788.02~525.34~0.81~~20260930~161437"
+    )
+
+    @staticmethod
+    def _gbk_response(payload: str):
+        resp = requests.Response()
+        resp.status_code = 200
+        resp._content = payload.encode("gbk")
+        return resp
+
+    @patch("finance_agent.data.akshare_client.ak")
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_tencent_primary_no_spot_call(self, mock_get, mock_ak, client):
+        mock_get.return_value = self._gbk_response(self.GOLDEN)
+        result = client.fetch_stock_quote("688072")
+        assert result["price"] == 640.00
+        assert result["market_cap"] == pytest.approx(1869.91e8)
+        assert "PE" not in result
+        # 主源命中 → 不触发东财 spot 翻页
+        mock_ak.stock_zh_a_spot_em.assert_not_called()
+        assert client.sources_seen["market_cap"] == {"tencent"}
+
+    @patch("finance_agent.data.akshare_client.ak")
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_tencent_fail_falls_back_to_eastmoney(self, mock_get, mock_ak, client):
+        mock_get.side_effect = ConnectionError("refused")
+        mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame(
+            {
+                "代码": ["688072"],
+                "名称": ["拓荆科技"],
+                "最新价": [640.0],
+                "总市值": [1.86e11],
+                "市净率": [14.0],
+            }
+        )
+        result = client.fetch_stock_quote("688072")
+        assert result["price"] == 640.0
+        assert result["market_cap"] == 1.86e11  # 东财主源单位=元（C1 契约）
+        assert client.sources_seen["market_cap"] == {"eastmoney"}
+
+
 class TestFetchStockQuoteBaiduFallback:
     """add-quote-baidu-fallback：东财行情失败时回退百度估值+腾讯日线。"""
+
+    @pytest.fixture(autouse=True)
+    def _tencent_primary_down(self, monkeypatch):
+        """本类钉死第二回退语义：腾讯主源与东财 spot 均不可达。"""
+        monkeypatch.setattr(
+            "finance_agent.data.akshare_client.AKShareClient._fetch_tencent_quote",
+            lambda self, code: None,
+        )
 
     @patch("finance_agent.data.akshare_client.ak")
     def test_baidu_market_cap_pb_and_tencent_price(self, mock_ak, client):
@@ -921,6 +986,8 @@ class TestFetchPeerDataSharedSpot:
     def test_spot_miss_peer_falls_back_to_quote_chain(self, mock_ak, client, monkeypatch):
         monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
         monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        # 腾讯主源 down：本类钉的是 spot 未命中 → 百度+腾讯日线回退链
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
         mock_ak.stock_zh_a_spot_em.return_value = self._spot_df()
         mock_ak.stock_zh_valuation_baidu.return_value = pd.DataFrame({"value": [11.26]})
         mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame(

@@ -401,29 +401,15 @@ class AKShareClient:
             return None
         return result
 
-    def fetch_stock_quote(self, stock_code: str) -> dict:
-        # 主源：东方财富实时行情（含 PE/PB/市值/价格全字段）
-        df = _call_ak(ak.stock_zh_a_spot_em)
-        mapped = self._quote_from_spot_df(df, stock_code)
-        if mapped is not None:
-            self.sources_seen["market_cap"].add(
-                "eastmoney" if mapped.get("market_cap") is not None else "missing"
-            )
-            return mapped
+    def _quote_fallback_baidu_tx(self, stock_code: str) -> dict:
+        """第二回退：百度估值补 market_cap/PB + 腾讯日线补 price（原二级回退语义）。
 
-        # ── 二级回退（add-quote-baidu-fallback）：东财被 TLS 风控封锁时，
-        # 用百度估值补 market_cap/PB、腾讯日线补 price——恢复估值与价格维度
-        # （此前静默降级为仅名称，GARP/相对估值/图表全部丢失且无日志）。
-        # PE 不在 quote 内推导（口径依赖财务数据，留给下游 compute/charts），
-        # 各源独立 try/except：任一失败不影响其余，缺失字段由下游守卫跳过。
-        logger.warning("东财行情不可用，尝试百度估值+腾讯日线回退: %s", stock_code)
+        各源独立 try/except：任一失败不影响其余；全部失败仅名称时留 ERROR
+        （维度缺失可观测）。百度总市值单位亿元 ×1e8 归一到元（终审 C1）。
+        """
         result = self._fetch_name_fallback(stock_code)
         if result:
             result["code"] = stock_code
-
-        # 百度估值：总市值 → market_cap；市净率 → PB（各指标末行最新）
-        # 单位归一（终审 C1）：百度总市值单位为亿元，东财主源为元——
-        # ×1e8 归一到元，与 state 既有契约一致（前端 Charts 除 1e8 显示「亿」）
         for indicator, key, scale in (("总市值", "market_cap", 1e8), ("市净率", "PB", 1.0)):
             try:
                 df_val = _call_ak(
@@ -433,8 +419,6 @@ class AKShareClient:
                     result[key] = float(df_val.iloc[-1]["value"]) * scale
             except Exception:
                 logger.warning("百度估值 %s 拉取失败: %s", indicator, stock_code)
-
-        # 腾讯日线最新收盘 → price
         try:
             df_tx = _call_ak(
                 ak.stock_zh_a_hist_tx, symbol=self._to_sina_symbol(stock_code), adjust="qfq"
@@ -443,8 +427,6 @@ class AKShareClient:
                 result["price"] = float(df_tx.iloc[-1]["close"])
         except Exception:
             logger.warning("腾讯日线价格拉取失败: %s", stock_code)
-
-        # 可观测性：估值/价格维度全部缺失时留 ERROR（数据维度缺失，非预期降级）
         has_valuation = any(result.get(k) is not None for k in ("market_cap", "PB", "price"))
         self.sources_seen["market_cap"].add(
             "baidu" if result.get("market_cap") is not None else "missing"
@@ -452,6 +434,46 @@ class AKShareClient:
         if not has_valuation:
             logger.error("行情回退后仍缺估值/价格（PE/PB/市值/价格缺失）: %s", stock_code)
         return result
+
+    def _quote_via_chain(
+        self, stock_code: str, spot_df: pd.DataFrame | None = None
+    ) -> tuple[dict, pd.DataFrame | None]:
+        """单标的完整行情链：腾讯主源 → 东财 spot（惰性共享）→ 百度+腾讯日线。
+
+        spot_df 语义：None=未尝试（首次需要时拉取一次并传出供批调用复用）；
+        空 DataFrame=已尝试且失败（哨兵，批调用不重复拉）。
+        """
+        q = self._fetch_tencent_quote(stock_code)
+        if q is not None:
+            self.sources_seen["market_cap"].add("tencent")
+            return q, spot_df
+        if spot_df is None:
+            try:
+                pulled = _call_ak(ak.stock_zh_a_spot_em)
+                spot_df = pulled if pulled is not None else pd.DataFrame()
+            except Exception as e:
+                logger.warning("东财行情表拉取失败: %s", e)
+                spot_df = pd.DataFrame()
+        if not spot_df.empty:
+            mapped = self._quote_from_spot_df(spot_df, stock_code)
+            if mapped is not None:
+                self.sources_seen["market_cap"].add(
+                    "eastmoney" if mapped.get("market_cap") is not None else "missing"
+                )
+                return mapped, spot_df
+        logger.warning("腾讯/东财行情均不可用，尝试百度估值+腾讯日线回退: %s", stock_code)
+        return self._quote_fallback_baidu_tx(stock_code), spot_df
+
+    def fetch_stock_quote(self, stock_code: str) -> dict:
+        """个股行情（update-quote-primary-source 三级链）。
+
+        主源：腾讯 qt.gtimg.cn 单标的直查（1 请求/标的）。东财全市场 spot
+        翻页降为第一回退（仅主源失败时触发；该抓取模式是本机 IP 被东财
+        行情域封禁的直接成因——实测 IP 级封禁，非代码注释早先猜测的 TLS
+        指纹风控，浏览器指纹伪装无效）。第二回退：百度估值+腾讯日线。
+        """
+        q, _ = self._quote_via_chain(stock_code)
+        return q
 
     def fetch_quarterly_income(self, stock_code: str, quarters: int = 4) -> pd.DataFrame:
         """拉取单季度利润表，计算同比/环比变化率。
