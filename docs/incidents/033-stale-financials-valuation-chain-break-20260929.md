@@ -30,6 +30,13 @@ openspec/changes/update-financial-freshness-and-valuation/（四个 capability�
 
 **实施收口（2026-09-30）**：主 delta 连同两个伴随 delta 一并落地——`clear-valuation-chain-debts`（诚实分桶全输入化、同业抓取 fetch_peer_data、季度出口 NaN 归一、披露节编号体系、图通道门禁扩展）、`update-decision-integrity-gates`（决策文本价位交叉校验 anomaly、非法仓位档位渲染归一、buy/sell 终稿 reeval_triggers 必填化打回、FM 审批可见性与置信度漂移标注）。三个 change 均已 sync+archive，人工验证报告见 `tests/validation/`（688072 四轮实跑 5/5 通过）。
 
+## 终审保留意见与遗留观测（2026-10-01 更新，delta `update-quote-primary-source`）
+
+终审 C1 保留意见原记录于 `tests/validation/2026-09-29-update-financial-freshness-and-valuation-validation.md`（C1（Critical）：quote.market_cap 双源单位不一致修复后的实跑抽验义务，因验证期东财被封而挂起），随 quote 主源切换重新定性如下。
+
+- ~~C1 保留意见：merge 后首次东财可用的 run 须抽验主源 PE 路径~~ **已重新定性（2026-10-01，update-quote-primary-source）**：东财行情域对本机 IP 封禁长期化（实测 IP 级、指纹伪装无效），quote 主源切换为腾讯单标的直查，东财降为回退1，生产链路 static 口径 PE 不再默认出现（compute 恒 derived_ttm）。C1 的单位归一代码与双源形单测作为回退路径资产保留。**新抽验义务：东财回退路径解封后，于任一实跑中抽验一次回退分支的 market_cap 量级与 sources_seen 标注。**
+- 新增观测项（同 IP 风险外溢）：东财非行情域（解禁/新闻/研报/季度利润表，datacenter/搜索/emweb 域）与被封 push2 共享出口 IP，2026-10-01 实测仍可用。数据源监控快照（/api/cache/stats sources_seen）需盯住这些域的健康度；若扩散，评估 Tushare Pro 补基本面（T-1 语义仅适合非行情数据）。
+
 ## 关联
 
 - 外部批评原文中的两处小误：解禁日期实为 2027-01-04（非 2026-01-04）；负债率在报告中被列为「偏高」（黄灯口径）而非红灯。不影响主论点。
