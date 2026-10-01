@@ -28,8 +28,11 @@ export default defineConfig({
     // AG-UI quick 通道带工具调用 run（fix/agui-quick-toolcall-lifecycle 回归）：
     // 依赖 STUB_SCENARIO=tool_call 后端（8001），覆盖 TOOL_CALL_END / 多轮分列 / 刷新恢复
     'agui-toolcall.spec.ts',
-    // 报告导出抽屉：依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175）
-    'report-export.spec.ts',
+  // 报告导出抽屉：依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175）
+  'report-export.spec.ts',
+  // 报告面板与主顶栏层叠：同 pipeline 环境（8002/5175），面板打开后断言
+  // 面板操作栏行不被主顶栏覆盖、主顶栏无圆形装饰占位（fix-report-panel-header-overlay）
+  'report-panel-overlay.spec.ts',
     // 消息操作条（复制/重试/点赞/点踩）：同 pipeline 环境(8002/5175),深度摘要经
     // AnalysisThread 渲染 stream-output 后 hover 断言操作条
     'message-actions.spec.ts',

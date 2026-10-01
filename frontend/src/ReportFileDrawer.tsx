@@ -45,7 +45,7 @@ export function ReportFileDrawer({ drawerMessage, onClose }: {
       <div className="absolute inset-0 bg-black/30" onClick={onClose} data-testid="drawer-backdrop" />
       {/* 抽屉主体 */}
       <div className="absolute right-0 top-0 bottom-0 w-[420px] max-w-[90vw] flex flex-col"
-        style={{ background: 'var(--bg-base)', borderLeft: '1px solid var(--border-neutral-l1)' }}>
+        style={{ background: 'var(--bg-base-default)', borderLeft: '1px solid var(--border-neutral-l1)' }}>
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border-neutral-l1)' }}>
           <span className="text-sm font-semibold" style={{ color: 'var(--text-default)' }}>全部文件</span>
           <div className="flex items-center gap-3">

@@ -984,7 +984,6 @@ export default function App() {
                 <Button variant="ghost" size="sm" onClick={() => { setSettingsFocus(undefined); navigate('/settings') }}>
                   <i className="fas fa-cog mr-1"></i>设置
                 </Button>
-                <div className="w-7 h-7 rounded-full" style={{ background: 'var(--bg-overlay-l3)' }}></div>
               </div>
             </header>
 
