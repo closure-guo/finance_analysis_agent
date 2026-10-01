@@ -2,14 +2,17 @@
 // React Flow DAG 渲染：状态着色节点 + 耗时 + 迭代徽标 + FM→Trader 回边动画 + 点击悬浮卡片。
 // 数据来自 graphModel 纯函数（消费 pipelineTree 状态树，与列表视图同源）。
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import {
   ReactFlow,
   type Node,
   type Edge,
   type NodeProps,
   Handle,
+  Panel,
   Position,
+  useReactFlow,
+  useViewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { LayerNode, NodeStatus } from './pipelineTree'
@@ -102,6 +105,71 @@ function PipelineNode({ data }: NodeProps) {
 
 const nodeTypes = { pipeline: PipelineNode }
 
+// ── 缩放控件（add-pipeline-graph-zoom-controls）──
+// 作为 <ReactFlow> child 渲染：v12 中 children 位于内部 Store Provider 内，
+// 可直接使用 useReactFlow/useViewport。步进 ×1.2（与 React Flow 内建 Controls 同因子）；
+// 重置 = fitView 回总览，options 与初始 fitView 完全一致。禁用阈值带浮点容差。
+
+const ZOOM_MIN = 0.4
+const ZOOM_MAX = 1.5
+const FIT_VIEW_OPTIONS = { padding: 0.15, maxZoom: 1 }
+
+function GraphZoomControls() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow()
+  const { zoom } = useViewport()
+  const btnStyle: CSSProperties = {
+    width: 28,
+    height: 28,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'var(--bg-base-secondary)',
+    color: 'var(--text-secondary)',
+    fontSize: 11,
+  }
+  return (
+    <Panel position="bottom-right" data-testid="graph-zoom-controls" className="!m-3">
+      <div
+        className="flex flex-col overflow-hidden rounded-lg"
+        style={{ border: '1px solid var(--border-neutral-l1)' }}
+      >
+        <button
+          type="button"
+          data-testid="graph-zoom-in"
+          aria-label="放大"
+          title="放大"
+          style={{ ...btnStyle, borderBottom: '1px solid var(--border-neutral-l1)' }}
+          disabled={zoom >= ZOOM_MAX - 1e-6}
+          onClick={() => zoomIn()}
+        >
+          <i className="fas fa-plus"></i>
+        </button>
+        <button
+          type="button"
+          data-testid="graph-zoom-out"
+          aria-label="缩小"
+          title="缩小"
+          disabled={zoom <= ZOOM_MIN + 1e-6}
+          onClick={() => zoomOut()}
+          style={btnStyle}
+        >
+          <i className="fas fa-minus"></i>
+        </button>
+        <button
+          type="button"
+          data-testid="graph-zoom-reset"
+          aria-label="重置"
+          title="重置"
+          style={{ ...btnStyle, borderTop: '1px solid var(--border-neutral-l1)' }}
+          onClick={() => fitView(FIT_VIEW_OPTIONS)}
+        >
+          <i className="fas fa-compress-arrows-alt"></i>
+        </button>
+      </div>
+    </Panel>
+  )
+}
+
 // ── 组件 ──
 
 export interface PipelineGraphProps {
@@ -162,9 +230,9 @@ export function PipelineGraph({ tree, startCounts, onViewDetails }: PipelineGrap
         nodeTypes={nodeTypes}
         onNodeClick={onNodeClick}
         fitView
-        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-        minZoom={0.4}
-        maxZoom={1.5}
+        fitViewOptions={FIT_VIEW_OPTIONS}
+        minZoom={ZOOM_MIN}
+        maxZoom={ZOOM_MAX}
         proOptions={{ hideAttribution: true }}
         nodesDraggable={false}
         nodesConnectable={false}
@@ -173,6 +241,7 @@ export function PipelineGraph({ tree, startCounts, onViewDetails }: PipelineGrap
         zoomOnScroll={false}
       >
         {/* 声明式 handles 使边渲染不依赖 RO 测量（见 rfNodes 注释） */}
+        <GraphZoomControls />
       </ReactFlow>
 
       {selected && (
