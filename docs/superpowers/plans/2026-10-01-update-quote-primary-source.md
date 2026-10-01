@@ -17,7 +17,7 @@
 - 静态门禁：`uv run ruff check` 全绿；`uv run mypy` 81 错误/20 文件为环境漂移基线，**零增量**；全量 `uv run pytest tests/ --ignore=tests/evals` 0 failed
 - 腾讯串字段位序以 2026-10-01 金样本（sh688072）钉死：`[3]=最新价 [31]=涨跌 [32]=涨跌% [33]=最高 [34]=最低 [38]=换手率 [39]=PE(TTM,不消费) [44]=流通市值(亿) [45]=总市值(亿) [46]=PB [1]=名称 [2]=代码`
 - market_cap/float_market_cap 单位=亿 ×1e8 归一到**元**（与 C1 修复后的统一元契约对齐）；PB 不做跨源融合
-- quote 输出 MUST NOT 含 `PE` 键（任何源）；`state.stock_quote` 是普通 dict，新增键（如 `float_market_cap`）无 D6 通道卫兵问题（已核实 state.py:36）
+- PE 契约（以 delta spec data-source-resilience 为权威）：**腾讯**市盈率字段（TTM 口径）MUST NOT 进入 quote 输出；东财回退路径的 static PE（`市盈率-动态`→`PE`）为既有保留契约，双源形单测继续生效；`state.stock_quote` 是普通 dict，新增键（如 `float_market_cap`）无 D6 通道卫兵问题（已核实 state.py:36）
 - 非交互类变更（纯后端数据层），不适用 E2E 门禁（project-workflow §2 判别）
 - prompt 零改动；citation 源路径（`quote.*`）零改动
 
