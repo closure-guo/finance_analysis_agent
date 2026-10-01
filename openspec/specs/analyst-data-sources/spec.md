@@ -57,6 +57,7 @@ citation 校验器 SHALL 将 announcements/research_reports/share_unlock/block_t
 - GIVEN 分析师 claim 引用 announcements 信源且 stated 内容为某公告标题
 - WHEN citation 校验器执行文本回声匹配
 - THEN 命中 SHALL 判 PASS(echo)
+
 ### Requirement: 最新报告期快照获取
 
 系统 SHALL 在深度分析数据准备阶段获取「最新报告期快照」（latest_period_snapshot）：从三大报表数据源取最新已披露报告期（不限于年报，含中报/季报/三季报）的关键科目，写入 state 键 `latest_period_snapshot`。快照 SHALL 至少包含：报告日、营业总收入（累计）、归母净利润（累计）、毛利率、资产负债率、存货、合同负债，以及营收/归母净利相对上年同期的同比变化率（同期数据可得时）。快照各科目口径为该报告期累计值，SHALL 标注「累计口径」。快照抓取或字段缺失 SHALL 降级为携带缺失标注的部分快照且不阻断管线。
@@ -119,9 +120,12 @@ citation 校验器 SHALL 将 announcements/research_reports/share_unlock/block_t
 - WHEN 基本面分析师生成报告
 - THEN 论断 SHALL 基于年报序列并显式标注「最新报告期快照缺失」
 - AND MUST NOT 假设年报趋势仍然成立而不加限定
+
 ### Requirement: 同业财务数据获取
 
-系统 SHALL 实现同业财务数据抓取（`AKShareClient.fetch_peer_data(stock_codes)`）：对用户指定的对标股代码列表逐标的获取名称、PE、PB。实现 SHALL 复用 `fetch_stock_quote` 的主源/回退链（东财 → 百度估值+腾讯）以继承其单位归一与降级语义。单标的抓取失败 SHALL 跳过该标的且不拖垮整批；全部标的失败或输入为空 SHALL 返回 None（fetch 层既有 optional 降级语义）。返回值 SHALL 为 DataFrame 且列名与相对估值消费契约一致（name/PE/PB）。市场平均 PE（`state.industry_pe`）与同业个股 PE 是不同口径的数据源，两者 SHALL 并存可辨。
+系统 SHALL 实现同业财务数据抓取（`AKShareClient.fetch_peer_data(stock_codes)`）：对用户指定的对标股代码列表逐标的获取名称、PE、PB。实现 SHALL 复用 `fetch_stock_quote` 的主源/回退链（链定义见 data-source-resilience「行情 quote 三级回退（腾讯单标的 / 东财 spot / 百度估值+腾讯日线）」）以继承其单位归一与降级语义。单标的抓取失败 SHALL 跳过该标的且不拖垮整批；全部标的失败或输入为空 SHALL 返回 None（fetch 层既有 optional 降级语义）。返回值 SHALL 为 DataFrame 且列名与相对估值消费契约一致（name/PE/PB）。市场平均 PE（`state.industry_pe`）与同业个股 PE 是不同口径的数据源，两者 SHALL 并存可辨。
+
+(Previously: 实现 SHALL 复用 `fetch_stock_quote` 的主源/回退链（东财 → 百度估值+腾讯）以继承其单位归一与降级语义。——主源切换后回退链不再以东财为主，改为引用 data-source-resilience 的链定义，避免两处 spec 硬编码同一链条。)
 
 #### Scenario: 有对标股时返回同业 DataFrame
 
@@ -151,3 +155,4 @@ citation 校验器 SHALL 将 announcements/research_reports/share_unlock/block_t
 - WHEN fetch_data 执行
 - THEN SHALL NOT 触发同业抓取调用
 - AND `peer_financials` 保持 None
+

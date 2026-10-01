@@ -29,3 +29,10 @@
 - WHEN fetch_data 完成
 - THEN `peer_financials` SHALL 为 None（与既有 optional 降级同语义）
 - AND 管线 SHALL 继续执行，相对估值段以缺失声明呈现
+
+#### Scenario: 未指定对标股时不抓取
+
+- GIVEN 请求未携带 peer_codes
+- WHEN fetch_data 执行
+- THEN SHALL NOT 触发同业抓取调用
+- AND `peer_financials` 保持 None
