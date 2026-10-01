@@ -1134,40 +1134,27 @@ class AKShareClient:
         return rows
 
     def fetch_peer_data(self, stock_codes: list[str]) -> pd.DataFrame | None:
-        """逐标的抓取同业名称/PE/PB（复用 fetch_stock_quote 主源+回退链）。
+        """逐标的抓取同业名称/PE/PB（复用 _quote_via_chain 三级链）。
 
-        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None
-        （delta clear-valuation-chain-debts ADDED「同业财务数据获取」）。
-        共享单次全市场 spot 表：N 标的的主源查询从 N× 全市场拉取降到 1×，
-        表未命中/失败的标的再逐个走 fetch_stock_quote 完整回退链。
+        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None。
+        spot 表惰性共享：腾讯主源健康时逐标的 1 请求、零 spot 调用；腾讯
+        失败后首个标的触发一次全市场 spot 拉取，批内复用（N 标的 1×）。
         """
         codes = [str(c).strip() for c in (stock_codes or []) if str(c).strip()]
         if not codes:
             return None
-        try:
-            spot_df = _call_ak(ak.stock_zh_a_spot_em)
-        except Exception as e:
-            logger.warning("同业共享行情表拉取失败，逐标的走完整回退链: %s", e)
-            spot_df = None
+        spot_df: pd.DataFrame | None = None
         rows: list[dict] = []
         for code in codes:
-            q: dict = {}
-            if spot_df is not None:
-                q = self._quote_from_spot_df(spot_df, code) or {}
+            try:
+                q, spot_df = self._quote_via_chain(code, spot_df)
+            except Exception as e:
+                logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
+                continue
             pe = q.get("PE") or q.get("pe")
             pb = q.get("PB") or q.get("pb")
-            if (pe is None or pd.isna(pe)) and (pb is None or pd.isna(pb)):
-                # spot 表未命中或无 PE/PB → 单标的走完整主源+回退链
-                try:
-                    q = self.fetch_stock_quote(code)
-                except Exception as e:
-                    logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
-                    continue
-                pe = q.get("PE") or q.get("pe")
-                pb = q.get("PB") or q.get("pb")
             # 停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数归一——NaN 真值
-            # 直通会被 _build_peers_list 的 is not None 放行，毒化同业均值
-            # （Task 2 复审 ⚠️，与 compute._derive_pe_ttm F1 守卫同源问题）
+            # 直通会毒化同业均值（终审 C1 同源问题）
             if pe is not None and pd.isna(pe):
                 pe = None
             if pb is not None and pd.isna(pb):
@@ -1178,7 +1165,6 @@ class AKShareClient:
             rows.append({"name": q.get("name") or code, "code": code, "PE": pe, "PB": pb})
         if not rows:
             return None
-        # 出口根因归一（终审 C1）：混合行（一 peer PE=None、一 peer PE 有值）时
-        # DataFrame 构造把 None 强转回 float64 NaN——与 _normalize_nan 修的
-        # quarterly_income 同源；NaN 毒化同业均值并伪装成 fair
+        # 出口根因归一（终审 C1）：混合行 DataFrame 构造把 None 强转回 float64
+        # NaN 毒化同业均值——出口必须 _normalize_nan
         return self._normalize_nan(pd.DataFrame(rows, columns=["name", "code", "PE", "PB"]))

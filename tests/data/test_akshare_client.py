@@ -863,15 +863,15 @@ class TestFetchIndustryCninfoLatest:
 
 
 class TestFetchPeerData:
-    """delta clear-valuation-chain-debts D2：同业财务数据抓取。
+    """update-quote-primary-source T3：同业财务数据抓取复用三级链。
 
-    共享 spot 表引入后，本类用例统一让共享表拉取快速失败（走逐标的
-    fetch_stock_quote mock 路径）；spot 命中路径见 TestFetchPeerDataSharedSpot。
+    腾讯主源 mock + spot 快速失败 → 百度回退路径；spot 命中路径见
+    TestFetchPeerDataSharedSpot。
     """
 
     @pytest.fixture(autouse=True)
     def _fast_spot_failure(self, monkeypatch):
-        """共享 spot 表拉取快速失败 → 逐标的走本类 mock 的 fetch_stock_quote。"""
+        """共享 spot 表拉取快速失败 → 腾讯失败标的命中本类 mock 的百度回退。"""
         with patch("finance_agent.data.akshare_client.ak") as mock_ak:
             mock_ak.stock_zh_a_spot_em.side_effect = ConnectionError("RST")
             monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
@@ -881,21 +881,26 @@ class TestFetchPeerData:
     def test_mixed_success_skips_failed_peer(self, client, monkeypatch):
         calls = []
 
-        def fake_quote(code):
+        def fake_tencent(code):
             calls.append(code)
             if code == "688012":
-                return {"name": "中微公司", "PE": 60.0, "PB": 10.0}
-            raise ConnectionError("全源失败")
+                return {"name": "中微公司", "code": code, "PB": 10.0}
+            return None  # 腾讯失败 → spot(fixture 失败) → 百度 name-only
 
-        monkeypatch.setattr(client, "fetch_stock_quote", fake_quote)
+        monkeypatch.setattr(client, "_fetch_tencent_quote", fake_tencent)
+        monkeypatch.setattr(
+            client, "_quote_fallback_baidu_tx", lambda code: {"name": "X", "code": code}
+        )
         df = client.fetch_peer_data(["688012", "002371"])
         assert df is not None and len(df) == 1
         assert df.iloc[0]["name"] == "中微公司"
-        assert df.iloc[0]["PE"] == 60.0
+        assert df.iloc[0]["PB"] == 10.0
         assert calls == ["688012", "002371"]
 
     def test_quote_without_pe_pb_skipped(self, client, monkeypatch):
-        monkeypatch.setattr(client, "fetch_stock_quote", lambda code: {"name": "X", "code": code})
+        monkeypatch.setattr(
+            client, "_fetch_tencent_quote", lambda code: {"name": "X", "code": code}
+        )
         df = client.fetch_peer_data(["600001"])
         assert df is None
 
@@ -903,7 +908,7 @@ class TestFetchPeerData:
         """停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数处理，不得写入行毒化均值。"""
         monkeypatch.setattr(
             client,
-            "fetch_stock_quote",
+            "_fetch_tencent_quote",
             lambda code: {"name": "X", "PE": float("nan"), "PB": float("nan")},
         )
         assert client.fetch_peer_data(["600001"]) is None
@@ -912,7 +917,7 @@ class TestFetchPeerData:
         """NaN PE 但 PB 有值：行内 PE 归一为 None，PB 保留。"""
         monkeypatch.setattr(
             client,
-            "fetch_stock_quote",
+            "_fetch_tencent_quote",
             lambda code: {"name": "X", "PE": float("nan"), "PB": 3.2},
         )
         df = client.fetch_peer_data(["600001"])
@@ -921,10 +926,10 @@ class TestFetchPeerData:
         assert df.iloc[0]["PB"] == 3.2
 
     def test_all_failed_returns_none(self, client, monkeypatch):
-        def fail(code):
-            raise ConnectionError("down")
-
-        monkeypatch.setattr(client, "fetch_stock_quote", fail)
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
+        monkeypatch.setattr(
+            client, "_quote_fallback_baidu_tx", lambda code: {"name": "X", "code": code}
+        )
         assert client.fetch_peer_data(["600001", "600002"]) is None
 
     def test_empty_input_returns_none(self, client):
@@ -937,23 +942,39 @@ class TestFetchPeerDataHeterogeneousRows:
     NaN 毒化同业均值并伪装成 fair。出口必须复用 _normalize_nan 根因归一。
     """
 
-    def test_mixed_none_and_value_pe_no_nan_leak(self, client, monkeypatch):
-        def fake_quote(code):
-            if code == "688012":
-                return {"name": "中微公司", "PE": 60.0, "PB": 10.0}  # 东财成功
-            return {"name": "北方华创", "PE": None, "PB": 11.26}  # 回退链无 PE
-
-        monkeypatch.setattr(client, "fetch_stock_quote", fake_quote)
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_mixed_none_and_value_pe_no_nan_leak(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
+        monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
+        mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame(
+            {
+                "名称": ["中微公司"],
+                "代码": ["688012"],
+                "最新价": [200.0],
+                "总市值": [1.5e11],
+                "市盈率-动态": [55.0],
+                "市净率": [9.0],
+            }
+        )
+        mock_ak.stock_zh_valuation_baidu.return_value = pd.DataFrame({"value": [11.26]})
+        mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame(
+            {"date": ["2026-09-29"], "open": [1.0], "close": [1.1], "high": [1.2], "low": [0.9]}
+        )
         df = client.fetch_peer_data(["688012", "002371"])
         assert df is not None and len(df) == 2
-        # 出口无 NaN（is None 可靠判空），数值保留
+        # 出口无 NaN（is None 可靠判空）：spot 行 PE=55.0，回退行 PE=None
+        assert df.iloc[0]["PE"] == 55.0
         assert df.iloc[1]["PE"] is None
-        assert df.iloc[0]["PE"] == 60.0
         assert not any(isinstance(v, float) and pd.isna(v) for v in df["PE"].tolist())
 
 
 class TestFetchPeerDataSharedSpot:
-    """同业批抓取共享单次全市场 spot 表（效率挂账收口：N×spot → 1×）。"""
+    """同业批抓取共享单次全市场 spot 表（效率挂账收口：N×spot → 1×）。
+
+    update-quote-primary-source T3：腾讯主源失败后共享 spot 才启用——主源
+    健康时逐标的 1 请求、零 spot 调用（见 test_tencent_primary_serves_peers_no_spot）。
+    """
 
     @staticmethod
     def _spot_df() -> pd.DataFrame:
@@ -970,6 +991,7 @@ class TestFetchPeerDataSharedSpot:
 
     @patch("finance_agent.data.akshare_client.ak")
     def test_spot_table_serves_all_peers_without_fallback(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
         monkeypatch.setattr("finance_agent.data.akshare_client._AK_MAX_RETRIES", 1)
         monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
         mock_ak.stock_zh_a_spot_em.return_value = self._spot_df()
@@ -981,6 +1003,37 @@ class TestFetchPeerDataSharedSpot:
         mock_ak.stock_zh_a_hist_tx.assert_not_called()
         # 共享断言：N peer 只拉 1 次全市场 spot 表（效率挂账：N× → 1×）
         assert mock_ak.stock_zh_a_spot_em.call_count == 1
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_tencent_primary_serves_peers_no_spot(self, mock_ak, client, monkeypatch):
+        """主源健康：逐标的单请求服务全批，MUST NOT 触发东财 spot 翻页。"""
+
+        def fake_tencent(code):
+            return {
+                "name": {"688012": "中微公司", "002371": "北方华创"}[code],
+                "code": code,
+                "PB": {"688012": 10.36, "002371": 11.26}[code],
+            }
+
+        monkeypatch.setattr(client, "_fetch_tencent_quote", fake_tencent)
+        df = client.fetch_peer_data(["688012", "002371"])
+        assert df is not None and len(df) == 2
+        assert df.iloc[0]["PB"] == 10.36
+        # 腾讯全命中 → 东财 spot/百度/腾讯日线零调用（请求量治理的核心断言）
+        mock_ak.stock_zh_a_spot_em.assert_not_called()
+        mock_ak.stock_zh_valuation_baidu.assert_not_called()
+
+    def test_peer_pe_follows_serving_source(self, client, monkeypatch):
+        """腾讯主源无 PE（spec 不消费）→ peer PE=None、PB 有值仍入行（PB 口径比较）。"""
+        monkeypatch.setattr(
+            client,
+            "_fetch_tencent_quote",
+            lambda code: {"name": "中微公司", "code": code, "PB": 10.36},
+        )
+        df = client.fetch_peer_data(["688012"])
+        assert df is not None
+        assert df.iloc[0]["PE"] is None
+        assert df.iloc[0]["PB"] == 10.36
 
     @patch("finance_agent.data.akshare_client.ak")
     def test_spot_miss_peer_falls_back_to_quote_chain(self, mock_ak, client, monkeypatch):
