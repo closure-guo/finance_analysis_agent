@@ -984,7 +984,6 @@ export default function App() {
                 <Button variant="ghost" size="sm" onClick={() => { setSettingsFocus(undefined); navigate('/settings') }}>
                   <i className="fas fa-cog mr-1"></i>设置
                 </Button>
-                <div className="w-7 h-7 rounded-full" style={{ background: 'var(--bg-overlay-l3)' }}></div>
               </div>
             </header>
 
@@ -1201,7 +1200,11 @@ function AppSidebar({ sessions, currentSessionId, onSelect, onDelete, onRename, 
   // ── 展开态（桌面）与移动端抽屉共用 ──
   return (
     <Sidebar collapsedRail={collapsedRail} expandedRail={
-      <div className="flex flex-col h-full">
+      // min-w-0：本节点是 sidebar.tsx 显隐包裹层（display:flex）的 flex item，
+      // 默认 min-width:auto 会拒绝收缩到会话名 min-content 以下，长会话名
+      // （truncate/nowrap）把整个 rail 撑出 256px 内层，按钮/搜索框 w-full
+      // 跟随拉伸后被 aside 裁剪；min-w-0 恢复收缩到包裹层宽度
+      <div className="flex min-w-0 flex-col h-full">
       {/* 顶部占位：撑起高度使下方「新建分析」按钮避开悬浮折叠按钮（fixed top-3 left-3，h-10） */}
       <div className="h-11 shrink-0" />
 

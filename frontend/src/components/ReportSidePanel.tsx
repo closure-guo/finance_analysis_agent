@@ -86,7 +86,9 @@ export function ReportSidePanel({ msg, onClose, isMobile = false, children }: {
         width,
         transform: open ? 'translateX(0)' : 'translateX(100%)',
         transition: 'transform 300ms ease-out',
-        background: 'var(--bg-base)',
+        // 令牌必须真实存在：--bg-base 未定义（只有 --bg-base-default），写错会使
+        // 面板背景透明、主顶栏整行透出与操作栏叠字（report-panel-overlay E2E 锚点）
+        background: 'var(--bg-base-default)',
         borderLeft: '1px solid var(--border-neutral-l1)',
       }}
     >
