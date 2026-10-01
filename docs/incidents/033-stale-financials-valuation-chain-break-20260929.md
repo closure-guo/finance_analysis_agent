@@ -1,7 +1,7 @@
 # Incident 033: 财报论据结构性过时 + 估值信号链路断裂 — 拓荆科技报告外部批评核实
 
 **日期**: 2026-09-29
-**状态**: delta 已立（openspec/changes/update-financial-freshness-and-valuation/），待实施
+**状态**: 已修复——三个 delta（update-financial-freshness-and-valuation / clear-valuation-chain-debts / update-decision-integrity-gates）已实施、终审通过并 sync+archive 于 `openspec/changes/archive/`（2026-09-29/30），全量 2631 passed
 **触发**: 外部对 2026-09-29 拓荆科技(688072)报告的批评，经逐条核实基本属实
 
 ## 现象
@@ -27,6 +27,8 @@
 ## 修复
 
 openspec/changes/update-financial-freshness-and-valuation/（四个 capability：analyst-data-sources 最新报告期快照+季度字段扩展、data-source-resilience PE 推导责任、valuation-signal-integrity 新能力、industry-threshold-coverage 新能力含 5 家同业校准）。健康度口径变更需同步 docs/evals/metrics.md §1。
+
+**实施收口（2026-09-30）**：主 delta 连同两个伴随 delta 一并落地——`clear-valuation-chain-debts`（诚实分桶全输入化、同业抓取 fetch_peer_data、季度出口 NaN 归一、披露节编号体系、图通道门禁扩展）、`update-decision-integrity-gates`（决策文本价位交叉校验 anomaly、非法仓位档位渲染归一、buy/sell 终稿 reeval_triggers 必填化打回、FM 审批可见性与置信度漂移标注）。三个 change 均已 sync+archive，人工验证报告见 `tests/validation/`（688072 四轮实跑 5/5 通过）。
 
 ## 关联
 
