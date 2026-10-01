@@ -8,6 +8,7 @@
 API 调用用 mock，不测外部网络。
 """
 
+from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
@@ -1126,3 +1127,41 @@ class TestFetchTencentQuote:
     def test_symbol_prefix(self, client):
         """深市代码走 sz 前缀（_to_sina_symbol 复用）。"""
         assert client._to_sina_symbol("002371") == "sz002371"
+
+
+class TestQuoteSourceCaliber:
+    """口径裁决单测（update-quote-primary-source design §2）。
+
+    双源形：腾讯主源与百度回退各自的 market_cap/PB 期望值独立钉死，
+    MUST NOT 跨源融合；market_cap 统一为元；PE 双路径均不产出。
+    """
+
+    @patch("finance_agent.data.akshare_client.requests.get")
+    def test_tencent_caliber_golden(self, mock_get, client):
+        mock_get.return_value = TestFetchTencentQuote._gbk_response(TestFetchTencentQuote.GOLDEN)
+        result = client.fetch_stock_quote("688072")
+        assert result["market_cap"] == pytest.approx(1869.91e8)  # 元
+        assert result["PB"] == 14.55  # 腾讯口径，原样保留
+        assert "PE" not in result
+
+    @patch("finance_agent.data.akshare_client.ak")
+    def test_baidu_caliber_golden(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr(
+            "finance_agent.data.akshare_client.AKShareClient._fetch_tencent_quote",
+            lambda self, code: None,
+        )
+        mock_ak.stock_zh_a_spot_em.return_value = None
+        mock_ak.stock_zh_valuation_baidu.side_effect = [
+            pd.DataFrame({"date": [date(2026, 9, 7)], "value": [1869.91]}),
+            pd.DataFrame({"date": [date(2026, 9, 7)], "value": [14.71]}),
+        ]
+        mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame(
+            {"date": [date(2026, 9, 8)], "close": [640.0]}
+        )
+        mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
+            {"code": ["688072"], "name": ["拓荆科技"]}
+        )
+        result = client.fetch_stock_quote("688072")
+        assert result["market_cap"] == pytest.approx(1869.91e8)  # 元（×1e8 归一）
+        assert result["PB"] == 14.71  # 百度口径，与腾讯原样并存、不融合
+        assert "PE" not in result
