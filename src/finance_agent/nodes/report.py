@@ -18,6 +18,7 @@ from typing import Any
 from finance_agent.charts import collect_chart_data, generate_all_charts
 from finance_agent.llm.gateway import complete_text
 from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
+from finance_agent.nodes.fund_manager import final_integrity_notes
 
 # ── focus -> 结构化标签（规则驱动，可测试） ──
 
@@ -113,6 +114,41 @@ _FUND_MANAGER_ANNOTATIONS: dict[str, str] = {
     "reject": "未通过审批",
     "return": "已退回交易员重新评估",
 }
+
+# 置信度漂移披露阈值（update-decision-integrity-gates Task 4，spec「置信度漂移披露」）
+_CONFIDENCE_DRIFT_THRESHOLD = 0.15
+# 结构不完整标注的判定标记：note 含其一才算「不完整」——「打回后已申报」等复核性
+# 标注属完整方案，零增量不渲染（spec Scenario「方案完整时不产生额外渲染」）
+_FM_INCOMPLETE_MARKERS: tuple[str, ...] = ("仍未申报", "缺失")
+
+
+def _fm_incomplete_integrity_block(state: dict) -> str:
+    """审批对象结构不完整标注块（update-decision-integrity-gates Task 4）。
+
+    从终稿三个完整性检查（final_price_check/final_inaction_check/final_reeval_check）
+    挑出标记「不完整」的 note 原文逐项列出；无不完整标注返回空串（零增量，无空标注行）。
+    """
+    fragments = [
+        f"{label}——{note}"
+        for label, note in final_integrity_notes(state)
+        if any(marker in note for marker in _FM_INCOMPLETE_MARKERS)
+    ]
+    if not fragments:
+        return ""
+    return f"> **审批对象结构不完整标注**：{'；'.join(fragments)}\n\n"
+
+
+def _ruling_confidence(state: dict) -> float | None:
+    """读终稿置信度（TradeDecision 对象或 dict 均可；缺失/噪声返回 None）。"""
+    ruling = state.get("final_trade_decision")
+    conf = (
+        ruling.get("confidence")
+        if isinstance(ruling, dict)
+        else getattr(ruling, "confidence", None)
+    )
+    if isinstance(conf, bool) or not isinstance(conf, (int, float)):
+        return None
+    return float(conf)
 
 
 # ── 财务口径披露（确定性渲染，不依赖 LLM 引用） ──
@@ -466,15 +502,19 @@ def generate_report(state: dict) -> dict:
         # 中文标注呈现（ADR-0011 Layer V）：reject 需明确标注「未通过审批」，
         # 而非仅显示原始英文枚举值。未命中时回退原始值，容忍加固前写入的历史非法值
         annotation = _FUND_MANAGER_ANNOTATIONS.get(fm_decision, fm_decision)
+        # 审批对象结构不完整标注（update-decision-integrity-gates Task 4）：先渲染
+        # 标注再渲染 FM 审批意见——「方案事实」与「FM 论断」的矛盾直接可见
+        # （spec「报告并排渲染不完整标注与 FM 论断」）；方案完整时空串零增量
+        integrity_block = _fm_incomplete_integrity_block(state)
         # #111：审批理由随决策渲染（在场时）；缺失时保持仅标注（历史 state 兼容）
         fm_reasoning = (state.get("fund_manager_decision_reasoning") or "").strip()
         # D1：FM 操作定性（action/置信度）与裁决 action 并排展示——「批准的是什么
         # 方案」直接可见，方向相悖时矛盾自明；历史 state 无字段时保持旧行为
+        fm_confidence = state.get("fund_manager_confidence")
         qualifier = ""
         fm_action = state.get("fund_manager_action")
         if fm_action:
             qualifier = f"（操作定性 {fm_action}"
-            fm_confidence = state.get("fund_manager_confidence")
             if fm_confidence is not None:
                 qualifier += f"，置信度 {fm_confidence}"
             qualifier += "）"
@@ -486,9 +526,25 @@ def generate_report(state: dict) -> dict:
             )
             if ruling_action:
                 qualifier += f" · 裁决: {ruling_action}"
+        # 置信度漂移披露（update-decision-integrity-gates Task 4，spec「置信度漂移
+        # 披露」）：仅 approve 产漂移标注（reject/return 无操作定性可比），偏差
+        # >0.15 时在操作定性旁渲染两值；MUST NOT 硬拦截，FM reasoning 全文本就
+        # 随决策渲染供标注人判读
+        drift = ""
+        if (
+            fm_decision == "approve"
+            and isinstance(fm_confidence, (int, float))
+            and not isinstance(fm_confidence, bool)
+        ):
+            ruling_conf = _ruling_confidence(state)
+            if (
+                ruling_conf is not None
+                and round(abs(fm_confidence - ruling_conf), 6) > _CONFIDENCE_DRIFT_THRESHOLD
+            ):
+                drift = f" · 置信度漂移：FM {fm_confidence:g} / 终稿 {ruling_conf:g}"
         reasoning_block = f"\n\n{fm_reasoning}\n" if fm_reasoning else "\n"
         sections.append(
-            f"{next_title('基金经理决策')}\n\n**{annotation}**{qualifier}{reasoning_block}"
+            f"{next_title('基金经理决策')}\n\n{integrity_block}**{annotation}**{qualifier}{drift}{reasoning_block}"
         )
 
     # ── 参考资料信源（Kimi 风格 URL 引用溯源）──

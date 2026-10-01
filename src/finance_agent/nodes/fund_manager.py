@@ -12,6 +12,30 @@ from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger("finance_agent.fund_manager")
 
+# 终稿完整性检查的 state 键 → 中文标签（update-decision-integrity-gates Task 4）。
+# report.py 渲染「审批对象结构不完整标注」复用同一收集器，键序/标签单源
+FINAL_CHECK_LABELS: tuple[tuple[str, str], ...] = (
+    ("final_price_check", "价位"),
+    ("final_inaction_check", "非执行动作理由"),
+    ("final_reeval_check", "再评估触发条件"),
+)
+
+
+def final_integrity_notes(state: dict) -> list[tuple[str, str]]:
+    """收集终稿完整性检查的非空 note（键序稳定，返回 [(标签, note 原文), ...]）。
+
+    note 非空即收集——含「打回后已申报」等复核性标注（FM 可见性优先，全量如实进
+    上下文；报告侧只挑「结构不完整」标注，见 report._fm_incomplete_integrity_block）。
+    噪声形态（check 非 dict / note 非字符串 / 纯空白）静默跳过，MUST NOT 中断构建。
+    """
+    notes: list[tuple[str, str]] = []
+    for key, label in FINAL_CHECK_LABELS:
+        check = state.get(key)
+        note = check.get("note") if isinstance(check, dict) else None
+        if isinstance(note, str) and note.strip():
+            notes.append((label, note.strip()))
+    return notes
+
 
 def fund_manager(state: dict) -> dict:
     """Layer V Fund Manager — 审批/拒绝/退回。"""
@@ -76,6 +100,14 @@ def _build_fund_manager_context(state: dict) -> str:
         decision = decision.model_dump()
     if isinstance(decision, dict) and decision:
         sections.append(f"交易决策: {json.dumps(decision, ensure_ascii=False)}")
+
+    # 终稿完整性标注（update-decision-integrity-gates Task 4）：终稿三个完整性检查
+    # 的 note 非空时如实进上下文——FM 审批前能看到审批对象的结构完整性状态
+    # （spec「FM 上下文携带完整性标注」；仲裁权保留：标注不禁止 approve）
+    integrity = final_integrity_notes(state)
+    if integrity:
+        detail = "；".join(f"{label}——{note}" for label, note in integrity)
+        sections.append(f"终稿完整性标注：{detail}")
 
     # 风控指标
     risk = state.get("risk_metrics") or {}
