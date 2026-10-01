@@ -1,8 +1,7 @@
-# price-level-tooling Specification
+# Delta for price-level-tooling
 
-## Purpose
-由 delta update-decision-integrity-gates 归档建立（2026-09-30 实施完毕并通过逐任务审查与全量回归）。
-## Requirements
+## ADDED Requirements
+
 ### Requirement: 决策文本价位与已验证技术指标交叉校验
 
 决策层产出的自由文本价位（`reeval_triggers` 条目与 `inaction_reason`/`reasoning` 中出现的数值价位）SHALL 由确定性代码与 state 中已验证的技术指标值（最新收盘价、各周期 MA、近期高低点、布林轨道）交叉核对，MUST NOT 仅因数值出现在决策文本即视为可信。以下两种形态 SHALL 各登记一条 anomaly（复用既有 anomalies 通道，附原始文本片段与最接近的已验证指标值），并在报告「再评估触发条件」/「不行动原因」旁以「价位待核实」类标注呈现：
