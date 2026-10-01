@@ -94,3 +94,22 @@ describe('PipelineGraph 边渲染（声明式 handles，不依赖 RO 测量）',
     expect(container.querySelectorAll('.react-flow__edge').length).toBeGreaterThanOrEqual(28)
   })
 })
+
+describe('PipelineGraph 缩放控件（add-pipeline-graph-zoom-controls）', () => {
+  it('右下角渲染放大/缩小/重置三控件，无障碍命名正确且点击不抛错', () => {
+    render(<PipelineGraph tree={buildLayerTree()} startCounts={{}} onViewDetails={() => {}} />)
+    expect(screen.getByTestId('graph-zoom-controls')).toBeDefined()
+    expect(screen.getByTestId('graph-zoom-in').getAttribute('aria-label')).toBe('放大')
+    expect(screen.getByTestId('graph-zoom-out').getAttribute('aria-label')).toBe('缩小')
+    expect(screen.getByTestId('graph-zoom-reset').getAttribute('aria-label')).toBe('重置')
+    expect(() => fireEvent.click(screen.getByTestId('graph-zoom-out'))).not.toThrow()
+    expect(() => fireEvent.click(screen.getByTestId('graph-zoom-in'))).not.toThrow()
+    expect(() => fireEvent.click(screen.getByTestId('graph-zoom-reset'))).not.toThrow()
+  })
+
+  it('初始缩放位于边界内时放大/缩小均可用（禁用态由真实缩放驱动）', () => {
+    render(<PipelineGraph tree={buildLayerTree()} startCounts={{}} onViewDetails={() => {}} />)
+    expect(screen.getByTestId('graph-zoom-in')).not.toBeDisabled()
+    expect(screen.getByTestId('graph-zoom-out')).not.toBeDisabled()
+  })
+})
