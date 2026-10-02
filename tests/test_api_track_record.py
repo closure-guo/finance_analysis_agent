@@ -1,5 +1,6 @@
 """add-track-record Task 4:track-record 只读 API 端点测试。"""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from finance_agent.api import app
@@ -8,6 +9,7 @@ from finance_agent.outcome.track_record.model import (
     insert_prediction,
     update_prediction_status,
     upsert_equity_point,
+    upsert_index_closes,
     upsert_metrics_daily,
 )
 
@@ -310,3 +312,39 @@ def test_predictions_filtered_total(monkeypatch, tmp_path):
         .json()
     )
     assert len(data["predictions"]) == 1 and data["total"] == 2
+
+
+# ── add-index-performance-compare Task 6：index-compare 读数端点 ──
+
+
+def test_index_compare_span_validation(monkeypatch, tmp_path):
+    _use_db(monkeypatch, tmp_path)
+    resp = TestClient(app).get("/api/v1/track-record/index-compare?span=2y")
+    assert resp.status_code == 422
+
+
+def test_index_compare_empty(monkeypatch, tmp_path):
+    _use_db(monkeypatch, tmp_path)
+    resp = TestClient(app).get("/api/v1/track-record/index-compare")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["window"]["start"] is None
+    assert data["agent_return"] is None
+    assert len(data["indices"]) == 5
+    assert all(i["beat"] is None for i in data["indices"])
+    assert data["as_of"] and data["disclaimer"]
+
+
+def test_index_compare_returns(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    upsert_equity_point("2026-09-28", 1.0, benchmark_nav=1.0, db_path=db)
+    upsert_equity_point("2026-10-09", 1.05, benchmark_nav=0.99, db_path=db)
+    upsert_index_closes(
+        [("000300", "2026-09-26", 4000.0), ("000300", "2026-10-09", 4040.0)], db_path=db
+    )
+    resp = TestClient(app).get("/api/v1/track-record/index-compare?span=all")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["agent_return"] == pytest.approx(0.05)
+    by = {i["code"]: i for i in data["indices"]}
+    assert by["000300"]["beat"] is True

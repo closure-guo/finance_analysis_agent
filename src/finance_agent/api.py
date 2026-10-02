@@ -2224,6 +2224,21 @@ async def track_record_equity_curve() -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/track-record/index-compare")
+async def track_record_index_compare(span: str = "all") -> dict[str, Any]:
+    """add-index-performance-compare:跑赢指数对比读数(展示层)。
+
+    组合区间收益取 equity_curve 窗口首尾净值,指数收益取 index_closes 同窗口
+    首尾收盘;win/loss 判定口径不变(仍锚 000300,见 docs/evals/metrics.md)。
+    """
+    if span not in ("all", "3m", "6m", "1y"):
+        raise HTTPException(status_code=422, detail="span 必须为 all/3m/6m/1y")
+    from finance_agent.outcome.track_record.index_compare import build_index_compare
+
+    data = await asyncio.to_thread(build_index_compare, span)
+    return {**data, "as_of": _track_as_of(), "disclaimer": _DISCLAIMER}
+
+
 @app.get("/api/v1/track-record/calibration")
 async def track_record_calibration() -> dict[str, Any]:
     """add-track-record-stage-c:置信度校准（分桶 + Brier Score）。
