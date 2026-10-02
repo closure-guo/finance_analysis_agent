@@ -5,12 +5,14 @@ import pytest
 
 from finance_agent.outcome.track_record.index_compare import (
     INDEX_COMPARE_UNIVERSE,
+    build_index_compare,
     sync_index_closes,
 )
 from finance_agent.outcome.track_record.marking import run_daily_marking
 from finance_agent.outcome.track_record.model import (
     init_track_record_tables,
     list_index_closes,
+    upsert_equity_point,
     upsert_index_closes,
 )
 
@@ -164,3 +166,75 @@ class TestDailyMarkingIndexSync:
         assert len(result["index_failed"]) == 5
         # 盯市主链路照常返回(不抛错、无额外 errors)
         assert "metrics_date" in result
+
+
+def _seed_curve(db, points: list[tuple[str, float]]):
+    for d, nav in points:
+        upsert_equity_point(d, nav, benchmark_nav=1.0, db_path=db)
+
+
+class TestBuildIndexCompare:
+    def test_window_agent_return_and_beat(self, db):
+        _seed_curve(db, [("2026-09-28", 1.0), ("2026-10-09", 1.05)])
+        upsert_index_closes(
+            [
+                ("000300", "2026-09-26", 4000.0),  # 基期回退:窗口首日 09-28 无值 → 用 09-26
+                ("000300", "2026-10-09", 4040.0),  # +1.0% → agent 5% 跑赢
+                ("000905", "2026-09-28", 6000.0),  # +10% → agent 跑输
+                ("000905", "2026-10-09", 6600.0),
+            ],
+            db_path=db,
+        )
+        out = build_index_compare("all", db_path=db)
+        assert out["window"] == {"start": "2026-09-28", "end": "2026-10-09"}
+        assert out["agent_return"] == pytest.approx(0.05)
+        by = {i["code"]: i for i in out["indices"]}
+        assert by["000300"]["return"] == pytest.approx(0.01)
+        assert by["000300"]["beat"] is True
+        assert by["000300"]["effective_start_date"] == "2026-09-26"
+        assert by["000905"]["beat"] is False
+        assert [i["code"] for i in out["indices"]] == [u["code"] for u in INDEX_COMPARE_UNIVERSE]
+
+    def test_index_starting_mid_window_uses_earliest_in_window(self, db):
+        _seed_curve(db, [("2026-09-28", 1.0), ("2026-10-09", 1.05)])
+        upsert_index_closes(
+            [("000852", "2026-10-01", 2500.0), ("000852", "2026-10-09", 2525.0)], db_path=db
+        )
+        out = build_index_compare("all", db_path=db)
+        by = {i["code"]: i for i in out["indices"]}
+        assert by["000852"]["effective_start_date"] == "2026-10-01"
+        assert by["000852"]["return"] == pytest.approx(0.01)
+
+    def test_index_all_missing_in_window_is_null(self, db):
+        _seed_curve(db, [("2026-09-28", 1.0), ("2026-10-09", 1.05)])
+        upsert_index_closes([("399006", "2026-12-01", 2000.0)], db_path=db)  # 全在窗口外
+        out = build_index_compare("all", db_path=db)
+        by = {i["code"]: i for i in out["indices"]}
+        assert by["399006"]["return"] is None
+        assert by["399006"]["beat"] is None
+        assert by["399006"]["effective_start_date"] is None
+
+    def test_curve_insufficient_points(self, db):
+        _seed_curve(db, [("2026-09-28", 1.0)])
+        out = build_index_compare("all", db_path=db)
+        assert out["agent_return"] is None
+        assert all(i["beat"] is None for i in out["indices"])
+        assert out["window"]["start"] == "2026-09-28"
+
+    def test_curve_empty(self, db):
+        out = build_index_compare("all", db_path=db)
+        assert out["window"] == {"start": None, "end": None}
+        assert out["agent_return"] is None
+
+    def test_span_window_truncates_to_actual_coverage(self, db):
+        _seed_curve(db, [("2026-06-01", 1.0), ("2026-09-28", 1.02), ("2026-10-09", 1.05)])
+        out = build_index_compare("1y", db_path=db)
+        assert out["span"] == "1y"
+        assert out["window"] == {"start": "2026-06-01", "end": "2026-10-09"}  # 1y 截断到实际覆盖
+
+    def test_span_3m_cutoff(self, db):
+        _seed_curve(db, [("2026-01-05", 1.0), ("2026-09-28", 1.10), ("2026-10-09", 1.05)])
+        out = build_index_compare("3m", db_path=db)
+        # 3m 截点 ≈ 2026-07-09 → 窗口从 09-28 起
+        assert out["window"]["start"] == "2026-09-28"
+        assert out["agent_return"] == pytest.approx(round(1.05 / 1.10 - 1, 6))

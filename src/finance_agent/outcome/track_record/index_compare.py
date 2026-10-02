@@ -7,11 +7,17 @@
 
 from __future__ import annotations
 
+import calendar
 import logging
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from finance_agent.outcome.track_record.model import upsert_index_closes
+from finance_agent.outcome.track_record.model import (
+    list_equity_curve,
+    list_index_closes,
+    upsert_index_closes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,3 +68,71 @@ def sync_index_closes(
             failed.append(code)
             logger.warning("指数 %s(%s) 收盘落库失败: %s", code, u["name"], e)
     return {"stored": stored, "failed": failed}
+
+
+_SPAN_MONTHS = {"all": None, "3m": 3, "6m": 6, "1y": 12}
+
+
+def _shift_months(d: date, months: int) -> date:
+    """日历月平移;目标月无对应日(如 01-31 −1 月)钳制到当月最后一天。"""
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def build_index_compare(
+    span: str = "all",
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """跑赢指数对比读数(口径见 specs/index-comparison;as_of/disclaimer 由端点层附加)。"""
+    curve = list_equity_curve(db_path=db_path)
+    window_start = curve[0]["curve_date"] if curve else None
+    window_end = curve[-1]["curve_date"] if curve else None
+    months = _SPAN_MONTHS.get(span)
+    if months and curve:
+        cutoff = _shift_months(date.fromisoformat(str(window_end)), -months).isoformat()
+        window_start = max(str(window_start), cutoff)
+
+    agent_return: float | None = None
+    if len(curve) >= 2:
+        first = next(p for p in curve if p["curve_date"] >= window_start)
+        window_start = str(first["curve_date"])  # span 窗口起点截断到实际覆盖
+        if first["agent_nav"]:
+            agent_return = round(float(curve[-1]["agent_nav"]) / float(first["agent_nav"]) - 1.0, 6)
+
+    indices: list[dict[str, Any]] = []
+    for u in INDEX_COMPARE_UNIVERSE:
+        ret: float | None = None
+        eff: str | None = None
+        rows = list_index_closes(
+            u["code"], end=str(window_end) if window_end else None, db_path=db_path
+        )
+        if rows and window_start is not None:
+            base = None
+            for r in rows:  # 行按日期升序;取 ≤ 窗口起点的最近可得日(向过去回退)
+                if r["trade_date"] <= window_start:
+                    base = r
+                else:
+                    break
+            if base is None:  # 窗口起点前无数据 → 取窗口内最早可得日(如实披露)
+                base = rows[0]
+            if base["close"]:
+                ret = round(float(rows[-1]["close"]) / float(base["close"]) - 1.0, 6)
+                eff = str(base["trade_date"])
+        beat = agent_return > ret if agent_return is not None and ret is not None else None
+        indices.append(
+            {
+                "code": u["code"],
+                "name": u["name"],
+                "return": ret,
+                "effective_start_date": eff,
+                "beat": beat,
+            }
+        )
+
+    return {
+        "span": span,
+        "window": {"start": window_start, "end": window_end},
+        "agent_return": agent_return,
+        "indices": indices,
+    }
