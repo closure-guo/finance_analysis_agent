@@ -695,11 +695,39 @@ if TESTING:
         分别经 update_pipeline_timelines / update_pipeline_snapshot 落库，
         供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）；
         顶层可选 track_record（{equity_curve, index_closes}）写战绩页造数表
-        （add-index-performance-compare），无需 chat_history 也可单独使用。
+        （add-index-performance-compare），无需 chat_history 也可单独使用，且不创建会话。
         """
         # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约；
         # track_record 造数块不受 chat_history 前置约束（track_record-only 造数合法）
         if "chat_history" not in req and not isinstance(req.get("track_record"), dict):
+            return {"status": "ok", "mode": "testing"}
+        # add-index-performance-compare:战绩页 E2E 造数(equity_curve/index_closes
+        # 写入真实存储层;SESSIONS_DB_PATH 已被 e2e webServer 指向独立测试库)。
+        # seed 是纯造数:track_record-only 请求到此为止,不创建会话,避免 E2E 会话
+        # 侧栏被无 chat_history 的空会话污染（review fix）。
+        track_seed = req.get("track_record")
+        if isinstance(track_seed, dict):
+            from finance_agent.outcome.track_record.model import (
+                init_track_record_tables,
+                upsert_equity_point,
+                upsert_index_closes,
+            )
+
+            init_track_record_tables()
+            for pt in track_seed.get("equity_curve", []):
+                upsert_equity_point(
+                    pt["curve_date"],
+                    pt["agent_nav"],
+                    benchmark_nav=pt.get("benchmark_nav"),
+                )
+            upsert_index_closes(
+                [
+                    (r["index_code"], r["trade_date"], r["close"])
+                    for r in track_seed.get("index_closes", [])
+                ]
+            )
+        # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
+        if "chat_history" not in req:
             return {"status": "ok", "mode": "testing"}
         session_id = create_session(
             session_type=req.get("session_type", "chat"),
@@ -724,29 +752,6 @@ if TESTING:
         pipeline_snapshot = req.get("pipeline_snapshot")
         if isinstance(pipeline_snapshot, dict):
             update_pipeline_snapshot(session_id, pipeline_snapshot)
-        # add-index-performance-compare:战绩页 E2E 造数(equity_curve/index_closes
-        # 写入真实存储层;SESSIONS_DB_PATH 已被 e2e webServer 指向独立测试库)
-        track_seed = req.get("track_record")
-        if isinstance(track_seed, dict):
-            from finance_agent.outcome.track_record.model import (
-                init_track_record_tables,
-                upsert_equity_point,
-                upsert_index_closes,
-            )
-
-            init_track_record_tables()
-            for pt in track_seed.get("equity_curve", []):
-                upsert_equity_point(
-                    pt["curve_date"],
-                    pt["agent_nav"],
-                    benchmark_nav=pt.get("benchmark_nav"),
-                )
-            upsert_index_closes(
-                [
-                    (r["index_code"], r["trade_date"], r["close"])
-                    for r in track_seed.get("index_closes", [])
-                ]
-            )
         return {"session_id": session_id}
 
     @app.post("/api/test/reset")

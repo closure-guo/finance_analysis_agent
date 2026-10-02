@@ -362,6 +362,12 @@ def test_seed_track_record_block(monkeypatch, tmp_path):
     import importlib
 
     import finance_agent.api as api_module
+    import finance_agent.session_store as session_store_module
+
+    # 会话库指向独立 tmp 库（同 test_testing_mode 模式），保证下方 /api/sessions
+    # HTTP 断言确定性，不读写真实 data/sessions.db
+    monkeypatch.setattr(session_store_module, "_DB_PATH", tmp_path / "sessions.db")
+    session_store_module.init_db()
 
     importlib.reload(api_module)
     try:
@@ -382,6 +388,10 @@ def test_seed_track_record_block(monkeypatch, tmp_path):
             },
         )
         assert resp.status_code == 200
+        # track_record-only 造数返回占位响应（review fix）：不返回 session_id
+        assert resp.json() == {"status": "ok", "mode": "testing"}
+        # review fix：seed 是纯造数，track_record-only 请求不得创建会话（不污染 E2E 会话侧栏）
+        assert client.get("/api/sessions").json()["sessions"] == []
         data = client.get("/api/v1/track-record/index-compare?span=all").json()
         assert data["agent_return"] == pytest.approx(0.05)
     finally:
