@@ -29,6 +29,23 @@ const OVERVIEW = {
   },
 }
 
+// 跑赢指数对比响应（add-index-performance-compare）：与 indexCompareCard.test 的 RESP 同构，
+// 一只指数 beat=null → 摘要分母 = beat 非 null 数 → 「跑赢 3/4 个指数」
+const INDEX_COMPARE = {
+  span: 'all',
+  window: { start: '2026-09-28', end: '2026-10-09' },
+  agent_return: 0.05,
+  indices: [
+    { code: '000001', name: '上证指数', return: 0.03, effective_start_date: '2026-09-28', beat: true },
+    { code: '000300', name: '沪深300', return: 0.01, effective_start_date: '2026-09-26', beat: true },
+    { code: '000905', name: '中证500', return: 0.1, effective_start_date: '2026-09-28', beat: false },
+    { code: '000852', name: '中证1000', return: null, effective_start_date: null, beat: null },
+    { code: '399006', name: '创业板指', return: 0.02, effective_start_date: '2026-09-28', beat: true },
+  ],
+  as_of: '2026-10-02',
+  disclaimer: '历史业绩不代表未来表现',
+}
+
 const PREDICTIONS: Record<string, unknown>[] = [
   {
     prediction_id: 'p1', source_type: 'live', symbol: '600519.SH', symbol_name: '贵州茅台',
@@ -46,7 +63,7 @@ const PREDICTIONS: Record<string, unknown>[] = [
   },
 ]
 
-function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown } = {}) {
+function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown; indexCompare?: unknown } = {}) {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/api/v1/track-record/overview')) {
@@ -67,6 +84,9 @@ function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: u
       return Promise.resolve(new Response(JSON.stringify({
         dimensions: opts.segments ?? [], as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
       }), { status: 200 }))
+    }
+    if (url.includes('/api/v1/track-record/index-compare')) {
+      return Promise.resolve(new Response(JSON.stringify(opts.indexCompare ?? INDEX_COMPARE), { status: 200 }))
     }
     if (url.includes('/api/v1/track-record/predictions')) {
       return Promise.resolve(new Response(JSON.stringify({
@@ -331,6 +351,11 @@ describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-fil
       if (url.includes('/overview')) {
         return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
       }
+      // 跑赢指数对比卡片端点：本组用例不覆盖该数据 → 404 走卡片失败态分支，
+      // 避免兜底 200 的 {points,dimensions} 形状喂给卡片（无 indices 字段会炸渲染）
+      if (url.includes('/index-compare')) {
+        return Promise.resolve(new Response('', { status: 404 }))
+      }
       return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
     }))
     renderPage()
@@ -355,6 +380,11 @@ describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-fil
       if (url.includes('/overview')) {
         return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
       }
+      // 跑赢指数对比卡片端点：本组用例不覆盖该数据 → 404 走卡片失败态分支，
+      // 避免兜底 200 的 {points,dimensions} 形状喂给卡片（无 indices 字段会炸渲染）
+      if (url.includes('/index-compare')) {
+        return Promise.resolve(new Response('', { status: 404 }))
+      }
       return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
     }))
     renderPage()
@@ -374,6 +404,11 @@ describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-fil
       }
       if (url.includes('/overview')) {
         return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      }
+      // 跑赢指数对比卡片端点：本组用例不覆盖该数据 → 404 走卡片失败态分支，
+      // 避免兜底 200 的 {points,dimensions} 形状喂给卡片（无 indices 字段会炸渲染）
+      if (url.includes('/index-compare')) {
+        return Promise.resolve(new Response('', { status: 404 }))
       }
       return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
     }))
@@ -395,6 +430,11 @@ describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-fil
       }
       if (url.includes('/overview')) {
         return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      }
+      // 跑赢指数对比卡片端点：本组用例不覆盖该数据 → 404 走卡片失败态分支，
+      // 避免兜底 200 的 {points,dimensions} 形状喂给卡片（无 indices 字段会炸渲染）
+      if (url.includes('/index-compare')) {
+        return Promise.resolve(new Response('', { status: 404 }))
       }
       return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
     }))
@@ -625,5 +665,37 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     const card = screen.getByTestId('track-record-avoidance')
     expect(card.textContent ?? '').not.toContain('0%')
     expect(card).toHaveTextContent('—')
+  })
+})
+
+describe('战绩页：跑赢指数对比卡片（add-index-performance-compare）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    localStorage.clear()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('净值图区块之后渲染卡片与摘要（span 随页面偏好）', async () => {
+    mockFetch({
+      overview: OVERVIEW,
+      predictions: PREDICTIONS,
+      equity: [
+        { date: '2026-09-01', agent_nav: 1.0, benchmark_nav: 1.0 },
+        { date: '2026-09-02', agent_nav: 1.01, benchmark_nav: 1.005 },
+      ],
+    })
+    renderPage()
+    const card = await screen.findByTestId('index-compare-card')
+    expect(card).toBeVisible()
+    // 摘要 N/M 口径：分母 = beat 非 null 指数数（000852 beat=null 不计入）→ 3/4
+    expect(await screen.findByTestId('index-compare-summary')).toHaveTextContent(/跑赢 \d+\/\d+ 个指数/)
+    // 挂载位置：净值图区块之后、观点日志过滤工具栏之前（span 与净值图窗口同源）
+    const curve = screen.getByTestId('track-record-curve')
+    expect(curve.compareDocumentPosition(card)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(card.compareDocumentPosition(screen.getByTestId('track-record-filters'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 })

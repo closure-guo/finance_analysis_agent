@@ -11,6 +11,9 @@ export function IndexCompareCard({ span }: { span: TrackTimeSpan }) {
 
   useEffect(() => {
     let alive = true
+    // span 切换即换窗口:旧窗口数据必须立刻清除,防止新窗口拉取失败时
+    // 旧摘要/对比条残留造成跨窗口混排(Task 8 审查修复)
+    setData(null)
     setFailed(false)
     fetch(`/api/v1/track-record/index-compare?span=${span}`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))

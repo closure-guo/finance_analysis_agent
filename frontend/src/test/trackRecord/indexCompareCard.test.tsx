@@ -115,4 +115,20 @@ describe('IndexCompareCard', () => {
     expect(screen.queryByTestId('index-compare-empty')).not.toBeInTheDocument()
     expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
   })
+
+  it('span 切换即清除旧窗口数据:新 span 拉取失败时不残留旧摘要/对比条', async () => {
+    // 首次 span=all 成功返回;切换 span=3m 后拉取拒绝。
+    // 修复前:effect 只重置 failed,旧 data 残留 → 失败文案与旧 span 摘要混排。
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(RESP), { status: 200 }))
+      .mockRejectedValueOnce(new Error('boom'))
+    vi.stubGlobal('fetch', fetchMock)
+    const { rerender } = render(<IndexCompareCard span="all" />)
+    expect(await screen.findByTestId('index-compare-summary')).toHaveTextContent('跑赢 3/4 个指数')
+    rerender(<IndexCompareCard span="3m" />)
+    expect(await screen.findByText('对比数据加载失败')).toBeInTheDocument()
+    expect(screen.queryByTestId('index-compare-summary')).not.toBeInTheDocument()
+    expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining('span=3m'))
+  })
 })
