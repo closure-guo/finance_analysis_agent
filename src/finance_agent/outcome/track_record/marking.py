@@ -162,7 +162,29 @@ def run_daily_marking(
         )
 
     metrics_date = persist_metrics_snapshot(db_path=db_path)
-    return {**mark_result, "equity_points": len(points), "metrics_date": metrics_date}
+
+    # add-index-performance-compare:指数集收盘顺带落库(展示层对比用)。
+    # 失败隔离铁律:任何指数异常不得使盯市失败、不得计入 marked/skipped/errors;
+    # 判定链仍读 daily_marks.benchmark_price,与 index_closes 互不影响。
+    index_summary: dict[str, Any] = {"index_stored": 0, "index_failed": ["_sync_error"]}
+    try:
+        from finance_agent.outcome.track_record.index_compare import sync_index_closes
+
+        sync_result = sync_index_closes(client=client, db_path=db_path, days=kline_days)
+        # sync_index_closes 返回 {stored, failed};按接口契约改名为 index_stored/index_failed
+        index_summary = {
+            "index_stored": sync_result["stored"],
+            "index_failed": sync_result["failed"],
+        }
+    except Exception as e:  # noqa: BLE001 - 展示层数据缺失不得放大成盯市失败
+        logger.warning("指数收盘同步整体失败(仅展示层): %s", e)
+
+    return {
+        **mark_result,
+        "equity_points": len(points),
+        "metrics_date": metrics_date,
+        **index_summary,
+    }
 
 
 def persist_metrics_snapshot(db_path: str | Path | None = None) -> str:

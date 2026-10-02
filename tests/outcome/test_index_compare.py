@@ -7,6 +7,7 @@ from finance_agent.outcome.track_record.index_compare import (
     INDEX_COMPARE_UNIVERSE,
     sync_index_closes,
 )
+from finance_agent.outcome.track_record.marking import run_daily_marking
 from finance_agent.outcome.track_record.model import (
     init_track_record_tables,
     list_index_closes,
@@ -123,3 +124,43 @@ class TestSyncIndexCloses:
         ]  # 空行情=失败(修正后语义)
         rows = list_index_closes("000300", db_path=db)
         assert [r["trade_date"] for r in rows] == ["2026-09-28", "2026-09-29"]
+
+
+class TestDailyMarkingIndexSync:
+    def _seed_open_prediction(self, db):
+        from finance_agent.outcome.track_record.model import insert_prediction
+
+        insert_prediction(
+            {
+                "source_type": "live",
+                "symbol": "600519.SH",
+                "symbol_name": "贵州茅台",
+                "direction": "long",
+                "entry_price": 100.0,
+                "horizon_days": 20,
+                "confidence": 0.8,
+                "rationale_snapshot": {"action": "buy"},
+                "created_at": "2026-09-01T10:00:00",
+            },
+            db_path=db,
+        )
+
+    def test_marking_summary_has_index_keys_and_stores(self, db):
+        self._seed_open_prediction(db)
+        # 需给全宇宙 5 个指数都喂数据:空行情=失败(Task 2 定案语义),
+        # 否则 index_failed 断言与「全部成功」的测试意图相悖
+        client = _fake_client({u["code"]: [("2026-09-28", 4000.0)] for u in INDEX_COMPARE_UNIVERSE})
+        result = run_daily_marking(client=client, db_path=db, kline_days=5)
+        assert result["index_stored"] >= 1
+        assert result["index_failed"] == []
+        # 盯市三键不受指数落库影响(errors 仍为盯市自身口径)
+        assert set(result) >= {"marked", "skipped", "errors", "index_stored", "index_failed"}
+
+    def test_marking_index_sync_all_failed_still_ok(self, db):
+        self._seed_open_prediction(db)
+        client = _fake_client({}, fail_codes={u["code"] for u in INDEX_COMPARE_UNIVERSE})
+        result = run_daily_marking(client=client, db_path=db, kline_days=5)
+        assert result["index_stored"] == 0
+        assert len(result["index_failed"]) == 5
+        # 盯市主链路照常返回(不抛错、无额外 errors)
+        assert "metrics_date" in result
