@@ -113,9 +113,44 @@ def risk_judge(state: dict) -> dict:
         prompt_version=_pinfo.prompt_version,
     )
     decision = TradeDecision.model_validate(data)
+    # sell 分型申报（update-sell-action-typing，#188）：sell 缺 sell_type → 打回申报
+    # 一次；申报 exit → 价位豁免（final_price_missing 分型分支生效，免去无意义价位
+    # 打回）；仍缺 → 默认 short（保守，与现行建仓模板语义一致）+ 如实标注。
+    # 判定在价位完整性检查之前（design：打回预算不叠加，先定型再验参数）
+    if (
+        str(getattr(decision, "action", "")) == "sell"
+        and getattr(decision, "sell_type", None) is None
+    ):
+        retry_context = (
+            f"{context}\n\n【sell 分型申报打回】sell 决策必须申报 sell_type："
+            "exit=持有者减仓/退出敞口（申报 exit_schedule 减仓节奏，无需 entry/stop/target，"
+            "重新介入条件写入 reeval_triggers）；short=做空建仓（沿用 entry/stop/target "
+            "必填模板）。请重新输出补全 sell_type 的完整决策 JSON。"
+        )
+        data = call_llm_for_json(
+            retry_context,
+            system=system,
+            api_key=api_key,
+            node_name="risk_judge",
+            llm_config=state.get("llm_config"),
+            stock_code=state.get("stock_code"),
+            prompt_name=_pinfo.prompt_name,
+            prompt_version=_pinfo.prompt_version,
+        )
+        decision = TradeDecision.model_validate(data)
+        if (
+            str(getattr(decision, "action", "")) == "sell"
+            and getattr(decision, "sell_type", None) is None
+        ):
+            decision = decision.model_copy(update={"sell_type": "short"})
+            _sell_type_note = "sell_type 未申报，默认 short 模板（如实标注）"
+        else:
+            _sell_type_note = "打回后已申报 sell_type"
+    else:
+        _sell_type_note = ""
     # 终稿价位完整性（extend-payout-self-check-coverage，601888 实证：buy 价位全 None
     # 直通）：buy/sell 缺失首次打回重试一次；仍缺放行 + 如实标注（同 Trader 价检语义）
-    final_price_check: dict = {"result": "pass", "note": ""}
+    final_price_check: dict = {"result": "pass", "note": _sell_type_note}
     _missing = final_price_missing(decision)
     if _missing:
         retry_context = (

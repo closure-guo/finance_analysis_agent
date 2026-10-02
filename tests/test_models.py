@@ -472,3 +472,58 @@ class TestTradeDecisionInactionRationale:
         assert (d.entry_price, d.stop_loss, d.target_price) == (1.0, 0.9, 1.2)
         assert d.inaction_reason is None
         assert d.reeval_triggers == []
+
+
+class TestSellTypeTyping:
+    """update-sell-action-typing（#188）：sell 分型字段——exit（持有者减仓）/
+    short（做空建仓）+ exit_schedule 减仓节奏；归一容错与非 sell 归 None。"""
+
+    @staticmethod
+    def _sell(**extra) -> dict:
+        base = {
+            "action": "sell",
+            "confidence": 0.6,
+            "reasoning": "趋势走弱",
+        }
+        base.update(extra)
+        return base
+
+    def test_exit_with_schedule_accepted(self):
+        d = TradeDecision.model_validate(
+            self._sell(sell_type="exit", exit_schedule="分两批：现价减半、跌破600清仓")
+        )
+        assert d.sell_type == "exit"
+        assert d.exit_schedule == "分两批：现价减半、跌破600清仓"
+
+    def test_short_accepted(self):
+        d = TradeDecision.model_validate(
+            self._sell(sell_type="short", entry_price=640.0, stop_loss=700.0, target_price=571.0)
+        )
+        assert d.sell_type == "short"
+
+    def test_case_and_synonym_normalization(self):
+        # 大小写归一；同义词（减仓/退出→exit，做空→short）
+        assert TradeDecision.model_validate(self._sell(sell_type="Exit")).sell_type == "exit"
+        assert TradeDecision.model_validate(self._sell(sell_type="SHORT")).sell_type == "short"
+        assert TradeDecision.model_validate(self._sell(sell_type="减仓")).sell_type == "exit"
+        assert TradeDecision.model_validate(self._sell(sell_type="退出敞口")).sell_type == "exit"
+        assert TradeDecision.model_validate(self._sell(sell_type="做空")).sell_type == "short"
+
+    def test_unknown_sell_type_normalized_to_none(self):
+        # 杂值归 None（走默认 short 模板路径），不抛异常炸管线
+        d = TradeDecision.model_validate(self._sell(sell_type="partially"))
+        assert d.sell_type is None
+
+    def test_non_sell_action_forces_none(self):
+        # 非 sell 动作上的 sell_type 一律归 None（防 LLM 在 buy 上塞值）
+        d = TradeDecision.model_validate(
+            {"action": "buy", "confidence": 0.6, "reasoning": "r", "sell_type": "exit"}
+        )
+        assert d.sell_type is None
+        assert d.exit_schedule is None
+
+    def test_default_none_backcompat(self):
+        # 历史决策对象（无字段）→ None，模板默认 short，行为与现状一致
+        d = TradeDecision.model_validate(self._sell())
+        assert d.sell_type is None
+        assert d.exit_schedule is None

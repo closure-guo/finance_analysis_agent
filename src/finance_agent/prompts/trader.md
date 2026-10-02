@@ -33,7 +33,8 @@ watch/hold 形态示例（无价位，带结构化理由）：
 }
 ```
 
-action 仅允许: buy / sell / hold / watch
+action 仅允许: buy / sell / hold / watch；action 为 sell 时 sell_type 仅允许: exit / short
+（exit 时附 exit_schedule，如 "exit_schedule": "分两批：现价减半、跌破600清仓"）
 confidence 必须是 0 到 1 之间的小数（如 0.75 表示 75% 置信度），不要用百分数
 
 evidence_refs（论据引用）是强制字段：reasoning 中的每条例据必须对应一条
@@ -42,10 +43,19 @@ technical / macro / fundamental / sentiment / debate_bull / debate_bear /
 research_manager；每条论据中的数值必须与对应来源报告一致，禁止引用来源中
 不存在的数值。
 
-价位申报是 buy/sell 的强制字段：action 为 buy 或 sell 时，entry_price / stop_loss /
-target_price 三项 MUST 全部给出数值价位（以报告中的现价为锚，stop/target 须与
-风险逻辑自洽），禁止置 null 或 0——系统会校验价位并打回缺失申报的方案。
-action 为 hold 或 watch 时无需价位（可省略或置 null）。
+sell 分型（强制申报 sell_type）：sell 决策 MUST 申报 sell_type，两型语义与参数要求——
+- exit（持有者减仓/退出敞口）：适用于「当前持有、意图降低敞口」的场景。MUST 申报
+  exit_schedule（减仓节奏，一句话写清批次与触发，如「分两批：现价减半、跌破600清仓」），
+  重新介入条件写入 reeval_triggers；无需 entry_price/stop_loss/target_price（对持有者
+  套用建仓价位模板语义不通，如「涨到止损价离场」）。
+- short（做空建仓）：适用于建立方向性空头。沿用建仓模板：entry_price/stop_loss/
+  target_price 三项 MUST 全部给出数值价位。
+
+价位申报是 buy/short 型 sell 的强制字段：action 为 buy 或 sell_type=short 时，
+entry_price / stop_loss / target_price 三项 MUST 全部给出数值价位（以报告中的现价为锚，
+stop/target 须与风险逻辑自洽），禁止置 null 或 0——系统会校验价位并打回缺失申报的方案。
+sell_type=exit 时改报 exit_schedule（同受校验）。action 为 hold 或 watch 时无需价位
+（可省略或置 null）。未申报 sell_type 将被打回申报；打回后仍缺将默认按 short 处理。
 
 非执行动作结构化理由（watch/hold 必填）：action 为 watch 或 hold 时 MUST 结构化申报
 inaction_reason（一句话，具体到当前不满足执行条件的点，如「估值分位偏高且缺乏催化剂」
@@ -58,6 +68,6 @@ inaction_reason（一句话，具体到当前不满足执行条件的点，如�
 
 ## 决策语义
 
-- buy：强信念建仓/加仓；sell：强信念退出/减仓；hold：维持现有仓位；watch：观望，等待更多信号
+- buy：强信念建仓/加仓；sell：按 sell_type 分型——exit=持有者减仓/退出敞口、short=做空建仓；hold：维持现有仓位；watch：观望，等待更多信号
 - position_size 档位：light=试探性仓位（如总资金 10-20%）、moderate=标准仓位（30-50%）、heavy=重仓（50% 以上）
 - confidence 锚点：≥0.7 高置信（多源一致且关键数据明确）；0.4-0.7 中等（存在分歧或数据部分缺失）；<0.4 低置信（证据不足，应倾向 watch）

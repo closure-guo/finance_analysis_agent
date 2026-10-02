@@ -202,6 +202,35 @@ class TradeDecision(BaseModel):
     entry_price: float | None = None
     stop_loss: float | None = None
     target_price: float | None = None
+    # sell 分型（update-sell-action-typing，#188）：exit=持有者减仓/退出敞口（申报
+    # exit_schedule 减仓节奏，无新建仓参数，重新介入条件走 reeval_triggers）；
+    # short=做空建仓（沿用 entry/stop/target 必填模板）。None=未申报/历史形态，
+    # 校验层打回申报，仍缺默认按 short 处理（保守，与现行模板语义一致）
+    sell_type: Literal["exit", "short"] | None = None
+    exit_schedule: str | None = None
+
+    @field_validator("sell_type", mode="before")
+    @classmethod
+    def _normalize_sell_type(cls, value: object) -> object:
+        """sell_type 归一（update-sell-action-typing）：大小写/同义词容错——
+        减仓/退出族→exit、做空族→short；未识别杂值归 None（走默认 short 模板
+        路径，不抛异常炸管线——申报约束由 risk_judge 校验层承担）。
+        非 sell 动作上的取值由 model_validator 归 None（防 LLM 在 buy 上塞值）。
+        """
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower()
+        if normalized == "exit":
+            return "exit"
+        if normalized == "short":
+            return "short"
+        # 中文同义词族（前缀匹配：「减仓」「退出敞口」「做空建仓」等）
+        if value.startswith(("减仓", "退出")):
+            return "exit"
+        if value.startswith("做空"):
+            return "short"
+        return None
+
     # toolize-price-levels：sanity 校验二次未通过时由工具参考带修正（可观测标注）
     price_level_corrected: bool = False
     price_level_correction_reason: str | None = None
@@ -254,6 +283,15 @@ class TradeDecision(BaseModel):
         if isinstance(value, (list, tuple)):
             return [v for v in value if isinstance(v, str) and v.strip()]
         return []
+
+    @model_validator(mode="after")
+    def _scrub_sell_type_off_sell(self) -> TradeDecision:
+        """非 sell 动作上的 sell_type/exit_schedule 一律归 None（#188：防 LLM 在
+        buy/watch 上塞值污染下游分模板渲染与校验豁免）。"""
+        if self.action != "sell":
+            self.sell_type = None
+            self.exit_schedule = None
+        return self
 
 
 class FundManagerDecision(BaseModel):

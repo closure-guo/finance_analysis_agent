@@ -301,3 +301,65 @@ class TestGateRecheckNoteNeverLeaksReport:
         md = generate_report(state)["final_report"]
         assert "审批对象结构不完整标注" in md
         assert "止损价缺失" in md
+
+
+class TestSellTypeSplitRendering:
+    """update-sell-action-typing（#188）：sell 按 sell_type 分模板——exit 渲染
+    减仓节奏、不渲染建仓价位行；short/None 维持现行参数行。"""
+
+    def test_exit_renders_schedule_not_prices(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "sell",
+                "confidence": 0.55,
+                "position_size": "light",
+                "sell_type": "exit",
+                "exit_schedule": "分两批：现价减半、跌破600清仓",
+                "reasoning": "持有者退出敞口",
+                "reeval_triggers": ["重新站上 660 恢复持有"],
+            }
+        )
+        md = _format_trade_decision(decision)
+        assert "- **减仓节奏**: 分两批：现价减半、跌破600清仓" in md
+        assert "入场价" not in md and "止损价" not in md and "目标价" not in md
+        assert "① 重新站上 660 恢复持有" in md  # 重新介入条件由 reeval 承载
+
+    def test_exit_missing_schedule_honest_placeholder(self):
+        decision = TradeDecision.model_validate(
+            {"action": "sell", "confidence": 0.5, "sell_type": "exit", "reasoning": "r"}
+        )
+        md = _format_trade_decision(decision)
+        assert "- **减仓节奏**: 未申报" in md
+        assert "入场价" not in md
+
+    def test_short_renders_price_template(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "sell",
+                "confidence": 0.55,
+                "position_size": "light",
+                "sell_type": "short",
+                "entry_price": 640.0,
+                "stop_loss": 700.0,
+                "target_price": 571.0,
+                "reasoning": "做空建仓",
+                "reeval_triggers": ["跌破 570 重估"],
+            }
+        )
+        md = _format_trade_decision(decision)
+        assert "入场价" in md and "止损价" in md and "目标价" in md
+        assert "减仓节奏" not in md
+
+    def test_untyped_sell_defaults_to_price_template(self):
+        decision = TradeDecision.model_validate(
+            {
+                "action": "sell",
+                "confidence": 0.55,
+                "entry_price": 640.0,
+                "stop_loss": 700.0,
+                "target_price": 571.0,
+                "reasoning": "r",
+            }
+        )
+        md = _format_trade_decision(decision)
+        assert "入场价" in md  # None → short 模板（历史兼容）

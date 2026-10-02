@@ -699,6 +699,8 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         correction_reason = getattr(decision, "price_level_correction_reason", "") or ""
         inaction = getattr(decision, "inaction_reason", None)
         triggers = getattr(decision, "reeval_triggers", []) or []
+        sell_type = getattr(decision, "sell_type", None)
+        exit_schedule = getattr(decision, "exit_schedule", None)
     else:
         action = decision.get("action", "N/A")
         confidence = decision.get("confidence", 0)
@@ -711,13 +713,24 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         correction_reason = decision.get("price_level_correction_reason", "") or ""
         inaction = decision.get("inaction_reason")
         triggers = decision.get("reeval_triggers") or []
+        sell_type = decision.get("sell_type")
+        exit_schedule = decision.get("exit_schedule")
 
     lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
     # spec report-decision-rendering：仓位档位为必含字段——缺失/非法字面量如实
     # 「未提供」，不得整行省略（#140 终审 C-4；Task 2：词表外字面量渲染前归一，
     # 不回写决策对象）
     lines.append(f"- **仓位**: {_fmt_position_size(position)}")
-    if action in ("buy", "sell"):
+    # sell 分型分模板（update-sell-action-typing，#188）：exit（持有者减仓）无新建仓
+    # 参数——渲染减仓节奏、不渲染价位行与派生指标（与 watch/hold 无建仓参数语义
+    # 同型，重新介入条件由 reeval_triggers 承载）；short 与未申报（None，默认
+    # short）维持现行参数行（历史报告兼容）
+    if action == "sell" and sell_type == "exit":
+        if isinstance(exit_schedule, str) and exit_schedule.strip():
+            lines.append(f"- **减仓节奏**: {exit_schedule}")
+        else:
+            lines.append("- **减仓节奏**: 未申报")
+    elif action in ("buy", "sell"):
         lines.append(f"- **入场价**: {_fmt_price(entry)}")
         lines.append(f"- **止损价**: {_fmt_price(stop)}")
         lines.append(f"- **目标价**: {_fmt_price(target)}")

@@ -553,3 +553,40 @@ class TestInactionRationaleRouting:
     def test_price_fail_still_routes_back(self):
         state = {"price_check": {"result": "fail"}}
         assert after_validate_trade_prices(state) == "trader"
+
+
+class TestSellTypePriceExemption:
+    """update-sell-action-typing（#188）：sell_type=exit 豁免三价位必填、
+    改为 exit_schedule 必填；short/None 维持现行价位要求。"""
+
+    @staticmethod
+    def _decision(**extra) -> dict:
+        base = {"action": "sell", "confidence": 0.6, "reasoning": "r"}
+        base.update(extra)
+        return base
+
+    def test_exit_exempt_from_prices_but_requires_schedule(self):
+        from finance_agent.nodes.validate import final_price_missing
+
+        d = TradeDecision.model_validate(
+            self._decision(sell_type="exit", exit_schedule="现价减半，跌破600清仓")
+        )
+        assert final_price_missing(d) == []
+
+    def test_exit_missing_schedule_reported(self):
+        from finance_agent.nodes.validate import final_price_missing
+
+        d = TradeDecision.model_validate(self._decision(sell_type="exit"))
+        assert final_price_missing(d) == ["exit_schedule"]
+
+    def test_short_still_requires_prices(self):
+        from finance_agent.nodes.validate import final_price_missing
+
+        d = TradeDecision.model_validate(self._decision(sell_type="short"))
+        assert final_price_missing(d) == ["entry_price", "stop_loss", "target_price"]
+
+    def test_untyped_sell_still_requires_prices(self):
+        from finance_agent.nodes.validate import final_price_missing
+
+        d = TradeDecision.model_validate(self._decision())
+        assert final_price_missing(d) == ["entry_price", "stop_loss", "target_price"]
