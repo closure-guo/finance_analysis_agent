@@ -12,7 +12,6 @@ fast path（api._run_graph_streaming）同语义回归见 tests/test_api_blocked
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -87,7 +86,7 @@ def _report_chunks() -> list[Any]:
 
 
 async def _run_tool(
-    isolated_db, chunks: list[Any], persist_spy: MagicMock
+    isolated_db, monkeypatch, chunks: list[Any], persist_spy: MagicMock
 ) -> tuple[str, list[Any]]:
     """隔离 DB + 关闭 Langfuse + fake graph 下跑完 run_deep_analysis 工具。
 
@@ -95,7 +94,8 @@ async def _run_tool(
     后台 _background_consume 的收尾分支已执行完毕，无竞态。
     """
     # 清掉可能压小全局预算的环境变量，避免误触发超时分支语义
-    os.environ.pop("PIPELINE_TIMEOUT_SECONDS", None)
+    # （monkeypatch 保证测试结束后还原，不污染开发者本机环境）
+    monkeypatch.delenv("PIPELINE_TIMEOUT_SECONDS", raising=False)
     sid = session_store.create_session(stock_code="600519", stock_name="贵州茅台", status="running")
     tool = _make_run_deep_analysis(api_key="fake", session_id=sid)
     events: list[Any] = []
@@ -113,10 +113,10 @@ async def _run_tool(
 
 
 @pytest.mark.asyncio
-async def test_gate_fail_exhaust_marks_session_failed(isolated_db):
+async def test_gate_fail_exhaust_marks_session_failed(isolated_db, monkeypatch):
     """门禁 fail 后图流正常耗尽 → 会话 failed + 阻断 TOOL_RESULT，非 completed 空报告。"""
     persist_spy = MagicMock()
-    sid, events = await _run_tool(isolated_db, _gate_fail_chunks(), persist_spy)
+    sid, events = await _run_tool(isolated_db, monkeypatch, _gate_fail_chunks(), persist_spy)
 
     # 1) 会话终态：failed + 阻断归因（不得停留 completed 空报告）
     row = session_store.get_session(sid)
@@ -152,10 +152,10 @@ async def test_gate_fail_exhaust_marks_session_failed(isolated_db):
 
 
 @pytest.mark.asyncio
-async def test_normal_completion_not_affected(isolated_db):
+async def test_normal_completion_not_affected(isolated_db, monkeypatch):
     """有报告的正常完成 → 照常 completed + report_ready + 决策落库（回归保护）。"""
     persist_spy = MagicMock()
-    sid, events = await _run_tool(isolated_db, _report_chunks(), persist_spy)
+    sid, events = await _run_tool(isolated_db, monkeypatch, _report_chunks(), persist_spy)
 
     row = session_store.get_session(sid)
     assert row is not None
