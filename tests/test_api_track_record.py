@@ -348,3 +348,42 @@ def test_index_compare_returns(monkeypatch, tmp_path):
     assert data["agent_return"] == pytest.approx(0.05)
     by = {i["code"]: i for i in data["indices"]}
     assert by["000300"]["beat"] is True
+
+
+# ── add-index-performance-compare Task 7：test/seed 的 track_record 造数块 ──
+
+
+def test_seed_track_record_block(monkeypatch, tmp_path):
+    _use_db(monkeypatch, tmp_path)
+    # /api/test/seed 仅在 TESTING=1 的导入期注册（api.py `if TESTING:`）；单测进程
+    # 与 CI 均未设该环境变量，故按仓库既有模式（test_testing_mode.client_testing）
+    # reload api 模块使路由挂载，结束后恢复默认模块态避免跨用例污染。
+    monkeypatch.setenv("TESTING", "1")
+    import importlib
+
+    import finance_agent.api as api_module
+
+    importlib.reload(api_module)
+    try:
+        client = TestClient(api_module.app)
+        resp = client.post(
+            "/api/test/seed",
+            json={
+                "track_record": {
+                    "equity_curve": [
+                        {"curve_date": "2026-09-28", "agent_nav": 1.0, "benchmark_nav": 1.0},
+                        {"curve_date": "2026-10-09", "agent_nav": 1.05, "benchmark_nav": 0.99},
+                    ],
+                    "index_closes": [
+                        {"index_code": "000300", "trade_date": "2026-09-28", "close": 4000.0},
+                        {"index_code": "000300", "trade_date": "2026-10-09", "close": 4040.0},
+                    ],
+                }
+            },
+        )
+        assert resp.status_code == 200
+        data = client.get("/api/v1/track-record/index-compare?span=all").json()
+        assert data["agent_return"] == pytest.approx(0.05)
+    finally:
+        monkeypatch.delenv("TESTING", raising=False)
+        importlib.reload(api_module)
