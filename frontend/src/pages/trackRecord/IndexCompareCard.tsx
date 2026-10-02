@@ -18,6 +18,12 @@ export function IndexCompareCard({ span }: { span: TrackTimeSpan }) {
     fetch(`/api/v1/track-record/index-compare?span=${span}`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d: IndexCompareResponse) => {
+        // 畸形 200 体守卫(代理错误页等):缺 indices 直通 setData 会在渲染期
+        // data.indices.every 抛 TypeError 炸整页 → 在 fetch 边界拦下走失败态
+        if (!d || !Array.isArray(d.indices)) {
+          if (alive) setFailed(true)
+          return
+        }
         if (alive) setData(d)
       })
       .catch(() => {

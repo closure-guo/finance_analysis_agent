@@ -116,6 +116,17 @@ describe('IndexCompareCard', () => {
     expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
   })
 
+  it('HTTP 200 但响应体畸形(无 indices)时走失败态,不崩溃、不渲染摘要/空态/对比条', async () => {
+    // 代理错误页等畸形 200 体:ok=true 但缺 indices → 守卫在 fetch 边界拦下,
+    // 修复前 setData 直通,渲染期 data.indices.every 对 undefined 调用直接抛错炸整页
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ foo: 'bar' }) }))
+    render(<IndexCompareCard span="all" />)
+    expect(await screen.findByText('对比数据加载失败')).toBeInTheDocument()
+    expect(screen.queryByTestId('index-compare-summary')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('index-compare-empty')).not.toBeInTheDocument()
+    expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
+  })
+
   it('span 切换即清除旧窗口数据:新 span 拉取失败时不残留旧摘要/对比条', async () => {
     // 首次 span=all 成功返回;切换 span=3m 后拉取拒绝。
     // 修复前:effect 只重置 failed,旧 data 残留 → 失败文案与旧 span 摘要混排。
