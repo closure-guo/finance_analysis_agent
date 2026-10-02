@@ -46,7 +46,7 @@
 
 ### Requirement: Markdown 导出图片自包含
 
-系统 SHALL 在导出 Markdown 格式时，将报告中引用且源文件仍存在的本地 PNG 图片行改写为 base64 data URI（`data:image/png;base64,<编码>`）内嵌于 `.md` 文件，使导出产物为不依赖任何外部文件的自包含单文件。改写 SHALL 仅发生在导出时刻：会话存储的 `report_markdown` SHALL 保持原样（仍为文件路径引用）。图片源文件已不存在时，系统 SHALL 跳过该图片行继续导出，不因缺失图片而失败。
+系统 SHALL 在导出 Markdown 格式时，将报告中引用且源文件仍存在的本地位图图片行（png/jpg/jpeg/gif/webp）改写为 base64 data URI（`data:image/<mime>;base64,<编码>`）内嵌于 `.md` 文件，使导出产物为不依赖任何外部文件的自包含单文件。改写 SHALL 仅发生在导出时刻：会话存储的 `report_markdown` SHALL 保持原样（仍为文件路径引用）。图片源文件已不存在时，系统 SHALL 跳过该图片行继续导出，不因缺失图片而失败。
 
 #### Scenario: 图片源文件存在时内嵌为 data URI
 
