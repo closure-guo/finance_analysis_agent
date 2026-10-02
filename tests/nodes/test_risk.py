@@ -405,3 +405,89 @@ class TestFinalInactionRationale:
         assert mock_llm.call_count == 3
         assert result["final_trade_decision"].action == "buy"
         assert "价位齐备" in result["final_price_check"]["note"]
+
+
+def _sell_decision_json(triggers: list[str]) -> str:
+    """sell 终稿 JSON：结构化价位齐全（不触发既有三回路），变盘点在 triggers。"""
+    return json.dumps(
+        {
+            "action": "sell",
+            "confidence": 0.65,
+            "position_size": "light",
+            "entry_price": 640.0,
+            "stop_loss": 700.0,
+            "target_price": 571.0,
+            "reasoning": "趋势走弱，减仓规避回撤",
+            "reeval_triggers": triggers,
+        },
+        ensure_ascii=False,
+    )
+
+
+# 95 元为正式批实证形态（丢位幻觉）；570 为已验证近期低点（偏差 83.33% > 2% 阈值）
+_BAD_TRIGGER = ["股价回落至 95 元附近再评估"]
+_GOOD_TRIGGER = ["股价跌破 570 一线再评估"]
+# price_levels 只给 entry_ref（兜底最新收盘 653.8）与近期低点/高点，不给参考带 → 无豁免
+_PRICE_GATE_STATE = {
+    "trader_plan": {"action": "sell", "confidence": 0.7},
+    "risk_debate_history": [],
+    "price_levels": {
+        "available": True,
+        "entry_ref": 653.8,
+        "recent_low": 570.0,
+        "recent_high": 940.0,
+    },
+}
+
+
+class TestDecisionPriceGate:
+    """update-decision-price-gate：价位交叉校验 anomaly → 打回重试一次 → 仍异常 gate fail。"""
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_anomaly_retry_fixed_passes(self, mock_llm):
+        """偏差 anomaly（95 vs 570）→ 打回一次 → 修正后 gate pass、残留清空。"""
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            _sell_decision_json(_GOOD_TRIGGER),
+        ]
+        result = risk_judge(dict(_PRICE_GATE_STATE))
+        assert mock_llm.call_count == 2
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "pass"
+        assert gate["note"] == "打回后已修正"
+        assert result["decision_price_anomalies"] == []
+        assert "570" in result["final_trade_decision"].reeval_triggers[0]
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_anomaly_persists_after_retry_fails_gate(self, mock_llm):
+        """打回后仍输出 95 → gate fail（路由据此阻断），残留 anomaly 落 state。"""
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            _sell_decision_json(_BAD_TRIGGER),
+        ]
+        result = risk_judge(dict(_PRICE_GATE_STATE))
+        assert mock_llm.call_count == 2
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "fail"
+        assert "已打回仍未通过" in gate["note"]
+        assert len(result["decision_price_anomalies"]) == 1
+        assert result["decision_price_anomalies"][0]["kind"] == "deviation"
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_no_anomaly_direct_pass(self, mock_llm):
+        """触发价与已验证低点一致 → 不打回（LLM 恰调用 1 次），gate 直通。"""
+        mock_llm.return_value = _sell_decision_json(_GOOD_TRIGGER)
+        result = risk_judge(dict(_PRICE_GATE_STATE))
+        mock_llm.assert_called_once()
+        assert result["decision_price_gate"] == {"result": "pass", "note": ""}
+
+    @patch("finance_agent.nodes.risk.check_decision_prices", side_effect=RuntimeError("boom"))
+    def test_validator_crash_fails_open(self, _mock_check):
+        """校验器自身异常 → fail-open 放行，gate pass，MUST NOT 阻断。"""
+        with patch(
+            "finance_agent.nodes._llm_utils.call_llm_streaming",
+            return_value=_sell_decision_json(_BAD_TRIGGER),
+        ):
+            result = risk_judge(dict(_PRICE_GATE_STATE))
+        assert result["decision_price_gate"]["result"] == "pass"
+        assert "final_trade_decision" in result

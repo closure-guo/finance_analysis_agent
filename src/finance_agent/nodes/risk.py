@@ -222,20 +222,64 @@ def risk_judge(state: dict) -> dict:
     )
     if _payout_fixed:
         decision = decision.model_copy(update={"reasoning": _reasoning})
-    # 决策文本价位交叉校验（update-decision-integrity-gates Task 1）：reeval_triggers/
-    # inaction_reason/reasoning 的自由文本价位 vs state 已验证技术指标。在 payout
-    # self-check 之后调用（此时 reasoning 已定型），纯观测——anomaly 只登记供报告
-    # 「再评估触发条件/不行动原因」旁标注（Task 3 渲染），决策照常放行
-    try:
-        decision_price_anomalies: list[dict] = check_decision_prices(
-            decision,
-            state.get("technical_indicators") or {},
-            state.get("price_levels") or {},
-            _latest_close_for_price_check(state),
+
+    # 决策文本价位交叉校验门禁（update-decision-integrity-gates Task 1 →
+    # update-decision-price-gate）：reeval_triggers/inaction_reason/reasoning 的
+    # 自由文本价位 vs state 已验证技术指标。anomaly 非空 → 携明细定向打回重试一次 →
+    # 重放 payout self-check → 复检；修正放行（note「打回后已修正」），仍异常 gate fail
+    # （after_risk_judge 据此阻断，不进 FM 审批）。校验器自身异常 fail-open（放行 + 告警）。
+    def _run_price_check(dec: TradeDecision) -> list[dict]:
+        try:
+            return check_decision_prices(
+                dec,
+                state.get("technical_indicators") or {},
+                state.get("price_levels") or {},
+                _latest_close_for_price_check(state),
+            )
+        except Exception:  # noqa: BLE001 -- fail-open：校验器自身异常不得阻断决策放行
+            logger.warning("decision_price_check 执行失败（fail-open 放行）", exc_info=True)
+            return []
+
+    decision_price_anomalies = _run_price_check(decision)
+    decision_price_gate: dict = {"result": "pass", "note": ""}
+    if decision_price_anomalies:
+        feedback = "；".join(
+            str(a.get("message") or "") for a in decision_price_anomalies if isinstance(a, dict)
         )
-    except Exception:  # noqa: BLE001 -- 观测旁路：校验自身异常不得打断决策放行
-        logger.warning("decision_price_check 执行失败（已忽略，不影响决策放行）", exc_info=True)
-        decision_price_anomalies = []
+        retry_context = (
+            f"{context}\n\n【决策价位交叉校验打回】终稿自由文本价位与已验证技术指标冲突：{feedback}。"
+            "请核对相关价位（以已验证指标值为准），修正后重新输出完整决策 JSON。"
+        )
+        data = call_llm_for_json(
+            retry_context,
+            system=system,
+            api_key=api_key,
+            node_name="risk_judge",
+            llm_config=state.get("llm_config"),
+            stock_code=state.get("stock_code"),
+            prompt_name=_pinfo.prompt_name,
+            prompt_version=_pinfo.prompt_version,
+        )
+        decision = TradeDecision.model_validate(data)
+        decision_price_gate["note"] = "打回后已修正"
+        # 重试换代重放 payout self-check（重试可能再引入自算赔率），计数合并不清零
+        _reasoning2, _payout_fixed2, _payout_skipped2 = _apply_payout_self_check(
+            decision.reasoning,
+            decision.action,
+            decision.entry_price,
+            decision.stop_loss,
+            decision.target_price,
+        )
+        if _payout_fixed2:
+            decision = decision.model_copy(update={"reasoning": _reasoning2})
+        _payout_fixed = _payout_fixed or _payout_fixed2
+        _payout_skipped += _payout_skipped2
+        # 重试换代复核价位完整性结论（I-1 模式：如实改注，不再打回，MUST NOT 死循环）
+        _recheck_price_note_after_retry(decision, final_price_check, "价位交叉校验重试")
+        decision_price_anomalies = _run_price_check(decision)
+        if decision_price_anomalies:
+            decision_price_gate["result"] = "fail"
+            decision_price_gate["note"] = f"已打回仍未通过：{len(decision_price_anomalies)} 条残留"
 
     return {
         "final_trade_decision": decision,
@@ -245,6 +289,7 @@ def risk_judge(state: dict) -> dict:
         "final_inaction_check": final_inaction_check,
         "final_reeval_check": final_reeval_check,
         "decision_price_anomalies": decision_price_anomalies,
+        "decision_price_gate": decision_price_gate,
     }
 
 

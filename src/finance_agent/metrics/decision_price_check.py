@@ -3,7 +3,7 @@
 spec price-level-tooling：决策层产出的自由文本价位（``reeval_triggers`` 条目与
 ``inaction_reason``/``reasoning`` 中出现的数值价位）由确定性代码与 state 中已验证的
 技术指标值（最新收盘、MA5/10/20/60、布林轨道、近期高低点、价位参考带）交叉核对，
-MUST NOT 仅因数值出现在决策文本即视为可信。两种 anomaly 形态（纯观测，不参与路由）：
+MUST NOT 仅因数值出现在决策文本即视为可信。两种 anomaly 形态（update-decision-price-gate 门禁化：调用方据 anomaly 打回重试/阻断）：
 
 - **偏差形态**（deviation）：文本价位与归属指标已验证值偏差 > 2%
   （``_DEVIATION_THRESHOLD``），且不落在 ``price_levels`` 参考带内；
@@ -16,8 +16,7 @@ MUST NOT 仅因数值出现在决策文本即视为可信。两种 anomaly 形�
 赔率比值、0-1 区间小数、日期与指标名成分数字、RSI/赔率等关键词语境）不进入价位
 校验（600015 的 18.35% 阈值、「赔率修复至 1:1」不误报）。
 
-「已站上/已跌破」为事实陈述而非再评估门槛，不构成空洞形态。管线不中断由调用方
-保证（risk_judge 观测旁路 try/except），本模块保持纯函数、不改写决策。
+「已站上/已跌破」为事实陈述而非再评估门槛，不构成空洞形态。处置语义由调用方（risk_judge 门禁回路）保证：anomaly 非空 → 打回重试一次 → 仍异常阻断；校验器自身异常由调用方 fail-open。本模块保持纯函数、不改写决策。
 """
 
 from __future__ import annotations
@@ -467,8 +466,8 @@ def check_decision_prices(
     list[dict]
         每条 anomaly：``{"kind": "deviation"|"empty_trigger", "source_text": str,
         "indicator": str|None, "verified_value": float|None,
-        "deviation_pct": float|None, "message": str}``。纯观测，调用方不得据此
-        中断管线。
+        "deviation_pct": float|None, "message": str}``。门禁语义：调用方据非空 anomaly 打回重试，
+        仍异常阻断交付（见 update-decision-price-gate spec）。
     """
     table = _verified_table(technical_indicators, price_levels, latest_close)
     if not table:
