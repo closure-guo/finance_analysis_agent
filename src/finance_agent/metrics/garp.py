@@ -96,6 +96,10 @@ def calc_garp(data: dict) -> dict:
         details["负债率"] = debt
     else:
         details["负债率"] = debt
+    # 期次来源标注（update-garp-input-period-alignment）：只透传不参与比较——
+    # 负债率最新披露期（快照）或年报回落、ROE 全年口径，判定依据的报告期可对账
+    details["负债率_期次"] = data.get("debt_ratio_period")
+    details["ROE_期次"] = data.get("roe_period")
 
     return {
         "pass": len(failures) == 0,
