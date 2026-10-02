@@ -5,6 +5,7 @@ MODIFIED：档位词表 light/moderate/heavy 大小写不敏感，非法字面�
 「未提供」，归一 MUST NOT 回写决策对象）。
 Task 3：buy/sell 终稿再评估触发条件渲染（缺失「未申报」）；update-decision-price-gate：
 报警仅进 trace，渲染链不接收 anomalies。
+update-decision-price-gate T4 收口：gate 复核注（pass 形态）不泄「结构不完整」报告标注。
 """
 
 import inspect
@@ -253,3 +254,50 @@ class TestPriceAlarmNeverRendered:
         md = _format_trade_decision(decision)
         assert "- **理由**: 股价跌破近期低点 26.28 支撑，趋势走弱" in md
         assert "价位待核实" not in md
+
+
+class TestGateRecheckNoteNeverLeaksReport:
+    """update-decision-price-gate T4 收口回归锁：gate 复核注不泄报告标注。
+
+    decision_price_gate 的复核性 note（pass 形态「打回后已修正」）随三个终稿完整性
+    检查一并被 fund_manager.final_integrity_notes 收集进 FM 上下文；报告渲染只挑
+    「结构不完整」标注（_FM_INCOMPLETE_MARKERS 过滤）——gate 复核注文案 MUST NOT
+    撞上词表导致 pass 状态误渲染「审批对象结构不完整标注」。
+    """
+
+    @staticmethod
+    def _gate_pass_state() -> dict:
+        return {
+            "stock_code": "600519",
+            "final_trade_decision": {
+                "action": "buy",
+                "confidence": 0.6,
+                "position_size": "light",
+                "entry_price": 10.0,
+                "stop_loss": 9.0,
+                "target_price": 12.0,
+                "reasoning": "r",
+                "reeval_triggers": ["跌破 9 元止损离场"],
+            },
+            # 全 pass 的真实 note 文案（risk.py：打回后复核通过形态）
+            "final_price_check": {"result": "pass", "note": "打回后已申报"},
+            "final_inaction_check": {"result": "pass", "note": "打回后已申报"},
+            "final_reeval_check": {"result": "pass", "note": "打回后已申报"},
+            "decision_price_gate": {"result": "pass", "note": "打回后已修正"},
+            # 报告产出前提：gate pass 后管线走完 FM 审批（标注渲染挂 FM 分支）
+            "fund_manager_decision": "approve",
+        }
+
+    def test_pass_gate_note_produces_report_without_annotation(self):
+        """全 pass + gate 复核注「打回后已修正」→ 报告正常产出，无「不完整」标注。"""
+        md = generate_report(self._gate_pass_state())["final_report"]
+        assert md
+        assert "审批对象结构不完整标注" not in md
+
+    def test_incomplete_note_still_renders_annotation(self):
+        """敏感性对照：note 真含「缺失」时标注 MUST 照常渲染（锁死过滤器在位）。"""
+        state = self._gate_pass_state()
+        state["final_price_check"] = {"result": "warn", "note": "止损价缺失"}
+        md = generate_report(state)["final_report"]
+        assert "审批对象结构不完整标注" in md
+        assert "止损价缺失" in md
