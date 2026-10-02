@@ -123,7 +123,55 @@ def main() -> int:
         raise AssertionError(f"全量批 regime 覆盖不全: {sorted(regimes)}")
 
     klines = {code: client.fetch_kline(code, days=1500, adjust=SETTLEMENT_ADJUST) for code in codes}
-    probe = run_batch_probe(codes, dates, client=client)
+
+    # ── 批级韧性（15 小时级跑批的必须品，本次首跑已交过学费）──────────
+    # 1) 探针缓存：probe ~2 小时，进程死亡即重烧 → 落盘复用
+    import json as _json
+    import time
+
+    cache_root = REPO / "reports" / "backtest" / "cache-formal-2026q3"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    probe_path = cache_root / "probe.json"
+    if probe_path.exists():
+        probe = _json.loads(probe_path.read_text(encoding="utf-8"))
+        print(f"[probe] 复用缓存 {probe_path}", flush=True)
+    else:
+        probe = run_batch_probe(codes, dates, client=client)
+        probe_path.write_text(_json.dumps(probe, ensure_ascii=False), encoding="utf-8")
+        print(f"[probe] 完成并落盘 {probe_path}", flush=True)
+
+    # 2) 逐样本检查点 + 限流退避：replay_with_consistency 每样本 ~27 分钟，
+    #    瞬时限流（ark 过载）曾炸掉整批——包装层退避重试 3 次（0/120/300s），
+    #    耗尽按 agreement=0 剔除披露（spec 一致率报告既有通道），不炸批次。
+    def _checkpointed_replay(code, decision_date, *, n=3, full_kline=None, full_benchmark=None):
+        from evals.backtest.replay import replay_with_consistency
+
+        key = f"{code}_{decision_date}"
+        path = cache_root / f"replay_{key}.json"
+        if path.exists():
+            cached = _json.loads(path.read_text(encoding="utf-8"))
+            if not cached.get("_failed"):
+                print(f"[cache hit] {key}", flush=True)
+                return cached
+        delays = [0, 120, 300]
+        last_exc = None
+        for k, delay in enumerate(delays):
+            if delay:
+                print(f"[限流退避] {key} {delay}s 后第 {k + 2} 次尝试", flush=True)
+                time.sleep(delay)
+            try:
+                out = replay_with_consistency(
+                    code, decision_date, n=n, full_kline=full_kline, full_benchmark=full_benchmark
+                )
+                path.write_text(_json.dumps(out, ensure_ascii=False, default=str), encoding="utf-8")
+                print(f"[样本完成] {key} agreement={out.get('agreement')}", flush=True)
+                return out
+            except Exception as exc:  # noqa: BLE001 - 瞬时故障退避重试，耗尽剔除
+                last_exc = exc
+                print(f"[样本异常] {key} 第 {k + 1} 次: {type(exc).__name__}: {exc}", flush=True)
+        print(f"[样本失败] {key} 3 次尝试耗尽，按一致率剔除披露", flush=True)
+        return {"agreement": 0.0, "actions": [], "_failed": str(last_exc)}
+
     as_of = datetime.now().strftime("%Y-%m-%d")
 
     report = run_backtest(
@@ -131,6 +179,7 @@ def main() -> int:
         klines,
         benchmark_kline=index_full,
         repeats=repeats,
+        replay_fn=_checkpointed_replay,
         batch_kind="formal",
         as_of=as_of,
         probe=probe,
