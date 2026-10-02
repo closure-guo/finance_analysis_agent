@@ -6,6 +6,7 @@ generate_file（管线结束自动生成）与 POST /api/export（按需导出�
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 from collections.abc import Sequence
@@ -34,6 +35,38 @@ def sanitize_missing_images(markdown_text: str) -> str:
         m = _IMAGE_LINE_RE.match(line.strip())
         if m and not Path(m.group(2)).exists():
             continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+# md 自包含导出：仅内嵌常见位图后缀；未知后缀/远程 URL 行原样保留
+_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def embed_images_as_data_uris(markdown_text: str) -> str:
+    """将引用存在的本地图片文件的图片行改写为 base64 data URI（md 自包含导出）。
+
+    前置约定：sanitize_missing_images 已先行删除缺失文件引用；此处对缺失文件
+    保守保留原行，不承担删除语义。远程 URL 与非图片后缀行原样保留。
+    """
+    out_lines = []
+    for line in markdown_text.splitlines():
+        m = _IMAGE_LINE_RE.match(line.strip())
+        suffix = Path(m.group(2)).suffix.lower() if m else ""
+        if m and suffix in _MIME_BY_SUFFIX:
+            img_path = Path(m.group(2))
+            if img_path.exists():
+                encoded = base64.b64encode(img_path.read_bytes()).decode("ascii")
+                out_lines.append(
+                    f"![{m.group(1)}](data:{_MIME_BY_SUFFIX[suffix]};base64,{encoded})"
+                )
+                continue
         out_lines.append(line)
     return "\n".join(out_lines)
 
@@ -85,8 +118,8 @@ def export_report(
         converter, ext = converters[fmt]
         target = base_name + ext
         try:
-            if converter is None:  # md：直接写文本
-                Path(target).write_text(markdown_text, encoding="utf-8")
+            if converter is None:  # md：图片内嵌为 data URI，落盘自包含单文件
+                Path(target).write_text(embed_images_as_data_uris(markdown_text), encoding="utf-8")
             else:
                 converter(markdown_text, target, stock_name)
             result[fmt] = target
