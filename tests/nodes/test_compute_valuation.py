@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from finance_agent.nodes.compute import _build_valuation_snapshot, _derive_pe_ttm, _try_garp
 
@@ -299,3 +300,88 @@ class TestRelativeCaliberNote:
         }
         result = compute_metrics(state)
         assert "caliber_note" not in result["relative_valuation"]["PE"]
+
+
+class TestGarpDebtPeriodAlignment:
+    """update-garp-input-period-alignment：GARP 负债率取最新披露期（时点指标），
+    ROE 维持全年口径，details 标注期次来源（第三轮评审：判定挂年报 64.11% 与
+    正文「中报 47.85%」自相矛盾）。"""
+
+    @staticmethod
+    def _deps(roe=0.20, debt_pct=64.11):
+        return (
+            {"ROE": {"2025": roe}},
+            {"资产负债率": {"2025": debt_pct}},
+        )
+
+    def test_snapshot_debt_wins_and_passes_threshold(self):
+        # 快照中报 47.85% < 60% → 不产生负债率 failure；期次标注含报告日
+        profitability, solvency = self._deps()
+        snap = {"报告日": "2026-06-30", "期类型": "中报", "资产负债率(%)": 47.85}
+        result = _try_garp(
+            {"PE": 20.0},
+            profitability,
+            solvency,
+            None,
+            0.25,
+            "2025",
+            industry_pe_avg=25.0,
+            latest_period_snapshot=snap,
+        )
+        assert "负债率 >= 60%" not in result["failures"]
+        assert result["details"]["负债率"] == pytest.approx(0.4785)
+        assert "2026-06-30" in result["details"]["负债率_期次"]
+        assert "快照" in result["details"]["负债率_期次"]
+
+    def test_snapshot_missing_falls_back_to_annual_with_note(self):
+        # 快照缺失 → 回落年报 64.11% → failure 产生；期次标注年报回落可见
+        profitability, solvency = self._deps()
+        result = _try_garp(
+            {"PE": 20.0},
+            profitability,
+            solvency,
+            None,
+            0.25,
+            "2025",
+            industry_pe_avg=25.0,
+            latest_period_snapshot=None,
+        )
+        assert "负债率 >= 60%" in result["failures"]
+        assert result["details"]["负债率"] == pytest.approx(0.6411)
+        assert "2025" in result["details"]["负债率_期次"]
+        assert "回落" in result["details"]["负债率_期次"]
+
+    def test_snapshot_field_missing_falls_back(self):
+        # 快照在但缺资产负债率字段（部分快照）→ 同回落语义
+        profitability, solvency = self._deps()
+        snap = {"报告日": "2026-06-30", "期类型": "中报"}  # 无资产负债率(%) 键
+        result = _try_garp(
+            {"PE": 20.0},
+            profitability,
+            solvency,
+            None,
+            0.25,
+            "2025",
+            industry_pe_avg=25.0,
+            latest_period_snapshot=snap,
+        )
+        assert "负债率 >= 60%" in result["failures"]
+        assert "回落" in result["details"]["负债率_期次"]
+
+    def test_roe_stays_annual_with_period_note(self):
+        # ROE 全年口径：用 latest_year 值，期次标注年报（不与半年度累计比较）
+        profitability, solvency = self._deps(roe=0.225)
+        snap = {"报告日": "2026-06-30", "期类型": "中报", "资产负债率(%)": 47.85}
+        result = _try_garp(
+            {"PE": 20.0},
+            profitability,
+            solvency,
+            None,
+            0.25,
+            "2025",
+            industry_pe_avg=25.0,
+            latest_period_snapshot=snap,
+        )
+        assert result["details"]["ROE"] == 0.225
+        assert "2025" in result["details"]["ROE_期次"]
+        assert "ROE <= 15%" not in result["failures"]

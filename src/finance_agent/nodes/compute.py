@@ -122,6 +122,7 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
         net_profit_growth,
         latest_year,
         industry_pe_avg=(state.get("industry_pe") or {}).get("avg_pe"),
+        latest_period_snapshot=state.get("latest_period_snapshot"),
     )
 
     # ── 季度趋势 ──
@@ -355,6 +356,7 @@ def _try_garp(
     net_profit_growth: float | None,
     latest_year: str | None,
     industry_pe_avg: float | None = None,
+    latest_period_snapshot: dict | None = None,
 ) -> dict | None:
     vs = valuation_snapshot or {}
     # PE 取 valuation_snapshot 已选好口径的值（static 优先，回落 PE_ttm；NaN 已守卫为 None）
@@ -362,9 +364,20 @@ def _try_garp(
     if not latest_year:
         return None
     roe = profitability.get("ROE", {}).get(latest_year)
-    # 负债率从百分比转为小数（如 16.42 → 0.1642）
-    debt_pct = solvency.get("资产负债率", {}).get(latest_year)
-    debt = debt_pct / 100 if debt_pct is not None else None
+    # 负债率期次对齐（update-garp-input-period-alignment）：时点指标优先最新披露期
+    # 快照（中报/季报披露后年报口径即过时）；快照缺字段回落年报并标注，回落可见
+    snap = latest_period_snapshot if isinstance(latest_period_snapshot, dict) else {}
+    snap_debt = snap.get("资产负债率(%)")
+    debt: float | None
+    debt_period: str | None
+    if isinstance(snap_debt, (int, float)) and snap_debt == snap_debt:
+        debt = snap_debt / 100
+        debt_period = f"{snap.get('报告日', '')}{snap.get('期类型', '报告期')}（快照）"
+    else:
+        # 负债率从百分比转为小数（如 16.42 → 0.1642）
+        debt_pct = solvency.get("资产负债率", {}).get(latest_year)
+        debt = debt_pct / 100 if debt_pct is not None else None
+        debt_period = f"{latest_year}年报（快照缺失回落）" if debt is not None else None
     data = {
         "PE": pe,
         "industry_avg_PE": industry_pe_avg,
@@ -372,6 +385,8 @@ def _try_garp(
         "ROE": roe,
         "debt_ratio": debt,
         "PE_caliber": vs.get("PE_caliber"),
+        "debt_ratio_period": debt_period,
+        "roe_period": f"{latest_year}年报",
     }
     return calc_garp(data)
 
