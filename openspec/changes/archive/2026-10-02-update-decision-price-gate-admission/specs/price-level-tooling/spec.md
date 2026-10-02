@@ -63,7 +63,7 @@ anomaly 的处置 SHALL 为门禁语义，准入按恶化判据分层（update-d
 - **THEN** 决策 SHALL 放行进入 fund_manager 审批，gate 结果记 pass，note 含「未恶化」「放行待人工终裁」与残留条数
 - **AND** 残留 anomaly SHALL 照落 `decision_price_anomalies`（trace 可观测），报告 MUST NOT 渲染报警文本
 
-#### Scenario: 打回后残留恶化阻断交付
+#### Scenario: 打回后仍异常阻断交付
 
 - **GIVEN** 首次校验登记 1 条 anomaly（source_text 为 S1），打回重试已执行
 - **WHEN** 重试输出的复检残留 2 条 anomaly，或残留 anomaly 的 source_text 为首次集合外的新文本（重试引入新错误）
