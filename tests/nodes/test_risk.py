@@ -417,6 +417,7 @@ def _sell_decision_json(triggers: list[str]) -> str:
             "entry_price": 640.0,
             "stop_loss": 700.0,
             "target_price": 571.0,
+            "sell_type": "short",
             "reasoning": "趋势走弱，减仓规避回撤",
             "reeval_triggers": triggers,
         },
@@ -602,3 +603,63 @@ class TestGateAdmissionLayering:
         gate = result["decision_price_gate"]
         assert gate["result"] == "pass"
         assert "未恶化" in gate["note"]
+
+
+def _sell_untyped_json(prices: bool = True) -> str:
+    """sell 未申报 sell_type 的终稿 JSON（prices=False 时价位也缺——exit 逃逸形态）。"""
+    payload: dict = {
+        "action": "sell",
+        "confidence": 0.6,
+        "position_size": "light",
+        "reasoning": "趋势走弱",
+        "reeval_triggers": ["跌破 570 重估"],
+    }
+    if prices:
+        payload.update({"entry_price": 640.0, "stop_loss": 700.0, "target_price": 571.0})
+    return json.dumps(payload, ensure_ascii=False)
+
+
+class TestSellTypeDeclarationLoop:
+    """update-sell-action-typing（#188）：sell 缺 sell_type → 打回申报一次；
+    申报 exit → 价位豁免生效；仍缺 → 默认 short + final_check 如实标注。"""
+
+    def _base_state(self) -> dict:
+        return {
+            "trader_plan": {"action": "sell", "confidence": 0.7},
+            "risk_debate_history": [],
+        }
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_untyped_sell_declares_after_retry(self, mock_llm):
+        """打回申报 → 重试带 sell_type=exit + 减仓节奏 → 放行且价位豁免生效。"""
+        typed_exit = json.loads(_sell_untyped_json(prices=False))
+        typed_exit.update({"sell_type": "exit", "exit_schedule": "现价减半，跌破600清仓"})
+        mock_llm.side_effect = [_sell_untyped_json(), json.dumps(typed_exit, ensure_ascii=False)]
+        result = risk_judge(self._base_state())
+        assert mock_llm.call_count == 2
+        decision = result["final_trade_decision"]
+        assert decision.sell_type == "exit"
+        assert "打回后已申报" in result["final_price_check"]["note"]  # exit 豁免后价位齐备语义
+        # 打回反馈含双型语义说明
+        assert "sell_type" in mock_llm.call_args_list[1].args[0]
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_untyped_sell_defaults_short_after_retry(self, mock_llm):
+        """打回申报仍缺 → 默认 short 模板 → 价位齐全（stub 带价位）→ 放行 + 标注。"""
+        mock_llm.side_effect = [_sell_untyped_json(), _sell_untyped_json()]
+        result = risk_judge(self._base_state())
+        assert mock_llm.call_count == 2
+        decision = result["final_trade_decision"]
+        assert decision.sell_type == "short"  # 默认推导落回决策对象
+        note = result["final_price_check"]["note"]
+        assert "默认 short" in note or "未申报" in note
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_typed_sell_no_extra_retry(self, mock_llm):
+        """已申报 sell_type → 不触发申报打回（恰 1 次调用）。"""
+        typed = json.loads(_sell_untyped_json())
+        typed["sell_type"] = "short"
+        mock_llm.return_value = json.dumps(typed, ensure_ascii=False)
+        result = risk_judge(self._base_state())
+        mock_llm.assert_called_once()
+        assert result["final_trade_decision"].sell_type == "short"

@@ -55,6 +55,10 @@ def direction_for_action(action: str) -> str:
 
     单一来源：ingest（落库）/ model（decision_log 迁移）/ evals.backtest.replay
     （回测预测量构造）三处共用，禁止各自再写三目拷贝。
+    update-sell-action-typing（#188）：sell 分 exit/short 两型后本映射零改动——
+    exit（持有者减仓）与 short（做空建仓）的结算数学一致（均「价格下跌获益」，
+    direction=short 的收益语义对两型同样成立），差异仅在执行结构（渲染/校验层
+    已分型），结算层不感知 sell_type。
     """
     return {"buy": "long", "sell": "short"}.get(str(action or ""), "neutral")
 

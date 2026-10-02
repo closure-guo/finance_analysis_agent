@@ -133,10 +133,16 @@ def final_price_missing(decision: object) -> list[str]:
     """终稿（final_trade_decision）buy/sell 的缺失价位清单（None/≤0；watch/hold 无要求）。
 
     extend-payout-self-check-coverage（601888 实证：buy 价位全 None 直通）——
-    完整性校验语义与 Trader 价位必填一致，但只查缺失，不重跑关系/参考带。"""
+    完整性校验语义与 Trader 价位必填一致，但只查缺失，不重跑关系/参考带。
+    update-sell-action-typing（#188）：sell_type=exit（持有者减仓）豁免三价位
+    必填（无新建仓参数），改为 exit_schedule（减仓节奏）必填；short 与未申报
+    （None）维持现行价位要求（未申报由 risk_judge 打回申报，仍缺默认 short）。"""
     action = str(getattr(decision, "action", "") or "")
     if action not in ("buy", "sell"):
         return []
+    if action == "sell" and str(getattr(decision, "sell_type", "") or "") == "exit":
+        schedule = getattr(decision, "exit_schedule", None)
+        return [] if isinstance(schedule, str) and schedule.strip() else ["exit_schedule"]
     missing: list[str] = []
     for label, value in (
         ("entry_price", getattr(decision, "entry_price", None)),
