@@ -58,6 +58,10 @@
 - [027](027-clickhouse-analyzer-scores-page-20260912.md) 基础设施镜像浮动 tag 的教训：clickhouse `latest` 08-20 拉入 26.6.1 当日 Scores 页即挂（新分析器回归），因人工标注走离线导出三周未被发现；修法=默认 profile 回旧分析器+固定版本，无降级
 - [026](026-citation-gate-misattribution-20260911.md) 020「考卷与答案册不同源」复发（日期显示格式/季度标签/单位量级/direction 符号字段）：FAIL 桶 100% 误报，重试只盯误报桶白烧 75 次生成并覆盖好报告；指标拆三报（真幻觉率/校验器误报率/结构不可验），处置对象必须匹配归因桶
 
+### 决策校验与门禁
+
+- [034](034-decision-price-check-false-positives-20261002.md) 决策价位校验器两误报：VaR95 语境的 95 被当股价（**回归评审原始 P0 案例「95 元幻觉」实为此误报，LLM 从未输出 95 元价位**）+ 复合回踩触发「先跌破/回撤至 X 再站稳 X」被句法判空洞；门禁机器按 spec 正确运转、LLM 行为一致可辩护 → 修复 delta fix-decision-price-check-false-positives；门禁自动阻断准入边界待 owner 终裁
+
 ### 评分与分析模型
 
 - [002](002-report-accuracy-20260526.md) 指标体系不适合白酒行业、归因逻辑错误、评分模型缺陷
