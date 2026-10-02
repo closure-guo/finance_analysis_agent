@@ -27,6 +27,7 @@ def _resp(action: str = "buy", **fields: object) -> str:
         "position_size": "light",
         "entry_price": 26.35,
         "stop_loss": 25.3,
+        "sell_type": "short",
         "target_price": 28.0,
     }
     payload.update(fields)

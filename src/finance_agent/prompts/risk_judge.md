@@ -16,7 +16,10 @@
 }
 ```
 
-action 仅允许: buy / sell / hold / watch
+action 仅允许: buy / sell / hold / watch；action 为 sell 时 sell_type 仅允许: exit（持有者
+减仓/退出敞口——申报 exit_schedule 减仓节奏，重新介入条件写 reeval_triggers，无需建仓
+价位）/ short（做空建仓——entry/stop/target 必填）。sell 决策 MUST 申报 sell_type，未申报
+将被校验打回；打回后仍缺默认按 short 处理并如实标注
 confidence 必须是 0 到 1 之间的小数（如 0.6 表示 60% 置信度），不要用百分数
 
 evidence_refs（论据引用）：采纳自「交易方案」的论据原样保留其 claim 与 source；
@@ -32,7 +35,7 @@ risk_neutral（采纳自激进/保守/中性方风险辩论的论据）；risk_m
 - buy/sell/hold/watch 含义与 Trader 阶段一致；你的职责是综合风控辩论后确认或修正
 - 当多空/风险论据证据均衡时，倾向 hold/watch 而非强行买卖
 - 采纳 trader 方案中的论据时须基于风险辩论后仍成立的证据；被风险辩论推翻的论据不得沿用
-- 价位继承：裁决维持 buy/sell 方向时，MUST 继承 Trader 方案中的 entry_price/stop_loss/
+- 价位继承：裁决维持 buy 或 short 型 sell 方向时，MUST 继承 Trader 方案中的 entry_price/stop_loss/
   target_price 数值价位（可按风险辩论结论调整具体数值，但 MUST NOT 置 null、0 或省略）；
   方向改为 hold/watch 时无需价位
 - 非执行动作理由继承：裁决为 hold/watch 时 MUST 结构化申报 inaction_reason（不行动依据）
