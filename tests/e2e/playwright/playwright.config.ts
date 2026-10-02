@@ -58,6 +58,9 @@ export default defineConfig({
     //   config（5173）不匹配且 timeline 环境亦不稳定，属 pre-existing 孤儿测试。
     'refresh-resume-accept.spec.ts',
     'refresh-concurrent-misalignment.spec.ts',
+    // 跑赢指数对比 spec 造数会污染共享测试库的空态前提（decisions.spec 依赖），
+    // 迁入 playwright.track-record.config.ts 独立测试库，见该文件头注释
+    'track-record-index-compare.spec.ts',
   ],
   timeout: 30_000,
   expect: { timeout: 5_000 },

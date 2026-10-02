@@ -3,13 +3,16 @@ import { expect, test } from '@playwright/test'
 /**
  * add-index-performance-compare:跑赢指数对比卡片 E2E 门禁。
  * 红线:不 mock /api/v1/track-record/*;数据经 TESTING=1 的 /api/test/seed 写入
- * 独立测试库(e2e webServer 的 SESSIONS_DB_PATH)。测试间有数据依赖,串行执行。
+ * 独立测试库。测试间有数据依赖,串行执行。
  *
- * 前提(与 decisions.spec.ts「天然空态」同一约定):测试库初始无 equity_curve 数据。
- * 本 spec 是套件中唯一写 track_record 造数的 spec(全仓 grep 核实),但 test 2 的
- * 种子会残留在共享测试库——重复跑/全量套件前需删除 `data/test-e2e-sessions.db*`
- * (brief 注意①;`/api/test/reset` 为占位骨架,不清数据)。残留也会污染
- * decisions.spec.ts 的「无净值快照空态」断言,全量套件必须从干净库起跑。
+ * 本 spec 由 playwright.track-record.config.ts 运行(专属端口对 8004/5177 +
+ * 专属测试库 data/test-e2e-track-record.db):造数种子会污染共享库
+ * (data/test-e2e-sessions.db)的空态前提——decisions.spec.ts 断言
+ * track-record-curve count 0,默认套件 fullyParallel 下与种子落库互斥,
+ * 且 /api/test/reset 为占位骨架无法自清理,故迁入独立库(见该 config 头注释)。
+ * seed 走相对路径,经 vite 代理到达当前 config 的 TESTING=1 后端
+ * (sidebar-content-overflow.spec.ts 先例)。
+ * 本地重跑前需删 data/test-e2e-track-record.db*(serial 首用例依赖空库)。
  *
  * 对 brief 的两处实现修正(详见 task-10-report.md):
  * 1. 种子 agent_nav 1.05 → 1.005:brief 原值(+5%)会跑赢全部四个指数(4/4),
@@ -29,7 +32,7 @@ test.describe('战绩页:跑赢指数对比', () => {
   })
 
   test('造数后渲染摘要与对比条,跑赢/跑输分色', async ({ page, request }) => {
-    const seedResp = await request.post('http://localhost:8000/api/test/seed', {
+    const seedResp = await request.post('/api/test/seed', {
       data: {
         track_record: {
           equity_curve: [
