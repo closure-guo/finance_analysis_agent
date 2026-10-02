@@ -32,14 +32,22 @@ describe('IndexCompareCard', () => {
     // 分母 = beat 非 null 数(spec: 无数据指数不参与 N/M 分母)→ 5 只中 000852 beat=null,故 3/4
     expect(screen.getByTestId('index-compare-summary').textContent).toContain('跑赢 3/4 个指数')
     const rows = screen.getAllByTestId(/^index-compare-row-/)
-    // 正确降序:0.10, 0.03, 0.02, 0.01, null(brief 原稿此数组故意写错,TDD 前已修正)
+    // 首行为组合参考线(spec:组合条置顶,无 beat 标记),其后指数按收益降序:0.10, 0.03, 0.02, 0.01, null
     expect(rows.map(r => r.dataset.testid)).toEqual([
+      'index-compare-row-agent', // 0.05 → 组合条置顶(对比基准线)
       'index-compare-row-000905', // 0.10
       'index-compare-row-000001', // 0.03
       'index-compare-row-399006', // 0.02
       'index-compare-row-000300', // 0.01
       'index-compare-row-000852', // null → 末位
     ])
+    // 组合条:首行 + 收益文案 5.00%,无跑赢/跑输标记
+    const agentRow = rows[0]
+    expect(agentRow.dataset.testid).toBe('index-compare-row-agent')
+    expect(agentRow.textContent).toContain('5.00%')
+    expect(agentRow.textContent).toContain('对比基准线')
+    expect(agentRow.textContent).not.toContain('跑赢')
+    expect(agentRow.textContent).not.toContain('跑输')
     // 跑输红 ↓(000905)、跑赢绿 ↑(000001);无数据灰显「无数据」
     const row905 = screen.getByTestId('index-compare-row-000905')
     expect(row905.textContent).toContain('↓ 跑输')

@@ -39,6 +39,12 @@ export function IndexCompareCard({ span }: { span: TrackTimeSpan }) {
             跑赢 {data.indices.filter(i => i.beat === true).length}/{data.indices.filter(i => i.beat !== null).length} 个指数
           </div>
           <div className="flex flex-col gap-1.5">
+            {/* 组合条置顶(对比基准线):无 beat 标记,不参与降序 */}
+            <div data-testid="index-compare-row-agent" className="flex items-center gap-2 text-sm font-semibold">
+              <span className="w-20 shrink-0">本组合</span>
+              <span className="flex-1">{(data.agent_return * 100).toFixed(2)}%</span>
+              <span className="text-xs text-[var(--text-secondary)]">对比基准线</span>
+            </div>
             {[...data.indices]
               .sort((a, b) => (b.return ?? -Infinity) - (a.return ?? -Infinity))
               .map(i => (
