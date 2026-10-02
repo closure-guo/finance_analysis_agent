@@ -33,7 +33,13 @@ export function IndexCompareCard({ span }: { span: TrackTimeSpan }) {
     >
       <div className="mb-2 text-sm font-medium">跑赢指数对比</div>
       {failed && <div className="text-xs text-[var(--text-secondary)]">对比数据加载失败</div>}
-      {data && data.agent_return !== null && (
+      {/* M=0 空态(spec:agent_return 有值但窗口内无指数数据时,不渲染摘要与对比条) */}
+      {data && data.agent_return !== null && data.indices.every(i => i.beat === null) && (
+        <div data-testid="index-compare-empty" className="text-xs text-[var(--text-secondary)]">
+          窗口内暂无指数数据,暂无法对比
+        </div>
+      )}
+      {data && data.agent_return !== null && data.indices.some(i => i.beat !== null) && (
         <>
           <div data-testid="index-compare-summary" className="mb-3 text-lg font-semibold">
             跑赢 {data.indices.filter(i => i.beat === true).length}/{data.indices.filter(i => i.beat !== null).length} 个指数
@@ -56,7 +62,8 @@ export function IndexCompareCard({ span }: { span: TrackTimeSpan }) {
                     <>
                       <span className="flex-1">
                         {(i.return * 100).toFixed(2)}%
-                        {i.effective_start_date !== data.window.start && (
+                        {/* effective_start_date 可 null:仅在非空且 ≠ 窗口首日时标注 */}
+                        {i.effective_start_date && i.effective_start_date !== data.window.start && (
                           <span className="ml-1 text-xs text-[var(--text-secondary)]">
                             (自 {i.effective_start_date} 起算)
                           </span>

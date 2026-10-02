@@ -24,11 +24,14 @@ afterEach(() => {
 })
 
 describe('IndexCompareCard', () => {
-  it('渲染 N/M 摘要并按收益降序排列,跑赢绿↑跑输红↓', async () => {
+  it('渲染 N/M 摘要并按收益降序排列,跑赢绿↑跑输红↓,请求带 span=all', async () => {
     // 既有 fetch mock 模式(trackRecordPage.test 同款):new Response + status 200
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(RESP), { status: 200 })))
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(RESP), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<IndexCompareCard span="all" />)
     await screen.findByTestId('index-compare-summary')
+    // fetch 契约:相对路径 + span 查询参数(span=all)
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('span=all'))
     // 分母 = beat 非 null 数(spec: 无数据指数不参与 N/M 分母)→ 5 只中 000852 beat=null,故 3/4
     expect(screen.getByTestId('index-compare-summary').textContent).toContain('跑赢 3/4 个指数')
     const rows = screen.getAllByTestId(/^index-compare-row-/)
@@ -63,14 +66,53 @@ describe('IndexCompareCard', () => {
     expect(screen.getByTestId('index-compare-card').textContent).toContain('历史业绩不代表未来表现')
   })
 
-  it('agent_return 为 null 时展示空态,不渲染摘要与对比条', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+  it('agent_return 为 null 时展示空态,不渲染摘要与对比条,请求带 span=3m', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       ...RESP, agent_return: null,
-    }), { status: 200 })))
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<IndexCompareCard span="3m" />)
     expect(await screen.findByTestId('index-compare-empty')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('span=3m'))
     expect(screen.getByTestId('index-compare-empty').textContent).toContain('净值数据积累中')
     expect(screen.queryByTestId('index-compare-summary')).not.toBeInTheDocument()
+    expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
+  })
+
+  it('agent_return 有值但全部指数 beat=null(M=0)时展示指数空态,不渲染摘要与对比条', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ...RESP,
+      indices: RESP.indices.map(i => ({ ...i, return: null, effective_start_date: null, beat: null })),
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<IndexCompareCard span="all" />)
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('span=all'))
+    expect(await screen.findByTestId('index-compare-empty')).toBeInTheDocument()
+    // M=0 专属文案(区别于 agent_return=null 的「净值数据积累中」)
+    expect(screen.getByTestId('index-compare-empty').textContent).toContain('窗口内暂无指数数据,暂无法对比')
+    expect(screen.queryByTestId('index-compare-summary')).not.toBeInTheDocument()
+    expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
+  })
+
+  it('return 有值但 effective_start_date 为 null 时不渲染「(自 起算)」标注', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ...RESP,
+      indices: RESP.indices.map(i => (i.code === '000001' ? { ...i, effective_start_date: null } : i)),
+    }), { status: 200 })))
+    render(<IndexCompareCard span="all" />)
+    await screen.findByTestId('index-compare-summary')
+    const row = screen.getByTestId('index-compare-row-000001')
+    expect(row.textContent).toContain('3.00%')
+    expect(row.textContent).not.toContain('(自')
+    expect(row.textContent).not.toContain('起算')
+  })
+
+  it('fetch 失败时展示加载失败文案,不渲染摘要/空态/对比条', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('boom')))
+    render(<IndexCompareCard span="6m" />)
+    expect(await screen.findByText('对比数据加载失败')).toBeInTheDocument()
+    expect(screen.queryByTestId('index-compare-summary')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('index-compare-empty')).not.toBeInTheDocument()
     expect(screen.queryByTestId(/^index-compare-row-/)).not.toBeInTheDocument()
   })
 })
