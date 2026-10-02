@@ -60,11 +60,15 @@ def _snapshot_node_status(snapshot: dict, node_id: str) -> str:
 # stub _stream_graph：产出受控事件序列
 # ───────────────────────────────────────────────
 
-# 两个节点的受控序列：
+# 三个节点的受控序列：
 #   updates: check_cache（首次出现 → node_start + node_complete）
 #   custom:  check_cache node_end → node_timing
 #   updates: fetch_data（首次出现 → node_start + node_complete）
 #   custom:  fetch_data node_end → node_timing
+#   updates: generate_report（首次出现 → node_start + node_complete）
+# update-decision-price-gate：无报告的正常结束已是阻断终态（failed + 阻断
+# TOOL_RESULT，见 tests/test_agent_factory_blocked_terminal.py），completed
+# 语义必须携带 final_report——故快照基线 stub 以「有报告的正常完成」为基准。
 _FAKE_CHUNKS: list[tuple[str, dict]] = [
     ("updates", {"check_cache": {"summary": "数据就绪"}}),
     ("custom", {"type": "node_start", "node": "check_cache", "ts": 1000}),
@@ -72,6 +76,7 @@ _FAKE_CHUNKS: list[tuple[str, dict]] = [
     ("updates", {"fetch_data": {"summary": "行情获取完成"}}),
     ("custom", {"type": "node_start", "node": "fetch_data", "ts": 1600}),
     ("custom", {"type": "node_end", "node": "fetch_data", "ts": 2200, "duration_ms": 600}),
+    ("updates", {"generate_report": {"final_report": "# 报告\n\n正文", "chart_data": {}}}),
 ]
 
 
@@ -80,11 +85,12 @@ def _stub_stream_graph(initial_state, config=None, session_id=None):
     yield from _FAKE_CHUNKS
 
 
-# 无快照逻辑时的基准 sse_type 序列（来自现有实现语义推导）：
+# 无快照逻辑时的基准 sse_type 序列（现有实现语义推导）：
 #   check_cache: node_start, node_complete
 #   check_cache custom node_end: node_timing
 #   fetch_data:  node_start, node_complete
 #   fetch_data custom node_end: node_timing
+#   generate_report: node_start, node_complete
 #   结束: report_ready (TOOL_RESULT)
 _BASELINE_SSE_TYPES = [
     "node_start",
@@ -93,6 +99,8 @@ _BASELINE_SSE_TYPES = [
     "node_start",
     "node_complete",
     "node_timing",
+    "node_start",
+    "node_complete",
     "report_ready",
 ]
 

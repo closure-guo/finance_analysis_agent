@@ -935,6 +935,24 @@ def _report_ready_event(
     return event
 
 
+def _blocked_failure_reason(accumulated: dict) -> tuple[str, str]:
+    """无报告收尾的阻断归因（update-decision-price-gate）：返回 (failure_reason, node_id)。
+
+    归因优先级：决策价位交叉校验门禁 fail > 勾稽校验 FAIL > 未产出报告兜底。
+    调用方仅在图流正常耗尽且 report_sent 为 False 时调用。
+    """
+    gate = accumulated.get("decision_price_gate")
+    if isinstance(gate, dict) and gate.get("result") == "fail":
+        anomalies = accumulated.get("decision_price_anomalies") or []
+        first = ""
+        if anomalies and isinstance(anomalies[0], dict):
+            first = str(anomalies[0].get("message") or "")
+        return f"决策价位交叉校验未通过（打回重试后仍异常），报告阻断交付：{first}", "risk_judge"
+    if accumulated.get("validation_result") == "FAIL":
+        return "勾稽校验失败（硬等式不通过），管线阻断", "validate_financials"
+    return "管线结束但未产出报告", "unknown"
+
+
 def _run_graph_streaming(
     stock_code: str,
     stock_name: str,
@@ -1170,6 +1188,22 @@ def _run_graph_streaming(
                         citations=citations,
                     )
                 )
+
+        # 管线阻断终态可见化（update-decision-price-gate）：图流正常耗尽但未产出报告
+        # （决策价位门禁 fail / 勾稽 FAIL / 其他前置阻断）→ 置 failed + error 终态事件，
+        # MUST NOT 停留 running 等超时兜底
+        if not report_sent:
+            reason, node_id = _blocked_failure_reason(accumulated)
+            update_session_status(session_id, "failed", failure_reason=reason)
+            yield _sse(
+                {
+                    "type": "error",
+                    "node_id": node_id,
+                    "session_id": session_id,
+                    "message": reason,
+                    "timestamp": _now(),
+                }
+            )
 
     except Exception as e:
         # 管线执行体异常终态 MUST 携带 failure_reason 与可读 traceback——

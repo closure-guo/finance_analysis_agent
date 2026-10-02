@@ -31,6 +31,7 @@ from finance_agent.routing import (
     after_check_cache,
     after_citation,
     after_fund_manager,
+    after_risk_judge,
     after_validate,
     after_validate_trade_prices,
     route_to_analysts,
@@ -148,7 +149,14 @@ def build_5layer_graph() -> CompiledStateGraph:
     graph.add_edge("neutral_r2", "risk_judge")
 
     # ── 边：Layer V + Report ──
-    graph.add_edge("risk_judge", "fund_manager")
+    # 决策价位交叉校验门禁（update-decision-price-gate）：gate fail 阻断——
+    # 不进 FM 审批、不产出报告（after_risk_judge 条件路由）。显式 path_map 与
+    # verify_citations 同款：langgraph 1.2 无 map 的条件边不可静态推断，draw 塌缩。
+    graph.add_conditional_edges(
+        "risk_judge",
+        after_risk_judge,
+        {"__end__": END, "fund_manager": "fund_manager"},
+    )
     graph.add_conditional_edges("fund_manager", after_fund_manager)
     graph.add_edge("generate_report", "generate_file")
     graph.add_edge("generate_file", END)

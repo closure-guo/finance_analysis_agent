@@ -166,3 +166,13 @@ def after_validate_trade_prices(state: dict) -> str:
     if rationale.get("result") == "fail":
         return "trader"
     return "risk_r1_entry"
+
+
+def after_risk_judge(state: dict) -> str:
+    """决策价位交叉校验门禁路由（update-decision-price-gate）：gate fail 阻断交付——
+    不进 FM 审批、不产出报告（会话终态由 API 收尾置 failed）；其余放行审批。
+    gate 缺失/形态噪声视为放行（fail-open，与管线既有容错风格一致）。"""
+    gate = state.get("decision_price_gate")
+    if isinstance(gate, dict) and gate.get("result") == "fail":
+        return "__end__"
+    return "fund_manager"

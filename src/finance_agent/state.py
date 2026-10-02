@@ -195,10 +195,14 @@ class AnalysisState(TypedDict, total=False):
     # 终稿执行动作再评估触发条件必填化（update-decision-integrity-gates Task 3）：
     # {result, note}——打回后申报/「已打回仍未申报」如实标注
     final_reeval_check: dict
-    # 决策文本价位交叉校验（update-decision-integrity-gates Task 1）：risk_judge 产出
-    # 的 anomaly 登记（reeval_triggers/inaction_reason/reasoning 自由文本价位 vs 已验证
-    # 技术指标；纯观测不参与路由），报告「再评估触发条件/不行动原因」旁标注消费
+    # 决策文本价位交叉校验残留 anomaly（update-decision-integrity-gates Task 1 →
+    # update-decision-price-gate 收窄）：保存 risk_judge **最终终稿**的残留 anomaly
+    # （打回修正后为空列表），仅经 state/Langfuse trace 可观测，MUST NOT 渲染进报告
     decision_price_anomalies: list[dict]
+    # 价位交叉校验门禁（update-decision-price-gate）：{result: pass|fail, note}——
+    # anomaly 打回重试后修正放行（note「打回后已修正」）；仍异常 fail，
+    # after_risk_judge 据此阻断（不进 FM 审批、不产出报告）
+    decision_price_gate: dict
     citation_coverage: float  # 正文数字普查覆盖率（0-1，监控不进路由）
 
     # ── URL 信源溯源（Kimi 风格引用）──

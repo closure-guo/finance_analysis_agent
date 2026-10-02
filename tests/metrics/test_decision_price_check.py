@@ -375,7 +375,8 @@ class TestCalcTechnicalShapeCompatibility:
 
 
 class TestRiskJudgeIntegration:
-    """risk_judge 接入：返回 dict 增 decision_price_anomalies 键（纯观测不中断）。"""
+    """risk_judge 接入（update-decision-price-gate 门禁化）：anomaly → 打回重试一次，
+    仍异常 gate fail、残留落 state；无 anomaly 直通。"""
 
     @staticmethod
     def _kline_601066() -> pd.DataFrame:
@@ -392,7 +393,7 @@ class TestRiskJudgeIntegration:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_risk_judge_returns_decision_price_anomalies(self, mock_llm):
-        """watch 决策含空洞触发价 → 返回 dict 含 empty_trigger anomaly，管线照常推进。"""
+        """watch 决策含空洞触发价 → 打回一次，stub 仍同输出 → gate fail、残留落 state。"""
         mock_llm.return_value = json.dumps(
             {
                 "action": "watch",
@@ -411,9 +412,12 @@ class TestRiskJudgeIntegration:
             "kline": self._kline_601066(),
         }
         result = risk_judge(state)
-        assert mock_llm.call_count == 1  # 无打回回路
+        assert mock_llm.call_count == 2  # anomaly 打回重试恰一次（门禁回路）
         decision = result["final_trade_decision"]
-        assert decision.action == "watch"  # 管线不中断，决策照常放行
+        assert decision.action == "watch"  # risk_judge 层照常产出决策（阻断在 after_risk_judge）
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "fail"
+        assert "已打回仍未通过" in gate["note"]
         anomalies = result["decision_price_anomalies"]
         assert len(anomalies) == 1
         assert anomalies[0]["kind"] == "empty_trigger"

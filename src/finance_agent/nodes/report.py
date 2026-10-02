@@ -125,8 +125,10 @@ _FM_INCOMPLETE_MARKERS: tuple[str, ...] = ("仍未申报", "缺失")
 def _fm_incomplete_integrity_block(state: dict) -> str:
     """审批对象结构不完整标注块（update-decision-integrity-gates Task 4）。
 
-    从终稿三个完整性检查（final_price_check/final_inaction_check/final_reeval_check）
-    挑出标记「不完整」的 note 原文逐项列出；无不完整标注返回空串（零增量，无空标注行）。
+    从终稿四个完整性检查键（final_price_check/final_inaction_check/final_reeval_check
+    与 decision_price_gate 复核注，经 fund_manager.final_integrity_notes 单源收集）中
+    挑出标记「不完整」（_FM_INCOMPLETE_MARKERS 命中）的 note 原文逐项列出；
+    无不完整标注返回空串（零增量，无空标注行——pass 复核注如「打回后已修正」不渲染）。
     """
     fragments = [
         f"{label}——{note}"
@@ -484,12 +486,8 @@ def generate_report(state: dict) -> dict:
 
     decision = state.get("final_trade_decision") or state.get("trader_plan")
     if decision:
-        # Task 1 产出的决策文本价位异常登记随 state 全量进入本节点，渲染时与决策
-        # 文本同源标注（update-decision-integrity-gates Task 3）
-        sections.append(
-            f"{next_title('交易决策')}\n"
-            f"{_format_trade_decision(decision, state.get('decision_price_anomalies'))}\n"
-        )
+        # update-decision-price-gate：报警仅进 trace，渲染链不接收 anomalies
+        sections.append(f"{next_title('交易决策')}\n{_format_trade_decision(decision)}\n")
 
     risk_history = state.get("risk_debate_history") or []
     if risk_history:
@@ -660,36 +658,10 @@ def _fmt_position_size(value: object) -> str:
     return "未提供"
 
 
-def _price_anomaly_notes(text: object, anomalies: list[dict] | None) -> str:
-    """决策文本价位异常同源标注（update-decision-integrity-gates Task 3）。
-
-    text（reeval_triggers 条目 / inaction_reason / reasoning）与 Task 1 登记的
-    anomaly ``source_text`` 呈字符串包含关系时，条目旁追加「（价位待核实：<message>）」
-    （source_text 的省略号是 _excerpt 渲染产物，匹配前剥除）。纯渲染旁注：不参与
-    路由、不改写决策；anomalies 形态噪声（非 dict / 缺键）不炸渲染。
-    """
-    if not text or not anomalies:
-        return ""
-    notes: list[str] = []
-    for anomaly in anomalies:
-        if not isinstance(anomaly, dict):
-            continue
-        source = anomaly.get("source_text")
-        message = anomaly.get("message")
-        if not (isinstance(source, str) and isinstance(message, str) and source and message):
-            continue
-        core = source.strip("…")
-        if core and core in str(text):
-            note = f"（价位待核实：{message}）"
-            if note not in notes:
-                notes.append(note)
-    return "".join(notes)
-
-
-def _fmt_reeval_triggers(triggers: object, anomalies: list[dict] | None = None) -> str:
+def _fmt_reeval_triggers(triggers: object) -> str:
     """再评估触发条件渲染：编号条目；无有效条目 → 未申报（require-watch-hold-rationale）。
 
-    Task 3：与 decision_price_anomalies source_text 同源的条目旁标注「价位待核实」。
+    update-decision-price-gate：报警仅进 trace，渲染链不接收 anomalies。
     """
     items: list[str] = []
     if isinstance(triggers, str):
@@ -701,13 +673,11 @@ def _fmt_reeval_triggers(triggers: object, anomalies: list[dict] | None = None) 
     parts = []
     for i, t in enumerate(items):
         mark = _TRIGGER_MARKS[i] if i < len(_TRIGGER_MARKS) else f"({i + 1})"
-        parts.append(f"{mark} {t}{_price_anomaly_notes(t, anomalies)}")
+        parts.append(f"{mark} {t}")
     return "；".join(parts)
 
 
-def _format_trade_decision(
-    decision: TradeDecision | dict, price_anomalies: list[dict] | None = None
-) -> str:
+def _format_trade_decision(decision: TradeDecision | dict) -> str:
     """格式化交易决策（report-render-operational-params：渲染完整操作参数）。
 
     buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）与「再评估触发条件」行
@@ -715,8 +685,7 @@ def _format_trade_decision(
     报告无任何可见缺口——缺失如实标注「未申报」，MUST NOT 整行省略或编造条目）；
     watch/hold 语义上无建仓参数，不渲染硬价格行，渲染结构化「不行动原因」与
     「再评估触发条件」（缺失如实标注「未申报」，require-watch-hold-rationale）。
-    price_anomalies：Task 1 决策文本价位交叉校验登记（state 决策文本与 anomaly
-    source_text 同源时条目旁标注「价位待核实」，纯渲染旁注）。
+    update-decision-price-gate：报警仅进 trace，渲染链不接收 anomalies。
     """
     if isinstance(decision, TradeDecision):
         action = decision.action
@@ -757,16 +726,13 @@ def _format_trade_decision(
             lines.append(derived)
     else:
         if isinstance(inaction, str) and inaction.strip():
-            lines.append(
-                f"- **不行动原因**: {inaction}{_price_anomaly_notes(inaction, price_anomalies)}"
-            )
+            lines.append(f"- **不行动原因**: {inaction}")
         else:
             lines.append("- **不行动原因**: 未申报")
     # Task 3：reeval_triggers 为全部 action 的必渲染对象——buy/sell 清洗后为空时
     # 「未申报」行保留（601818 形态），MUST NOT 整行省略或编造条目
-    lines.append(f"- **再评估触发条件**: {_fmt_reeval_triggers(triggers, price_anomalies)}")
-    reasoning_text = reasoning if isinstance(reasoning, str) else ""
-    lines.append(f"- **理由**: {reasoning}{_price_anomaly_notes(reasoning_text, price_anomalies)}")
+    lines.append(f"- **再评估触发条件**: {_fmt_reeval_triggers(triggers)}")
+    lines.append(f"- **理由**: {reasoning}")
     if corrected:
         # toolize-price-levels：价位经工具参考带修正（可观测，不静默）
         lines.append(
