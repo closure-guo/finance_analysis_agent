@@ -847,84 +847,126 @@ def _make_run_deep_analysis(
                     )
 
                 report_md = accumulated.get("final_report", "")
-                # 报告数据落库（与 fast path _run_graph_streaming 同语义）：
-                # ReAct 路径此前仅置 status，不落 report_markdown/chart_data/duration_ms，
-                # 导致刷新重建时报告正文/图表丢失、耗时显示"未知"。
-                if session_id:
-                    await asyncio.to_thread(
-                        _session_store.update_session_report,
-                        session_id,
-                        report_markdown=report_md,
-                        chart_data=accumulated.get("chart_data") or {},
-                        analyst_reports=accumulated.get("analyst_reports") or {},
-                        agent_process=accumulated.get("agent_process") or {},
-                        analyst_summaries=accumulated.get("analyst_summaries") or {},
-                        duration_ms=int((_time_module.time() - _pipeline_start_time) * 1000),
-                        file_paths=accumulated.get("file_paths") or {},
-                        status="completed",
-                    )
-                    # add-track-record:ReAct 深模式完成即落库观点(全量记录,含 reject)。
-                    # 挂点曾只存在于旧 /api/analyze 路径,深模式经工具路径无挂点 →
-                    # predictions 恒为 0(真实事故);现经共享入口与旧路径同语义。
-                    await asyncio.to_thread(
-                        _persist_decision_from_tool,
-                        accumulated,
-                        session_id,
-                        stock_code,
-                        stock_name,
-                    )
-                    # add-user-feedback:把本次深分析运行的 Langfuse trace 关联到
-                    # session(反馈端点按 session 解析最近一次运行落 score)
-                    _tid = accumulated.get("langfuse_trace_id")
-                    if not _tid:
-                        try:
-                            from finance_agent.langfuse_tracing import get_langfuse as _lf_get
 
-                            _lfc = _lf_get()
-                            if _lfc is not None:
-                                _tid = _lfc.get_current_trace_id()
-                        except Exception:  # noqa: BLE001 - 取不到则降级(前端本地 toggle)
-                            _tid = None
-                    if _tid:
+                if not report_md:
+                    # 管线阻断终态可见化（update-decision-price-gate，spec
+                    # pipeline-events「管线阻断终态可见化」SHALL 路径无关）：
+                    # 图流正常耗尽但未产出报告（决策价位门禁 fail / 勾稽 FAIL）
+                    # 时不得标 completed 空报告。与 fast path
+                    # _run_graph_streaming 收尾同语义：置 failed + 归因
+                    # failure_reason；未经审批的决策 MUST NOT 落战绩，故跳过
+                    # update_session_report 与 _persist_decision_from_tool；
+                    # 并复用超时/异常分支的通知形态下发阻断 TOOL_RESULT，
+                    # 使 Agent 能向用户转述失败而非拿到空报告（601700 复盘）。
+                    from finance_agent.api import _blocked_failure_reason
+
+                    reason, _blocked_node = _blocked_failure_reason(accumulated)
+                    if _track_snapshot:
+                        # _track_snapshot = bool(session_id)，类型收窄供 mypy（同工具入口先例）
+                        assert session_id is not None  # noqa: S101
                         await asyncio.to_thread(
-                            _session_store.set_session_trace_id, session_id, _tid
+                            _session_store.update_session_status,
+                            session_id,
+                            "failed",
+                            failure_reason=reason,
                         )
-
-                metadata = {
-                    "chart_data": accumulated.get("chart_data") or {},
-                    "analyst_reports": accumulated.get("analyst_reports") or {},
-                    "stock_code": stock_code,
-                    "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
-                    "report_markdown": report_md,
-                    "web_sources": web_sources or [],
-                    "file_paths": accumulated.get("file_paths") or {},
-                    "sse_type": "report_ready",
-                }
-
-                # LLM 上下文放结构化结论摘要 + 报告正文节选（修复 add-deep-summary-brief：
-                # 仅截 report_md[:2000] 时辩论/交易/风控/基金经理章节不可见 → 「本次分析未覆盖」）
-                llm_output = f"深度分析完成。股票：{metadata['stock_name']}({stock_code})。\n"
-                llm_output += f"报告已生成，共 {len(report_md)} 字符。\n"
-                brief = _build_summary_brief(accumulated, report_md)
-                if brief:
-                    llm_output += f"\n{brief}"
-                if len(report_md) > 2000:
-                    llm_output += f"报告正文（节选）：\n{report_md[:2000]}...\n"
-                else:
-                    llm_output += f"报告内容：\n{report_md}"
-
-                _put_event(
-                    StreamEvent(
-                        event_type=ActionType.TOOL_RESULT,
-                        content=llm_output,
-                        tool_result=ToolResult(
-                            tool_call_id="",
-                            name=TOOL_RUN_DEEP_ANALYSIS,
-                            output=llm_output,
-                            metadata=metadata,
-                        ),
+                    _blocked_note = f"深度分析未产出报告，会话已标记为失败：{reason}"
+                    _put_event(
+                        StreamEvent(
+                            event_type=ActionType.TOOL_RESULT,
+                            content=_blocked_note,
+                            tool_result=ToolResult(
+                                tool_call_id="",
+                                name=TOOL_RUN_DEEP_ANALYSIS,
+                                output=_blocked_note,
+                                metadata={
+                                    "pipeline_blocked": True,
+                                    "failure_reason": reason,
+                                },
+                            ),
+                        )
                     )
-                )
+                else:
+                    # 报告数据落库（与 fast path _run_graph_streaming 同语义）：
+                    # ReAct 路径此前仅置 status，不落 report_markdown/chart_data/duration_ms，
+                    # 导致刷新重建时报告正文/图表丢失、耗时显示"未知"。
+                    if session_id:
+                        await asyncio.to_thread(
+                            _session_store.update_session_report,
+                            session_id,
+                            report_markdown=report_md,
+                            chart_data=accumulated.get("chart_data") or {},
+                            analyst_reports=accumulated.get("analyst_reports") or {},
+                            agent_process=accumulated.get("agent_process") or {},
+                            analyst_summaries=accumulated.get("analyst_summaries") or {},
+                            duration_ms=int((_time_module.time() - _pipeline_start_time) * 1000),
+                            file_paths=accumulated.get("file_paths") or {},
+                            status="completed",
+                        )
+                        # add-track-record:ReAct 深模式完成即落库观点(全量记录,含 reject)。
+                        # 挂点曾只存在于旧 /api/analyze 路径,深模式经工具路径无挂点 →
+                        # predictions 恒为 0(真实事故);现经共享入口与旧路径同语义。
+                        await asyncio.to_thread(
+                            _persist_decision_from_tool,
+                            accumulated,
+                            session_id,
+                            stock_code,
+                            stock_name,
+                        )
+                        # add-user-feedback:把本次深分析运行的 Langfuse trace 关联到
+                        # session(反馈端点按 session 解析最近一次运行落 score)
+                        _tid = accumulated.get("langfuse_trace_id")
+                        if not _tid:
+                            try:
+                                from finance_agent.langfuse_tracing import (
+                                    get_langfuse as _lf_get,
+                                )
+
+                                _lfc = _lf_get()
+                                if _lfc is not None:
+                                    _tid = _lfc.get_current_trace_id()
+                            except Exception:  # noqa: BLE001 - 取不到则降级(前端本地 toggle)
+                                _tid = None
+                        if _tid:
+                            await asyncio.to_thread(
+                                _session_store.set_session_trace_id, session_id, _tid
+                            )
+
+                    metadata = {
+                        "chart_data": accumulated.get("chart_data") or {},
+                        "analyst_reports": accumulated.get("analyst_reports") or {},
+                        "stock_code": stock_code,
+                        "stock_name": accumulated.get("stock_name") or stock_name or stock_code,
+                        "report_markdown": report_md,
+                        "web_sources": web_sources or [],
+                        "file_paths": accumulated.get("file_paths") or {},
+                        "sse_type": "report_ready",
+                    }
+
+                    # LLM 上下文放结构化结论摘要 + 报告正文节选（修复 add-deep-summary-brief：
+                    # 仅截 report_md[:2000] 时辩论/交易/风控/基金经理章节不可见 → 「本次分析未覆盖」）
+                    llm_output = f"深度分析完成。股票：{metadata['stock_name']}({stock_code})。\n"
+                    llm_output += f"报告已生成，共 {len(report_md)} 字符。\n"
+                    brief = _build_summary_brief(accumulated, report_md)
+                    if brief:
+                        llm_output += f"\n{brief}"
+                    if len(report_md) > 2000:
+                        llm_output += f"报告正文（节选）：\n{report_md[:2000]}...\n"
+                    else:
+                        llm_output += f"报告内容：\n{report_md}"
+
+                    _put_event(
+                        StreamEvent(
+                            event_type=ActionType.TOOL_RESULT,
+                            content=llm_output,
+                            tool_result=ToolResult(
+                                tool_call_id="",
+                                name=TOOL_RUN_DEEP_ANALYSIS,
+                                output=llm_output,
+                                metadata=metadata,
+                            ),
+                        )
+                    )
             finally:
                 _put_event(None)
                 if session_id:
