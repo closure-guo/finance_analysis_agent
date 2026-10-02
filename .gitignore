@@ -290,3 +290,6 @@ tests/e2e/playwright/tmp_body.json
 
 # clickhouse entrypoint 在挂载的 users.d 内生成（incident 027 挂载引入）
 docker/clickhouse/users.d/default-user.xml
+
+# 本地验证运行产物（含 .env 密钥副本，严禁入库）
+.verify-*/
