@@ -34,7 +34,9 @@ def sync_index_closes(
     """拉取指数集 K 线并幂等落库;单指数失败仅 WARNING,不外抛。
 
     日批(daily_marking)与回填脚本共用:days 为拉取的交易日长度,
-    280 交易日 ≈ 1.1 年,覆盖前端最长 1y 窗口。返回 {stored, failed}。
+    280 交易日 ≈ 1.1 年,覆盖前端最长 1y 窗口。返回 {stored, failed}:
+    failed 收集拉取抛异常或返回空行情的指数(空行情是 fetch_index_kline
+    双源皆失败的生产故障形态,计入 failed);成功拉取并落库的计入 stored。
     """
     if client is None:
         from finance_agent.data.akshare_client import AKShareClient
@@ -47,10 +49,14 @@ def sync_index_closes(
         try:
             df = client.fetch_index_kline(code, days=days)
             if df is None or df.empty:
-                # 空行情仅告警跳过,不进 failed(failed 只收异常码,单指数缺数不放大)
+                failed.append(code)
                 logger.warning("指数 %s(%s) 行情为空,本批跳过", code, u["name"])
                 continue
-            rows = [(code, str(d), float(c)) for d, c in zip(df["日期"], df["收盘"], strict=False)]
+            # str(d)[:10] 是必要的:新浪回退源日期为 datetime64,str() 带时间后缀会破坏
+            # trade_date 字符串比较与 INSERT OR REPLACE 幂等
+            rows = [
+                (code, str(d)[:10], float(c)) for d, c in zip(df["日期"], df["收盘"], strict=False)
+            ]
             stored += upsert_index_closes(rows, db_path=db_path)
         except Exception as e:  # noqa: BLE001 - 单指数失败隔离,展示层不得放大
             failed.append(code)

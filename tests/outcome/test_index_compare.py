@@ -81,15 +81,45 @@ class TestSyncIndexCloses:
             {
                 "000300": [("2026-09-28", 4000.0), ("2026-09-29", 4040.0)],
                 "000001": [("2026-09-28", 3000.0)],
+                "000905": [("2026-09-28", 6000.0)],
+                "000852": [("2026-09-28", 2500.0)],
+                "399006": [("2026-09-28", 2000.0)],
             }
         )
         result = sync_index_closes(client=client, db_path=db)
-        assert result["stored"] == 3 and result["failed"] == []
+        assert result["stored"] == 6 and result["failed"] == []
         assert len(list_index_closes("000300", db_path=db)) == 2
 
     def test_sync_single_failure_isolated(self, db):
-        client = _fake_client({"000300": [("2026-09-28", 4000.0)]}, fail_codes={"000905", "399006"})
+        client = _fake_client(
+            {
+                "000300": [("2026-09-28", 4000.0)],
+                "000001": [("2026-09-28", 3000.0)],
+                "000852": [("2026-09-28", 2500.0)],
+            },
+            fail_codes={"000905", "399006"},
+        )
         result = sync_index_closes(client=client, db_path=db)
         assert result["failed"] == ["000905", "399006"]
-        assert result["stored"] >= 1  # 其余指数照常落库
+        assert result["stored"] >= 3  # 其余指数照常落库
         assert len(list_index_closes("000300", db_path=db)) == 1
+
+    def test_sync_truncates_datetime64_dates(self, db):
+        """新浪回退源返回 datetime64 日期;落库必须截断到 YYYY-MM-DD(Fix review finding)。"""
+        df_dates = pd.DataFrame(
+            {"日期": pd.to_datetime(["2026-09-28", "2026-09-29"]), "收盘": [4000.0, 4040.0]}
+        )
+
+        class _TsClient:
+            def fetch_index_kline(self, index_code: str, days: int = 250):
+                return df_dates if index_code == "000300" else pd.DataFrame()
+
+        result = sync_index_closes(client=_TsClient(), db_path=db)
+        assert result["failed"] == [
+            "000001",
+            "000905",
+            "000852",
+            "399006",
+        ]  # 空行情=失败(修正后语义)
+        rows = list_index_closes("000300", db_path=db)
+        assert [r["trade_date"] for r in rows] == ["2026-09-28", "2026-09-29"]
