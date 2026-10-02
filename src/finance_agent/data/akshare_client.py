@@ -1117,6 +1117,10 @@ class AKShareClient:
         if df is None or df.empty:
             logger.error("大宗交易拉取失败/返回空（大宗信源缺失）: %s", stock_code)
             return []
+        if "股票代码" not in df.columns:
+            # 空数据日/维护窗口信源会返回非空但缺列的变体——按契约降级 []，与真空结果区分记录
+            logger.warning("大宗交易信源返回缺「股票代码」列（空数据日变体）: %s", stock_code)
+            return []
         df = df[df["股票代码"].astype(str) == stock_code]
         rows: list[dict] = []
         for _, row in df.head(10).iterrows():
