@@ -47,5 +47,6 @@
 独立终审（全分支 a5b5e84..HEAD）裁决 Needs fixes → 修复 commit 31faee40 → 复核 **Approved**。
 
 - **C1（Critical，终审发现）**：quote.market_cap 两源单位不一致（东财主源=元、百度回退=亿元），新估值链路无条件按亿元消费——东财可用路径 PE_ttm 量级错 1 亿倍。四轮验证 run 恰逢东财被封全部走百度回退而漏网。修复：fetch 层百度 ×1e8 归一到元（与前端 Charts 除 1e8 约定同构）+ compute 元→亿单点换算 + 双源形单测钉死。**保留意见**：C1 实跑验证在东财被封环境完成，merge 后首次东财可用的 run 须抽验披露节「市值 … 亿」量级与 static 口径 GARP。
+  > ⚠️ **已重新定性（2026-10-01，update-quote-primary-source）**：东财行情域对本机 IP 封禁长期化（实测 IP 级、指纹伪装无效），quote 主源切换为腾讯单标的直查、东财降为回退1，生产链路 static 口径 PE 不再默认出现（compute 恒 derived_ttm）。抽验义务改写为「东财回退路径解封后抽验一次回退分支 market_cap 量级与 sources_seen 标注」——见 docs/incidents/033 与 tests/validation/2026-10-01-update-quote-primary-source-validation.md。
 - **I1/M1/M2（Important/Minor）**：relative_valuation 跨口径注（TTM vs 行业静态）、披露节缺失字段「暂缺」化、行业覆盖未命中组合用例——同 commit 修复并复核。
 - 终审确认的 spec 覆盖：22 Scenario 中 21 有实现+测试（1 个以 M2 补齐），全局约束（年报口径零改动/§1.10 登记/prompt 发布/五处 schema 一致/降级矩阵）全部核查通过。

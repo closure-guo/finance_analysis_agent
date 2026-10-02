@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 
 import akshare as ak
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,27 @@ _INDUSTRY_KEY_MAP = {
 #   东财回退 ak.index_stock_cons        → '品种代码' / '品种名称'
 _CONSTITUENT_CODE_COLS = ("成分券代码", "品种代码", "代码")
 _CONSTITUENT_NAME_COLS = ("成分券名称", "品种名称", "名称", "股票名称", "股票简称")
+
+# 腾讯 qt.gtimg.cn 单标的行情串字段位序（2026-10-01 金样本 sh688072 实抓钉死，
+# update-quote-primary-source）。field 39 市盈率为 TTM 口径——腾讯无静态 PE，
+# 按 delta spec MUST NOT 进入 quote 输出（PE 推导留给 compute derived_ttm）。
+_TENCENT_FIELD_IDX: dict[str, int] = {
+    "name": 1,
+    "code": 2,
+    "price": 3,
+    "change": 31,
+    "pct_change": 32,
+    "high": 33,
+    "low": 34,
+    "turnover_rate": 38,
+    "float_market_cap": 44,  # 亿
+    "market_cap": 45,  # 亿
+    "PB": 46,
+}
+# 亿 → 元归一字段（quote 层统一元契约，前端 Charts /1e8 显示「亿」）
+_TENCENT_YI_FIELDS = frozenset({"float_market_cap", "market_cap"})
+# 关键字段缺失即视为主源失败（触发回退）
+_TENCENT_REQUIRED = ("price", "market_cap")
 
 
 def _add_prefix(code: str) -> str:
@@ -341,29 +363,53 @@ class AKShareClient:
             for k, v in raw.items()
         }
 
-    def fetch_stock_quote(self, stock_code: str) -> dict:
-        # 主源：东方财富实时行情（含 PE/PB/市值/价格全字段）
-        df = _call_ak(ak.stock_zh_a_spot_em)
-        mapped = self._quote_from_spot_df(df, stock_code)
-        if mapped is not None:
-            self.sources_seen["market_cap"].add(
-                "eastmoney" if mapped.get("market_cap") is not None else "missing"
-            )
-            return mapped
+    def _fetch_tencent_quote(self, stock_code: str) -> dict | None:
+        """腾讯 qt.gtimg.cn 单标的行情直查（update-quote-primary-source 新主源）。
 
-        # ── 二级回退（add-quote-baidu-fallback）：东财被 TLS 风控封锁时，
-        # 用百度估值补 market_cap/PB、腾讯日线补 price——恢复估值与价格维度
-        # （此前静默降级为仅名称，GARP/相对估值/图表全部丢失且无日志）。
-        # PE 不在 quote 内推导（口径依赖财务数据，留给下游 compute/charts），
-        # 各源独立 try/except：任一失败不影响其余，缺失字段由下游守卫跳过。
-        logger.warning("东财行情不可用，尝试百度估值+腾讯日线回退: %s", stock_code)
+        1 请求/标的，替代东财全市场 spot 翻页主源（~50 请求/次拿单只股票——
+        本机 IP 被东财行情域封禁的直接成因，实测为 IP 级封禁、浏览器指纹伪装
+        无效）。GBK 解码 + `~` 分割，字段位序见 _TENCENT_FIELD_IDX（金样本单测
+        钉死）。总市值/流通市值单位为亿，×1e8 归一到元。解析失败/关键字段缺失
+        返回 None 触发既有回退链，MUST NOT 抛异常。
+        """
+        symbol = self._to_sina_symbol(stock_code)
+        try:
+            resp = requests.get(f"https://qt.gtimg.cn/q={symbol}", timeout=10)
+            text = resp.content.decode("gbk")
+        except Exception as e:
+            logger.warning("腾讯行情直查失败: %s %s", stock_code, e)
+            return None
+        fields = text.split("~")
+        if len(fields) <= max(_TENCENT_FIELD_IDX.values()):
+            logger.warning("腾讯行情串字段不足（%d 段）: %s", len(fields), stock_code)
+            return None
+        result: dict = {"name": fields[_TENCENT_FIELD_IDX["name"]], "code": stock_code}
+        for key, idx in _TENCENT_FIELD_IDX.items():
+            if key in ("name", "code"):  # code 保持入参字符串，不走 float 转换
+                continue
+            raw = fields[idx].strip()
+            if not raw:
+                continue
+            try:
+                value = float(raw)
+            except ValueError:
+                continue
+            result[key] = value * 1e8 if key in _TENCENT_YI_FIELDS else value
+        missing = [k for k in _TENCENT_REQUIRED if result.get(k) is None]
+        if missing:
+            logger.warning("腾讯行情关键字段缺失 %s: %s", missing, stock_code)
+            return None
+        return result
+
+    def _quote_fallback_baidu_tx(self, stock_code: str) -> dict:
+        """第二回退：百度估值补 market_cap/PB + 腾讯日线补 price（原二级回退语义）。
+
+        各源独立 try/except：任一失败不影响其余；全部失败仅名称时留 ERROR
+        （维度缺失可观测）。百度总市值单位亿元 ×1e8 归一到元（终审 C1）。
+        """
         result = self._fetch_name_fallback(stock_code)
         if result:
             result["code"] = stock_code
-
-        # 百度估值：总市值 → market_cap；市净率 → PB（各指标末行最新）
-        # 单位归一（终审 C1）：百度总市值单位为亿元，东财主源为元——
-        # ×1e8 归一到元，与 state 既有契约一致（前端 Charts 除 1e8 显示「亿」）
         for indicator, key, scale in (("总市值", "market_cap", 1e8), ("市净率", "PB", 1.0)):
             try:
                 df_val = _call_ak(
@@ -373,8 +419,6 @@ class AKShareClient:
                     result[key] = float(df_val.iloc[-1]["value"]) * scale
             except Exception:
                 logger.warning("百度估值 %s 拉取失败: %s", indicator, stock_code)
-
-        # 腾讯日线最新收盘 → price
         try:
             df_tx = _call_ak(
                 ak.stock_zh_a_hist_tx, symbol=self._to_sina_symbol(stock_code), adjust="qfq"
@@ -383,8 +427,6 @@ class AKShareClient:
                 result["price"] = float(df_tx.iloc[-1]["close"])
         except Exception:
             logger.warning("腾讯日线价格拉取失败: %s", stock_code)
-
-        # 可观测性：估值/价格维度全部缺失时留 ERROR（数据维度缺失，非预期降级）
         has_valuation = any(result.get(k) is not None for k in ("market_cap", "PB", "price"))
         self.sources_seen["market_cap"].add(
             "baidu" if result.get("market_cap") is not None else "missing"
@@ -392,6 +434,46 @@ class AKShareClient:
         if not has_valuation:
             logger.error("行情回退后仍缺估值/价格（PE/PB/市值/价格缺失）: %s", stock_code)
         return result
+
+    def _quote_via_chain(
+        self, stock_code: str, spot_df: pd.DataFrame | None = None
+    ) -> tuple[dict, pd.DataFrame | None]:
+        """单标的完整行情链：腾讯主源 → 东财 spot（惰性共享）→ 百度+腾讯日线。
+
+        spot_df 语义：None=未尝试（首次需要时拉取一次并传出供批调用复用）；
+        空 DataFrame=已尝试且失败（哨兵，批调用不重复拉）。
+        """
+        q = self._fetch_tencent_quote(stock_code)
+        if q is not None:
+            self.sources_seen["market_cap"].add("tencent")
+            return q, spot_df
+        if spot_df is None:
+            try:
+                pulled = _call_ak(ak.stock_zh_a_spot_em)
+                spot_df = pulled if pulled is not None else pd.DataFrame()
+            except Exception as e:
+                logger.warning("东财行情表拉取失败: %s", e)
+                spot_df = pd.DataFrame()
+        if not spot_df.empty:
+            mapped = self._quote_from_spot_df(spot_df, stock_code)
+            if mapped is not None:
+                self.sources_seen["market_cap"].add(
+                    "eastmoney" if mapped.get("market_cap") is not None else "missing"
+                )
+                return mapped, spot_df
+        logger.warning("腾讯/东财行情均不可用，尝试百度估值+腾讯日线回退: %s", stock_code)
+        return self._quote_fallback_baidu_tx(stock_code), spot_df
+
+    def fetch_stock_quote(self, stock_code: str) -> dict:
+        """个股行情（update-quote-primary-source 三级链）。
+
+        主源：腾讯 qt.gtimg.cn 单标的直查（1 请求/标的）。东财全市场 spot
+        翻页降为第一回退（仅主源失败时触发；该抓取模式是本机 IP 被东财
+        行情域封禁的直接成因——实测 IP 级封禁，非代码注释早先猜测的 TLS
+        指纹风控，浏览器指纹伪装无效）。第二回退：百度估值+腾讯日线。
+        """
+        q, _ = self._quote_via_chain(stock_code)
+        return q
 
     def fetch_quarterly_income(self, stock_code: str, quarters: int = 4) -> pd.DataFrame:
         """拉取单季度利润表，计算同比/环比变化率。
@@ -1052,40 +1134,27 @@ class AKShareClient:
         return rows
 
     def fetch_peer_data(self, stock_codes: list[str]) -> pd.DataFrame | None:
-        """逐标的抓取同业名称/PE/PB（复用 fetch_stock_quote 主源+回退链）。
+        """逐标的抓取同业名称/PE/PB（复用 _quote_via_chain 三级链）。
 
-        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None
-        （delta clear-valuation-chain-debts ADDED「同业财务数据获取」）。
-        共享单次全市场 spot 表：N 标的的主源查询从 N× 全市场拉取降到 1×，
-        表未命中/失败的标的再逐个走 fetch_stock_quote 完整回退链。
+        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None。
+        spot 表惰性共享：腾讯主源健康时逐标的 1 请求、零 spot 调用；腾讯
+        失败后首个标的触发一次全市场 spot 拉取，批内复用（N 标的 1×）。
         """
         codes = [str(c).strip() for c in (stock_codes or []) if str(c).strip()]
         if not codes:
             return None
-        try:
-            spot_df = _call_ak(ak.stock_zh_a_spot_em)
-        except Exception as e:
-            logger.warning("同业共享行情表拉取失败，逐标的走完整回退链: %s", e)
-            spot_df = None
+        spot_df: pd.DataFrame | None = None
         rows: list[dict] = []
         for code in codes:
-            q: dict = {}
-            if spot_df is not None:
-                q = self._quote_from_spot_df(spot_df, code) or {}
+            try:
+                q, spot_df = self._quote_via_chain(code, spot_df)
+            except Exception as e:
+                logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
+                continue
             pe = q.get("PE") or q.get("pe")
             pb = q.get("PB") or q.get("pb")
-            if (pe is None or pd.isna(pe)) and (pb is None or pd.isna(pb)):
-                # spot 表未命中或无 PE/PB → 单标的走完整主源+回退链
-                try:
-                    q = self.fetch_stock_quote(code)
-                except Exception as e:
-                    logger.warning("同业 %s 行情抓取失败，跳过: %s", code, e)
-                    continue
-                pe = q.get("PE") or q.get("pe")
-                pb = q.get("PB") or q.get("pb")
             # 停牌 peer 的 NaN PE/PB（东财 spot 实测行为）按缺数归一——NaN 真值
-            # 直通会被 _build_peers_list 的 is not None 放行，毒化同业均值
-            # （Task 2 复审 ⚠️，与 compute._derive_pe_ttm F1 守卫同源问题）
+            # 直通会毒化同业均值（终审 C1 同源问题）
             if pe is not None and pd.isna(pe):
                 pe = None
             if pb is not None and pd.isna(pb):
@@ -1096,7 +1165,6 @@ class AKShareClient:
             rows.append({"name": q.get("name") or code, "code": code, "PE": pe, "PB": pb})
         if not rows:
             return None
-        # 出口根因归一（终审 C1）：混合行（一 peer PE=None、一 peer PE 有值）时
-        # DataFrame 构造把 None 强转回 float64 NaN——与 _normalize_nan 修的
-        # quarterly_income 同源；NaN 毒化同业均值并伪装成 fair
+        # 出口根因归一（终审 C1）：混合行 DataFrame 构造把 None 强转回 float64
+        # NaN 毒化同业均值——出口必须 _normalize_nan
         return self._normalize_nan(pd.DataFrame(rows, columns=["name", "code", "PE", "PB"]))

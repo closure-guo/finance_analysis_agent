@@ -162,7 +162,7 @@ class TestSourceProvenance:
         assert client.sources_seen["constituents"] == {"none"}
 
     @patch("finance_agent.data.akshare_client.ak")
-    def test_records_industry_and_market_cap_sources(self, mock_ak, client):
+    def test_records_industry_and_market_cap_sources(self, mock_ak, client, monkeypatch):
         """行业/市值维度同样留痕（东财被封锁 → cninfo / baidu）。"""
         mock_ak.stock_individual_info_em.return_value = None  # 行业主源不可用
         mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
@@ -172,6 +172,8 @@ class TestSourceProvenance:
         client.fetch_industry("600519")
         assert client.sources_seen["industry"] == {"cninfo"}
 
+        # 腾讯主源 down：本用例钉的是东财封锁 → baidu 留痕（update-quote-primary-source）
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
         mock_ak.stock_zh_a_spot_em.return_value = None  # 市值主源不可用
         mock_ak.stock_zh_valuation_baidu.return_value = pd.DataFrame({"value": [15641.52]})
         mock_ak.stock_zh_a_hist_tx.return_value = pd.DataFrame({"close": [1500.0]})
@@ -179,7 +181,8 @@ class TestSourceProvenance:
         assert client.sources_seen["market_cap"] == {"baidu"}
 
     @patch("finance_agent.data.akshare_client.ak")
-    def test_records_market_cap_missing_when_all_sources_fail(self, mock_ak, client):
+    def test_records_market_cap_missing_when_all_sources_fail(self, mock_ak, client, monkeypatch):
+        monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
         mock_ak.stock_zh_a_spot_em.return_value = None
         mock_ak.stock_info_a_code_name.return_value = pd.DataFrame(
             {"code": ["600519"], "name": ["贵州茅台"]}
