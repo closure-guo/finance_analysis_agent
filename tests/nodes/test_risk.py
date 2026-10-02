@@ -491,3 +491,51 @@ class TestDecisionPriceGate:
             result = risk_judge(dict(_PRICE_GATE_STATE))
         assert result["decision_price_gate"]["result"] == "pass"
         assert "final_trade_decision" in result
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_retry_feedback_includes_source_text(self, mock_llm):
+        """评审 Minor：打回反馈四要素——原始文本片段（source_text）须随 message 拼入重试 prompt。
+
+        delta spec 要求反馈含原始文本片段/指标名/已验证值/偏差幅度；context 本身
+        不含 technical_indicators/price_levels（_build_risk_context 不下发），
+        故断言的片段与数值只能来自 anomaly 明细拼接。
+        """
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            _sell_decision_json(_GOOD_TRIGGER),
+        ]
+        risk_judge(dict(_PRICE_GATE_STATE))
+        retry_context = mock_llm.call_args_list[1].args[0]
+        assert "股价回落至 95 元附近再评估" in retry_context  # source_text 原文片段
+        assert "近期低点" in retry_context  # 指标名（message 携带）
+        assert "570" in retry_context  # 已验证值
+        assert "83.33" in retry_context  # 偏差幅度
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_gate_retry_to_watch_rechecks_sibling_notes(self, mock_llm):
+        """评审 Minor：价位门禁重试换代（sell→watch 缺理由）→ 兄弟结论如实改注。
+
+        终稿换代后仅复核价位结论不够：watch 缺 inaction_reason 时
+        final_inaction_check 不得停留空注假阳性；reeval_triggers 一并缺失时
+        final_reeval_check 同理——如实标注「未再次打回」，MUST NOT 虚报「已申报」。
+        """
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            json.dumps(
+                {
+                    "action": "watch",
+                    "confidence": 0.6,
+                    "reasoning": "趋势不明，暂观望",
+                    "position_size": "light",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+        result = risk_judge(dict(_PRICE_GATE_STATE))
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "watch"
+        inaction_note = result["final_inaction_check"]["note"]
+        assert "价位交叉校验重试" in inaction_note
+        assert "inaction_reason" in inaction_note
+        assert "未再次打回" in inaction_note
+        assert "未再次打回" in result["final_reeval_check"]["note"]

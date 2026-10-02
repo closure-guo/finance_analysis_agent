@@ -243,9 +243,18 @@ def risk_judge(state: dict) -> dict:
     decision_price_anomalies = _run_price_check(decision)
     decision_price_gate: dict = {"result": "pass", "note": ""}
     if decision_price_anomalies:
-        feedback = "；".join(
-            str(a.get("message") or "") for a in decision_price_anomalies if isinstance(a, dict)
-        )
+        # 反馈四要素（delta spec）：原始文本片段（source_text）+ 指标名/已验证值/
+        # 偏差幅度（message 携带）。单侧缺失退化为另一侧，两侧皆空不拼入；
+        # 全部为空时兜底「（无明细）」，MUST NOT 拼出空反馈打回。
+        feedback_parts: list[str] = []
+        for anomaly in decision_price_anomalies:
+            if not isinstance(anomaly, dict):
+                continue
+            sides = [str(anomaly.get("source_text") or ""), str(anomaly.get("message") or "")]
+            detail = "：".join(part for part in sides if part)
+            if detail:
+                feedback_parts.append(detail)
+        feedback = "；".join(feedback_parts) or "（无明细）"
         retry_context = (
             f"{context}\n\n【决策价位交叉校验打回】终稿自由文本价位与已验证技术指标冲突：{feedback}。"
             "请核对相关价位（以已验证指标值为准），修正后重新输出完整决策 JSON。"
@@ -276,6 +285,18 @@ def risk_judge(state: dict) -> dict:
         _payout_skipped += _payout_skipped2
         # 重试换代复核价位完整性结论（I-1 模式：如实改注，不再打回，MUST NOT 死循环）
         _recheck_price_note_after_retry(decision, final_price_check, "价位交叉校验重试")
+        # 重试换代复核兄弟结论（比照再评估重试 I-1 链，评审 Minor 收口）：终稿换代后
+        # 理由/触发条件结论可能失真——如实改注，不再打回（MUST NOT 死循环、不得虚报「已申报」）
+        _missing_inaction_after = inaction_rationale_missing(decision)
+        if _missing_inaction_after:
+            final_inaction_check["note"] = (
+                "价位交叉校验重试后终稿为非执行动作且理由缺失："
+                f"{'、'.join(_missing_inaction_after)}（未再次打回，如实标注）"
+            )
+        if not decision.reeval_triggers:
+            final_reeval_check["note"] = (
+                "价位交叉校验重试后终稿未申报再评估触发条件（未再次打回，如实标注）"
+            )
         decision_price_anomalies = _run_price_check(decision)
         if decision_price_anomalies:
             decision_price_gate["result"] = "fail"
