@@ -459,8 +459,10 @@ class TestDecisionPriceGate:
         assert "570" in result["final_trade_decision"].reeval_triggers[0]
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
-    def test_anomaly_persists_after_retry_fails_gate(self, mock_llm):
-        """打回后仍输出 95 → gate fail（路由据此阻断），残留 anomaly 落 state。"""
+    def test_anomaly_persists_same_source_after_retry_passes(self, mock_llm):
+        """打回后原样输出 95（同源残留，update-decision-price-gate-admission
+        分层语义）→ 未恶化放行 + note 待终裁，残留 anomaly 落 state 供 trace；
+        恶化阻断形态由 TestGateAdmissionLayering 覆盖。"""
         mock_llm.side_effect = [
             _sell_decision_json(_BAD_TRIGGER),
             _sell_decision_json(_BAD_TRIGGER),
@@ -468,8 +470,8 @@ class TestDecisionPriceGate:
         result = risk_judge(dict(_PRICE_GATE_STATE))
         assert mock_llm.call_count == 2
         gate = result["decision_price_gate"]
-        assert gate["result"] == "fail"
-        assert "已打回仍未通过" in gate["note"]
+        assert gate["result"] == "pass"
+        assert "未恶化" in gate["note"]
         assert len(result["decision_price_anomalies"]) == 1
         assert result["decision_price_anomalies"][0]["kind"] == "deviation"
 
@@ -539,3 +541,64 @@ class TestDecisionPriceGate:
         assert "inaction_reason" in inaction_note
         assert "未再次打回" in inaction_note
         assert "未再次打回" in result["final_reeval_check"]["note"]
+
+
+class TestGateAdmissionLayering:
+    """update-decision-price-gate-admission（incident 034 owner 终裁已批）：
+    打回后残留按恶化判据分层——同源未恶化 → 放行+标注待终裁；恶化（新增
+    source 或条数增加）→ 维持阻断。"""
+
+    def _run(self, mock_llm, first: list[str], retry: list[str]) -> dict:
+        mock_llm.side_effect = [
+            _sell_decision_json(first),
+            _sell_decision_json(retry),
+        ]
+        return risk_judge(dict(_PRICE_GATE_STATE))
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_same_source_residue_passes_with_note(self, mock_llm):
+        """同源残留（LLM 坚持原文本）→ pass + note 含未恶化/放行待终裁。"""
+        result = self._run(mock_llm, _BAD_TRIGGER, _BAD_TRIGGER)
+        assert mock_llm.call_count == 2
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "pass"
+        assert "未恶化" in gate["note"]
+        assert "放行待人工终裁" in gate["note"]
+        assert len(result["decision_price_anomalies"]) == 1  # 残留照落 trace
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_new_source_residue_fails_gate(self, mock_llm):
+        """重试引入新错误文本 → 恶化 → fail。"""
+        result = self._run(
+            mock_llm,
+            _BAD_TRIGGER,
+            ["股价回落至 96 元附近再评估"],  # 新幻觉价位（新 source_text）
+        )
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "fail"
+        assert "恶化" in gate["note"]
+        assert len(result["decision_price_anomalies"]) >= 1
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_more_residues_fails_gate(self, mock_llm):
+        """残留条数增加（1 → 2）→ 恶化 → fail。"""
+        result = self._run(
+            mock_llm,
+            _BAD_TRIGGER,
+            _BAD_TRIGGER + ["反弹至 94 元减仓再评估"],  # 原 1 条 + 新增 1 条
+        )
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "fail"
+        assert "恶化" in gate["note"]
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_shrunk_same_source_residue_passes(self, mock_llm):
+        """残留减少（2 → 1，剩余同源）→ 有改善未恶化 → pass。"""
+        result = self._run(
+            mock_llm,
+            _BAD_TRIGGER + ["反弹至 94 元减仓再评估"],
+            _BAD_TRIGGER,
+        )
+        gate = result["decision_price_gate"]
+        assert gate["result"] == "pass"
+        assert "未恶化" in gate["note"]

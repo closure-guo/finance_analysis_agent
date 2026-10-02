@@ -393,7 +393,8 @@ class TestRiskJudgeIntegration:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_risk_judge_returns_decision_price_anomalies(self, mock_llm):
-        """watch 决策含空洞触发价 → 打回一次，stub 仍同输出 → gate fail、残留落 state。"""
+        """watch 决策含空洞触发价 → 打回一次，stub 仍同输出（同源残留）→
+        未恶化放行 + note 待终裁、残留照落 state（update-decision-price-gate-admission）。"""
         mock_llm.return_value = json.dumps(
             {
                 "action": "watch",
@@ -416,8 +417,8 @@ class TestRiskJudgeIntegration:
         decision = result["final_trade_decision"]
         assert decision.action == "watch"  # risk_judge 层照常产出决策（阻断在 after_risk_judge）
         gate = result["decision_price_gate"]
-        assert gate["result"] == "fail"
-        assert "已打回仍未通过" in gate["note"]
+        assert gate["result"] == "pass"
+        assert "未恶化" in gate["note"]
         anomalies = result["decision_price_anomalies"]
         assert len(anomalies) == 1
         assert anomalies[0]["kind"] == "empty_trigger"
