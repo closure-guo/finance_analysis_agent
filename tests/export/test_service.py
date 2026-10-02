@@ -118,3 +118,41 @@ def test_embed_images_keeps_remote_url():
 
 def test_embed_images_passes_plain_text_through():
     assert embed_images_as_data_uris(_SAMPLE.rstrip("\n")) == _SAMPLE.rstrip("\n")
+
+
+def test_export_report_md_embeds_existing_image(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    img = tmp_path / "chart_roe.png"
+    raw = b"\x89PNG\r\n\x1a\n" + b"chart-bytes"
+    img.write_bytes(raw)
+    report = f"# 报告\n\n![ROE 趋势]({img})\n\n正文"
+
+    result = export_report(report, "600519", "贵州茅台", formats=("md",))
+
+    content = Path(result["md"]).read_text(encoding="utf-8")
+    encoded = base64.b64encode(raw).decode("ascii")
+    assert f"data:image/png;base64,{encoded}" in content
+    assert str(img) not in content
+    assert "免责声明" in content
+    # 会话侧 report_markdown 不被改写（改写仅发生在导出时刻）
+    assert report == f"# 报告\n\n![ROE 趋势]({img})\n\n正文"
+
+
+def test_export_report_md_drops_missing_image_line(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    report = "# 报告\n\n![坏图](C:/不存在/图.png)\n\n正文"
+
+    result = export_report(report, "600519", "", formats=("md",))
+
+    content = Path(result["md"]).read_text(encoding="utf-8")
+    assert "![坏图]" not in content
+    assert "正文" in content
+
+
+def test_export_report_md_no_data_uri_without_images(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    result = export_report(_SAMPLE, "600519", "", formats=("md",))
+
+    content = Path(result["md"]).read_text(encoding="utf-8")
+    assert "data:image" not in content
+    assert "免责声明" in content

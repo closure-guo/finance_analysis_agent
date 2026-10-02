@@ -118,8 +118,8 @@ def export_report(
         converter, ext = converters[fmt]
         target = base_name + ext
         try:
-            if converter is None:  # md：直接写文本
-                Path(target).write_text(markdown_text, encoding="utf-8")
+            if converter is None:  # md：图片内嵌为 data URI，落盘自包含单文件
+                Path(target).write_text(embed_images_as_data_uris(markdown_text), encoding="utf-8")
             else:
                 converter(markdown_text, target, stock_name)
             result[fmt] = target
