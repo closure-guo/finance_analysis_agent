@@ -243,6 +243,9 @@ def risk_judge(state: dict) -> dict:
     decision_price_anomalies = _run_price_check(decision)
     decision_price_gate: dict = {"result": "pass", "note": ""}
     if decision_price_anomalies:
+        # 首次 anomaly 快照（update-decision-price-gate-admission）：重试后残留
+        # 与此比较做恶化判据（见下方分层注释）
+        first_anomalies: list[dict] = list(decision_price_anomalies)
         # 反馈四要素（delta spec）：原始文本片段（source_text）+ 指标名/已验证值/
         # 偏差幅度（message 携带）。单侧缺失退化为另一侧，两侧皆空不拼入；
         # 全部为空时兜底「（无明细）」，MUST NOT 拼出空反馈打回。
@@ -299,8 +302,33 @@ def risk_judge(state: dict) -> dict:
             )
         decision_price_anomalies = _run_price_check(decision)
         if decision_price_anomalies:
-            decision_price_gate["result"] = "fail"
-            decision_price_gate["note"] = f"已打回仍未通过：{len(decision_price_anomalies)} 条残留"
+            # 门禁准入恶化判据分层（update-decision-price-gate-admission，owner 终裁
+            # 已批）：残留 ⊆ 首次（source_text 同源且条数不增）= LLM 坚持原文本的合理
+            # 申辩形态（多为校验器语义盲区，incident 034 实证）→ 放行 + 如实标注待
+            # 人工终裁；残留恶化（新增 source 或条数增加）= 重试引入新错误 → 阻断。
+            # source_text 为校验器提取的原文片段：LLM 改写文本必然产生新片段，
+            # 集合精确运算即可刻画「未采纳修正且未引入新错误」，模糊匹配不需要
+            # （模糊地带按恶化阻断，保守方向正确）。
+            first_sources = {
+                str(a.get("source_text") or "") for a in first_anomalies if isinstance(a, dict)
+            }
+            resid_sources = {
+                str(a.get("source_text") or "")
+                for a in decision_price_anomalies
+                if isinstance(a, dict)
+            }
+            worse = len(decision_price_anomalies) > len(first_anomalies) or any(
+                s not in first_sources for s in resid_sources
+            )
+            if worse:
+                decision_price_gate["result"] = "fail"
+                decision_price_gate["note"] = (
+                    f"已打回仍恶化（新增异常文本或条数增加）：{len(decision_price_anomalies)} 条残留"
+                )
+            else:
+                decision_price_gate["note"] = (
+                    f"打回后残留 {len(decision_price_anomalies)} 条未清零（未恶化，放行待人工终裁）"
+                )
 
     return {
         "final_trade_decision": decision,
