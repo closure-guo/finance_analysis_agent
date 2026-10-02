@@ -12,12 +12,16 @@ from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger("finance_agent.fund_manager")
 
-# 终稿完整性检查的 state 键 → 中文标签（update-decision-integrity-gates Task 4）。
+# 终稿完整性检查的 state 键 → 中文标签（update-decision-integrity-gates Task 4；
+# decision_price_gate 为 update-decision-price-gate 追加）。
 # report.py 渲染「审批对象结构不完整标注」复用同一收集器，键序/标签单源
 FINAL_CHECK_LABELS: tuple[tuple[str, str], ...] = (
     ("final_price_check", "价位"),
     ("final_inaction_check", "非执行动作理由"),
     ("final_reeval_check", "再评估触发条件"),
+    # 决策价位门禁复核注（「打回后已修正」/「已打回仍未通过：N 条残留」）随完整性
+    # 标注一并进 FM 上下文（report 侧经 _FM_INCOMPLETE_MARKERS 过滤，不渲染）
+    ("decision_price_gate", "决策价位校验"),
 )
 
 

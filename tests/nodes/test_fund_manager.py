@@ -7,7 +7,11 @@ import pytest
 from pydantic import ValidationError
 
 from finance_agent.models import TradeDecision
-from finance_agent.nodes.fund_manager import _build_fund_manager_context, fund_manager
+from finance_agent.nodes.fund_manager import (
+    _build_fund_manager_context,
+    final_integrity_notes,
+    fund_manager,
+)
 
 
 def _mock_response(decision: str) -> str:
@@ -208,3 +212,25 @@ class TestApproveFieldRetry:
         mock_llm.return_value = _mock_response("approve")
         fund_manager(_base_state())
         assert mock_llm.call_count == 1
+
+
+def test_final_integrity_notes_includes_price_gate_note():
+    """update-decision-price-gate：gate「打回后已修正」复核标注进 FM 上下文。"""
+    state = {
+        "final_price_check": {"result": "pass", "note": ""},
+        "final_inaction_check": {"result": "pass", "note": ""},
+        "final_reeval_check": {"result": "pass", "note": ""},
+        "decision_price_gate": {"result": "pass", "note": "打回后已修正"},
+    }
+    notes = final_integrity_notes(state)
+    assert ("决策价位校验", "打回后已修正") in notes
+
+
+def test_final_integrity_notes_empty_gate_note_skipped():
+    state = {
+        "final_price_check": {"result": "pass", "note": ""},
+        "final_inaction_check": {"result": "pass", "note": ""},
+        "final_reeval_check": {"result": "pass", "note": ""},
+        "decision_price_gate": {"result": "pass", "note": ""},
+    }
+    assert final_integrity_notes(state) == []
