@@ -466,3 +466,90 @@ class TestRiskJudgeIntegration:
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert result["final_trade_decision"].action == "watch"
         assert result["decision_price_anomalies"] == []
+
+
+class TestFalsePositiveFix688072:
+    """fix-decision-price-check-false-positives：688072 重跑实证的两个误报回归。
+
+    案例背景（incident 034 / trace 7f43b9c9…）：reasoning 的「VaR95单日6.6%」
+    曾被误读为股价 95 vs 近期低点 570 偏差 83.33%；触发条件「回撤至610以下…
+    站稳610」的回踩确认结构曾被句法命中上破模式判空洞，导致门禁误拦。
+    """
+
+    STATE = {
+        "available": True,
+        "entry_ref": 640.0,
+        "recent_low": 570.0,
+        "recent_high": 945.0,
+        "stop_band_long": {"low": 570.0, "high": 605.0},
+        "target_band_long": {"low": 500.0, "high": 560.0},
+    }
+
+    GEN1_TRIGGER = "价格回撤至610以下且连续5日收盘站稳610并缩量企稳（量化原610企稳条件）"
+    GEN2_TRIGGER = (
+        "价格有效回撤至近期低点570-605止损带区域（需实际跌破610后连续5日收盘"
+        "站稳610之上且成交量萎缩，形成回踩确认的企稳结构，而非当前640价位下直接满足）"
+    )
+    VAR_REASONING = (
+        "(1)以PEG口径论证86倍PE便宜依赖+1324%单期增速可外推，属'线性外推'；"
+        "(2)VaR95单日6.6%不能证明'高波动来自上行弹性'，最大回撤30.37%是已实现极值。"
+    )
+
+    def _decision(self, trigger: str, reasoning: str) -> TradeDecision:
+        return TradeDecision.model_validate(
+            {
+                "action": "watch",
+                "confidence": 0.6,
+                "reasoning": reasoning,
+                "inaction_reason": trigger,
+                "reeval_triggers": [trigger],
+            }
+        )
+
+    def test_var95_not_misread_as_price(self):
+        """缺陷 A：VaR95 语境的 95 不再被当股价报偏差。"""
+        anoms = check_decision_prices(
+            self._decision(" MACD柱线重新翻正且MA5收复MA10 ".strip(), self.VAR_REASONING),
+            {},
+            self.STATE,
+            640.0,
+        )
+        assert not [
+            a for a in anoms if "95" in str(a.get("verified_value")) or "95" in a["message"]
+        ]
+
+    def test_var_percent_and_chinese_forms_not_misread(self):
+        """VaR(95% / 在险价值95 变体形态同样不误报。"""
+        for reasoning in ("VaR(95%置信)下单日6.6%", "在险价值95口径下回撤可控"):
+            anoms = check_decision_prices(
+                self._decision("跌破近期低点570重估", reasoning), {}, self.STATE, 640.0
+            )
+            assert not [a for a in anoms if "95" in a["message"]], reasoning
+
+    def test_compound_retest_trigger_gen1_not_empty(self):
+        """缺陷 B：gen1 复合回踩（回撤至610…站稳610）不判空洞。"""
+        anoms = check_decision_prices(
+            self._decision(self.GEN1_TRIGGER, "观望等待回踩确认"), {}, self.STATE, 640.0
+        )
+        assert not [a for a in anoms if a["kind"] == "empty_trigger"]
+
+    def test_compound_retest_trigger_gen2_not_empty(self):
+        """缺陷 B：gen2 复合回踩（跌破610后站稳610之上）不判空洞。"""
+        anoms = check_decision_prices(
+            self._decision(self.GEN2_TRIGGER, "观望等待回踩确认"), {}, self.STATE, 640.0
+        )
+        assert not [a for a in anoms if a["kind"] == "empty_trigger"]
+
+    def test_simple_breakout_still_empty(self):
+        """护栏：单上破无下破语境（spec 场景）照常判空洞——豁免不得扩大化。"""
+        anoms = check_decision_prices(
+            self._decision("价格放量站上止损参考带上沿605", "等待企稳"), {}, self.STATE, 640.0
+        )
+        assert [a for a in anoms if a["kind"] == "empty_trigger"]
+
+    def test_real_hallucinated_price_still_reported(self):
+        """护栏：真幻觉价位（无 var 语境的裸 95）照常报偏差——修复只豁免风险度量语境。"""
+        anoms = check_decision_prices(
+            self._decision("目标价看到 95 元附近减仓", "技术形态走弱"), {}, self.STATE, 640.0
+        )
+        assert [a for a in anoms if a["kind"] == "deviation" and "95" in a["message"]]

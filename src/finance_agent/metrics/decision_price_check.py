@@ -30,9 +30,11 @@ from finance_agent.models import TradeDecision
 _DEVIATION_THRESHOLD = 0.02
 
 # 空洞形态方向词（spec：上破类「站上/突破/收复 X」/ 下破类「跌破/回落至 X」；
-# 「放量突破」被「突破」覆盖；「站稳」为同族上破语义扩展）
+# 「放量突破」被「突破」覆盖；「站稳」为同族上破语义扩展；
+# 「回撤至/回调至」为回踩语境同族下破词（fix-decision-price-check-false-positives，
+# 688072 实证：缺失导致复合回踩触发的前半句无方向、后半句被误判空洞）
 _BREAKOUT_WORDS: tuple[str, ...] = ("站上", "突破", "收复", "放量突破", "站稳")
-_BREAKDOWN_WORDS: tuple[str, ...] = ("跌破", "回落至", "失守")
+_BREAKDOWN_WORDS: tuple[str, ...] = ("跌破", "回落至", "失守", "回撤至", "回调至")
 
 # 方向词与数值的最大字符距离（词尾 → 数值起点；触发条目为 1-3 个短句）
 _BREAK_WORD_WINDOW = 12
@@ -72,6 +74,9 @@ _NON_PRICE_KEYWORDS: tuple[str, ...] = (
     "m2",
     "lpr",
     "beta",
+    "var",  # VaR95/VaR(95% 风险度量语境（fix-decision-price-check-false-positives：
+    # 688072 实证 95 曾被误读为股价）
+    "在险价值",
     "换手",
     "量比",
     "赔率",
@@ -370,10 +375,32 @@ def _check_snippet(
     scale: float,
     latest_close: float | None,
 ) -> list[dict]:
-    """单段文本的价位交叉校验；每处数值至多登记 deviation + empty_trigger 各一条。"""
+    """单段文本的价位交叉校验；每处数值至多登记 deviation + empty_trigger 各一条。
+
+    复合回踩豁免（fix-decision-price-check-false-positives）：同一文本内同一数值
+    同时出现下破语境与上破语境（「先跌破/回撤至 X，再站稳/站上 X」）时，该数值的
+    空洞判定跳过——两个子条件串联，整体是前瞻有效门槛，非当前时点已满足。
+    """
     anomalies: list[dict] = []
     aliases = _alias_occurrences(text)
     exclusions = _exclusion_spans(text, aliases)
+    # 复合回踩豁免（fix-decision-price-check-false-positives）：同一文本内同一数值
+    # 同时出现下破语境与上破语境（「先跌破/回撤至 X，再站稳 X」）时，该数值的
+    # 空洞判定跳过——两个子条件串联，整体是前瞻有效门槛，非当前时点已满足。
+    # 预扫不做量纲过滤（_non_price_context）：方向检测与量纲分类正交，且
+    # 「回撤」关键词会误杀「回撤至610」的下破方向（688072 gen1 实证），使
+    # down+up 共现判定缺一半；预扫结果只用于豁免，不产生 anomaly
+    _value_dirs: dict[float, set[str]] = {}
+    for m in _NUM_RE.finditer(text):
+        s = (m.start(), m.end())
+        if _overlaps(s, exclusions):
+            continue
+        v = float(m.group())
+        if 0 < v < 1:
+            continue
+        d = _break_direction(text, s[0])
+        if d is not None:
+            _value_dirs.setdefault(v, set()).add(d)
     for match in _NUM_RE.finditer(text):
         span = (match.start(), match.end())
         if _overlaps(span, exclusions):
@@ -421,6 +448,9 @@ def _check_snippet(
             is_empty = (direction == "up" and value <= latest_close) or (
                 direction == "down" and value >= latest_close
             )
+            dirs_of_value = _value_dirs.get(value, set())
+            if is_empty and "up" in dirs_of_value and "down" in dirs_of_value:
+                is_empty = False  # 复合回踩结构：down+up 共现，见函数头注释
             if is_empty:
                 word = "上破" if direction == "up" else "下破"
                 relation = "不高于" if direction == "up" else "不低于"
