@@ -8,7 +8,10 @@
 决策层产出的自由文本价位（`reeval_triggers` 条目与 `inaction_reason`/`reasoning` 中出现的数值价位）SHALL 由确定性代码与 state 中已验证的技术指标值（最新收盘价、各周期 MA、近期高低点、布林轨道）交叉核对，MUST NOT 仅因数值出现在决策文本即视为可信。以下两种形态 SHALL 各登记一条 anomaly（复用既有 anomalies 通道，附原始文本片段与最接近的已验证指标值）：
 
 - **偏差形态**：文本价位与语义最接近的已验证指标值偏差超过配置阈值（默认 2%），且不落在 `price_levels` 参考带内；
-- **空洞形态**：上破类触发（「站上/突破/收复 X」）中 X 不高于最新收盘价，或下破类触发（「跌破/回落至 X」）中 X 不低于最新收盘价——即触发条件在当前时点已经满足，不构成有效的再评估门槛。
+- **空洞形态**：上破类触发（「站上/突破/收复 X」）中 X 不高于最新收盘价，或下破类触发（「跌破/回落至/回撤至/回调至 X」）中 X 不低于最新收盘价——即触发条件在当前时点已经满足，不构成有效的再评估门槛。
+(Previously: 下破类触发词枚举为「跌破/回落至 X」。)
+
+**复合条件豁免（fix-decision-price-check-false-positives，688072 实证）**：同一触发条目内同一数值同时出现下破语境与上破语境（「先跌破/回撤至 X，再站稳/站上 X」的回踩确认结构）时，该数值 SHALL NOT 判空洞形态——两个子条件串联（价格须先跌破 X 才谈得上站稳 X），整体构成前瞻有效门槛，MUST NOT 因后半句句法命中上破模式而误判。
 
 anomaly 的处置 SHALL 为门禁语义（2026-10-02 回归评审裁决，取代「纯观测 + 报告旁注」）：
 
@@ -16,14 +19,13 @@ anomaly 的处置 SHALL 为门禁语义（2026-10-02 回归评审裁决，取代
 - 重试输出修正（复检无 anomaly）→ 决策放行进 Fund Manager 审批，gate 结果与「打回后已修正」复核标注落 state；
 - 重试后仍存在 anomaly → 管线 SHALL 阻断：MUST NOT 进入 Fund Manager 审批、MUST NOT 产出报告，阻断原因与 anomaly 明细落 state/Langfuse trace；
 - 报警信息属于内部 trace：报告 SHALL NOT 渲染「价位待核实」类标注（无论打回修正与否），anomaly 明细仅经 state/Langfuse trace 可观测。
-(Previously: 校验 SHALL NOT 硬中断管线——决策照常放行前进，校验结果以 anomaly + 报告标注呈现，可观测优先。)
 
-无法与任何已验证指标建立归属对应的数值（如财报降幅阈值、赔率比值）SHALL NOT 被误报——归属匹配 SHALL 区分价格量纲与百分比/比值量纲。校验器自身抛出异常时 SHALL fail-open（放行决策并告警日志），MUST NOT 因校验器缺陷阻断管线；校验器无任何已验证指标可核对时 SHALL 直通（不凭空报 anomaly）。
+无法与任何已验证指标建立归属对应的数值（如财报降幅阈值、赔率比值、**风险度量 VaR/在险价值语境的置信水平数字**）SHALL NOT 被误报——归属匹配 SHALL 区分价格量纲与百分比/比值量纲，VaR95 / VaR(95% / 在险价值 95% 等表述中的 95 属风险度量语境，MUST NOT 按股价比对（fix-decision-price-check-false-positives，688072 实证：reasoning「VaR95单日6.6%」的 95 曾被误读为股价并报「与近期低点偏差 83.33%」）。校验器自身抛出异常时 SHALL fail-open（放行决策并告警日志），MUST NOT 因校验器缺陷阻断管线；校验器无任何已验证指标可核对时 SHALL 直通（不凭空报 anomaly）。
 
 #### Scenario: 触发价幻觉检测（偏差形态）
 
-- **WHEN** risk_judge 终稿的 `reeval_triggers` 含文本价位 95，state 已验证指标中近期低点 = 570（偏差 83.33%，超过默认阈值 2% 且不在 price_levels 参考带内）
-- **THEN** 系统 SHALL 登记一条偏差形态 anomaly，内容含触发原文、指标名（近期低点）、已验证值 570 与偏差幅度
+- **WHEN** risk_judge 终稿的 `target_price` 相关 reasoning 含文本价位 95（如「目标价看到 95 元附近」，量纲与现价同数量级），state 已验证指标中近期低点 = 570、最新收盘 = 640（偏差远超 2% 阈值且不在 price_levels 参考带内）
+- **THEN** 系统 SHALL 登记一条偏差形态 anomaly，内容含触发原文、指标名、已验证值与偏差幅度
 - **AND** anomaly 明细 SHALL 仅落 state/Langfuse trace，报告 MUST NOT 渲染「价位待核实」标注
 
 #### Scenario: 空洞触发条件检测
@@ -39,8 +41,14 @@ anomaly 的处置 SHALL 为门禁语义（2026-10-02 回归评审裁决，取代
 
 #### Scenario: 非价格量纲数值不误报
 
-- **WHEN** `reeval_triggers` 含「单季净利降幅收敛至 18.35% 以下」「赔率修复至 1:1」等百分比/比值表述
-- **THEN** 归属匹配 SHALL 识别其为非价格量纲，SHALL NOT 按价位偏差误报 anomaly
+- **WHEN** `reeval_triggers` 含「单季净利降幅收敛至 18.35% 以下」「赔率修复至 1:1」等百分比/比值表述，或 `reasoning` 含「VaR95单日6.6%」「VaR(95%置信)」「在险价值95」等风险度量语境
+- **THEN** 归属匹配 SHALL 识别其为非价格量纲/风险度量语境，SHALL NOT 按价位偏差误报 anomaly
+
+#### Scenario: 复合回踩触发不判空洞
+
+- **WHEN** watch 决策的 `reeval_triggers` 含「价格回撤至610以下且连续5日收盘站稳610并缩量企稳」（或「需实际跌破610后连续5日收盘站稳610之上」），最新收盘价为 640（高于 610）
+- **THEN** 610 因同条目内同时出现下破语境（回撤至/跌破）与上破语境（站稳）SHALL 被识别为回踩确认结构，SHALL NOT 登记空洞形态 anomaly
+- **AND** 该条目其他数值的偏差/空洞校验照常进行
 
 #### Scenario: 偏差异常打回重试后修正放行
 
