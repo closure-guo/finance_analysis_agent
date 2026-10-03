@@ -942,3 +942,40 @@ def migrate_decision_log(db_path: str | Path | None = None) -> int:
     finally:
         conn.close()
     return migrated
+
+
+def recent_directions(
+    stock_code: str,
+    window_days: int = 5,
+    db_path: str | Path | None = None,
+    today: str | None = None,
+) -> list[dict[str, Any]]:
+    """近窗历史决策方向序列（add-decision-hysteresis 滞回数据源，只读）。
+
+    返回窗口内该标的按时间升序的 {"date", "direction", "confidence"} 列表；
+    symbol 映射与 ingest 同款（6 开头 .SH、否则 .SZ）。fail-open：DB 异常/库
+    不可用返回 []——滞回不生效，MUST NOT 因历史查询炸决策管线。
+    """
+    symbol = f"{stock_code}.SH" if str(stock_code).startswith("6") else f"{stock_code}.SZ"
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    try:
+        conn = _connect(db_path)
+    except Exception:  # noqa: BLE001 -- fail-open（查询不可用 ≠ 决策不可行）
+        return []
+    try:
+        rows = conn.execute(
+            """SELECT substr(created_at, 1, 10) AS d, direction, confidence
+               FROM predictions
+               WHERE symbol = ? AND d >= date(?, ?)
+               ORDER BY created_at ASC""",
+            (symbol, today, f"-{int(window_days)} days"),
+        ).fetchall()
+        return [
+            {"date": d, "direction": direction, "confidence": confidence}
+            for d, direction, confidence in rows
+        ]
+    except Exception:  # noqa: BLE001 -- fail-open 同上
+        return []
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()

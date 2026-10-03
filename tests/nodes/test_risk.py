@@ -663,3 +663,199 @@ class TestSellTypeDeclarationLoop:
         result = risk_judge(self._base_state())
         mock_llm.assert_called_once()
         assert result["final_trade_decision"].sell_type == "short"
+
+
+def _watch_from_exec_json(reasoning: str) -> str:
+    """均衡带降级重申形态：LLM 重申仍输出执行动作（供 side_effect 第二段）。"""
+    return json.dumps(
+        {
+            "action": "sell",
+            "confidence": 0.55,
+            "position_size": "light",
+            "sell_type": "short",
+            "entry_price": 640.0,
+            "stop_loss": 700.0,
+            "target_price": 571.0,
+            "reasoning": reasoning,
+            "reeval_triggers": ["跌破 570 重估"],
+        },
+        ensure_ascii=False,
+    )
+
+
+class TestDecisionHysteresis:
+    """add-decision-hysteresis：证据均衡带 + 方向滞回——无增量的执行/翻转
+    打回重申一次，重申仍无 → 降级观望 / 维持前判；携带增量放行。"""
+
+    @staticmethod
+    def _state(rating: str | None, history: list[dict]) -> dict:
+        return {
+            "trader_plan": {"action": "sell", "confidence": 0.7},
+            "risk_debate_history": [],
+            "stock_code": "688072",
+            "research_manager_rating": rating,
+            "price_levels": {"available": True, "entry_ref": 640.0, "recent_low": 570.0},
+        }
+
+    @patch("finance_agent.nodes.risk.recent_directions", return_value=[])
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_balanced_zone_exec_no_incremental_downgraded(self, mock_llm, _mock_hist):
+        """RM 中性（均衡带）+ sell 无增量 → 重申仍无 → 降级 watch + 标注。"""
+        mock_llm.side_effect = [
+            _sell_decision_json(["跌破 570 重估"]),
+            _watch_from_exec_json("技术形态走弱，趋势延续"),
+        ]
+        result = risk_judge(self._state("中性", []))
+        assert mock_llm.call_count == 2
+        decision = result["final_trade_decision"]
+        assert decision.action == "watch"
+        assert "证据均衡" in (decision.inaction_reason or "")
+        hy = result["decision_hysteresis"]
+        assert hy["balanced_zone"] is True
+        assert "默认观望" in hy["applied"]
+
+    @patch("finance_agent.nodes.risk.recent_directions", return_value=[])
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_balanced_zone_exec_with_incremental_passes(self, mock_llm, _mock_hist):
+        """均衡带内执行动作但 reasoning 申报增量（技术破位确认）→ 放行。"""
+        mock_llm.return_value = json.dumps(
+            {
+                "action": "sell",
+                "confidence": 0.6,
+                "position_size": "light",
+                "sell_type": "short",
+                "entry_price": 640.0,
+                "stop_loss": 700.0,
+                "target_price": 571.0,
+                "reasoning": "今日放量跌破 MA60，技术形态破位确认",
+                "reeval_triggers": ["收复 645 上方重估"],
+            },
+            ensure_ascii=False,
+        )
+        result = risk_judge(self._state("中性", []))
+        mock_llm.assert_called_once()
+        assert result["final_trade_decision"].action == "sell"
+        assert result["decision_hysteresis"]["applied"] == ""
+
+    @patch(
+        "finance_agent.nodes.risk.recent_directions",
+        return_value=[{"date": "2026-10-01", "direction": "short", "confidence": 0.6}],
+    )
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_flip_without_incremental_maintains_prior(self, mock_llm, _mock_hist):
+        """近窗前向 short，输出 buy（翻转）无增量 → 重申仍无 → 维持 sell + 价位清空。"""
+        mock_llm.side_effect = [
+            json.dumps(
+                {
+                    "action": "buy",
+                    "confidence": 0.6,
+                    "position_size": "light",
+                    "entry_price": 640.0,
+                    "stop_loss": 600.0,
+                    "target_price": 750.0,
+                    "reasoning": "超跌反弹",
+                    "reeval_triggers": ["放量收复 645 上方"],
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "action": "buy",
+                    "confidence": 0.6,
+                    "position_size": "light",
+                    "entry_price": 640.0,
+                    "stop_loss": 600.0,
+                    "target_price": 750.0,
+                    "reasoning": "反弹动能仍在",
+                    "reeval_triggers": ["放量收复 645 上方"],
+                },
+                ensure_ascii=False,
+            ),
+            # 维持前判 sell（sell_type 默认 short、价位清空）→ 价位完整性打回第三段
+            json.dumps(
+                {
+                    "action": "sell",
+                    "confidence": 0.6,
+                    "position_size": "light",
+                    "sell_type": "short",
+                    "entry_price": 645.0,
+                    "stop_loss": 700.0,
+                    "target_price": 571.0,
+                    "reasoning": "维持前判（无证据增量）",
+                    "reeval_triggers": ["跌破 570 重估"],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+        result = risk_judge(
+            self._state("看空", [{"date": "2026-10-01", "direction": "short", "confidence": 0.6}])
+        )
+        assert mock_llm.call_count == 3  # 滞回打回 + 维持前判后价位完整性打回
+        decision = result["final_trade_decision"]
+        assert decision.action == "sell"  # 维持前判
+        assert decision.entry_price == 645.0  # 价位经完整性打回重新申报
+        hy = result["decision_hysteresis"]
+        assert hy["flip"] is True
+        assert "维持前判" in hy["applied"]
+
+    @patch(
+        "finance_agent.nodes.risk.recent_directions",
+        return_value=[{"date": "2026-10-01", "direction": "short", "confidence": 0.6}],
+    )
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_flip_with_incremental_passes(self, mock_llm, _mock_hist):
+        """翻转但申报增量（三季报增速回落）→ 放行翻转。"""
+        mock_llm.return_value = json.dumps(
+            {
+                "action": "buy",
+                "confidence": 0.6,
+                "position_size": "light",
+                "entry_price": 640.0,
+                "stop_loss": 600.0,
+                "target_price": 750.0,
+                "reasoning": "三季报披露后毛利率拐点确认，估值消化",
+                "reeval_triggers": ["跌破 570"],
+            },
+            ensure_ascii=False,
+        )
+        result = risk_judge(
+            self._state("看空", [{"date": "2026-10-01", "direction": "short", "confidence": 0.6}])
+        )
+        mock_llm.assert_called_once()
+        assert result["final_trade_decision"].action == "buy"
+
+    @patch("finance_agent.nodes.risk.recent_directions", return_value=[])
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_no_rating_no_history_no_op(self, mock_llm, _mock_hist):
+        """RM 看多（非均衡带）+ 无历史 → 无复核（恰 1 次调用），行为与现状一致。"""
+        mock_llm.return_value = _sell_decision_json(["跌破 570 重估"])
+        result = risk_judge(self._state("看多", []))
+        mock_llm.assert_called_once()
+        assert result["decision_hysteresis"]["applied"] == ""
+        assert result["decision_hysteresis"]["balanced_zone"] is False
+
+    @patch("finance_agent.nodes.risk.recent_directions", return_value=[])
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_reaffirm_with_incremental_second_pass_keeps_exec(self, mock_llm, _mock_hist):
+        """首次无增量被打回，重申携带增量 → 放行执行动作（恰 2 次调用）。"""
+        mock_llm.side_effect = [
+            _sell_decision_json(["跌破 570 重估"]),
+            json.dumps(
+                {
+                    "action": "sell",
+                    "confidence": 0.55,
+                    "position_size": "light",
+                    "sell_type": "short",
+                    "entry_price": 640.0,
+                    "stop_loss": 700.0,
+                    "target_price": 571.0,
+                    "reasoning": "中报披露后现金流质量证伪，破位风险上升",
+                    "reeval_triggers": ["跌破 570 重估"],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+        result = risk_judge(self._state("中性", []))
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "sell"
+        assert result["decision_hysteresis"]["applied"] == ""
