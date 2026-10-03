@@ -611,9 +611,21 @@ class AKShareClient:
 
         raw_rev = latest.get("营业总收入")
         raw_cost = latest.get("营业成本")
+        raw_np = latest.get("归母净利润") or latest.get("归属于母公司股东的净利润")
         revenue = self._yi(raw_rev)
         cost = self._yi(raw_cost)
-        np_attr = self._yi(latest.get("归母净利润") or latest.get("归属于母公司股东的净利润"))
+        np_attr = self._yi(raw_np)
+
+        # 展示精度 4 位（update-sell-action-typing 同期 #190 修正）：同比与下游 LLM
+        # 复算须可对账——2 位舍入基期 0.94 会把 688072 归母同比算成 1328.72%
+        # （精确 1324.10%），精度链断裂即多口径并存
+        def _yi4(v: object) -> float | None:
+            # round 6 = 元级精度：下游 LLM 用展示值复算同比须能与 raw 同比值对上
+            # （round 4 的 0.9429 会再引入 2e-5 舍入，复算得 1324.07 ≠ 1324.1）
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return None
+            return round(float(v) / 1e8, 6)
+
         # 毛利率按原始值计算（先 round 成亿元再算比值会引入截断误差）；
         # revenue/cost 守卫排除缺失与零营收，raw 守卫收窄 pandas-stubs 的 Any|None
         gross_margin: float | None = None
@@ -636,17 +648,20 @@ class AKShareClient:
         prior_np: float | None = None
         if not prior_rows.empty:
             prior = prior_rows.iloc[0]
-            prior_rev = self._yi(prior.get("营业总收入"))
-            prior_np = self._yi(prior.get("归母净利润") or prior.get("归属于母公司股东的净利润"))
+            prior_rev = _yi4(prior.get("营业总收入"))
+            prior_np = _yi4(prior.get("归母净利润") or prior.get("归属于母公司股东的净利润"))
         if prior_rev is None and prior_np is None:
             # 无同期行，或同期行存在但值全缺（审查 M2）——同比无从计算，均须标注
             missing.append("上年同期数据缺失")
+        # 同比按原始元值计算（与毛利率 raw 同款，update-sell-action-typing 期 #190
+        # 修正）：舍入亿元值相除引入基期截断误差（688072 实证 1328.72% vs 精确
+        # 1324.10%），先 round 再算比值是错误顺序
         rev_yoy: float | None = None
-        if revenue is not None and prior_rev is not None and prior_rev != 0:
-            rev_yoy = round((revenue - prior_rev) / abs(prior_rev) * 100, 2)
+        if raw_rev is not None and prior_rev is not None and prior_rev != 0:
+            rev_yoy = round((float(raw_rev) / 1e8 - prior_rev) / abs(prior_rev) * 100, 2)
         np_yoy: float | None = None
-        if np_attr is not None and prior_np is not None and prior_np != 0:
-            np_yoy = round((np_attr - prior_np) / abs(prior_np) * 100, 2)
+        if raw_np is not None and prior_np is not None and prior_np != 0:
+            np_yoy = round((float(raw_np) / 1e8 - prior_np) / abs(prior_np) * 100, 2)
 
         # 资产负债表（取同一报告日；该期缺失取最新一期并标注）
         snap: dict = {
