@@ -29,6 +29,7 @@ from finance_agent.outcome.track_record.model import (
     upsert_equity_point,
     upsert_metrics_daily,
 )
+from finance_agent.outcome.track_record.reference_price import reference_price_ok
 
 logger = logging.getLogger(__name__)
 
@@ -59,17 +60,45 @@ def _bench_base(bench_by_date: dict[str, float], entry_date: str) -> float | Non
     return None
 
 
+def _fetch_benchmark(client: Any, kline_days: int) -> pd.DataFrame | None:
+    """拉取并归一基准日 K；失败/空结果仅 WARN 返回 None（超额置空/日历降级）。"""
+    try:
+        benchmark = client.fetch_index_kline(BENCHMARK_CODE, days=kline_days)
+        if benchmark is not None and not benchmark.empty:
+            return _normalize_dates(benchmark)
+        logger.warning("基准行情返回空,按无基准降级")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("基准行情拉取失败,超额收益字段置空: %s", e)
+    return None
+
+
+# 参考价防护仅对「created 后首个交易日」在近邻窗口内的观点生效（日历日）
+_GUARD_WINDOW_DAYS = 7
+
+
+def _within_guard_window(created: str, first_mark: str) -> bool:
+    """首盯日距 created 超窗（280 根 K 线窗口滑动的老龄 open 观点）→ 比对无意义。"""
+    try:
+        from datetime import date
+
+        delta = abs((date.fromisoformat(first_mark) - date.fromisoformat(created)).days)
+    except ValueError:
+        return False
+    return delta <= _GUARD_WINDOW_DAYS
+
+
 def mark_open_predictions(
     *,
     client: Any = None,
     db_path: str | Path | None = None,
     kline_days: int = 280,
+    benchmark: pd.DataFrame | None = None,
 ) -> dict[str, int]:
     """盯市全部 open 观点。返回 {marked, skipped, errors}。
 
     容错：单个观点行情失败仅跳过（errors+1），本批继续；无入场价/信号
     缺要素的观点 skipped（不入盯市）。幂等：同 (prediction_id, mark_date)
-    覆盖重写。
+    覆盖重写。benchmark 可由 run_daily_marking 传入复用（同批仅拉一次）。
     """
     if client is None:
         from finance_agent.data.akshare_client import AKShareClient
@@ -84,13 +113,8 @@ def mark_open_predictions(
         result["errors"] += 1
         return result
 
-    benchmark: pd.DataFrame | None = None
-    try:
-        benchmark = client.fetch_index_kline(BENCHMARK_CODE, days=kline_days)
-        if benchmark is not None and not benchmark.empty:
-            benchmark = _normalize_dates(benchmark)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("基准行情拉取失败,超额收益字段置空: %s", e)
+    if benchmark is None:
+        benchmark = _fetch_benchmark(client, kline_days)
     bench_by_date = _bench_by_date(benchmark)
 
     for p in open_preds:
@@ -112,9 +136,27 @@ def mark_open_predictions(
             result["errors"] += 1
             continue
 
-        sign = 1.0 if p["direction"] == "long" else -1.0
+        # neutral 按 long 口径记录（与 judgment 回避判定同号；incident 032 根因 A：
+        # 旧代码 else -1.0 把 hold/watch 当空头，产生幻影空头损益）
+        sign = -1.0 if p["direction"] == "short" else 1.0
         benchmark_base = _bench_base(bench_by_date, created)
         if rows.empty:
+            result["skipped"] += 1
+            continue
+        # 参考价失效防护（incident 032 根因 B 存量）：entry 与首盯市收盘偏离超阈值
+        # 视参考价不可信，跳过不写 marks，供人工甄别（append-only 冻结语义不修 entry）。
+        # 仅在首盯日临近 created 时比对——280 根窗口滑动的老龄观点首盯日远离
+        # created，收盘差异巨大是持仓期行情，不是坏参考价，不适用防护。
+        first_close = float(rows.iloc[0]["收盘"])
+        if _within_guard_window(created, str(rows.iloc[0]["日期"])) and not reference_price_ok(
+            float(entry), first_close
+        ):
+            logger.warning(
+                "参考价失效（entry=%s vs 首盯市收盘=%s 偏离超阈值），跳过 %s 供人工甄别",
+                entry,
+                first_close,
+                p["prediction_id"],
+            )
             result["skipped"] += 1
             continue
         for _, r in rows.iterrows():
@@ -144,13 +186,30 @@ def run_daily_marking(
     db_path: str | Path | None = None,
     kline_days: int = 280,
 ) -> dict[str, Any]:
-    """日批入口：盯市 → 净值曲线入库 → 指标快照入库。幂等，同日覆盖。"""
+    """日批入口：盯市 → 净值曲线入库 → 指标快照入库。幂等，同日覆盖。
+
+    基准日 K 同批只拉一次：既作盯市超额基价，也作净值/指标的交易日历骨架
+    （incident 032 根因 C：空仓日补 0、年化 n=交易日数）；拉取失败降级
+    marks-only 口径（净值仅覆盖有盯市日期）。
+    """
     init_track_record_tables(db_path)  # 幂等建表
-    mark_result = mark_open_predictions(client=client, db_path=db_path, kline_days=kline_days)
+    if client is None:
+        from finance_agent.data.akshare_client import AKShareClient
+
+        client = AKShareClient()
+    benchmark = _fetch_benchmark(client, kline_days)
+    mark_result = mark_open_predictions(
+        client=client, db_path=db_path, kline_days=kline_days, benchmark=benchmark
+    )
 
     from finance_agent.outcome.track_record.metrics import build_equity_curve_points
 
-    points = build_equity_curve_points(db_path=db_path)
+    bench_map = _bench_by_date(benchmark)
+    points = build_equity_curve_points(
+        db_path=db_path,
+        calendar_dates=sorted(bench_map) if bench_map else None,
+        benchmark_by_date=bench_map or None,
+    )
     for pt in points:
         upsert_equity_point(
             str(pt["date"]),
@@ -161,7 +220,9 @@ def run_daily_marking(
             db_path=db_path,
         )
 
-    metrics_date = persist_metrics_snapshot(db_path=db_path)
+    metrics_date = persist_metrics_snapshot(
+        db_path=db_path, client=client, kline_days=kline_days, benchmark=benchmark
+    )
 
     # add-index-performance-compare:指数集收盘顺带落库(展示层对比用)。
     # 失败隔离铁律:任何指数异常不得使盯市失败、不得计入 marked/skipped/errors;
@@ -187,11 +248,31 @@ def run_daily_marking(
     }
 
 
-def persist_metrics_snapshot(db_path: str | Path | None = None) -> str:
-    """重算并落库当日指标快照（metrics_snapshot 任务入口，幂等）。"""
+def persist_metrics_snapshot(
+    *,
+    db_path: str | Path | None = None,
+    client: Any = None,
+    kline_days: int = 280,
+    benchmark: pd.DataFrame | None = None,
+) -> str:
+    """重算并落库当日指标快照（metrics_snapshot 任务入口，幂等）。
+
+    benchmark 缺省时自行拉取（独立 16:35 任务入口）；run_daily_marking 传入复用。
+    """
     from finance_agent.outcome.track_record.metrics import compute_metrics_snapshot
 
-    snapshot = compute_metrics_snapshot(db_path=db_path)
+    if benchmark is None:
+        if client is None:
+            from finance_agent.data.akshare_client import AKShareClient
+
+            client = AKShareClient()
+        benchmark = _fetch_benchmark(client, kline_days)
+    bench_map = _bench_by_date(benchmark)
+    snapshot = compute_metrics_snapshot(
+        db_path=db_path,
+        calendar_dates=sorted(bench_map) if bench_map else None,
+        benchmark_by_date=bench_map or None,
+    )
     metric_date = _today()
     upsert_metrics_daily(metric_date, snapshot, db_path=db_path)
     return metric_date

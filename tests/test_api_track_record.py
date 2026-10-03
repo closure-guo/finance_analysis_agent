@@ -213,6 +213,7 @@ def test_overview_portfolio_block_with_snapshot(monkeypatch, tmp_path):
         },
         db_path=db,
     )
+    upsert_equity_point("2026-09-04", agent_nav=1.0, benchmark_nav=1.0, db_path=db)
     data = TestClient(app).get("/api/v1/track-record/overview").json()
     p = data["portfolio"]
     assert p["available"] is True
@@ -220,6 +221,38 @@ def test_overview_portfolio_block_with_snapshot(monkeypatch, tmp_path):
     assert p["risk_score"] == 5
     assert p["risk_label"] == "中"
     assert p["as_of"] == "2026-09-04"
+
+
+def test_overview_portfolio_as_of_is_data_date(monkeypatch, tmp_path):
+    """incident 032 伴生发现：快照写入日 ≠ 数据日期时 as_of 取后者（诚实性）。
+
+    快照 metric_date=2026-09-28，但净值数据停在 2026-09-24（marking 断更）→
+    as_of SHALL 为 2026-09-24，SHALL NOT 冒称 09-28。
+    """
+    db = _use_db(monkeypatch, tmp_path)
+    upsert_metrics_daily(
+        "2026-09-28",
+        {"sample_size": 1, "settled": 0, "risk_score": 5, "risk_label": "中"},
+        db_path=db,
+    )
+    upsert_equity_point("2026-09-24", agent_nav=0.99, benchmark_nav=0.97, db_path=db)
+    data = TestClient(app).get("/api/v1/track-record/overview").json()
+    p = data["portfolio"]
+    assert p["available"] is True
+    assert p["as_of"] == "2026-09-24"
+
+
+def test_overview_portfolio_metrics_without_curve_is_unavailable(monkeypatch, tmp_path):
+    """只有指标快照、无任何净值数据 → available=false（无净值不伪称有组合）。"""
+    db = _use_db(monkeypatch, tmp_path)
+    upsert_metrics_daily(
+        "2026-09-28",
+        {"sample_size": 1, "settled": 0, "risk_score": 5, "risk_label": "中"},
+        db_path=db,
+    )
+    data = TestClient(app).get("/api/v1/track-record/overview").json()
+    assert data["portfolio"]["available"] is False
+    assert data["portfolio"]["as_of"] is None
 
 
 def test_equity_curve_empty(monkeypatch, tmp_path):
@@ -367,15 +400,23 @@ def test_overview_portfolio_beta_alpha(monkeypatch, tmp_path):
 
     rng = random.Random(7)  # noqa: S311 — 可复现测试 fixture，非加密用途
     bench, cum = 4000.0, 0.0
+    dates, closes = [], []
     for i in range(1, 26):
         rb = rng.uniform(-0.02, 0.02)
         bench *= 1 + rb
         cum += 0.8 * rb
         d = f"2026-09-{i:02d}"
+        dates.append(d)
+        closes.append(bench)
         insert_daily_mark(
             pid, d, mark_price=10.0, cum_return=cum, benchmark_price=bench, db_path=db
         )
-    persist_metrics_snapshot(db_path=db)
+    # 日历口径封闭性（update-track-record-data-integrity）：persist 缺省会自行
+    # 拉网源基准（东财→新浪回退），测试必须离线确定性——传合成基准日 K 走日历路径
+    import pandas as pd
+
+    bench_df = pd.DataFrame({"日期": dates, "收盘": closes})
+    persist_metrics_snapshot(db_path=db, benchmark=bench_df)
     data = TestClient(app).get("/api/v1/track-record/overview").json()
     assert data["portfolio"]["beta"] == pytest.approx(0.8, abs=1e-6)
     assert data["portfolio"]["jensen_alpha"] == pytest.approx(-0.004, abs=1e-6)

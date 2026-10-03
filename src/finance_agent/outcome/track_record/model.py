@@ -463,6 +463,18 @@ def list_daily_marks(
         conn.close()
 
 
+def prediction_ids_by_direction(direction: str, db_path: str | Path | None = None) -> set[str]:
+    """按方向取 prediction_id 集合（组合聚合排除 neutral 用，incident 032 根因 A）。"""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT prediction_id FROM predictions WHERE direction=?", (direction,)
+        ).fetchall()
+        return {r["prediction_id"] for r in rows}
+    finally:
+        conn.close()
+
+
 # ── equity_curve：组合净值（同日期覆盖；幂等）──
 def upsert_equity_point(
     curve_date: str,
@@ -608,6 +620,16 @@ def get_latest_metrics(db_path: str | Path | None = None) -> dict[str, Any] | No
             "SELECT * FROM agent_metrics_daily ORDER BY metric_date DESC LIMIT 1"
         ).fetchone()  # noqa: S608
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def latest_equity_date(db_path: str | Path | None = None) -> str | None:
+    """净值数据最新日期（总览 portfolio.as_of 用，incident 032 诚实性）。"""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT MAX(curve_date) AS d FROM equity_curve").fetchone()
+        return row["d"] if row else None
     finally:
         conn.close()
 

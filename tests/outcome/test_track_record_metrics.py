@@ -151,14 +151,185 @@ def _marks_fixture():
 class TestPortfolioReturns:
     def test_equal_weight_mean_and_missing_excluded(self):
         rets = daily_portfolio_returns(_marks_fixture())
-        # 06-02: (0.01+0.02)/2；06-03: 只有 p1 Δ0.01；06-04: p1 Δ0.01, p2 Δ0.02 → 0.015
-        assert rets["2026-06-02"] == pytest.approx(0.015)
+        # 新口径（incident 032 根因 C）：首盯市日贡献 0；06-03 只有 p1 Δ0.01；
+        # 06-04: p1 Δ0.01, p2 Δ0.02 → 0.015
+        assert rets["2026-06-02"] == pytest.approx(0.0)
         assert rets["2026-06-03"] == pytest.approx(0.01)
         assert rets["2026-06-04"] == pytest.approx(0.015)
 
     def test_empty_day_is_zero(self):
         rets = daily_portfolio_returns([])
         assert rets == {}
+
+
+class TestCalendarCaliber:
+    """incident 032 根因 C：首盯市日 0 收益 + 交易日历覆盖空仓日 + 年化 n=交易日数。"""
+
+    def test_first_mark_day_contributes_zero(self):
+        marks = [
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.05,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-03",
+                "cum_return": 0.08,
+                "benchmark_price": 3010.0,
+            },
+        ]
+        rets = daily_portfolio_returns(marks)
+        assert rets["2026-06-02"] == pytest.approx(0.0)
+        assert rets["2026-06-03"] == pytest.approx(0.03)
+
+    def test_calendar_fills_empty_days_with_zero(self):
+        marks = [
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.01,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-05",
+                "cum_return": 0.02,
+                "benchmark_price": 3010.0,
+            },
+        ]
+        cal = ["2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"]
+        rets = daily_portfolio_returns(marks, calendar_dates=cal)
+        assert set(rets) == set(cal)
+        assert rets["2026-06-03"] == pytest.approx(0.0)
+        assert rets["2026-06-04"] == pytest.approx(0.0)
+
+    def test_annual_uses_calendar_n_not_marked_n(self):
+        marks = [
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.00,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-05",
+                "cum_return": 0.01,
+                "benchmark_price": 3010.0,
+            },
+        ]
+        cal = ["2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"]
+        pm = compute_metrics_from_marks(marks, risk_free_rate=0.02, calendar_dates=cal)
+        expected = 1.01 ** (252 / 4) - 1  # n=4，SHALL NOT 按 2 个盯市日外推
+        assert pm.annual_return == pytest.approx(expected, abs=1e-6)
+
+    def test_benchmark_nav_advances_on_empty_days(self):
+        marks = [
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.0,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-05",
+                "cum_return": 0.01,
+                "benchmark_price": 3100.0,
+            },
+        ]
+        bench = {
+            "2026-06-02": 3000.0,
+            "2026-06-03": 3030.0,
+            "2026-06-04": 3060.0,
+            "2026-06-05": 3090.0,
+        }
+        pm = compute_metrics_from_marks(
+            marks,
+            calendar_dates=["2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"],
+            benchmark_by_date=bench,
+        )
+        navs = {p["date"]: p["benchmark_nav"] for p in pm.nav_points}
+        assert navs["2026-06-02"] == pytest.approx(1.0)
+        assert navs["2026-06-03"] == pytest.approx(3030.0 / 3000.0)
+        assert navs["2026-06-05"] == pytest.approx(3090.0 / 3000.0)
+
+    def test_mark_dates_beyond_calendar_kept(self):
+        """审查 Fix：mark 日期超出基准日历（基准日 K 滞后）不得静默丢弃。"""
+        marks = [
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.0,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-08",
+                "cum_return": 0.01,
+                "benchmark_price": 3010.0,
+            },
+        ]
+        rets = daily_portfolio_returns(marks, calendar_dates=["2026-06-02", "2026-06-03"])
+        assert set(rets) == {"2026-06-02", "2026-06-03", "2026-06-08"}
+        assert rets["2026-06-03"] == pytest.approx(0.0)
+        assert rets["2026-06-08"] == pytest.approx(0.01)
+
+
+class TestNeutralExclusion:
+    """incident 032 根因 A：neutral（hold/watch）盯市不得进组合净值/指标。"""
+
+    def test_neutral_marks_excluded_from_portfolio(self):
+        marks = [
+            {
+                "prediction_id": "n1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.05,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "n1",
+                "mark_date": "2026-06-03",
+                "cum_return": 0.10,
+                "benchmark_price": 3010.0,
+            },
+        ]
+        pm = compute_metrics_from_marks(marks, risk_free_rate=0.02, exclude_prediction_ids={"n1"})
+        assert pm.nav_points == []
+        assert pm.annual_return is None
+
+    def test_neutral_diff_not_in_portfolio_mean(self):
+        marks = [
+            {
+                "prediction_id": "n1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.50,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "n1",
+                "mark_date": "2026-06-03",
+                "cum_return": 0.40,
+                "benchmark_price": 3010.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-02",
+                "cum_return": 0.01,
+                "benchmark_price": 3000.0,
+            },
+            {
+                "prediction_id": "p1",
+                "mark_date": "2026-06-03",
+                "cum_return": 0.02,
+                "benchmark_price": 3010.0,
+            },
+        ]
+        rets = daily_portfolio_returns(marks, exclude_prediction_ids={"n1"})
+        # 06-03 只含 p1 的 +0.01；n1 的 -0.10 幻影空头损益被排除
+        assert rets["2026-06-03"] == pytest.approx(0.01)
 
 
 class TestRiskScore:
@@ -263,6 +434,39 @@ class TestMarking:
         # 超额 = 股票收益 - 基准收益（基准基期 = entry 日 06-01 收盘 3000；落库 6 位小数）
         assert m["cum_excess"] == pytest.approx(0.01 - (3100.0 / 3000.0 - 1.0), abs=1e-6)
 
+    def test_neutral_marked_long_caliber(self, db, fake_client):
+        """incident 032 根因 A：neutral 盯市按多头口径（与回避判定同号），不取反。"""
+        pid = _insert(db, direction="neutral", created_at="2026-06-01T10:00:00")
+        mark_open_predictions(client=fake_client, db_path=db)
+        marks = list_daily_marks(prediction_id=pid, db_path=db)
+        assert marks[0]["cum_return"] == pytest.approx(0.01)  # 101/100-1，而非 -0.01
+
+    def test_stale_reference_price_skipped(self, db):
+        """incident 032 根因 B 存量防护：entry 与首盯市收盘偏离 >30% → skipped 不写 marks。"""
+        klines = {"600519": _df(["2026-06-02", "2026-06-03"], [1316.01, 1309.3])}
+        bench = _df(["2026-06-01", "2026-06-02"], [3000.0, 3100.0])
+        client = FakeClient(klines, bench)
+        pid = _insert(db, entry_price=1800.0, created_at="2026-06-01T10:00:00")
+        result = mark_open_predictions(client=client, db_path=db)
+        assert result["skipped"] == 1
+        assert result["marked"] == 0
+        assert list_daily_marks(prediction_id=pid, db_path=db) == []
+
+    def test_aged_view_outside_kline_window_not_guarded(self, db):
+        """审查 Important#1：280 根窗口滑动后首盯日远离 created，参考价防护不适用。
+
+        老龄 open 观点（created 远早于窗口）的首盯市收盘本就与参考价差异巨大，
+        比对无意义——不跳过、正常盯市，否则合法持仓期涨幅会被误判为坏参考价。
+        """
+        klines = {"600519": _df(["2026-06-02", "2026-06-03"], [15.0, 15.3])}
+        bench = _df(["2026-06-01", "2026-06-02"], [3000.0, 3100.0])
+        client = FakeClient(klines, bench)
+        pid = _insert(db, entry_price=10.0, created_at="2025-06-01T10:00:00")
+        result = mark_open_predictions(client=client, db_path=db)
+        assert result["marked"] == 2
+        assert result["skipped"] == 0
+        assert len(list_daily_marks(prediction_id=pid, db_path=db)) == 2
+
     def test_marking_uses_reference_price_caliber(self, db, fake_client):
         """盯市取数用默认 qfq（与存储参考价同尺度），不得传 hfq（口径混用禁令）。
 
@@ -345,6 +549,18 @@ class TestEquityCurve:
         assert latest["sample_size"] == 1
         assert latest["settled"] == 0
         assert latest["risk_score"] is not None
+
+    def test_neutral_db_marks_excluded_from_curve(self, db, fake_client):
+        """端到端（审查 Minor#5）：库内仅 neutral 观点 marks → 净值表为空，不进组合。"""
+        _insert(db, direction="neutral", created_at="2026-06-01T10:00:00")
+        result = run_daily_marking(client=fake_client, db_path=db)
+        assert result["marked"] == 3  # neutral 照常盯市（详情页展示口径）
+        import sqlite3
+
+        conn = sqlite3.connect(db)
+        (n,) = conn.execute("SELECT COUNT(*) FROM equity_curve").fetchone()
+        conn.close()
+        assert n == 0  # 但不进组合净值
 
     def test_benchmark_nav_present(self, db, fake_client):
         _insert(db, created_at="2026-06-01T10:00:00")
