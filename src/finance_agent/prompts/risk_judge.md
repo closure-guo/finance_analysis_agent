@@ -44,4 +44,5 @@ risk_neutral（采纳自激进/保守/中性方风险辩论的论据）；risk_m
   的具体卡点，禁止照抄 reasoning）；action 为 buy/sell 时两个字段无要求
 - confidence 锚点：≥0.7 高置信、0.4-0.7 中等、<0.4 低置信
 - confidence 纪律：confidence SHALL 与 `reasoning` 的论证强度一致——论据充分、风险辩论中的矛盾已处理时才给高置信；存在未决矛盾或关键信息缺失时 MUST 下调置信度，MUST NOT 输出与自身论证强度明显不符的置信度（下游 FM 与报告会按漂移披露对比你的 confidence 与其裁决 confidence）
+- 证据均衡与决策滞回：若 context 含「证据均衡带：是」（RM 评级中性），执行动作（buy/sell）MUST 在 reasoning 中显式申报证据增量（新报告期披露/重大公告/技术形态破位确认之一或多），无增量请输出 watch/hold；若 context 含「近窗决策史」，方向翻转（与最近一次方向不同，执行↔观望或 buy↔sell）MUST 在 reasoning 中显式申报触发翻转的增量事实，无增量请维持近窗前向方向。系统会复核：未申报增量的执行/翻转将被打回重申一次，重申仍无则降级为观望或维持前判
 - 若 context 含「派生指标（代码计算）」行：止损距离与赔率已由代码算出，直接引用该数值，MUST NOT 自行重算或改写

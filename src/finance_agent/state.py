@@ -199,6 +199,11 @@ class AnalysisState(TypedDict, total=False):
     # update-decision-price-gate 收窄）：保存 risk_judge **最终终稿**的残留 anomaly
     # （打回修正后为空列表），仅经 state/Langfuse trace 可观测，MUST NOT 渲染进报告
     decision_price_anomalies: list[dict]
+    # 决策滞回（add-decision-hysteresis）：{balanced_zone, prior_direction,
+    # prior_date, flip, incremental_claimed, needs_reaffirm, reaffirmed, applied}——
+    # 均衡带/翻转判定与处置标注（「维持前判（无证据增量）」/「证据均衡无增量，
+    # 默认观望」），trace 可观测，报告不渲染
+    decision_hysteresis: dict
     # 价位交叉校验门禁（update-decision-price-gate）：{result: pass|fail, note}——
     # anomaly 打回重试后修正放行（note「打回后已修正」）；仍异常 fail，
     # after_risk_judge 据此阻断（不进 FM 审批、不产出报告）
