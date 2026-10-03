@@ -17,6 +17,7 @@ from finance_agent.models import DebateMessage, TradeDecision
 from finance_agent.nodes._llm_utils import call_llm_for_json, focus_hint
 from finance_agent.nodes.validate import apply_payout_self_check as _apply_payout_self_check
 from finance_agent.nodes.validate import final_price_missing, inaction_rationale_missing
+from finance_agent.outcome.track_record.model import recent_directions
 from finance_agent.prompts.loader import load_prompt_with_meta
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,167 @@ def neutral_debater(state: dict) -> dict:
     return _risk_debater(state, "neutral", "risk_debater", node_name="neutral_debater")
 
 
+# 增量事实词表（add-decision-hysteresis，首版从严窄词表）：新报告期披露 /
+# 重大公告事件 / 技术形态破位确认三类——reasoning 含任一即视为申报了翻转或
+# 均衡带执行所需的证据增量；漏放优于误拦（漏放走重申二次申报兜底）
+_INCREMENTAL_MARKERS: tuple[str, ...] = (
+    "披露",
+    "季报",
+    "中报",
+    "年报",
+    "财报",
+    "业绩预告",
+    "业绩快报",
+    "公告",
+    "中标",
+    "回购",
+    "减持",
+    "增持",
+    "质押",
+    "解禁",
+    "定增",
+    "分红",
+    "放量",
+    "死叉",
+    "金叉",
+    "破位",
+    "收复",
+)
+
+_ACTION_DIRECTION = {"buy": "long", "sell": "short", "hold": "neutral", "watch": "neutral"}
+_DIRECTION_ACTION = {"long": "buy", "short": "sell", "neutral": "watch"}
+
+
+def _has_incremental_claim(reasoning: object) -> bool:
+    """reasoning 是否申报了证据增量（窄词表包含判定，首版语义）。"""
+    if not isinstance(reasoning, str):
+        return False
+    return any(marker in reasoning for marker in _INCREMENTAL_MARKERS)
+
+
+def _evaluate_hysteresis(state: dict, decision: TradeDecision) -> dict:
+    """均衡带/滞回判定（纯判定，不改决策）：balanced_zone / prior / flip /
+    incremental_claimed / needs_reaffirm。历史查询 fail-open（空序列即不翻转）。"""
+    rating = str(state.get("research_manager_rating") or "")
+    balanced_zone = "中性" in rating
+    history = recent_directions(str(state.get("stock_code") or ""))
+    prior = history[-1] if history else None
+    cur_direction = _ACTION_DIRECTION.get(str(getattr(decision, "action", "")), "neutral")
+    flip = prior is not None and str(prior["direction"]) != cur_direction
+    incremental = _has_incremental_claim(getattr(decision, "reasoning", None))
+    action_is_exec = str(getattr(decision, "action", "")) in ("buy", "sell")
+    needs_reaffirm = (balanced_zone and action_is_exec and not incremental) or (
+        flip and not incremental
+    )
+    return {
+        "balanced_zone": balanced_zone,
+        "prior_direction": str(prior["direction"]) if prior else None,
+        "prior_date": str(prior["date"]) if prior else None,
+        "flip": flip,
+        "incremental_claimed": incremental,
+        "needs_reaffirm": needs_reaffirm,
+        "applied": "",
+    }
+
+
+def _build_hysteresis_context(state: dict) -> str:
+    """近窗决策史 + 均衡带标志注入决策上下文（首次输出即知情，减少无谓翻转）；
+    无历史且非均衡带时返回空串（零增量）。"""
+    parts: list[str] = []
+    if "中性" in str(state.get("research_manager_rating") or ""):
+        parts.append(
+            "证据均衡带：是（Research Manager 评级中性）——执行动作（buy/sell）"
+            "须以证据增量（新报告期披露/重大公告/技术形态破位确认）为支撑"
+        )
+    history = recent_directions(str(state.get("stock_code") or ""))
+    if history:
+        seq = " → ".join(
+            f"{x['date']} {x['direction']}({float(x['confidence']):.0%})" for x in history
+        )
+        parts.append(f"近窗决策史（旧→新）：{seq}——方向翻转须申报增量事实，未申报将被复核维持前判")
+    return ("\n\n【决策滞回上下文】\n" + "\n".join(parts) + "\n") if parts else ""
+
+
+def _reaffirm_decision_semantics(
+    state: dict,
+    decision: TradeDecision,
+    context: str,
+    system: str,
+    api_key: str | None,
+    llm_config: dict | None,
+    pinfo,
+) -> tuple[TradeDecision, dict]:
+    """均衡带/滞回复核回路：无增量的执行动作或翻转 → 携反馈打回重申恰一次；
+    重申仍无 → 降级观望（均衡带执行）/ 维持前判（翻转），如实标注落 hysteresis。"""
+    hy = _evaluate_hysteresis(state, decision)
+    if not hy["needs_reaffirm"]:
+        return decision, hy
+    why = "方向翻转未申报证据增量" if hy["flip"] else "证据均衡带内执行动作未申报证据增量"
+    retry_context = (
+        f"{context}\n\n【决策滞回复核打回】{why}。滞回约束要求：方向翻转或证据均衡带内"
+        "执行动作（buy/sell）MUST 在 reasoning 中显式申报增量事实（新报告期披露、"
+        "重大公告、技术形态破位确认之一或多）。若确有增量请改写 reasoning 显式申报后"
+        "重新输出完整决策 JSON；若无增量请输出与近窗前向一致的观望决策。"
+    )
+    data = call_llm_for_json(
+        retry_context,
+        system=system,
+        api_key=api_key,
+        node_name="risk_judge",
+        llm_config=llm_config,
+        stock_code=state.get("stock_code"),
+        prompt_name=pinfo.prompt_name,
+        prompt_version=pinfo.prompt_version,
+    )
+    decision = TradeDecision.model_validate(data)
+    hy = _evaluate_hysteresis(state, decision)
+    if not hy["needs_reaffirm"]:
+        hy["applied"] = ""
+        hy["reaffirmed"] = True
+        return decision, hy
+    # 重申仍无增量 → 确定性处置
+    hy["reaffirmed"] = True
+    if hy["flip"]:
+        prior_action = _DIRECTION_ACTION.get(str(hy["prior_direction"]), "watch")
+        # 维持前判到执行动作时：反方向价位不可信清空（交既有价位完整性打回补报）；
+        # sell_type 维持语义中性默认 short（清空会撞后续 sell_type 申报打回的级联）
+        update: dict = {
+            "action": prior_action,
+            "position_size": None,
+            "entry_price": None,
+            "stop_loss": None,
+            "target_price": None,
+            "exit_schedule": None,
+        }
+        if prior_action == "sell":
+            update["sell_type"] = "short"
+        else:
+            update["sell_type"] = None
+        decision = decision.model_copy(update=update)
+        if prior_action == "watch":
+            decision = decision.model_copy(
+                update={
+                    "inaction_reason": "维持前判（无证据增量）：近窗前向为观望，本次翻转未申报增量事实"
+                }
+            )
+        hy["applied"] = "维持前判（无证据增量）"
+    else:
+        decision = decision.model_copy(
+            update={
+                "action": "watch",
+                "position_size": None,
+                "entry_price": None,
+                "stop_loss": None,
+                "target_price": None,
+                "sell_type": None,
+                "exit_schedule": None,
+                "inaction_reason": "证据均衡无增量，默认观望：均衡带内执行动作未申报证据增量",
+            }
+        )
+        hy["applied"] = "证据均衡无增量，默认观望"
+    return decision, hy
+
+
 def _recheck_price_note_after_retry(
     decision: TradeDecision, final_price_check: dict, cause: str
 ) -> None:
@@ -98,6 +260,9 @@ def _recheck_price_note_after_retry(
 def risk_judge(state: dict) -> dict:
     """Layer IV Risk Judge — 最终交易决策。"""
     context = _build_risk_context(state)
+    # 滞回上下文注入（add-decision-hysteresis）：均衡带标志 + 近窗决策史随
+    # context 下发，首次输出即知情；空串零增量
+    context += _build_hysteresis_context(state)
     _pinfo = load_prompt_with_meta("risk_judge")
     system = _pinfo.template
     api_key = state.get("api_key")
@@ -113,6 +278,12 @@ def risk_judge(state: dict) -> dict:
         prompt_version=_pinfo.prompt_version,
     )
     decision = TradeDecision.model_validate(data)
+    # 证据均衡带与方向滞回复核（add-decision-hysteresis）：无增量的执行动作或
+    # 翻转打回重申恰一次，重申仍无 → 降级观望/维持前判（决策语义最先定型，
+    # 后续 sell_type/价位回路在其上验参数）
+    decision, decision_hysteresis = _reaffirm_decision_semantics(
+        state, decision, context, system, api_key, state.get("llm_config"), _pinfo
+    )
     # sell 分型申报（update-sell-action-typing，#188）：sell 缺 sell_type → 打回申报
     # 一次；申报 exit → 价位豁免（final_price_missing 分型分支生效，免去无意义价位
     # 打回）；仍缺 → 默认 short（保守，与现行建仓模板语义一致）+ 如实标注。
@@ -374,6 +545,7 @@ def risk_judge(state: dict) -> dict:
         "final_reeval_check": final_reeval_check,
         "decision_price_anomalies": decision_price_anomalies,
         "decision_price_gate": decision_price_gate,
+        "decision_hysteresis": decision_hysteresis,
     }
 
 
