@@ -11,10 +11,11 @@ DataFrame（2 行年报 + 报告日列）；其余方法经 __getattr__ 抛 Conn
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from finance_agent.data.akshare_client import AKShareClient
 from finance_agent.nodes.fetch import fetch_data
 
 CODE = "688072"
@@ -76,3 +77,58 @@ def test_fetch_snapshot_failure_degrades_to_empty_dict(monkeypatch, caplog):
     assert any(
         "latest_period_snapshot" in r.getMessage() for r in caplog.records if r.levelname == "ERROR"
     ), "快照失败应以 ERROR 级别记录且含 label"
+
+
+class TestSnapshotYoYRawPrecision:
+    """快照同比用 raw 值计算（#190 根因修复，与毛利率 raw 修复同款）。
+
+    688072 实证：归母 13.4275 亿 / 基期 0.9429 亿——round 后基期 0.94 算出
+    1328.72%（传播误差），精确基期算出 1324.10%（与外部引用一致的精确值）。
+    同一函数里毛利率已按 raw 值计算（截断误差注释先例），同比必须同款。
+    """
+
+    @staticmethod
+    def _income_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "报告日": ["20260630", "20250630"],
+                "营业总收入": [2912864261.46, 1954150000.0],
+                "营业成本": [1718464963.55, 1329640000.0],
+                "归母净利润": [1342753981.0, 94287965.0],
+            }
+        )
+
+    @staticmethod
+    def _balance_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "报告日": ["20260630"],
+                "资产总计": [5000000000.0],
+                "负债合计": [2392500000.0],
+                "存货": [100000000.0],
+                "合同负债": [50000000.0],
+            }
+        )
+
+    def test_np_yoy_uses_raw_precision(self):
+        client = AKShareClient()
+
+        def _fake_report(stock: str, symbol: str) -> pd.DataFrame:
+            return self._income_df() if symbol == "利润表" else self._balance_df()
+
+        with patch("finance_agent.data.akshare_client._sina_report", _fake_report):
+            snap = client.fetch_latest_period_snapshot("688072")
+        # 精确：(13.4275 - 0.9429) / 0.9429 = 1324.10%；舍入基期会算出 1328.72%
+        assert snap["归母净利同比(%)"] == 1324.1
+        assert snap["上年同期归母净利润"] == 0.94288  # 元级精度（round6），复算=同比值
+
+    def test_rev_yoy_uses_raw_precision(self):
+        client = AKShareClient()
+
+        def _fake_report(stock: str, symbol: str) -> pd.DataFrame:
+            return self._income_df() if symbol == "利润表" else self._balance_df()
+
+        with patch("finance_agent.data.akshare_client._sina_report", _fake_report):
+            snap = client.fetch_latest_period_snapshot("688072")
+        # 精确：(29.1286 - 19.5415) / 19.5415 = 49.06%；若用 round 后 29.13/19.54 会漂
+        assert snap["营收同比(%)"] == 49.06
