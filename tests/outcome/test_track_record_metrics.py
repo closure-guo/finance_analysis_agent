@@ -383,6 +383,68 @@ class TestMetricsSnapshotCaliber:
         assert latest["sample_size"] == 1
 
 
+class TestBetaAlpha:
+    RF = 0.02
+
+    def _marks_linear(self, n_days: int, beta: float = 0.8, seed: int = 7):
+        """构造 ra_d = beta * rb_d 的精确线性关系（每日）。
+
+        基准价: 4000 * (1 + rb_d) 逐日连乘，rb_d 由固定伪随机序列给出；
+        组合 cum_return: 日增量恰为 beta * rb_d（首日 cum = beta*rb_1，
+        与 daily_portfolio_returns 的首日口径一致——首日在 _beta_alpha 中被剔除）。
+        """
+        import random
+
+        rng = random.Random(seed)  # noqa: S311 — 可复现测试 fixture，非加密用途
+        bench_price = 4000.0
+        cum = 0.0
+        marks = []
+        pid = "pred-beta-test"
+        for i in range(1, n_days + 1):
+            rb = rng.uniform(-0.02, 0.02)
+            bench_price *= 1 + rb
+            cum += beta * rb
+            marks.append(
+                {
+                    "prediction_id": pid,
+                    "mark_date": f"2026-09-{i:02d}" if i <= 30 else f"2026-10-{i - 30:02d}",
+                    "cum_return": cum,
+                    "benchmark_price": bench_price,
+                }
+            )
+        return marks
+
+    def test_beta_exact_and_alpha(self):
+        from finance_agent.outcome.track_record.metrics import compute_metrics_from_marks
+
+        pm = compute_metrics_from_marks(self._marks_linear(25, beta=0.8))
+        assert pm.beta == pytest.approx(0.8, abs=1e-9)
+        # μa = 0.8μb ⇒ α_daily = −0.2×rf/252 ⇒ 年化 α = −0.2×rf
+        assert pm.jensen_alpha == pytest.approx(-0.2 * self.RF, abs=1e-9)
+
+    def test_insufficient_pairs_null(self):
+        from finance_agent.outcome.track_record.metrics import compute_metrics_from_marks
+
+        pm = compute_metrics_from_marks(self._marks_linear(15, beta=0.8))
+        assert pm.beta is None and pm.jensen_alpha is None
+        assert pm.sharpe is not None  # 其余指标不受影响
+
+    def test_no_benchmark_null(self):
+        from finance_agent.outcome.track_record.metrics import compute_metrics_from_marks
+
+        marks = self._marks_linear(25)
+        for m in marks:
+            m["benchmark_price"] = None
+        pm = compute_metrics_from_marks(marks)
+        assert pm.beta is None and pm.jensen_alpha is None
+
+    def test_snapshot_dict_has_keys(self, db, fake_client):
+        from finance_agent.outcome.track_record.metrics import compute_metrics_snapshot
+
+        snap = compute_metrics_snapshot(db_path=db)
+        assert "beta" in snap and "jensen_alpha" in snap
+
+
 class TestSchedulerJobs:
     def test_start_registers_marking_and_metrics(self):
         import os

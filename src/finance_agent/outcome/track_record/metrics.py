@@ -59,6 +59,8 @@ class PortfolioMetrics:
     max_drawdown: float | None = None
     risk_score: int | None = None
     risk_label: str | None = None
+    beta: float | None = None
+    jensen_alpha: float | None = None
     nav_points: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -119,6 +121,36 @@ def _cum_nav(daily_returns: dict[str, float]) -> dict[str, float]:
     return out
 
 
+_BETA_MIN_PAIRS = 20
+
+
+def _beta_alpha(
+    rets: dict[str, float],
+    bench_ret: dict[str, float],
+    risk_free_rate: float,
+) -> tuple[float | None, float | None]:
+    """组合 β（OLS 斜率）与年化 Jensen α；重叠对 < 20 → (None, None)。
+
+    首个共同日期剔除：组合首日收益是相对入场日的口径混合点，基准首日恒 0，
+    入对会污染斜率。α = (μa − rf/252 − β×(μb − rf/252))×252，rf 与夏普同源。
+    """
+    dates = sorted(set(rets) & set(bench_ret))[1:]  # 剔除首个共同日
+    if len(dates) < _BETA_MIN_PAIRS:
+        return None, None
+    ra = [rets[d] for d in dates]
+    rb = [bench_ret[d] for d in dates]
+    n = len(dates)
+    mu_a, mu_b = sum(ra) / n, sum(rb) / n
+    cov = sum((rb[i] - mu_b) * (ra[i] - mu_a) for i in range(n))
+    var = sum((rb[i] - mu_b) ** 2 for i in range(n))
+    if var <= 0:
+        return None, None
+    beta = cov / var
+    rf_d = risk_free_rate / 252
+    alpha = (mu_a - rf_d - beta * (mu_b - rf_d)) * 252
+    return round(beta, 6), round(alpha, 6)
+
+
 def compute_metrics_from_marks(
     marks: list[dict[str, Any]],
     risk_free_rate: float = RISK_FREE_RATE,
@@ -140,6 +172,7 @@ def compute_metrics_from_marks(
     agent_nav = {d: agent_cum[d] / first_agent for d in dates}
     bench_ret = _benchmark_returns(marks)
     bench_cum = _cum_nav(bench_ret) if bench_ret else {}
+    beta, jensen_alpha = _beta_alpha(rets, bench_ret, risk_free_rate)
 
     n = len(dates)
     final_nav = agent_cum[dates[-1]]
@@ -182,6 +215,8 @@ def compute_metrics_from_marks(
         max_drawdown=round(max_dd, 6) if max_dd is not None else None,
         risk_score=risk_score,
         risk_label=risk_label_from(risk_score),
+        beta=beta,
+        jensen_alpha=jensen_alpha,
         nav_points=nav_points,
     )
 
@@ -219,5 +254,7 @@ def compute_metrics_snapshot(db_path: Any = None) -> dict[str, Any]:
         "max_drawdown": pm.max_drawdown,
         "risk_score": pm.risk_score,
         "risk_label": pm.risk_label,
+        "beta": pm.beta,
+        "jensen_alpha": pm.jensen_alpha,
         "segment_json": "{}",
     }
