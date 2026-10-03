@@ -258,3 +258,24 @@ class TestFreshnessAndValuationPrompt:
         assert "PE_caliber" in text
         # 缺估值数据时显式声明，不得无数值断言贵贱
         assert "估值数据缺失" in text
+
+
+class TestNarrativeFreshnessContract:
+    """update-narrative-freshness（#189）：论据期次新鲜度契约。"""
+
+    def test_bear_prompt_requires_latest_period_and_reversal_pairing(self):
+        from finance_agent.prompts.loader import load_prompt_with_meta
+
+        template = load_prompt_with_meta("bear_debater").template
+        assert "最新披露" in template
+        assert "并列呈现" in template
+
+    def test_focus_summary_builder_requires_pairing(self):
+        import inspect
+
+        from finance_agent.nodes import report
+
+        src = inspect.getsource(report._build_focus_summary)
+        assert "最新披露期次" in src
+        assert "并列呈现" in src
+        assert "单边" in src
