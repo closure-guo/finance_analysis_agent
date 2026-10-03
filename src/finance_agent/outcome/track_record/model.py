@@ -183,6 +183,13 @@ CREATE TABLE IF NOT EXISTS index_closes (
   close      REAL NOT NULL,
   PRIMARY KEY (index_code, trade_date)
 );
+
+-- ── update-risk-free-rate-source ──
+CREATE TABLE IF NOT EXISTS risk_free_rates (
+  rate_date TEXT PRIMARY KEY,
+  rate      REAL NOT NULL,
+  source    TEXT NOT NULL
+);
 """
 
 
@@ -557,6 +564,49 @@ def list_index_closes(
         conn.close()
 
 
+# ── risk_free_rates:无风险利率日频序列(update-risk-free-rate-source;夏普/α 消费)──
+def upsert_risk_free_rates(
+    rows: list[tuple[str, float, str]],
+    db_path: str | Path | None = None,
+) -> int:
+    """幂等写入日频无风险利率（rate_date, rate 年化小数, source）；同日覆盖。"""
+    if not rows:
+        return 0
+    conn = _connect(db_path)
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO risk_free_rates (rate_date, rate, source) VALUES (?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def list_risk_free_rates(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    """全部无风险利率记录，按 rate_date 升序。"""
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute("SELECT rate_date, rate, source FROM risk_free_rates ORDER BY rate_date")
+        return [
+            {"rate_date": str(r[0]), "rate": float(r[1]), "source": str(r[2])}
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def earliest_mark_date(db_path: str | Path | None = None) -> str | None:
+    """daily_marks 最早 mark_date；空表返回 None（sync 回填区间起点用）。"""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT MIN(mark_date) FROM daily_marks").fetchone()
+        return str(row[0]) if row and row[0] else None
+    finally:
+        conn.close()
+
+
 # ── agent_metrics_daily：日批指标快照（同日覆盖）──
 _METRICS_COLUMNS = (
     "sample_size",
@@ -630,6 +680,56 @@ def latest_equity_date(db_path: str | Path | None = None) -> str | None:
     try:
         row = conn.execute("SELECT MAX(curve_date) AS d FROM equity_curve").fetchone()
         return row["d"] if row else None
+    finally:
+        conn.close()
+
+
+def list_metric_dates(db_path: str | Path | None = None) -> list[str]:
+    """agent_metrics_daily 全部 metric_date 升序（as-of 历史重算遍历用）。"""
+    conn = _connect(db_path)
+    try:
+        return [
+            str(r[0])
+            for r in conn.execute(
+                "SELECT metric_date FROM agent_metrics_daily ORDER BY metric_date"
+            )
+        ]
+    finally:
+        conn.close()
+
+
+def update_metrics_daily_columns(
+    metric_date: str,
+    columns: dict[str, float | None],
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """部分列 UPDATE agent_metrics_daily 指定行；返回前后对照 dict。
+
+    列名白名单由调用方约束（recompute_rf_metrics_history 仅传
+    sharpe/beta/jensen_alpha）；行不存在时原样返回不含对照。
+    """
+    if not columns:
+        return {"metric_date": metric_date}
+    conn = _connect(db_path)
+    try:
+        col_names = ", ".join(columns)
+        old = conn.execute(
+            f"SELECT {col_names} FROM agent_metrics_daily WHERE metric_date = ?",  # noqa: S608
+            (metric_date,),
+        ).fetchone()
+        if old is None:
+            return {"metric_date": metric_date}
+        sets = ", ".join(f"{c} = ?" for c in columns)
+        conn.execute(
+            f"UPDATE agent_metrics_daily SET {sets} WHERE metric_date = ?",  # noqa: S608
+            (*columns.values(), metric_date),
+        )
+        conn.commit()
+        row: dict[str, Any] = {"metric_date": metric_date}
+        for c, o in zip(columns, old, strict=True):
+            row[f"old_{c}"] = o
+            row[f"new_{c}"] = columns[c]
+        return row
     finally:
         conn.close()
 
