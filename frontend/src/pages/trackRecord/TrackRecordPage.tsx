@@ -97,6 +97,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [applied, setApplied] = useState({ keyword: '', dateFrom: '', dateTo: '' })
+  // update-prediction-log-tabs:状态 tab——open=当前持有(与总览卡同口径)/resolved=已判定/''=全部
+  const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | ''>('open')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
 
@@ -128,6 +130,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
     const p = new URLSearchParams()
     if (sortBy !== 'created_at') p.set('sort_by', sortBy)
     if (sortDir !== 'desc') p.set('sort_dir', sortDir)
+    if (statusFilter) p.set('status', statusFilter)
     if (applied.keyword) p.set('keyword', applied.keyword)
     if (applied.dateFrom) p.set('date_from', applied.dateFrom)
     if (applied.dateTo) p.set('date_to', applied.dateTo)
@@ -135,7 +138,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
     p.set('page_size', String(PAGE_SIZE))
     const q = p.toString()
     return `/api/v1/track-record/predictions${q ? `?${q}` : ''}`
-  }, [sortBy, sortDir, applied, page])
+  }, [sortBy, sortDir, applied, page, statusFilter])
 
   useEffect(() => {
     let cancelled = false
@@ -153,6 +156,13 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
     })()
     return () => { cancelled = true }
   }, [predictionsUrl])
+
+  const onStatusTab = (tab: 'open' | 'resolved' | '') => {
+    if (tab !== statusFilter) {
+      setStatusFilter(tab)
+      setPage(1)
+    }
+  }
 
   const onSort = (col: string) => {
     if (sortBy === col) {
@@ -427,7 +437,35 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
               span 与净值图窗口同源（页面战绩展示偏好 prefs.timeSpan） */}
           <IndexCompareCard span={prefs.timeSpan} />
 
-          {/* 观点日志 */}
+          {/* 观点日志（update-prediction-log-tabs）：标题 + 状态 tab */}
+          <div className="flex items-center justify-between mb-3" data-testid="prediction-log-header">
+            <div>
+              <div className="text-sm font-medium">观点日志</div>
+              <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                每条 = 一次分析结论;当前持有 = 仍在 20 日判定窗口内
+              </div>
+            </div>
+            <div className="flex gap-1" role="tablist" data-testid="prediction-log-tabs">
+              {([['open', '当前持有'], ['resolved', '已判定'], ['', '全部']] as const).map(([value, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="tab"
+                  aria-selected={statusFilter === value}
+                  onClick={() => onStatusTab(value)}
+                  data-testid={`prediction-tab-${value || 'all'}`}
+                  className="text-xs rounded-lg px-3 py-1 border"
+                  style={
+                    statusFilter === value
+                      ? { background: 'var(--bg-overlay-l2)', color: 'var(--text-default)', borderColor: 'var(--border-neutral-l2)' }
+                      : { color: 'var(--text-secondary)', borderColor: 'var(--border-neutral-l1)' }
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           {/* 过滤工具栏（add-track-record-sort-filter） */}
           <div className="flex flex-wrap items-center gap-2 mb-3" data-testid="track-record-filters">
             <input

@@ -448,6 +448,84 @@ describe('观点日志排序/过滤/日期列/分页（add-track-record-sort-fil
   })
 })
 
+describe('观点日志标题与状态 tab（update-prediction-log-tabs）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  function predictionsCalls(calls: string[]) {
+    return calls.filter(u => u.includes('/predictions'))
+  }
+
+  it('缺省「当前持有」:请求带 status=open,tab 有 active 标识,标题与副标题渲染', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          predictions: PREDICTIONS, page: 1, page_size: 50, total: 57, as_of: 'x', disclaimer: 'x',
+        }), { status: 200 }))
+      }
+      if (url.includes('/index-compare')) return Promise.resolve(new Response('', { status: 404 }))
+      if (url.includes('/overview')) return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByText('贵州茅台')
+    expect(screen.getByTestId('prediction-log-header')).toBeVisible()
+    expect(screen.getByText(/每条 = 一次分析结论/)).toBeVisible()
+    const tab = screen.getByTestId('prediction-tab-open')
+    expect(tab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('prediction-tab-resolved')).toHaveAttribute('aria-selected', 'false')
+    expect(predictionsCalls(calls).every(u => u.includes('status=open'))).toBe(true)
+  })
+
+  it('切换「已判定」:请求带 status=resolved 且重置分页', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          predictions: [], page: 1, page_size: 50, total: 51, as_of: 'x', disclaimer: 'x',
+        }), { status: 200 }))
+      }
+      if (url.includes('/index-compare')) return Promise.resolve(new Response('', { status: 404 }))
+      if (url.includes('/overview')) return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByText('观点日志')
+    fireEvent.click(screen.getByTestId('prediction-tab-resolved'))
+    await waitFor(() => expect(screen.getByTestId('prediction-tab-resolved')).toHaveAttribute('aria-selected', 'true'))
+    const predUrls = predictionsCalls(calls)
+    expect(predUrls.some(u => u.includes('status=resolved'))).toBe(true)
+    expect(predUrls[predUrls.length - 1]).not.toContain('page=2')  // 分页重置
+  })
+
+  it('切换「全部」:请求不带 status 参数', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push(url)
+      if (url.includes('/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          predictions: PREDICTIONS, page: 1, page_size: 50, total: 108, as_of: 'x', disclaimer: 'x',
+        }), { status: 200 }))
+      }
+      if (url.includes('/index-compare')) return Promise.resolve(new Response('', { status: 404 }))
+      if (url.includes('/overview')) return Promise.resolve(new Response(JSON.stringify(OVERVIEW), { status: 200 }))
+      return Promise.resolve(new Response(JSON.stringify({ points: [], dimensions: [] }), { status: 200 }))
+    }))
+    renderPage()
+    await screen.findByText('观点日志')
+    fireEvent.click(screen.getByTestId('prediction-tab-all'))
+    await waitFor(() => expect(screen.getByTestId('prediction-tab-all')).toHaveAttribute('aria-selected', 'true'))
+    const last = predictionsCalls(calls)[predictionsCalls(calls).length - 1]
+    expect(last).not.toContain('status=')
+  })
+})
+
 describe('回避终态标签（update-decision-settlement-contract：status=avoidance）', () => {
   beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })

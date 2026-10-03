@@ -760,8 +760,12 @@ def _prediction_filters(
         clauses.append("symbol LIKE ?")
         params.append(f"%{ticker}%")
     if status:
-        clauses.append("status = ?")
-        params.append(status)
+        if status == "resolved":
+            # update-prediction-log-tabs:组值——全部非 open 终态(含未来新增)
+            clauses.append("status != 'open'")
+        else:
+            clauses.append("status = ?")
+            params.append(status)
     if source_type:
         clauses.append("source_type = ?")
         params.append(source_type)

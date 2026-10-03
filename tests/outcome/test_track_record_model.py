@@ -104,6 +104,38 @@ def test_list_filter_and_pagination(db):
     assert len(list_predictions(limit=1, db_path=db)) == 1
 
 
+def test_status_resolved_group_filter(db):
+    """update-prediction-log-tabs:status=resolved 组值 → 全部非 open 终态。
+
+    非 open 状态须经 update_prediction_status 状态流转产生(insert 契约:写入必为 open)。
+    """
+    from finance_agent.outcome.track_record.model import update_prediction_status
+
+    _insert(db, symbol="600519.SH")  # open(默认)
+    _insert(db, symbol="300308.SZ")
+    _insert(db, symbol="601318.SH")
+    _insert(db, symbol="600036.SH")
+    _insert(db, symbol="601888.SH")
+    _insert(db, symbol="601988.SH")
+    rows = list_predictions(db_path=db)
+    by_symbol = {r["symbol"]: r["prediction_id"] for r in rows}
+    update_prediction_status(
+        by_symbol["300308.SZ"],
+        {"status": "resolved_win", "raw_return": 0.1, "excess_return": 0.05},
+        db_path=db,
+    )
+    update_prediction_status(by_symbol["601318.SH"], {"status": "resolved_loss"}, db_path=db)
+    update_prediction_status(by_symbol["600036.SH"], {"status": "resolved_neutral"}, db_path=db)
+    update_prediction_status(by_symbol["601888.SH"], {"status": "avoidance"}, db_path=db)
+    update_prediction_status(by_symbol["601988.SH"], {"status": "unresolvable"}, db_path=db)
+    resolved = list_predictions(status="resolved", db_path=db)
+    assert len(resolved) == 5
+    assert all(r["status"] != "open" for r in resolved)
+    assert len(list_predictions(status="open", db_path=db)) == 1  # 精确匹配不受影响
+    assert len(list_predictions(status="resolved_win", db_path=db)) == 1
+    assert count_predictions(status="resolved", db_path=db) == 5  # total 与 list 同口径
+
+
 def test_stats_empty(db):
     s = prediction_stats(db_path=db)
     assert s["total"] == 0 and s["open"] == 0 and s["win_rate"] is None
