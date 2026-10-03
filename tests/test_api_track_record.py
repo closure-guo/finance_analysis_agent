@@ -353,6 +353,40 @@ def test_index_compare_returns(monkeypatch, tmp_path):
 # ── add-index-performance-compare Task 7：test/seed 的 track_record 造数块 ──
 
 
+# ── add-portfolio-beta-alpha Task 3：overview 透传 β/α + 全链集成 ──
+
+
+def test_overview_portfolio_beta_alpha(monkeypatch, tmp_path):
+    """全链:daily_marks(β=0.8 线性)→ persist_metrics_snapshot → overview 透传。"""
+    from finance_agent.outcome.track_record.marking import persist_metrics_snapshot
+    from finance_agent.outcome.track_record.model import insert_daily_mark
+
+    db = _use_db(monkeypatch, tmp_path)
+    pid = _insert(db)
+    import random
+
+    rng = random.Random(7)  # noqa: S311 — 可复现测试 fixture，非加密用途
+    bench, cum = 4000.0, 0.0
+    for i in range(1, 26):
+        rb = rng.uniform(-0.02, 0.02)
+        bench *= 1 + rb
+        cum += 0.8 * rb
+        d = f"2026-09-{i:02d}"
+        insert_daily_mark(
+            pid, d, mark_price=10.0, cum_return=cum, benchmark_price=bench, db_path=db
+        )
+    persist_metrics_snapshot(db_path=db)
+    data = TestClient(app).get("/api/v1/track-record/overview").json()
+    assert data["portfolio"]["beta"] == pytest.approx(0.8, abs=1e-6)
+    assert data["portfolio"]["jensen_alpha"] == pytest.approx(-0.004, abs=1e-6)
+
+
+def test_overview_portfolio_beta_alpha_null_when_insufficient(monkeypatch, tmp_path):
+    _use_db(monkeypatch, tmp_path)
+    data = TestClient(app).get("/api/v1/track-record/overview").json()
+    assert data["portfolio"]["beta"] is None and data["portfolio"]["jensen_alpha"] is None
+
+
 def test_seed_track_record_block(monkeypatch, tmp_path):
     _use_db(monkeypatch, tmp_path)
     # /api/test/seed 仅在 TESTING=1 的导入期注册（api.py `if TESTING:`）；单测进程

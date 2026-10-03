@@ -2208,6 +2208,8 @@ async def track_record_overview(
         "max_drawdown": metrics.get("max_drawdown") if metrics else None,
         "risk_score": metrics.get("risk_score") if metrics else None,
         "risk_label": metrics.get("risk_label") if metrics else None,
+        "beta": metrics.get("beta") if metrics else None,
+        "jensen_alpha": metrics.get("jensen_alpha") if metrics else None,
         "as_of": metrics.get("metric_date") if metrics else None,
     }
     return {
