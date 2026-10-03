@@ -213,6 +213,18 @@ describe('buildModelWithPrefix - litellm 前缀推导', () => {
     expect(buildModelWithPrefix('gpt-4o', 'https://api.openai.com/v1')).toBe('openai/gpt-4o')
   })
 
+  it('域名推导前缀不在白名单时回退 openai（kimi）', () => {
+    expect(buildModelWithPrefix('kimi-k2-0905-preview', 'https://api.kimi.ai/v1')).toBe('openai/kimi-k2-0905-preview')
+  })
+
+  it('域名推导前缀在白名单时保持推导值（anthropic）', () => {
+    expect(buildModelWithPrefix('claude-sonnet-4', 'https://api.anthropic.com/v1')).toBe('anthropic/claude-sonnet-4')
+  })
+
+  it('未知主机兜底段也走白名单回退', () => {
+    expect(buildModelWithPrefix('some-model', 'https://foo.bar/v1')).toBe('openai/some-model')
+  })
+
   it('baseUrl 为空时返回原始模型名', () => {
     expect(buildModelWithPrefix('llama3', '')).toBe('llama3')
   })

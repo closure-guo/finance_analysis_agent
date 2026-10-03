@@ -209,10 +209,16 @@ export function matchPreset(cfg: { model: string; baseUrl: string; thinking: str
   return found ? found.name : CUSTOM_PRESET_NAME
 }
 
+// 与后端 resolver._KNOWN_PREFIXES 对齐（openai/deepseek/anthropic/gemini）；
+// 域名推导出的前缀不在白名单时回退 openai/（OpenAI 兼容端点语义），
+// 避免拼出后端解析必然拒绝的前缀（如 api.kimi.ai → kimi/）
+const KNOWN_LLM_PREFIXES = new Set(['openai', 'deepseek', 'anthropic', 'gemini'])
+
 // 为模型自动发现返回的原始模型名拼接 litellm 前缀。
 // 规则（对齐 spec 场景）：
 //   1. 原始值已含 '/' → 直接使用（已是 litellm 格式）
-//   2. 否则 → 从 baseUrl 域名主体推导前缀（api.deepseek.com → deepseek），拼成 `deepseek/<model>`
+//   2. 否则 → 从 baseUrl 域名主体推导前缀（api.deepseek.com → deepseek），
+//      推导结果不在白名单时回退 openai/
 //   3. baseUrl 非法或为空 → 返回原始模型名（交由用户手动补全）
 export function buildModelWithPrefix(rawModel: string, baseUrl: string): string {
   const model = rawModel.trim()
@@ -227,7 +233,8 @@ export function buildModelWithPrefix(rawModel: string, baseUrl: string): string 
     const insignificant = new Set(['api', 'www', 'com', 'cn', 'org', 'net', 'io', 'ai', 'dev', 'co'])
     const significant = parts.filter((p) => p && !insignificant.has(p.toLowerCase()))
     const prefix = significant[0] || parts[0] || 'openai'
-    return `${prefix.toLowerCase()}/${model}`
+    const safePrefix = KNOWN_LLM_PREFIXES.has(prefix.toLowerCase()) ? prefix.toLowerCase() : 'openai'
+    return `${safePrefix}/${model}`
   } catch {
     // baseUrl 非法（如缺少协议）时无法推导前缀，返回原始模型名
     return model
