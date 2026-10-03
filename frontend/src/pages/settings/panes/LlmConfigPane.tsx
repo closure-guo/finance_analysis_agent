@@ -13,6 +13,8 @@ import {
   matchPreset,
   buildModelWithPrefix,
   parseCapability,
+  capabilityItemState,
+  formatProbeWarning,
   type LLMConfig,
   type CapabilityMatrix,
   type ProfileStore,
@@ -363,18 +365,31 @@ export function LlmConfigPane({ config, backendDefaults, profileStore, capabilit
                   { key: 'tool_followup', label: '工具跟随' },
                   { key: 'json_output', label: 'JSON 输出' },
                 ] as { key: keyof CapabilityMatrix; label: string }[]
-              ).map(item => (
-                <div key={item.key} className="flex items-center gap-1.5 text-xs" data-testid={`capability-${item.key}`}>
-                  <i
-                    className={`fas ${capability[item.key] ? 'fa-check-circle' : 'fa-times-circle'}`}
-                    style={{ color: capability[item.key] ? 'var(--status-success-default)' : 'var(--status-error-default)' }}
-                  ></i>
-                  <span style={{ color: 'var(--text-secondary)' }}>
-                    {item.label}
-                    {!capability[item.key] && <span style={{ color: 'var(--text-tertiary)' }}>（不支持）</span>}
-                  </span>
-                </div>
-              ))}
+              ).map(item => {
+                // 三态：通过 / 不支持（实测失败）/ 未测（tool_followup 因 tool_call 未通过而未执行）
+                const state = capabilityItemState(item.key, capability)
+                return (
+                  <div key={item.key} className="flex items-center gap-1.5 text-xs" data-testid={`capability-${item.key}`} data-state={state}>
+                    <i
+                      className={`fas ${state === 'pass' ? 'fa-check-circle' : state === 'fail' ? 'fa-times-circle' : 'fa-minus-circle'}`}
+                      style={{
+                        color:
+                          state === 'pass'
+                            ? 'var(--status-success-default)'
+                            : state === 'fail'
+                              ? 'var(--status-error-default)'
+                              : 'var(--text-tertiary)',
+                      }}
+                    ></i>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {item.label}
+                      {state !== 'pass' && (
+                        <span style={{ color: 'var(--text-tertiary)' }}>{state === 'fail' ? '（不支持）' : '（未测）'}</span>
+                      )}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           ) : (
             // probe_required：未探测时提示（不展示错误，仅静态能力语义）
@@ -386,7 +401,7 @@ export function LlmConfigPane({ config, backendDefaults, profileStore, capabilit
             <ul className="mt-2 space-y-1" data-testid="capability-warnings">
               {testWarnings.map((w, i) => (
                 <li key={i} className="text-[11px]" style={{ color: 'var(--status-warning-default)' }}>
-                  <i className="fas fa-exclamation-triangle mr-1"></i>{w}
+                  <i className="fas fa-exclamation-triangle mr-1"></i>{formatProbeWarning(w)}
                 </li>
               ))}
             </ul>
@@ -475,6 +490,8 @@ function formatTestError(errorType: string | undefined, error: string | undefine
       return '无法连接到 API 端点，请检查 Base URL'
     case 'model_not_found':
       return '模型不存在，请检查模型名称'
+    case 'model_prefix_invalid':
+      return '模型名前缀不被支持：OpenAI 兼容端点请使用 openai/<模型名>'
     default:
       return error || '测试失败，请检查配置'
   }

@@ -209,34 +209,60 @@ def run_live_probes(
     except Exception:  # noqa: S110
         warnings.append("stream_unsupported")
 
-    # tool_call
-    try:
-        tr = raw_completion(**base, tools=TOOLS, tool_choice="auto")
-        msg = tr.choices[0].message
-        report["tool_call"] = bool(getattr(msg, "tool_calls", None))
+    # tool_call（两级判定，消除「模型不主动调用」假阴性）：
+    # 第一级 auto + 明确工具调用指令；请求成功但未调用 → 第二级指定函数强制
+    # tool_choice。任一级拿到结构化 tool_calls 即通过；两级均无 → false；
+    # 请求被端点拒绝 → warning tool_call_probe_error（区别于模型未调用）。
+    tool_probe_msgs: list = [
+        {"role": "user", "content": "请调用 probe_echo 工具，把文本 hello 回显出来"}
+    ]
+    forced_choice: dict[str, Any] = {"type": "function", "function": {"name": "probe_echo"}}
 
-        # tool_followup：构造工具结果回传
-        if report["tool_call"]:
-            tc = msg.tool_calls[0]
-            followup_msgs: list = list(base["messages"]) + [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": tc.id, "content": "probe-ok"},
-            ]
-            fr = raw_completion(**{**base, "messages": followup_msgs, "tools": TOOLS})
-            report["tool_followup"] = fr.choices[0].message.content is not None
+    def _tool_stage(tool_choice: Any) -> Any | None:
+        """单级工具探测：成功返回 message；端点拒绝返回 None 并记 warning。"""
+        try:
+            r = raw_completion(
+                **{**base, "messages": tool_probe_msgs}, tools=TOOLS, tool_choice=tool_choice
+            )
+            return r.choices[0].message
+        except Exception:  # noqa: BLE001
+            warnings.append("tool_call_probe_error")
+            return None
+
+    tool_msg = _tool_stage("auto")
+    if tool_msg is not None and not getattr(tool_msg, "tool_calls", None):
+        forced_msg = _tool_stage(forced_choice)
+        if forced_msg is not None:
+            if getattr(forced_msg, "tool_calls", None):
+                warnings.append("tool_auto_no_call_forced_ok")
+            tool_msg = forced_msg
+
+    try:
+        if tool_msg is not None:
+            report["tool_call"] = bool(getattr(tool_msg, "tool_calls", None))
+
+            # tool_followup：构造工具结果回传
+            if report["tool_call"]:
+                tc = tool_msg.tool_calls[0]
+                followup_msgs: list = list(tool_probe_msgs) + [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": tc.id, "content": "probe-ok"},
+                ]
+                fr = raw_completion(**{**base, "messages": followup_msgs, "tools": TOOLS})
+                report["tool_followup"] = fr.choices[0].message.content is not None
     except Exception:  # noqa: S110
         warnings.append("tool_call_probe_error")
 

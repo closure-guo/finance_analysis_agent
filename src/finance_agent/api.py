@@ -1992,9 +1992,20 @@ async def test_llm_config(req: LLMConfigRequest):
     # 模型前缀归一（设计档案 §6）：自定义 baseUrl + 裸模型名 → 强制 openai/，
     # 与 resolver._ensure_prefix 同一语义；同时令缓存键与 resolve 侧一致
     # （裸模型探测结果否则永不命中 resolver 读取，终审 #77）。
-    from finance_agent.llm.resolver import _ensure_prefix
+    from finance_agent.llm.resolver import UnknownProviderPrefixError, _ensure_prefix
 
-    usedModel = _ensure_prefix(usedModel, usedBaseUrl)
+    try:
+        usedModel = _ensure_prefix(usedModel, usedBaseUrl)
+    except UnknownProviderPrefixError as e:
+        # 配置类错误结构化返回（不再 500 裸栈）；异常文案本身含已知前缀列表
+        # 与 openai/<model> 指引
+        return {
+            "success": False,
+            "latencyMs": int((_time.time() - startMs) * 1000),
+            "model": usedModel,
+            "error": str(e),
+            "errorType": "model_prefix_invalid",
+        }
     probeModel = usedModel
     try:
         report = run_live_probes(

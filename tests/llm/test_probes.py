@@ -148,3 +148,66 @@ class TestRunLiveProbes:
         report = run_live_probes(model="x", api_key="k", base_url="https://x")
         assert report.tool_call is False
         assert report.tool_followup is False
+
+    def test_auto_no_call_forced_fallback_passes(self, monkeypatch):
+        """两级判定：auto 不调用 + 强制 tool_choice 返回 tool_calls → 通过 + forced_ok warning。"""
+        import litellm
+
+        from finance_agent.llm.probes import run_live_probes
+
+        def fake_completion(**kwargs):
+            from types import SimpleNamespace
+
+            forced = isinstance(kwargs.get("tool_choice"), dict)
+            msgs = kwargs.get("messages") or []
+            is_followup = any(m.get("role") == "tool" for m in msgs)
+            msg = SimpleNamespace(
+                content="好的",
+                tool_calls=(
+                    None
+                    if is_followup or not forced
+                    else [
+                        SimpleNamespace(
+                            id="c1",
+                            function=SimpleNamespace(
+                                name="probe_echo", arguments='{"text":"hello"}'
+                            ),
+                        )
+                    ]
+                    if kwargs.get("tools")
+                    else None
+                ),
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=msg, finish_reason="tool_calls")]
+            )
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        report = run_live_probes(
+            model="openai/kimi-k2-0905-preview", api_key="k", base_url="https://x/v1"
+        )
+        assert report.tool_call is True
+        assert report.tool_followup is True
+        assert "tool_auto_no_call_forced_ok" in report.warnings
+        assert "tool_call_probe_error" not in report.warnings
+
+    def test_tools_rejected_by_endpoint_marks_error(self, monkeypatch):
+        """端点拒绝 tools 请求（HTTP 错误）→ tool_call=false + tool_call_probe_error。"""
+        import litellm
+
+        from finance_agent.llm.probes import run_live_probes
+
+        def fake_completion(**kwargs):
+            if kwargs.get("tools"):
+                raise RuntimeError("400 InvalidSubscription")
+            from types import SimpleNamespace
+
+            msg = SimpleNamespace(content="好的", tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")])
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        report = run_live_probes(model="openai/x", api_key="k", base_url="https://x")
+        assert report.non_stream is True
+        assert report.tool_call is False
+        assert report.tool_followup is False
+        assert "tool_call_probe_error" in report.warnings

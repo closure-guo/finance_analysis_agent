@@ -8,6 +8,8 @@ import {
   FA_LLM_CONFIG_KEY,
   addProfile,
   getActiveConfig,
+  capabilityItemState,
+  formatProbeWarning,
   type CapabilityMatrix,
   type LLMConfig,
 } from '../llmConfig'
@@ -101,5 +103,30 @@ describe('capability 持久化（store 层）', () => {
     const raw = JSON.parse(localStorage.getItem(FA_LLM_CONFIG_KEY)!)
     expect(raw.capability).toEqual(cfg.capability)
     expect(getActiveConfig(store).capability).toEqual(cfg.capability)
+  })
+})
+
+describe('capabilityItemState - 矩阵三态', () => {
+  const cap: CapabilityMatrix = fullMatrix({ tool_call: false, tool_followup: false })
+  it('tool_followup 在 tool_call=false 时为未测态', () => {
+    expect(capabilityItemState('tool_followup', cap)).toBe('untested')
+  })
+  it('tool_call=false 为失败态，通过项为通过态', () => {
+    expect(capabilityItemState('tool_call', cap)).toBe('fail')
+    expect(capabilityItemState('stream', cap)).toBe('pass')
+  })
+  it('tool_call=true 且 tool_followup=false 时 tool_followup 为失败态', () => {
+    const c2 = fullMatrix({ tool_followup: false })
+    expect(capabilityItemState('tool_followup', c2)).toBe('fail')
+  })
+})
+
+describe('formatProbeWarning - warnings 人话化', () => {
+  it('已知机器码映射为可行动中文提示', () => {
+    expect(formatProbeWarning('tool_call_probe_error')).toContain('tools')
+    expect(formatProbeWarning('tool_auto_no_call_forced_ok')).toContain('强制')
+  })
+  it('未知码原样透传', () => {
+    expect(formatProbeWarning('something_odd')).toBe('something_odd')
   })
 })
