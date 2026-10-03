@@ -29,7 +29,7 @@
 
 ## 生产部署运行手册(合并 PR 后执行)
 
-1. `docker compose up -d --build backend`(镜像含新代码后 index-compare 端点才存在)
+1. `docker compose up -d --build backend frontend`(**两个都要**:index-compare 端点在 backend 镜像,对比卡片是 frontend 构建产物——只重建 backend 网页上看不到卡片)
 2. 容器内回填(近 280 交易日): `docker exec finance-agent-backend-1 python -c "from finance_agent.outcome.track_record.index_compare import sync_index_closes; print(sync_index_closes(days=280))"`;抽验: `...model import list_index_closes; print(len(list_index_closes('000300')), list_index_closes('000300')[-1])`(应 ≥200 行)
 3. 冒烟: `curl -s "http://127.0.0.1:8000/api/v1/track-record/index-compare?span=all"` → 五指数读数
 4. 人工核对上表「真实指数读数」行(与东方财富/同花顺同期区间涨跌幅比对)后勾选
