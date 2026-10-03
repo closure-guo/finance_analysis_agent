@@ -400,15 +400,23 @@ def test_overview_portfolio_beta_alpha(monkeypatch, tmp_path):
 
     rng = random.Random(7)  # noqa: S311 — 可复现测试 fixture，非加密用途
     bench, cum = 4000.0, 0.0
+    dates, closes = [], []
     for i in range(1, 26):
         rb = rng.uniform(-0.02, 0.02)
         bench *= 1 + rb
         cum += 0.8 * rb
         d = f"2026-09-{i:02d}"
+        dates.append(d)
+        closes.append(bench)
         insert_daily_mark(
             pid, d, mark_price=10.0, cum_return=cum, benchmark_price=bench, db_path=db
         )
-    persist_metrics_snapshot(db_path=db)
+    # 日历口径封闭性（update-track-record-data-integrity）：persist 缺省会自行
+    # 拉网源基准（东财→新浪回退），测试必须离线确定性——传合成基准日 K 走日历路径
+    import pandas as pd
+
+    bench_df = pd.DataFrame({"日期": dates, "收盘": closes})
+    persist_metrics_snapshot(db_path=db, benchmark=bench_df)
     data = TestClient(app).get("/api/v1/track-record/overview").json()
     assert data["portfolio"]["beta"] == pytest.approx(0.8, abs=1e-6)
     assert data["portfolio"]["jensen_alpha"] == pytest.approx(-0.004, abs=1e-6)
