@@ -475,6 +475,8 @@ function formatTestError(errorType: string | undefined, error: string | undefine
       return '无法连接到 API 端点，请检查 Base URL'
     case 'model_not_found':
       return '模型不存在，请检查模型名称'
+    case 'model_prefix_invalid':
+      return '模型名前缀不被支持：OpenAI 兼容端点请使用 openai/<模型名>'
     default:
       return error || '测试失败，请检查配置'
   }

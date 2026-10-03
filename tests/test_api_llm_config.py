@@ -205,6 +205,25 @@ def test_test_llm_config_error_report():
     assert "AuthenticationError" in data["error"]
 
 
+def test_test_llm_config_unknown_prefix_structured_error():
+    """未知 provider 前缀 → 结构化失败（errorType=model_prefix_invalid），非 500 裸栈。"""
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/llm-config/test",
+            json={
+                "model": "kimi/kimi-k2-0905-preview",
+                "baseUrl": "https://api.kimi.ai/v1",
+                "apiKey": "sk-test",
+            },
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    assert data["errorType"] == "model_prefix_invalid"
+    assert "openai/" in data["error"]
+    assert "kimi" in data["error"]
+
+
 # ── 4.9: AnalyzeRequest / ChatRequest 携带 llm_config 不报错 ──
 
 
