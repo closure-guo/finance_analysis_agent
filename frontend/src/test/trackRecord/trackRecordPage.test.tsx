@@ -26,6 +26,7 @@ const OVERVIEW = {
   portfolio: {
     available: true, annual_return: 0.12, volatility: 0.2, sharpe: 0.5,
     max_drawdown: 0.05, risk_score: 4, risk_label: '中', as_of: '2026-09-04',
+    beta: 0.85, jensen_alpha: 0.031,
   },
 }
 
@@ -697,5 +698,34 @@ describe('战绩页：跑赢指数对比卡片（add-index-performance-compare�
     const curve = screen.getByTestId('track-record-curve')
     expect(curve.compareDocumentPosition(card)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     expect(card.compareDocumentPosition(screen.getByTestId('track-record-filters'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+})
+
+// β/α 指标位（add-portfolio-beta-alpha）：overview portfolio.beta/jensen_alpha 两格，
+// 有值渲染（β 两位小数 / α 带符号百分比），null/缺失如实占位「—」
+describe('战绩页：β/α 指标位（add-portfolio-beta-alpha）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('渲染 β 与 α 两格（两位小数/带符号百分比）与副标题', async () => {
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('β 市场敞口')
+    expect(screen.getByTestId('portfolio-beta')).toHaveTextContent('0.85')
+    expect(screen.getByText('α 年化超额')).toBeVisible()
+    expect(screen.getByTestId('portfolio-alpha')).toHaveTextContent('+3.10%')
+    // 副标题同步披露新指标
+    expect(screen.getByText('年化/波动/夏普/最大回撤/风险分/β/α')).toBeInTheDocument()
+  })
+
+  it('null 时显示 —', async () => {
+    mockFetch({
+      overview: { ...OVERVIEW, portfolio: { ...OVERVIEW.portfolio, beta: null, jensen_alpha: null } },
+      predictions: PREDICTIONS,
+    })
+    renderPage()
+    await screen.findByText('β 市场敞口')
+    expect(screen.getByTestId('portfolio-beta')).toHaveTextContent('—')
+    expect(screen.getByTestId('portfolio-alpha')).toHaveTextContent('—')
   })
 })

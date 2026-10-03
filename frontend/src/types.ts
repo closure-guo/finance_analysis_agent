@@ -500,6 +500,9 @@ export interface TrackRecordPortfolio {
   risk_score: number | null
   risk_label: string | null
   as_of: string | null
+  // β 市场敞口 / Jensen α 年化超额（add-portfolio-beta-alpha）
+  beta: number | null
+  jensen_alpha: number | null
 }
 
 // neutral 回避正确率读数（avoidance_stats() 形状：win/(win+loss) 口径，settled 为分母）

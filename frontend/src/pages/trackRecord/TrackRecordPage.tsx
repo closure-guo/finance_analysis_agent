@@ -324,13 +324,13 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           {/* 组合风险指标（add-track-record-stage-b：P4 收益与风险成对） */}
           <div data-testid="track-record-risk" className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }}>
             <div className="flex items-center justify-between mb-3">
-              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>组合风险指标 <span className="ml-1 text-[10px]">年化/波动/夏普/最大回撤/风险分</span></div>
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>组合风险指标 <span className="ml-1 text-[10px]">年化/波动/夏普/最大回撤/风险分/β/α</span></div>
               {portfolio?.as_of && (
                 <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>快照截至 {portfolio.as_of}</div>
               )}
             </div>
             {portfolio && portfolio.available ? (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>年化收益</div>
                   <div className="text-lg font-semibold" style={{ color: portfolio.annual_return !== null && portfolio.annual_return >= 0 ? 'var(--text-default)' : 'var(--text-default)' }}>
@@ -352,6 +352,21 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 <div>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>风险分（{portfolio.risk_label ?? '—'}）</div>
                   <div className={`text-lg font-semibold ${riskColor(portfolio.risk_score)}`}>{portfolio.risk_score ?? '—'}</div>
+                </div>
+                {/* β/α（add-portfolio-beta-alpha）：!= null 同时兜住旧快照缺字段（undefined），如实占位「—」 */}
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>β 市场敞口</div>
+                  <div className="text-lg font-semibold" data-testid="portfolio-beta" style={{ color: 'var(--text-default)' }}>
+                    {portfolio.beta != null ? portfolio.beta.toFixed(2) : '—'}
+                  </div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>≈1 满仓跟随大盘,负值=反向敞口</div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>α 年化超额</div>
+                  <div className="text-lg font-semibold" data-testid="portfolio-alpha" style={{ color: 'var(--text-default)' }}>
+                    {portfolio.jensen_alpha != null ? <Delta value={portfolio.jensen_alpha} /> : '—'}
+                  </div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>剔除大盘影响后的独立判断收益</div>
                 </div>
               </div>
             ) : (
