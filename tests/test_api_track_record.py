@@ -462,6 +462,8 @@ def test_seed_metrics_snapshot_block(monkeypatch, tmp_path):
         data = client.get("/api/v1/track-record/overview").json()
         assert data["portfolio"]["beta"] == pytest.approx(0.85)
         assert data["portfolio"]["jensen_alpha"] == pytest.approx(0.031)
+        # metrics-only 造数不得创建会话(双保险,闭环约束:seed=数据准备)
+        assert client.get("/api/sessions").json()["sessions"] == []
     finally:
         monkeypatch.delenv("TESTING", raising=False)
         importlib.reload(api_module)

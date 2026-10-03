@@ -429,6 +429,24 @@ class TestBetaAlpha:
         assert pm.beta is None and pm.jensen_alpha is None
         assert pm.sharpe is not None  # 其余指标不受影响
 
+    def test_boundary_21_marks_exactly_20_pairs(self):
+        """20/21 边界:21 个盯市日 → 剔除首共同日后恰 20 对 → 可计算。"""
+        from finance_agent.outcome.track_record.metrics import compute_metrics_from_marks
+
+        pm = compute_metrics_from_marks(self._marks_linear(21, beta=0.8))
+        assert pm.beta == pytest.approx(0.8, abs=1e-9)
+
+    def test_zero_bench_variance_null(self):
+        """基准日收益恒 0(方差 0)→ 斜率无定义 → 双 null,不除零。"""
+        from finance_agent.outcome.track_record.metrics import compute_metrics_from_marks
+
+        marks = self._marks_linear(25, beta=0.8)
+        flat = marks[0]["benchmark_price"]
+        for m in marks:
+            m["benchmark_price"] = flat
+        pm = compute_metrics_from_marks(marks)
+        assert pm.beta is None and pm.jensen_alpha is None
+
     def test_no_benchmark_null(self):
         from finance_agent.outcome.track_record.metrics import compute_metrics_from_marks
 
