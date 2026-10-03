@@ -24,7 +24,7 @@
 - `cd frontend && npm test`: **632 passed**(76 文件)
 - E2E 默认套件: 24 passed / 2 @live skipped
 - E2E track-record 专属套件(独立测试库): **5 passed**(index-compare 3 + beta-alpha 2);文件序不破坏空库前提(beta-alpha 只写 agent_metrics_daily,build_index_compare 不读该表)
-- E2E timeline 套件: [见下方补记]
+- E2E timeline 套件: **21 passed / 1 skipped**(本次无 flaky)
 - 本地复跑专属套件前需删 `data/test-e2e-track-record.db*`(CI 不受影响)
 
 ## 合并后操作说明
