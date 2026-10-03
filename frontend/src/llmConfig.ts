@@ -75,6 +75,25 @@ export function parseCapability(obj: unknown): CapabilityMatrix | null {
   }
 }
 
+// probe warnings 机器码 → 人话映射（未知码透传）；键与后端 probes.py warnings 对齐
+export const PROBE_WARNING_LABELS: Record<string, string> = {
+  tool_call_probe_error: '工具调用请求被端点拒绝：请检查该 API 套餐/权限是否支持 tools 参数',
+  tool_auto_no_call_forced_ok: '模型未主动调用工具，强制指定后通过（能力正常）',
+  json_mode_unsupported: 'JSON 输出模式被端点拒绝，管线结构化节点可能降级',
+  stream_unsupported: '流式输出被端点拒绝，快速模式体验可能降级',
+}
+export function formatProbeWarning(code: string): string {
+  return PROBE_WARNING_LABELS[code] ?? code
+}
+
+// 矩阵呈现三态：通过 | 不支持（实测失败）| 未测（tool_followup 因 tool_call 未通过而未执行）
+export type CapabilityItemState = 'pass' | 'fail' | 'untested'
+export function capabilityItemState(key: keyof CapabilityMatrix, cap: CapabilityMatrix): CapabilityItemState {
+  if (cap[key]) return 'pass'
+  if (key === 'tool_followup' && !cap.tool_call) return 'untested'
+  return 'fail'
+}
+
 // 后端 llm_config 请求载荷（camelCase，对齐后端 LLMConfigRequest 模型 baseUrl/apiKey）
 export interface LLMConfigPayload {
   model?: string
