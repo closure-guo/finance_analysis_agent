@@ -431,3 +431,37 @@ def test_seed_track_record_block(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("TESTING", raising=False)
         importlib.reload(api_module)
+
+
+# ── add-portfolio-beta-alpha Task 5：test/seed 的 metrics_snapshot 造数 ──
+
+
+def test_seed_metrics_snapshot_block(monkeypatch, tmp_path):
+    """seed track_record.metrics_snapshot → 当日 upsert → overview 透传 β/α。"""
+    _use_db(monkeypatch, tmp_path)
+    # reload 模式沿 test_seed_track_record_block（Testing=1 + importlib.reload + finally 恢复）
+    monkeypatch.setenv("TESTING", "1")
+    import importlib
+
+    import finance_agent.api as api_module
+    import finance_agent.session_store as session_store_module
+
+    monkeypatch.setattr(session_store_module, "_DB_PATH", tmp_path / "sessions.db")
+    session_store_module.init_db()
+
+    importlib.reload(api_module)
+    try:
+        client = TestClient(api_module.app)
+        resp = client.post(
+            "/api/test/seed",
+            json={"track_record": {"metrics_snapshot": {"beta": 0.85, "jensen_alpha": 0.031}}},
+        )
+        assert resp.status_code == 200
+        # track_record-only 造数返回占位响应，不创建会话
+        assert resp.json() == {"status": "ok", "mode": "testing"}
+        data = client.get("/api/v1/track-record/overview").json()
+        assert data["portfolio"]["beta"] == pytest.approx(0.85)
+        assert data["portfolio"]["jensen_alpha"] == pytest.approx(0.031)
+    finally:
+        monkeypatch.delenv("TESTING", raising=False)
+        importlib.reload(api_module)

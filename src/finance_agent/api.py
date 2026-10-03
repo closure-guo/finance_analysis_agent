@@ -694,8 +694,9 @@ if TESTING:
         顶层可选 pipeline_timelines（{node: [TimelineItem]}）与 pipeline_snapshot（dict），
         分别经 update_pipeline_timelines / update_pipeline_snapshot 落库，
         供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）；
-        顶层可选 track_record（{equity_curve, index_closes}）写战绩页造数表
-        （add-index-performance-compare），无需 chat_history 也可单独使用，且不创建会话。
+        顶层可选 track_record（{equity_curve, index_closes, metrics_snapshot}）写战绩页造数表
+        （add-index-performance-compare / add-portfolio-beta-alpha），无需 chat_history
+        也可单独使用，且不创建会话。
         """
         # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约；
         # track_record 造数块不受 chat_history 前置约束（track_record-only 造数合法）
@@ -711,6 +712,7 @@ if TESTING:
                 init_track_record_tables,
                 upsert_equity_point,
                 upsert_index_closes,
+                upsert_metrics_daily,
             )
 
             init_track_record_tables()
@@ -726,6 +728,11 @@ if TESTING:
                     for r in track_seed.get("index_closes", [])
                 ]
             )
+            # add-portfolio-beta-alpha:指标快照造数(当日 upsert,缺省列自动置空;
+            # 只写 agent_metrics_daily,不触碰 equity_curve/index_closes)
+            metrics_snapshot = track_seed.get("metrics_snapshot")
+            if isinstance(metrics_snapshot, dict):
+                upsert_metrics_daily(_track_as_of(), metrics_snapshot)
         # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
         if "chat_history" not in req:
             return {"status": "ok", "mode": "testing"}
