@@ -173,6 +173,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_pred ON audit_log(prediction_id);
+
+-- ── add-index-performance-compare ──
+CREATE TABLE IF NOT EXISTS index_closes (
+  index_code TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  close      REAL NOT NULL,
+  PRIMARY KEY (index_code, trade_date)
+);
 """
 
 
@@ -471,6 +479,51 @@ def list_equity_curve(db_path: str | Path | None = None) -> list[dict[str, Any]]
             "SELECT curve_date, agent_nav, benchmark_nav, daily_return, trades_count FROM equity_curve ORDER BY curve_date ASC"
         ).fetchall()  # noqa: S608
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── index_closes:指数收盘(add-index-performance-compare;展示层对比用,判定链不读)──
+def upsert_index_closes(
+    rows: list[tuple[str, str, float]],
+    db_path: str | Path | None = None,
+) -> int:
+    """批量幂等写入指数收盘(INSERT OR REPLACE,单事务),返回写入行数。"""
+    if not rows:
+        return 0
+    conn = _connect(db_path)
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO index_closes (index_code, trade_date, close) VALUES (?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def list_index_closes(
+    index_code: str,
+    end: str | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """按指数读收盘序列(trade_date ASC),end 为含右边界;无 start(基期回退需全历史)。"""
+    conn = _connect(db_path)
+    try:
+        if end is None:
+            cur = conn.execute(
+                "SELECT index_code, trade_date, close FROM index_closes"
+                " WHERE index_code = ? ORDER BY trade_date ASC",
+                (index_code,),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT index_code, trade_date, close FROM index_closes"
+                " WHERE index_code = ? AND trade_date <= ? ORDER BY trade_date ASC",
+                (index_code, end),
+            )
+        return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 

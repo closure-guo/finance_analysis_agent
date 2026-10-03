@@ -546,6 +546,24 @@ export interface EquityCurveResponse {
   disclaimer: string
 }
 
+// 跑赢指数对比(add-index-performance-compare)
+export interface IndexCompareIndex {
+  code: string
+  name: string
+  return: number | null
+  effective_start_date: string | null
+  beat: boolean | null
+}
+
+export interface IndexCompareResponse {
+  span: 'all' | '3m' | '6m' | '1y'
+  window: { start: string | null; end: string | null }
+  agent_return: number | null
+  indices: IndexCompareIndex[]
+  as_of: string
+  disclaimer: string
+}
+
 // 校准分桶（add-track-record-stage-c）
 export interface CalibrationBucket {
   bucket: string

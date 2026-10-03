@@ -693,9 +693,40 @@ if TESTING:
         + agentTimeline），内部经 session_store.create_session + append_chat 写入真实存储；
         顶层可选 pipeline_timelines（{node: [TimelineItem]}）与 pipeline_snapshot（dict），
         分别经 update_pipeline_timelines / update_pipeline_snapshot 落库，
-        供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）。
+        供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）；
+        顶层可选 track_record（{equity_curve, index_closes}）写战绩页造数表
+        （add-index-performance-compare），无需 chat_history 也可单独使用，且不创建会话。
         """
-        # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约
+        # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约；
+        # track_record 造数块不受 chat_history 前置约束（track_record-only 造数合法）
+        if "chat_history" not in req and not isinstance(req.get("track_record"), dict):
+            return {"status": "ok", "mode": "testing"}
+        # add-index-performance-compare:战绩页 E2E 造数(equity_curve/index_closes
+        # 写入真实存储层;SESSIONS_DB_PATH 已被 e2e webServer 指向独立测试库)。
+        # seed 是纯造数:track_record-only 请求到此为止,不创建会话,避免 E2E 会话
+        # 侧栏被无 chat_history 的空会话污染（review fix）。
+        track_seed = req.get("track_record")
+        if isinstance(track_seed, dict):
+            from finance_agent.outcome.track_record.model import (
+                init_track_record_tables,
+                upsert_equity_point,
+                upsert_index_closes,
+            )
+
+            init_track_record_tables()
+            for pt in track_seed.get("equity_curve", []):
+                upsert_equity_point(
+                    pt["curve_date"],
+                    pt["agent_nav"],
+                    benchmark_nav=pt.get("benchmark_nav"),
+                )
+            upsert_index_closes(
+                [
+                    (r["index_code"], r["trade_date"], r["close"])
+                    for r in track_seed.get("index_closes", [])
+                ]
+            )
+        # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
         if "chat_history" not in req:
             return {"status": "ok", "mode": "testing"}
         session_id = create_session(
@@ -2222,6 +2253,21 @@ async def track_record_equity_curve() -> dict[str, Any]:
         "as_of": _track_as_of(),
         "disclaimer": _DISCLAIMER,
     }
+
+
+@app.get("/api/v1/track-record/index-compare")
+async def track_record_index_compare(span: str = "all") -> dict[str, Any]:
+    """add-index-performance-compare:跑赢指数对比读数(展示层)。
+
+    组合区间收益取 equity_curve 窗口首尾净值,指数收益取 index_closes 同窗口
+    首尾收盘;win/loss 判定口径不变(仍锚 000300,见 docs/evals/metrics.md)。
+    """
+    if span not in ("all", "3m", "6m", "1y"):
+        raise HTTPException(status_code=422, detail="span 必须为 all/3m/6m/1y")
+    from finance_agent.outcome.track_record.index_compare import build_index_compare
+
+    data = await asyncio.to_thread(build_index_compare, span)
+    return {**data, "as_of": _track_as_of(), "disclaimer": _DISCLAIMER}
 
 
 @app.get("/api/v1/track-record/calibration")

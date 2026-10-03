@@ -7,6 +7,7 @@ import { navigate } from '../../route'
 import { cssVar } from '../../Charts'
 import { loadTrackPrefs, type TrackTimeSpan } from '../../lib/trackPrefs'
 import { PREDICTION_STATUS_CLS as STATUS_CLS, PREDICTION_STATUS_LABEL as STATUS_LABEL } from './predictionStatus'
+import { IndexCompareCard } from './IndexCompareCard'
 
 const DIRECTION_LABEL: Record<string, string> = {
   long: '看多',
@@ -406,6 +407,10 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
               <ReactECharts option={chartOption} style={{ height: 240 }} notMerge />
             </div>
           )}
+
+          {/* 跑赢指数对比（add-index-performance-compare）：组合区间收益 vs 主要指数同期收益；
+              span 与净值图窗口同源（页面战绩展示偏好 prefs.timeSpan） */}
+          <IndexCompareCard span={prefs.timeSpan} />
 
           {/* 观点日志 */}
           {/* 过滤工具栏（add-track-record-sort-filter） */}

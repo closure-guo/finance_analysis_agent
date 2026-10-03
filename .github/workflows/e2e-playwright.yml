@@ -66,6 +66,13 @@ jobs:
         env:
           CI: "true"
 
+      # 战绩页·跑赢指数对比（专属 config + 独立测试库，避免造数污染共享库空态前提）
+      - name: Run Playwright E2E (track-record suite)
+        run: npx playwright test --config=playwright.track-record.config.ts
+        working-directory: tests/e2e/playwright
+        env:
+          CI: "true"
+
       # 时间序列 E2E（专属 config，STUB_SCENARIO=tool_call/pipeline，独立端口对）
       - name: Run Playwright E2E (timeline suite)
         run: npx playwright test --config=playwright.timeline.config.ts
