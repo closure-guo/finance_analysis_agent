@@ -460,3 +460,55 @@ def test_avoidance_stats_source_and_version_filter(db):
     )
     live = avoidance_stats(source_type="live", db_path=db)
     assert live["avoidance_win"] == 1 and live["settled"] == 1
+
+
+class TestMetricsBetaAlphaColumns:
+    def test_old_db_migrated_idempotent(self, tmp_path):
+        """旧 schema(无 beta/jensen_alpha 列)→ init 补列,重跑不加列。"""
+        import sqlite3
+
+        from finance_agent.outcome.track_record.model import (
+            init_track_record_tables,
+        )
+
+        db = tmp_path / "old.db"
+        conn = sqlite3.connect(db)
+        # predictions 用文件内既有 _LEGACY_PREDICTIONS_DDL 全列夹具——brief 原文的退化表
+        # (仅 prediction_id)会在 init 第一步建 idx_predictions_status 时报 no such column
+        # (本文件 line 236 注释所载约束);本用例主题是 agent_metrics_daily 迁移。
+        conn.executescript(_LEGACY_PREDICTIONS_DDL)
+        conn.executescript(
+            """
+            CREATE TABLE agent_metrics_daily (
+              metric_date TEXT PRIMARY KEY, sample_size INTEGER NOT NULL DEFAULT 0,
+              settled INTEGER NOT NULL DEFAULT 0, win_rate REAL, avg_excess REAL,
+              annual_return REAL, volatility REAL, sharpe REAL, max_drawdown REAL,
+              risk_score INTEGER, risk_label TEXT, segment_json TEXT NOT NULL DEFAULT '{}'
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+        init_track_record_tables(db)
+        init_track_record_tables(db)  # 重跑幂等
+        conn = sqlite3.connect(db)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_metrics_daily)")}
+        conn.close()
+        assert {"beta", "jensen_alpha"} <= cols
+
+    def test_upsert_and_read_back(self, tmp_path):
+        from finance_agent.outcome.track_record.model import (
+            get_latest_metrics,
+            init_track_record_tables,
+            upsert_metrics_daily,
+        )
+
+        db = tmp_path / "t.db"
+        init_track_record_tables(db)
+        upsert_metrics_daily("2026-10-03", {"beta": 0.85, "jensen_alpha": -0.004}, db_path=db)
+        row = get_latest_metrics(db_path=db)
+        assert row["beta"] == 0.85 and row["jensen_alpha"] == -0.004
+        # 覆盖写(null 覆盖非 null,同日 upsert 语义)
+        upsert_metrics_daily("2026-10-03", {"beta": None, "jensen_alpha": None}, db_path=db)
+        row = get_latest_metrics(db_path=db)
+        assert row["beta"] is None and row["jensen_alpha"] is None

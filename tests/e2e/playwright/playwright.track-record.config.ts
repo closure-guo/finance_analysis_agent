@@ -1,7 +1,8 @@
 import { defineConfig } from '@playwright/test'
 
 /**
- * 战绩页·跑赢指数对比专用 E2E 配置（add-index-performance-compare）
+ * 战绩页专属 E2E 配置（track-record-*.spec.ts 套件;
+ * 现含 add-index-performance-compare 与 add-portfolio-beta-alpha 两个 spec）
  *
  * 为什么独立 config（数据竞争，review fix）：
  * 本 spec 经 /api/test/seed 写 equity_curve/index_closes 造数行，而默认 config 的
@@ -9,7 +10,7 @@ import { defineConfig } from '@playwright/test'
  * 「无净值快照空态」断言（track-record-curve count 0）——默认套件 fullyParallel
  * 下两者互斥：种子一旦落库（且跨 run 持久），decisions.spec 空态必红；
  * /api/test/reset 为占位骨架无法自清理。故沿 timeline config 先例
- * （特殊前提 spec → 专属 config + 独立 CI step）为本 spec 拆专属库：
+ * （特殊前提 spec → 专属 config + 独立 CI step）为本套件拆专属库：
  * SESSIONS_DB_PATH=data/test-e2e-track-record.db，与共享库彻底互不影响。
  *
  * 端口对 8004/5177（避开默认 8000/5173 与 timeline 8001-8003/5174-5176）。
@@ -18,7 +19,7 @@ import { defineConfig } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './tests',
-  testMatch: ['track-record-index-compare.spec.ts'],
+  testMatch: ['track-record-*.spec.ts'],
   timeout: 60_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,

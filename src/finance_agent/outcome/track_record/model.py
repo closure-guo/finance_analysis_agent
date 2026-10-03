@@ -147,6 +147,8 @@ CREATE TABLE IF NOT EXISTS agent_metrics_daily (
   max_drawdown  REAL,
   risk_score    INTEGER,
   risk_label    TEXT,
+  beta          REAL,
+  jensen_alpha  REAL,
   segment_json  TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -192,6 +194,7 @@ def init_track_record_tables(db_path: str | Path | None = None) -> None:
         conn.executescript(TRACK_RECORD_EXTRA_DDL)
         _migrate_stage_c_columns(conn)
         _migrate_settlement_contract_columns(conn)
+        _migrate_metrics_beta_alpha_columns(conn)
         conn.commit()
     finally:
         conn.close()
@@ -221,6 +224,20 @@ _SETTLEMENT_CONTRACT_COLUMNS = (
 def _migrate_settlement_contract_columns(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)").fetchall()}
     for col, ddl in _SETTLEMENT_CONTRACT_COLUMNS:
+        if col not in cols:
+            conn.execute(ddl)
+
+
+# ── add-portfolio-beta-alpha:指标快照 β/α 列(幂等迁移)──
+_METRICS_BETA_ALPHA_COLUMNS = (
+    ("beta", "ALTER TABLE agent_metrics_daily ADD COLUMN beta REAL"),
+    ("jensen_alpha", "ALTER TABLE agent_metrics_daily ADD COLUMN jensen_alpha REAL"),
+)
+
+
+def _migrate_metrics_beta_alpha_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_metrics_daily)").fetchall()}
+    for col, ddl in _METRICS_BETA_ALPHA_COLUMNS:
         if col not in cols:
             conn.execute(ddl)
 
@@ -540,6 +557,8 @@ _METRICS_COLUMNS = (
     "max_drawdown",
     "risk_score",
     "risk_label",
+    "beta",
+    "jensen_alpha",
 )
 
 
@@ -560,8 +579,8 @@ def upsert_metrics_daily(
         conn.execute(
             """INSERT INTO agent_metrics_daily (metric_date, sample_size, settled,
                  win_rate, avg_excess, annual_return, volatility, sharpe,
-                 max_drawdown, risk_score, risk_label)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 max_drawdown, risk_score, risk_label, beta, jensen_alpha)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(metric_date) DO UPDATE SET
                  sample_size=excluded.sample_size,
                  settled=excluded.settled,
@@ -572,7 +591,9 @@ def upsert_metrics_daily(
                  sharpe=excluded.sharpe,
                  max_drawdown=excluded.max_drawdown,
                  risk_score=excluded.risk_score,
-                 risk_label=excluded.risk_label""",
+                 risk_label=excluded.risk_label,
+                 beta=excluded.beta,
+                 jensen_alpha=excluded.jensen_alpha""",
             [metric_date, *values],
         )
         conn.commit()
