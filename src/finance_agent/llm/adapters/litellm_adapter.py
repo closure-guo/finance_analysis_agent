@@ -571,6 +571,22 @@ def _maybe_opencode_session(kwargs: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def _is_temperature_rejected(exc: BaseException) -> bool:
+    """端点以 temperature 相关错误拒绝（思考型模型常见：仅允许 temperature=1）。"""
+    return "temperature" in str(exc).lower()
+
+
+def _record_temperature_degradation(model: Any) -> None:
+    """降级事实落 trace（观测失败不阻断）+ 进程日志（update-temperature-degrade-fallback）。"""
+    logger.warning("端点拒绝 temperature（思考型模型常见限制），剔除后降级重试: model=%s", model)
+    try:
+        from finance_agent.langfuse_tracing import update_current_span
+
+        update_current_span(metadata={"degradation": "temperature_dropped_endpoint_rejected"})
+    except Exception:  # noqa: S110 -- 观测失败不阻断业务
+        pass
+
+
 def raw_completion(**kwargs: Any) -> Any:
     """adapter 内暴露 litellm.completion（gateway/probes 唯一入口）。
 
@@ -580,9 +596,15 @@ def raw_completion(**kwargs: Any) -> Any:
     import litellm
 
     ensure_litellm_runtime()
-    return litellm.completion(
-        **_with_default_timeout(_drop_unsupported(_maybe_opencode_session(dict(kwargs))))
-    )
+    final_kwargs = _with_default_timeout(_drop_unsupported(_maybe_opencode_session(dict(kwargs))))
+    try:
+        return litellm.completion(**final_kwargs)
+    except Exception as exc:
+        if "temperature" in final_kwargs and _is_temperature_rejected(exc):
+            _record_temperature_degradation(final_kwargs.get("model"))
+            final_kwargs.pop("temperature", None)
+            return litellm.completion(**final_kwargs)
+        raise
 
 
 def raw_stream(**kwargs: Any) -> Any:
@@ -591,7 +613,15 @@ def raw_stream(**kwargs: Any) -> Any:
     ensure_litellm_runtime()
     kwargs.setdefault("stream_options", {"include_usage": True})
     kwargs = _maybe_opencode_session(dict(kwargs))
-    return litellm.completion(**_with_default_timeout(_drop_unsupported(kwargs)), stream=True)
+    final_kwargs = _with_default_timeout(_drop_unsupported(kwargs))
+    try:
+        return litellm.completion(**final_kwargs, stream=True)
+    except Exception as exc:
+        if "temperature" in final_kwargs and _is_temperature_rejected(exc):
+            _record_temperature_degradation(final_kwargs.get("model"))
+            final_kwargs.pop("temperature", None)
+            return litellm.completion(**final_kwargs, stream=True)
+        raise
 
 
 async def raw_acompletion(**kwargs: Any) -> Any:
@@ -604,4 +634,12 @@ async def raw_acompletion(**kwargs: Any) -> Any:
         # 否则 generation 无 token 用量 → Langfuse cost 无法计算
         kwargs.setdefault("stream_options", {"include_usage": True})
     kwargs = _maybe_opencode_session(dict(kwargs))
-    return await litellm.acompletion(**_with_default_timeout(_drop_unsupported(kwargs)))
+    final_kwargs = _with_default_timeout(_drop_unsupported(kwargs))
+    try:
+        return await litellm.acompletion(**final_kwargs)
+    except Exception as exc:
+        if "temperature" in final_kwargs and _is_temperature_rejected(exc):
+            _record_temperature_degradation(final_kwargs.get("model"))
+            final_kwargs.pop("temperature", None)
+            return await litellm.acompletion(**final_kwargs)
+        raise

@@ -150,3 +150,157 @@ def test_raw_stream_opencode_base_injects_session_header(monkeypatch):
     )
     headers = captured.get("extra_headers") or {}
     assert headers.get("x-opencode-session")
+
+
+# ── temperature 拒绝自动降级（update-temperature-degrade-fallback）──
+
+
+class TestTemperatureDegrade:
+    """思考型模型端点仅允许 temperature=1：temperature 相关拒绝剔除后重试一次。"""
+
+    def _temp_reject(self):
+        class FakeBadRequestError(Exception):
+            pass
+
+        return FakeBadRequestError(
+            "Error code: 400 - invalid temperature: only 1 is allowed for this model"
+        )
+
+    def test_raw_completion_degrades_and_retries(self, monkeypatch):
+        import litellm
+
+        from finance_agent.llm.adapters import litellm_adapter
+
+        calls: list[dict] = []
+
+        def fake_completion(**kwargs):
+            calls.append(dict(kwargs))
+            if "temperature" in kwargs:
+                raise self._temp_reject()
+            from unittest.mock import MagicMock
+
+            return MagicMock()
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        litellm_adapter.raw_completion(
+            model="openai/kimi-k2-thinking",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.3,
+        )
+        assert len(calls) == 2
+        assert "temperature" not in calls[1]
+
+    def test_raw_completion_non_temperature_error_no_retry(self, monkeypatch):
+        import litellm
+
+        from finance_agent.llm.adapters import litellm_adapter
+
+        calls: list[dict] = []
+
+        def fake_completion(**kwargs):
+            calls.append(dict(kwargs))
+            raise RuntimeError("Error code: 401 - invalid api key")
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        import pytest
+
+        with pytest.raises(RuntimeError, match="invalid api key"):
+            litellm_adapter.raw_completion(
+                model="openai/kimi-k2-thinking",
+                messages=[{"role": "user", "content": "hi"}],
+                temperature=0.3,
+            )
+        assert len(calls) == 1
+
+    def test_raw_completion_degrade_still_fails_raises_original(self, monkeypatch):
+        import litellm
+
+        from finance_agent.llm.adapters import litellm_adapter
+
+        calls: list[dict] = []
+
+        def fake_completion(**kwargs):
+            calls.append(dict(kwargs))
+            raise RuntimeError("Error code: 400 - invalid temperature: only 1")
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        import pytest
+
+        with pytest.raises(RuntimeError, match="invalid temperature"):
+            litellm_adapter.raw_completion(
+                model="openai/x",
+                messages=[{"role": "user", "content": "hi"}],
+                temperature=0.3,
+            )
+        assert len(calls) == 2
+
+    def test_raw_completion_without_temperature_untouched(self, monkeypatch):
+        import litellm
+
+        from finance_agent.llm.adapters import litellm_adapter
+
+        calls: list[dict] = []
+
+        def fake_completion(**kwargs):
+            calls.append(dict(kwargs))
+            raise RuntimeError("some temperature unrelated")
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        import pytest
+
+        with pytest.raises(RuntimeError):
+            litellm_adapter.raw_completion(
+                model="openai/x", messages=[{"role": "user", "content": "hi"}]
+            )
+        assert len(calls) == 1
+
+    def test_raw_stream_degrades_and_retries(self, monkeypatch):
+        import litellm
+
+        from finance_agent.llm.adapters import litellm_adapter
+
+        calls: list[dict] = []
+
+        def fake_completion(**kwargs):
+            calls.append(dict(kwargs))
+            if "temperature" in kwargs:
+                raise self._temp_reject()
+            return iter(["chunk"])
+
+        monkeypatch.setattr(litellm, "completion", fake_completion)
+        out = litellm_adapter.raw_stream(
+            model="openai/kimi-k2-thinking",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.3,
+        )
+        assert next(iter(out)) == "chunk"
+        assert len(calls) == 2
+        assert "temperature" not in calls[1]
+
+    def test_raw_acompletion_degrades_and_retries(self, monkeypatch):
+        import litellm
+
+        from finance_agent.llm.adapters import litellm_adapter
+
+        calls: list[dict] = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(dict(kwargs))
+            if "temperature" in kwargs:
+                raise self._temp_reject()
+            from unittest.mock import MagicMock
+
+            return MagicMock()
+
+        monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+        import asyncio
+
+        asyncio.run(
+            litellm_adapter.raw_acompletion(
+                model="openai/kimi-k2-thinking",
+                messages=[{"role": "user", "content": "hi"}],
+                temperature=0.3,
+            )
+        )
+        assert len(calls) == 2
+        assert "temperature" not in calls[1]
