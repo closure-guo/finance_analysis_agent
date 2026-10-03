@@ -264,3 +264,35 @@ class TestStubRealKeysetParity:
             f"stub 与真实 fetch_data 键集漂移：仅真实有 {sorted(real_keys - stub_keys)}，"
             f"仅 stub 有 {sorted(stub_keys - real_keys)}"
         )
+
+
+class TestEntryChannels:
+    """入口键 ⊆ AnalysisState 声明（incident 035，027 同族复发）。
+
+    两个管线入口（api.run_deep_analysis_stream / agent_factory._make_run_deep_analysis
+    闭包）的 initial_state 都注入 llm_config，但 AnalysisState 未声明该键 →
+    LangGraph 静默过滤未声明输入键 → 全部管线节点回退 env 模型（请求级配置
+    整条哑火，实测：用户配 Kimi k3-256k，4 分析师仍打 env glm-5.3 → 方舟
+    InvalidSubscription）。本门禁锁死：入口注入的每个键必须已建图通道。
+    """
+
+    def test_entry_initial_state_keys_declared(self):
+        from finance_agent.graph import build_5layer_graph
+
+        graph = build_5layer_graph()
+        entry_keys = {
+            "stock_code",
+            "stock_name",
+            "analysis_type",
+            "peer_codes",
+            "enable_web_search",
+            "api_key",
+            "focus",
+            "llm_config",
+            "web_sources",
+        }
+        missing = sorted(k for k in entry_keys if k not in graph.channels)
+        assert not missing, (
+            f"入口 initial_state 键未在 AnalysisState 声明，会被 LangGraph 静默丢弃"
+            f"（incident 027 同族）：{missing}"
+        )

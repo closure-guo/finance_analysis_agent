@@ -3,6 +3,8 @@ from typing import Annotated, Literal, TypedDict
 
 import pandas as pd
 
+from finance_agent.llm.config import LLMConfig
+
 
 def merge_dicts(left: dict | None, right: dict | None) -> dict:
     """Send 并行 agent 的 dict 合并 reducer。"""
@@ -21,6 +23,9 @@ class AnalysisState(TypedDict, total=False):
     enable_web_search: bool  # 是否启用实时事件搜索
     api_key: str | None  # 用户自带的 DeepSeek API Key（HF Spaces 用）
     focus: str  # 深度研究意图澄清环节用户填写的关注点（Kimi 风格反问回答）
+    # 请求级 LLM 配置（incident 035：曾未声明 → LangGraph 静默过滤输入键，
+    # 全部管线节点回退 env 模型，请求级配置整条哑火——027 同族）
+    llm_config: LLMConfig | None
 
     # ── Cache ──
     cache_result: str  # HIT | MISS
