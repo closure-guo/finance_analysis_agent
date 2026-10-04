@@ -282,6 +282,23 @@ def _request_config_dict(llm_config: Any, api_key: str | None) -> dict | None:
     return cfg
 
 
+# 研究聚焦摘要字数约束（Task3-c 去重：基础 system 与重试强化指令同源引用）
+_FOCUS_LEN_HINT = "150-200 字"
+
+
+def _truncate_at_sentence(text: str, limit: int = 200) -> str:
+    """句界截断（新增-2）：len ≤ limit 原样；否则在 text[:limit] 窗口内找最后
+    一个「。」，找到则切到该句号（含），找不到才硬切 limit——兜底文本不在
+    句中腰斩，读者不读到半句。"""
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    cut = window.rfind("。")
+    if cut == -1:
+        return window
+    return window[: cut + 1]
+
+
 def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
     """用 LLM 生成围绕用户关注点的开篇摘要，失败时回退到结构化拼接。"""
     api_key = state.get("api_key")
@@ -316,7 +333,7 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
 
     tags_desc = "、".join(t for t in focus_tags) or "综合"
     system = (
-        "你是投研报告编辑。根据用户关注点和各层分析产出，写一段 150-200 字的研究聚焦摘要，"
+        f"你是投研报告编辑。根据用户关注点和各层分析产出，写一段 {_FOCUS_LEN_HINT}的研究聚焦摘要，"
         "紧扣用户关注点组织语言，点出最关键的结论与数据。纯文本，不使用 emoji，不输出标题。"
         "内容仅基于所提供材料中的数据组织，不得引入材料外的数值或推测。"
         "引用财务数据时使用材料中的最新披露期次；当最新期次与历史趋势方向相反时"
@@ -329,7 +346,7 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
         f"各层分析产出:\n" + "\n".join(materials)
     )
 
-    def _call(system_extra: str = "") -> tuple[str, dict]:
+    def _call(system_extra: str = "", trace_meta: dict | None = None) -> tuple[str, dict]:
         text, meta = complete_text(
             [
                 {"role": "system", "content": system + system_extra},
@@ -339,33 +356,32 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
             max_tokens=400,
             temperature=0.3,
             llm_config=_request_config_dict(state.get("llm_config"), api_key),
-            trace={"name": "report", "metadata": {"agent": "report"}},
+            trace=trace_meta or {"name": "report", "metadata": {"agent": "report"}},
             output_guard={"target_lang": "zh"},
         )
         return (text or "").strip(), meta
 
     with contextlib.suppress(Exception):
         resp, meta = _call()
-        # 调用侧判定（gateway 侧 output_guard 仅承担观测遥测；决策语义在本层）
-        if resp and validate_deliverable_text(resp, finish_reason=meta.get("finish_reason")).ok:
+        # 调用侧判定（gateway 侧 output_guard 仅承担观测遥测；决策语义在本层）。
+        # 判定路径统一（Task3-b）：空文本交由校验器判 empty，不再调用侧短路
+        if validate_deliverable_text(resp or "", finish_reason=meta.get("finish_reason")).ok:
             return resp
         # 违约（泄露/截断/空）→ 定向重试 1 次（incident 036：glm-5.3 间歇性
         # 把任务独白写进正文；强化指令禁止思考输出）
         retry_resp, retry_meta = _call(
-            "\n\n重要：直接输出最终摘要文本。禁止输出任务理解、要点清单、"
-            "约束重述、Draft 标记或任何思考过程；只输出面向读者的 150-200 字中文摘要。"
+            f"\n\n重要：直接输出最终摘要文本。禁止输出任务理解、要点清单、"
+            f"约束重述、Draft 标记或任何思考过程；只输出面向读者的 {_FOCUS_LEN_HINT}中文摘要。",
+            {"name": "report", "metadata": {"agent": "report", "retry": 1}},
         )
-        if (
-            retry_resp
-            and validate_deliverable_text(
-                retry_resp, finish_reason=retry_meta.get("finish_reason")
-            ).ok
-        ):
+        if validate_deliverable_text(
+            retry_resp or "", finish_reason=retry_meta.get("finish_reason")
+        ).ok:
             return retry_resp
 
-    # 兜底：取首个分析师 summary 截断
+    # 兜底：取首个分析师 summary 句界截断（新增-2）
     fallback = materials[0] if materials else ""
-    return fallback[:200]
+    return _truncate_at_sentence(fallback)
 
 
 # ── 报告主函数 ──
