@@ -72,16 +72,27 @@ class TestGetDbTransientRetry:
         conn.close()
 
     def test_retry_exhausted_raises(self, isolated_db, monkeypatch):
-        """瞬态错误持续超过重试窗口：显式 raise 原异常，不静默。"""
-        monkeypatch.setattr(
-            "sqlite3.connect",
-            lambda *a, **kw: (_ for _ in ()).throw(
-                sqlite3.OperationalError("unable to open database file")
-            ),
-        )
-        monkeypatch.setattr("time.sleep", lambda _s: None)
+        """瞬态错误持续超过重试窗口：显式 raise 原异常，不静默。
+
+        R4/R6 回归锚：恰好 6 次连接尝试（尝试点 t≈0/0.1/0.3/0.7/1.5/3.1，
+        覆盖 ~2s bind mount 自愈窗口且留余量）；退避序列 [0.1, 0.2, 0.4,
+        0.8, 1.6] 共 5 次——末次尝试失败后不再 sleep（重试耗尽即抛）。
+        """
+        calls = {"n": 0}
+        sleeps: list[float] = []
+
+        def down_connect(*a, **kw):
+            calls["n"] += 1
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr("sqlite3.connect", down_connect)
+        monkeypatch.setattr("time.sleep", sleeps.append)
         with pytest.raises(sqlite3.OperationalError):
             ss._get_db()
+        assert calls["n"] == ss._DB_CONNECT_MAX_RETRIES == 6
+        assert sleeps == [0.1, 0.2, 0.4, 0.8, 1.6], (
+            f"退避应恰为 5 次（末次失败后不 sleep），实际: {sleeps}"
+        )
 
     def test_non_transient_error_not_retried(self, isolated_db, monkeypatch):
         """非瞬态错误（如 no such table）不重试，立即 raise。"""

@@ -135,7 +135,10 @@ class StreamRegistry:
 
         终态落库值得比普通写更固执：5 次 × 1s 重试（_get_db 层短重试之上的
         调用侧兜底）。重试耗尽 raise（显式失败，由调用方日志兜底），
-        MUST NOT 静默吞掉造成「管线完成但终态缺失」。
+        MUST NOT 静默吞掉造成「管线完成但终态缺失」。raise 前释放 per-run
+        CAS：append 事务失败即回滚，journal 无半终态；若保住置位，_run_task
+        自动 done/error 与 _publish_sync interrupted 兜底全被挡掉，反而坐实
+        「管线完成但终态彻底缺失」。
         """
         if not self._try_mark_terminal(session_id, event):
             return 0
@@ -151,6 +154,15 @@ class StreamRegistry:
                 )
                 await asyncio.sleep(1.0)
         else:
+            # 重试耗尽：先释放 per-run CAS 再 raise（final review C1，裁决已定）。
+            # append 事务原子失败即回滚，journal 不存在半终态残留；保住置位会把
+            # 上游兜底发布（_run_task 自动终态 / _publish_sync interrupted）全挡掉，
+            # 终态彻底缺失。释放后兜底路径仍可重试发布。
+            if event.get("type") in ("done", "interrupted", "error"):
+                # 仅释放本调用真实获取过的 CAS（_try_mark_terminal 只对终态置位）
+                stream = self._streams.get(session_id)
+                if stream is not None:
+                    stream.terminalPublished = False
             raise last_exc  # type: ignore[misc]
         event["seq"] = seq
         stream = self._streams.get(session_id)

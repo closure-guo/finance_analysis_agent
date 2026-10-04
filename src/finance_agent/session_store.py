@@ -36,7 +36,9 @@ _EVENT_APPEND_RETRY_SLEEP = 0.05
 # unable to open database file = bind mount 瞬断；locked = busy_timeout 覆盖不到的
 # 连接期锁；disk I/O error = 存储瞬态。非瞬态错误不重试立即抛出。
 _DB_TRANSIENT_PATTERNS = ("unable to open database file", "database is locked", "disk i/o error")
-_DB_CONNECT_MAX_RETRIES = 4
+# 连接重试 6 次：尝试点 t≈0/0.1/0.3/0.7/1.5/3.1（指数退避 0.1s 基数，
+# 末次失败不再 sleep），覆盖 spec 假设的 ~2s bind mount 自愈窗口且留余量
+_DB_CONNECT_MAX_RETRIES = 6
 _DB_CONNECT_RETRY_BASE_SLEEP = 0.1
 
 # created_at 列曾被旧版代码错写为 session_type 的值（'chat' / 'analysis'），
@@ -79,7 +81,9 @@ def _get_db() -> sqlite3.Connection:
             if not any(p in str(exc).lower() for p in _DB_TRANSIENT_PATTERNS):
                 raise
             last_exc = exc
-            time.sleep(_DB_CONNECT_RETRY_BASE_SLEEP * (2**attempt))
+            # 末次尝试失败后不再 sleep（重试耗尽即抛，不做无意义的收尾等待）
+            if attempt < _DB_CONNECT_MAX_RETRIES - 1:
+                time.sleep(_DB_CONNECT_RETRY_BASE_SLEEP * (2**attempt))
     raise last_exc  # type: ignore[misc]
 
 
