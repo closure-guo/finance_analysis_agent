@@ -1,7 +1,7 @@
 # Incident 036: 纯文本交付物零契约——glm-5.3 思考独白原文进报告「研究聚焦」段
 
 **日期**: 2026-10-04
-**状态**: 已登记（修复 delta `add-output-contract-guard` 待实施）
+**状态**: 已修复（delta `add-output-contract-guard` 已实施，PR #221 合并 + 部署 + 拓荆真实验证收口，见 `tests/validation/2026-10-04-add-output-contract-guard-validation.md`）
 **关联**: [017（同根因：reasoning 吃满 max_tokens）](017-ark-glm-reasoning-token-starvation.md)、[019（截断治理）](019-llm-output-truncation-governance.md)、[001（LLM 输出失真）](001-llm-hallucination-20260601.md)、PR #215-#219（LLM_* 切 bigmodel glm-5.3）
 
 ## 症状
