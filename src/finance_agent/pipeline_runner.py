@@ -395,14 +395,17 @@ class PipelineRunner:
             - 重试耗尽的 raise 只记日志不外抛：finally 中外抛会跳过 state.done
               置位，is_running 永真、会话永远无法重开（publish_terminal 契约的
               「调用方日志兜底」）；
-            - result 超时须覆盖 5×1s 重试窗口，故 15s（普通 publish 单发 5s）。
+            - result 超时须覆盖最坏叠加窗口：publish_terminal 5×1s 重试 +
+              _get_db 6 次连接重试（≈3.1s 退避）+ busy_timeout 15s 单次写等待，
+              故 90s（普通 publish 单发 5s）。仅终态路径一次性行，不构成
+              常规写放大。
             """
             if loop is None:  # 仅 loop 桥接模式调用（调用侧均已守卫）；防御式收口
                 return
             try:
                 asyncio.run_coroutine_threadsafe(
                     stream_registry.publish_terminal(session_id, ev), loop
-                ).result(timeout=15)
+                ).result(timeout=90)
             except Exception:
                 logger.exception("终态发布失败 session=%s type=%s", session_id, ev.get("type"))
 

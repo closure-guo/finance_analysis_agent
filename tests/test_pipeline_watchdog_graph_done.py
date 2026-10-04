@@ -158,6 +158,8 @@ async def test_scenario_b_budget_exhausted_before_graph_done_still_timeout(tmp_p
     out = tool_results[-1].tool_result.output if tool_results[-1].tool_result else ""
     assert "管线执行超时" in out
     assert tool_results[-1].tool_result is not None
+    # spec「管线异常终止的工具结果显式错误语义」：is_error=True + 机器可读标志
+    assert tool_results[-1].tool_result.is_error is True
     assert tool_results[-1].tool_result.metadata.get("pipeline_timeout") is True
 
     row = session_store.get_session(sid)

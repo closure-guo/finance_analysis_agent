@@ -616,8 +616,24 @@ class Agent:
                     # 追加工具结果到上下文
                     self.context.append_tool_result(tc.id, result.output, result.is_error)
 
-                    # run_deep_analysis 完成后标记，允许 LLM 再生成一次摘要
-                    if tc.name == "run_deep_analysis" and not result.is_error:
+                    # run_deep_analysis 完成后标记，允许 LLM 再生成一次摘要。
+                    # spec「管线异常终止的工具结果显式错误语义」成对语义：终态
+                    # 失败 TOOL_RESULT（is_error=True + pipeline_* 机器标志）表示
+                    # 管线已收口（超时/异常/阻断），同样置位 analysis_completed——
+                    # 否则 LLM 保有工具 schemas 可能对已终结的管线自动重跑（40
+                    # 分钟级）；而缺失/空结果等非终态失败仍不置位（保留重试引导）。
+                    _terminal_meta = (
+                        "pipeline_timeout",
+                        "pipeline_error",
+                        "pipeline_blocked",
+                    )
+                    if tc.name == "run_deep_analysis" and (
+                        not result.is_error
+                        or (
+                            result.metadata is not None
+                            and any(result.metadata.get(k) for k in _terminal_meta)
+                        )
+                    ):
                         analysis_completed = True
 
                     # 触发 post_tool_use 钩子

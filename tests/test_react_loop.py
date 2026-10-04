@@ -532,3 +532,71 @@ class TestStreamingToolEmptyOutput:
         assert mock_llm.last_tools, (
             f"analysis_completed 不应置位（空结果不该触发强制摘要），实际 last_tools={mock_llm.last_tools}"
         )
+
+
+class TestTerminalToolResultStillCompletes:
+    """spec「管线异常终止的工具结果显式错误语义」成对语义回归锚。
+
+    终态失败 TOOL_RESULT（is_error=True + pipeline_timeout/pipeline_error/
+    pipeline_blocked 机器标志）表示管线已收口——analysis_completed MUST 仍
+    置位（下一轮清空工具 schemas 强制摘要转述），MUST NOT 让 LLM 对已终结
+    的管线自动重跑（40 分钟级）。若有人把 loop 的成对判断回退成单纯
+    `not result.is_error`，本组用例即红。
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", ["pipeline_timeout", "pipeline_error", "pipeline_blocked"])
+    async def test_terminal_error_tool_result_still_completes(self, flag):
+        """终态 TOOL_RESULT 带 pipeline_* 标志 → is_error 透传且 analysis_completed 仍置位。"""
+        from finance_agent.harness import StreamEvent, ToolResult
+
+        async def terminal_error_tool():
+            """模拟 agent_factory 终态分支：is_error=True + 机器可读标志。"""
+            yield StreamEvent(
+                event_type=ActionType.TOOL_RESULT,
+                content=f"深度分析管线异常终止（{flag}）",
+                tool_result=ToolResult(
+                    tool_call_id="",
+                    name="run_deep_analysis",
+                    output=f"深度分析管线异常终止：{flag}",
+                    is_error=True,
+                    metadata={flag: True},
+                ),
+            )
+
+        mock_llm = MockLLMClient(
+            [
+                [
+                    LLMResponse(
+                        tool_calls=[_make_tool_call("run_deep_analysis", {})],
+                        is_finished=True,
+                    )
+                ],
+                [LLMResponse(text_delta="管线已失败，原因是……", is_finished=True)],
+            ]
+        )
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=5,
+            llm=mock_llm,
+        )
+        agent.tools.register(terminal_error_tool, name="run_deep_analysis")
+
+        events = [e async for e in agent.run("分析")]
+
+        # TOOL_RESULT 的 is_error 语义原样透传给事件流
+        tool_results = [
+            e.tool_result
+            for e in events
+            if e.event_type == ActionType.TOOL_RESULT and e.tool_result
+        ]
+        assert tool_results, "缺少 TOOL_RESULT 事件"
+        assert tool_results[-1].is_error is True
+
+        # analysis_completed 仍置位：下一轮 LLM 调用被清空工具 schemas（强制摘要）
+        assert mock_llm.last_tools is None, (
+            f"analysis_completed 应置位（终态失败不该诱导 LLM 自动重跑管线），"
+            f"实际 last_tools={mock_llm.last_tools}"
+        )

@@ -852,6 +852,9 @@ def _make_run_deep_analysis(
                 )
                 # 超时也必须给 Agent 主循环一个 TOOL_RESULT：空结果会让模型误判
                 # 「临时故障」盲目重试，且用户看不到失败原因（601700 复盘）。
+                # spec「管线异常终止的工具结果显式错误语义」：is_error=True +
+                # 机器可读 pipeline_timeout 标志（摘要 LLM 可区分「管线异常终止」
+                # 与「正常无报告」，harness 据此置位 analysis_completed 防自动重跑）。
                 _timeout_note = (
                     f"深度分析管线执行超时：全局预算 {pipeline_timeout:.0f}s 已耗尽，"
                     "管线已终止且会话标记为失败。如需继续可将环境变量 "
@@ -865,6 +868,7 @@ def _make_run_deep_analysis(
                             tool_call_id="",
                             name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_timeout_note,
+                            is_error=True,
                             metadata={"pipeline_timeout": True},
                         ),
                     )
@@ -887,7 +891,8 @@ def _make_run_deep_analysis(
                     )
                 )
                 # 与超时同因：异常路径也必须发 TOOL_RESULT，Agent 才能向用户
-                # 转述失败原因而非拿到空结果
+                # 转述失败原因而非拿到空结果；is_error=True + pipeline_error
+                # 机器标志（spec 显式错误语义，同超时分支）
                 await _put_event(
                     StreamEvent(
                         event_type=ActionType.TOOL_RESULT,
@@ -896,6 +901,7 @@ def _make_run_deep_analysis(
                             tool_call_id="",
                             name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_error_note,
+                            is_error=True,
                             metadata={"pipeline_error": True},
                         ),
                     )
@@ -942,6 +948,7 @@ def _make_run_deep_analysis(
                                 tool_call_id="",
                                 name=TOOL_RUN_DEEP_ANALYSIS,
                                 output=_blocked_note,
+                                is_error=True,
                                 metadata={
                                     "pipeline_blocked": True,
                                     "failure_reason": reason,
