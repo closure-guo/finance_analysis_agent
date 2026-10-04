@@ -554,3 +554,90 @@ class TestFalsePositiveFix688072:
             self._decision("目标价看到 95 元附近减仓", "技术形态走弱"), {}, self.STATE, 640.0
         )
         assert [a for a in anoms if a["kind"] == "deviation" and "95" in a["message"]]
+
+
+# ── 600026 复现夹具（2026-10-04 环境链验证跑实证，指标值为会话真实值）──
+TI_600026 = _indicators(
+    ma5=20.908,
+    ma10=21.425,
+    ma20=20.9565,
+    ma60=18.218,
+    boll_upper=22.10,
+    boll_middle=20.95,
+    boll_lower=19.80,
+)
+PL_600026 = {
+    "available": True,
+    "entry_ref": 20.56,
+    "recent_high": 22.80,
+    "recent_low": 14.06,
+    "atr": 0.45,
+    "stop_band_long": {"low": 18.60, "high": 19.40},
+    "target_band_long": {"low": 22.50, "high": 23.40},
+    "full_band": [14.06, 23.40],
+}
+CLOSE_600026 = 20.56
+
+# risk_judge 打回重试后的终稿 reasoning 原文（Langfuse 逐字取回）：
+# 「（1）（2）（3）」枚举序号被价位提取器误读为股价——生产阻断消息
+# 「文本价位 3 与 近期低点 已验证值 14.06 偏差 78.66%」即出自此文。
+REASONING_600026_RETRY = (
+    "维持买入方向但下调仓位与置信度。硬事实（中报营收+30%、净利+143%、PE_ttm 16.76倍）"
+    "站在多头一侧，技术面属中期趋势内回调，方向判断仍成立。风险辩论有效修正了方案三处问题："
+    "（1）现金流与偿债压力（ROE 10.4%）是资产负债表既成事实而非未兑现情景，保守方归类纠正被采纳；"
+    "（2）止损距离7.6%仅略高于VaR95单日5.3%，且波动率59.8%、历史最大回撤44%，止损被快速触及概率偏高，"
+    "故仓位由moderate降为light；（3）赔率1.56:1（代码派生值）偏低，到达目标价后采用移动止盈而非固定截断。"
+    "相对近窗前判（09-30 neutral），增量事实为中报景气反转已验证落地且估值处合理偏低水平，构成方向翻转依据。"
+    "价位继承：入场20.56，止损19.0（无条件执行），第一目标23.0。"
+)
+TRIGGERS_600026_RETRY = [
+    "收盘价触及19.0止损位即无条件执行价格纪律离场",
+    "季报或经营数据显示营收/净利增速显著回落（如营收增速降至15%以下），或现金流、偿债指标进一步恶化时重估",
+    "年化波动率显著抬升至70%以上或解禁窗口临近时触发降仓评估",
+]
+
+
+class TestEnumeratorFalsePositives:
+    """枚举序号/量词/空格别名误提取修复（fix-decision-price-enumerators）。
+
+    生产实证：risk_judge 打回重试后的 reasoning 以「（1）（2）（3）」枚举论点，
+    「（3）」的 3 被当股价归属到近期低点 14.06（偏差 78.66%）→ 打回重试也换不掉
+    自己的列表行文 → 恶化判定 → 报告阻断（cohort no_report_ready 根因）。
+    """
+
+    def test_production_retry_reasoning_zero_false_positives(self):
+        """真实终稿全文 SHALL 零 anomaly（真实价位 20.56/19.0/23.0 均在参考带内）。"""
+        decision = _decision(
+            action="buy",
+            confidence=0.55,
+            reasoning=REASONING_600026_RETRY,
+            entry_price=20.56,
+            stop_loss=19.0,
+            target_price=23.0,
+            reeval_triggers=TRIGGERS_600026_RETRY,
+        )
+        anomalies = check_decision_prices(decision, TI_600026, PL_600026, CLOSE_600026)
+        assert anomalies == []
+
+    def test_spaced_ma_alias_not_treated_as_price(self):
+        """「MA 60」（空格变体，别名表不命中）的 60 不得按价位校验（600845 191% 误报同族）。"""
+        decision = _decision(reasoning="股价站稳 MA 60 上方，止损参考 19.0 一线。")
+        anomalies = check_decision_prices(decision, TI_600026, PL_600026, CLOSE_600026)
+        assert anomalies == []
+
+    def test_count_measure_words_not_treated_as_price(self):
+        """「3个月」类量词数字不得按价位校验。"""
+        decision = _decision(reasoning="回踩近3个月低点区域后企稳，止损参考 19.0 一线。")
+        anomalies = check_decision_prices(decision, TI_600026, PL_600026, CLOSE_600026)
+        assert anomalies == []
+
+    def test_price_in_parens_with_context_still_checked(self):
+        """护栏：括号内带小数点/上下文的真实价位仍须校验（排除区不得过宽）。
+
+        13.0 与近期低点 14.06 偏差 7.5% 且落在全部参考带外 → SHALL 登记 deviation。
+        """
+        decision = _decision(reasoning="若跌破（13.0）支撑位则离场观望。")
+        anomalies = check_decision_prices(decision, TI_600026, PL_600026, CLOSE_600026)
+        assert len(anomalies) == 1
+        assert anomalies[0]["kind"] == "deviation"
+        assert anomalies[0]["indicator"] == "近期低点"
