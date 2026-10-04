@@ -573,7 +573,10 @@ def _make_run_deep_analysis(
                 with contextlib.suppress(BaseException):
                     gen.close()  # GeneratorExit 传播关闭底层 graph.stream，阻断后续节点
                 # 先置位图完成信号再投哨兵：保证消费者看到 graph_done 后哨兵
-                # 必然到达（排空 get() 无需超时的正确性前提）
+                # 必然到达（排空 get() 无需超时的正确性前提）。注意 graph_done
+                # 只证明生产者发完流——chunk_queue 中可能仍缓冲未消费 chunk
+                # （含报告前的合法 thinking），消费者侧不得仅凭 graph_done 压缩
+                # thinking，须以 report_seen（final_report updates chunk）为准。
                 graph_done.set()
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(None), loop)
 
@@ -594,6 +597,11 @@ def _make_run_deep_analysis(
             TIMELINE_PERSIST_INTERVAL = 0.5  # 秒
             # thinking 明细丢弃累计（droppable 背压），供节流日志判断
             _thinking_dropped = 0
+            # 报告产出标记：updates 分支见到含 final_report 键的 update dict
+            # （真实图最后一个 updates chunk 的标记）即置位。tail_thinking 压缩
+            # 以「报告已产出」为准而非 graph_done——后者只证明生产者发完流，
+            # chunk_queue 中可能仍缓冲着报告前的合法 thinking（消费滞后场景）。
+            report_seen = False
 
             async def _put_event(evt, *, droppable: bool = False) -> None:
                 """事件入队（spec「发布积压可观测与背压」分级处置）。
@@ -656,10 +664,14 @@ def _make_run_deep_analysis(
                         if isinstance(chunk, dict):
                             ctype = chunk.get("type")
                             if ctype == "thinking":
-                                if graph_done.is_set():
-                                    # spec「图完成后工具消费端压缩缓冲明细」：图完成后的
-                                    # 思考明细是报告产出后的噪声，压缩丢弃（不做 timeline
-                                    # 累积、不入 event_queue）使终态 TOOL_RESULT 有界送达
+                                if report_seen and graph_done.is_set():
+                                    # spec「图完成后工具消费端压缩缓冲明细」：仅压缩
+                                    # 报告产出（final_report updates chunk）之后缓冲的
+                                    # 思考明细——graph_done 只证明生产者发完流，
+                                    # chunk_queue 中可能仍有报告前的合法缓冲，不得
+                                    # 错杀（消费滞后时报告产出前的 thinking 是合法
+                                    # timeline 内容）。压缩丢弃（不做 timeline 累积、
+                                    # 不入 event_queue）使终态 TOOL_RESULT 有界送达
                                     registry.record_drop(session_id or "", "tail_thinking")
                                     continue
                                 # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
@@ -732,6 +744,11 @@ def _make_run_deep_analysis(
 
                     # Updates mode: existing node progress logic
                     for node_name, update in chunk.items():
+                        # 报告产出标记（对齐真实图行为：generate_report 的
+                        # final_report updates chunk 是最后一个 updates chunk，
+                        # 此后到达的 thinking 均为报告后的缓冲明细）
+                        if isinstance(update, dict) and "final_report" in update:
+                            report_seen = True
                         if node_name not in _ALL_NODES:
                             continue
 
