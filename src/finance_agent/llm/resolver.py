@@ -98,10 +98,18 @@ def _provider_options_from_request(provider: str, llm_config: dict[str, Any]) ->
 
     ark 端点（model 含 glm）走 ark-glm 白名单——registry 白名单在
     "ark-glm" 名下，但 resolver 请求分支 provider 前缀是 "openai"
-    （env:openai/glm-5.3 同理，model 名才是识别锚点）；其余走 provider 白名单。
+    （env:openai/glm-5.3 同理，model 名才是识别锚点）；Kimi Code 同为
+    openai/ 前缀接入（model 含 kimi 或 k3 前缀段）走 "kimi" 白名单；
+    其余走 provider 白名单。
     """
     raw_model = str(llm_config.get("model") or "")
-    options_key = "ark-glm" if "glm" in raw_model.lower() else provider
+    lower_model = raw_model.lower()
+    if "glm" in lower_model:
+        options_key = "ark-glm"
+    elif "kimi" in lower_model or lower_model.split("/")[-1].startswith("k3"):
+        options_key = "kimi"
+    else:
+        options_key = provider
     merged = dict(DEFAULT_PROVIDER_OPTIONS.get(options_key, {}))
     whitelist = REQUEST_OVERRIDABLE.get(options_key, set())
     for key in whitelist:
