@@ -32,6 +32,15 @@ _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 _EVENT_APPEND_MAX_RETRIES = 5
 _EVENT_APPEND_RETRY_SLEEP = 0.05
 
+# 瞬态 SQLite 错误模式（delta add-event-delivery-resilience spec「SQLite 瞬态错误重试」）：
+# unable to open database file = bind mount 瞬断；locked = busy_timeout 覆盖不到的
+# 连接期锁；disk I/O error = 存储瞬态。非瞬态错误不重试立即抛出。
+_DB_TRANSIENT_PATTERNS = ("unable to open database file", "database is locked", "disk i/o error")
+# 连接重试 6 次：尝试点 t≈0/0.1/0.3/0.7/1.5/3.1（指数退避 0.1s 基数，
+# 末次失败不再 sleep），覆盖 spec 假设的 ~2s bind mount 自愈窗口且留余量
+_DB_CONNECT_MAX_RETRIES = 6
+_DB_CONNECT_RETRY_BASE_SLEEP = 0.1
+
 # created_at 列曾被旧版代码错写为 session_type 的值（'chat' / 'analysis'），
 # 这些值无法被 Date 解析，前端显示 "Invalid Date"。这里集中兜底。
 _BAD_CREATED_AT_VALUES = {"chat", "analysis", "deep", "quick", ""}
@@ -59,12 +68,23 @@ def _normalize_created_at(ts: str | None) -> str:
 
 
 def _get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False, timeout=15.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    # 并发写等待锁而非立即抛 "database is locked"（流式 token 高频落库场景必需）
-    conn.execute("PRAGMA busy_timeout=15000")
-    return conn
+    last_exc: sqlite3.OperationalError | None = None
+    for attempt in range(_DB_CONNECT_MAX_RETRIES):
+        try:
+            conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False, timeout=15.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            # 并发写等待锁而非立即抛 "database is locked"（流式 token 高频落库场景必需）
+            conn.execute("PRAGMA busy_timeout=15000")
+            return conn
+        except sqlite3.OperationalError as exc:
+            if not any(p in str(exc).lower() for p in _DB_TRANSIENT_PATTERNS):
+                raise
+            last_exc = exc
+            # 末次尝试失败后不再 sleep（重试耗尽即抛，不做无意义的收尾等待）
+            if attempt < _DB_CONNECT_MAX_RETRIES - 1:
+                time.sleep(_DB_CONNECT_RETRY_BASE_SLEEP * (2**attempt))
+    raise last_exc  # type: ignore[misc]
 
 
 def init_db() -> None:

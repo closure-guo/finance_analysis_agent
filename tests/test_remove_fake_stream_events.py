@@ -69,6 +69,10 @@ async def test_timesensitive_query_no_presearch_events(tmp_path, monkeypatch):
         async def publish_many(self, session_id, datas):
             published.extend(datas)
 
+        async def publish_terminal(self, session_id, data):
+            # 与 publish 同语义记录：终态收拢后 _run_react_analysis 经此发布
+            published.append(data)
+
     monkeypatch.setattr(api_mod, "registry", _StubRegistry())
 
     req = AnalyzeRequest(query="今天有什么热门股票", user_id="u1")

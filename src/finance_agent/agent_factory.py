@@ -477,6 +477,7 @@ def _make_run_deep_analysis(
             apply_node_event,
             build_layer_tree,
         )
+        from finance_agent.stream_registry import registry
         from finance_agent.timeline_builder import (
             apply_pipeline_node_complete,
             apply_pipeline_thinking_token,
@@ -552,6 +553,12 @@ def _make_run_deep_analysis(
         # 执行）。图跑在 executor 线程无法强杀；消费端停止后生产端若继续拉流，
         # 会孤儿式烧完剩余 LLM 调用（601700 复盘：超时后 R2 分析师又跑了 3 分钟）。
         graph_cancel = threading.Event()
+        # 图完成信号（spec pipeline-events「管线超时与中断检测」MODIFIED）：
+        # _run_graph 在 finally 中先于哨兵置位——消费者见 graph_done 即知哨兵
+        # 必然到达，排空阶段的 get() 无需超时；看门狗亦据此区分「图未完成
+        # 真超时」与「图已完成仅排空滞后」（2026-10-04 拓荆案例：思考洪峰把
+        # 消费链压出 ~19 分钟滞后，管线本体完成却被误判超时置 failed）。
+        graph_done = threading.Event()
 
         def _run_graph():
             gen = _stream_graph(initial_state, session_id=session_id)
@@ -565,6 +572,12 @@ def _make_run_deep_analysis(
             finally:
                 with contextlib.suppress(BaseException):
                     gen.close()  # GeneratorExit 传播关闭底层 graph.stream，阻断后续节点
+                # 先置位图完成信号再投哨兵：保证消费者看到 graph_done 后哨兵
+                # 必然到达（排空 get() 无需超时的正确性前提）。注意 graph_done
+                # 只证明生产者发完流——chunk_queue 中可能仍缓冲未消费 chunk
+                # （含报告前的合法 thinking），消费者侧不得仅凭 graph_done 压缩
+                # thinking，须以 report_seen（final_report updates chunk）为准。
+                graph_done.set()
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(None), loop)
 
         loop.run_in_executor(_pipeline_executor, _run_graph)
@@ -582,22 +595,56 @@ def _make_run_deep_analysis(
             # 且按 TIMELINE_PERSIST_INTERVAL 节流，避免每个 thinking chunk 都写库。
             last_timeline_persist = 0.0
             TIMELINE_PERSIST_INTERVAL = 0.5  # 秒
+            # thinking 明细丢弃累计（droppable 背压），供节流日志判断
+            _thinking_dropped = 0
+            # 报告产出标记：updates 分支见到含 final_report 键的 update dict
+            # （真实图最后一个 updates chunk 的标记）即置位。tail_thinking 压缩
+            # 以「报告已产出」为准而非 graph_done——后者只证明生产者发完流，
+            # chunk_queue 中可能仍缓冲着报告前的合法 thinking（消费滞后场景）。
+            report_seen = False
 
-            def _put_event(evt):
-                with contextlib.suppress(asyncio.QueueFull):
-                    event_queue.put_nowait(evt)
+            async def _put_event(evt, *, droppable: bool = False) -> None:
+                """事件入队（spec「发布积压可观测与背压」分级处置）。
+
+                droppable（thinking_token 明细）：队列满即丢弃，计数 + 节流日志。
+                其余（节点边界/工具/终态）：阻塞入队不丢弃；下游消费者消失时
+                30s 有界等待后放弃并显式日志——宁可显式放弃不可无限阻塞泄漏任务。
+                """
+                nonlocal _thinking_dropped
+                if droppable and event_queue.full():
+                    _thinking_dropped += 1
+                    registry.record_drop(session_id or "", "thinking")
+                    if _thinking_dropped == 1 or _thinking_dropped % 100 == 0:
+                        logger.warning(
+                            "thinking 明细丢弃（队列满）session=%s 累计=%s",
+                            session_id,
+                            _thinking_dropped,
+                        )
+                    return
+                try:
+                    await asyncio.wait_for(event_queue.put(evt), timeout=30.0)
+                except TimeoutError:
+                    registry.record_drop(session_id or "", "undeliverable")
+                    logger.error("事件入队超时（消费者停滞）session=%s type=%s", session_id, evt)
 
             try:
                 while True:
-                    # 墙钟超时（spec pipeline-events「管线超时与中断检测」：自管线
-                    # 启动起算的全局预算，默认 600s）：原实现为单次空闲超时，
-                    # thinking token 持续流动时永不触发——线上 601700 深研管线
-                    # 跑了 71 分钟无人拦截。剩余预算耗尽即抛 TimeoutError，
-                    # 走下方既有 failed + failure_reason 分支。
-                    _remaining = pipeline_timeout - (_time_module.time() - _pipeline_start_time)
-                    if _remaining <= 0:
-                        raise TimeoutError(f"管线执行超过 {pipeline_timeout}s 全局预算")
-                    item = await asyncio.wait_for(chunk_queue.get(), timeout=_remaining)
+                    # 墙钟超时（spec pipeline-events「管线超时与中断检测」MODIFIED：
+                    # 预算耗尽须先核对图完成信号——图已完成时排空延迟不构成超时，
+                    # 2026-10-04 拓荆案例）。图未完成时维持自管线启动起算的全局
+                    # 预算硬约束：原单次空闲超时在 thinking token 持续流动时永不
+                    # 触发（601700 复盘：线上深研管线跑了 71 分钟无人拦截），剩余
+                    # 预算耗尽即抛 TimeoutError，走下方既有 failed + failure_reason
+                    # 分支。
+                    if not graph_done.is_set():
+                        _remaining = pipeline_timeout - (_time_module.time() - _pipeline_start_time)
+                        if _remaining <= 0:
+                            raise TimeoutError(f"管线执行超过 {pipeline_timeout}s 全局预算")
+                        item = await asyncio.wait_for(chunk_queue.get(), timeout=_remaining)
+                    else:
+                        # 图已完成：排空剩余缓冲。thinking 明细在下方压缩丢弃，
+                        # 纯 CPU 速度排空（无逐条写库/入队等待），终态有界送达
+                        item = await chunk_queue.get()
                     if item is None:
                         break
                     if isinstance(item, Exception):
@@ -617,6 +664,16 @@ def _make_run_deep_analysis(
                         if isinstance(chunk, dict):
                             ctype = chunk.get("type")
                             if ctype == "thinking":
+                                if report_seen and graph_done.is_set():
+                                    # spec「图完成后工具消费端压缩缓冲明细」：仅压缩
+                                    # 报告产出（final_report updates chunk）之后缓冲的
+                                    # 思考明细——graph_done 只证明生产者发完流，
+                                    # chunk_queue 中可能仍有报告前的合法缓冲，不得
+                                    # 错杀（消费滞后时报告产出前的 thinking 是合法
+                                    # timeline 内容）。压缩丢弃（不做 timeline 累积、
+                                    # 不入 event_queue）使终态 TOOL_RESULT 有界送达
+                                    registry.record_drop(session_id or "", "tail_thinking")
+                                    continue
                                 # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
                                 # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
                                 node = chunk.get("node", "")
@@ -635,11 +692,12 @@ def _make_run_deep_analysis(
                                             session_id,
                                             _nodeTimelines,
                                         )
-                                _put_event(
+                                await _put_event(
                                     StreamEvent.think(
                                         chunk.get("token", ""),
                                         metadata={"node": node} if node else None,
-                                    )
+                                    ),
+                                    droppable=True,
                                 )
                             elif ctype == "node_start":
                                 # 节点真实入口时间戳（timed_node 装饰器发出）
@@ -669,7 +727,7 @@ def _make_run_deep_analysis(
                                     )
                                     # to_thread：快照写移出事件循环
                                     await asyncio.to_thread(_persist_snapshot, _tree, _now)
-                                _put_event(
+                                await _put_event(
                                     StreamEvent.progress(
                                         content=f"{node_name} timing",
                                         metadata={
@@ -686,6 +744,11 @@ def _make_run_deep_analysis(
 
                     # Updates mode: existing node progress logic
                     for node_name, update in chunk.items():
+                        # 报告产出标记（对齐真实图行为：generate_report 的
+                        # final_report updates chunk 是最后一个 updates chunk，
+                        # 此后到达的 thinking 均为报告后的缓冲明细）
+                        if isinstance(update, dict) and "final_report" in update:
+                            report_seen = True
                         if node_name not in _ALL_NODES:
                             continue
 
@@ -729,7 +792,7 @@ def _make_run_deep_analysis(
                                 )
                                 # to_thread：快照写移出事件循环
                                 await asyncio.to_thread(_persist_snapshot, _tree, _now)
-                            _put_event(
+                            await _put_event(
                                 StreamEvent.progress(
                                     content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)}...",
                                     metadata=start_meta,
@@ -760,7 +823,7 @@ def _make_run_deep_analysis(
                                 session_id,
                                 _nodeTimelines,
                             )
-                        _put_event(
+                        await _put_event(
                             StreamEvent.progress(
                                 content=f"{step_info.get('layer', '')}: {step_info.get('desc', node_name)} ✓",
                                 metadata={
@@ -782,19 +845,22 @@ def _make_run_deep_analysis(
                     _session_store.update_session_status(
                         session_id, "failed", failure_reason="管线执行超时"
                     )
-                _put_event(
+                await _put_event(
                     StreamEvent.progress(
                         content="分析失败：管线执行超时",
                     )
                 )
                 # 超时也必须给 Agent 主循环一个 TOOL_RESULT：空结果会让模型误判
                 # 「临时故障」盲目重试，且用户看不到失败原因（601700 复盘）。
+                # spec「管线异常终止的工具结果显式错误语义」：is_error=True +
+                # 机器可读 pipeline_timeout 标志（摘要 LLM 可区分「管线异常终止」
+                # 与「正常无报告」，harness 据此置位 analysis_completed 防自动重跑）。
                 _timeout_note = (
                     f"深度分析管线执行超时：全局预算 {pipeline_timeout:.0f}s 已耗尽，"
                     "管线已终止且会话标记为失败。如需继续可将环境变量 "
                     "PIPELINE_TIMEOUT_SECONDS 调大后重新发起分析。"
                 )
-                _put_event(
+                await _put_event(
                     StreamEvent(
                         event_type=ActionType.TOOL_RESULT,
                         content=_timeout_note,
@@ -802,6 +868,7 @@ def _make_run_deep_analysis(
                             tool_call_id="",
                             name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_timeout_note,
+                            is_error=True,
                             metadata={"pipeline_timeout": True},
                         ),
                     )
@@ -818,14 +885,15 @@ def _make_run_deep_analysis(
                     )
                 # 下发错误事件，使 SSE 转发层能感知异常（不 re-raise，仅通知）
                 _error_note = f"深度分析管线异常终止：{type(e).__name__}: {e}"
-                _put_event(
+                await _put_event(
                     StreamEvent.progress(
                         content=f"分析失败：{type(e).__name__}: {e}",
                     )
                 )
                 # 与超时同因：异常路径也必须发 TOOL_RESULT，Agent 才能向用户
-                # 转述失败原因而非拿到空结果
-                _put_event(
+                # 转述失败原因而非拿到空结果；is_error=True + pipeline_error
+                # 机器标志（spec 显式错误语义，同超时分支）
+                await _put_event(
                     StreamEvent(
                         event_type=ActionType.TOOL_RESULT,
                         content=_error_note,
@@ -833,6 +901,7 @@ def _make_run_deep_analysis(
                             tool_call_id="",
                             name=TOOL_RUN_DEEP_ANALYSIS,
                             output=_error_note,
+                            is_error=True,
                             metadata={"pipeline_error": True},
                         ),
                     )
@@ -871,7 +940,7 @@ def _make_run_deep_analysis(
                             failure_reason=reason,
                         )
                     _blocked_note = f"深度分析未产出报告，会话已标记为失败：{reason}"
-                    _put_event(
+                    await _put_event(
                         StreamEvent(
                             event_type=ActionType.TOOL_RESULT,
                             content=_blocked_note,
@@ -879,6 +948,7 @@ def _make_run_deep_analysis(
                                 tool_call_id="",
                                 name=TOOL_RUN_DEEP_ANALYSIS,
                                 output=_blocked_note,
+                                is_error=True,
                                 metadata={
                                     "pipeline_blocked": True,
                                     "failure_reason": reason,
@@ -955,7 +1025,7 @@ def _make_run_deep_analysis(
                     else:
                         llm_output += f"报告内容：\n{report_md}"
 
-                    _put_event(
+                    await _put_event(
                         StreamEvent(
                             event_type=ActionType.TOOL_RESULT,
                             content=llm_output,
@@ -968,7 +1038,7 @@ def _make_run_deep_analysis(
                         )
                     )
             finally:
-                _put_event(None)
+                await _put_event(None)
                 if session_id:
                     _background_tasks.pop(session_id, None)
 
