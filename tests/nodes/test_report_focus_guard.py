@@ -39,9 +39,11 @@ def test_clean_first_call_passes_through():
 
 def test_leak_triggers_retry_with_strengthened_instruction():
     calls = []
+    traces = []
 
     def fake_complete_text(messages, **kwargs):  # noqa: ARG002
         calls.append(messages)
+        traces.append(kwargs.get("trace"))
         if len(calls) == 1:
             return _LEAKED, {"finish_reason": "stop"}
         return _CLEAN, {"finish_reason": "stop"}
@@ -51,6 +53,9 @@ def test_leak_triggers_retry_with_strengthened_instruction():
     assert out == _CLEAN
     assert len(calls) == 2
     assert "禁止" in calls[1][0]["content"]  # 强化指令落在第二次的 system
+    # 重试观测标记：retry=1 仅落在第二次调用的 trace metadata
+    assert "retry" not in traces[0]["metadata"]
+    assert traces[1]["metadata"]["retry"] == 1
 
 
 def test_double_leak_falls_back_to_structured_join():
@@ -77,3 +82,34 @@ def test_empty_content_with_reasoning_not_delivered():
         out = _build_focus_summary(_STATE, "", ["综合"])
     assert reasoning_text not in out
     assert out == "[fundamental] 基本面摘要"[:200]
+
+
+def test_fallback_truncates_at_sentence_boundary():
+    """兜底句界截断：超长 material 在 200 字窗口内最后一个「。」处收口。"""
+    long_summary = "第一句结论。第二句结论。" + "长" * 300
+
+    def fake_complete_text(messages, **kwargs):  # noqa: ARG002
+        return _LEAKED, {"finish_reason": "stop"}
+
+    state = dict(_STATE)
+    state["analyst_reports"] = {"fundamental": {"summary": long_summary}}
+    with patch.object(report_mod, "complete_text", side_effect=fake_complete_text):
+        out = _build_focus_summary(state, "", ["综合"])
+    assert out.endswith("。")
+    assert len(out) <= 200
+    assert out == "[fundamental] 第一句结论。第二句结论。"
+
+
+def test_fallback_hard_cuts_without_sentence_period():
+    """兜底句界截断：窗口内无「。」时硬切 limit（200）。"""
+    long_summary = "x" * 500
+
+    def fake_complete_text(messages, **kwargs):  # noqa: ARG002
+        return _LEAKED, {"finish_reason": "stop"}
+
+    state = dict(_STATE)
+    state["analyst_reports"] = {"fundamental": {"summary": long_summary}}
+    with patch.object(report_mod, "complete_text", side_effect=fake_complete_text):
+        out = _build_focus_summary(state, "", ["综合"])
+    assert len(out) == 200
+    assert out == ("[fundamental] " + "x" * 500)[:200]
