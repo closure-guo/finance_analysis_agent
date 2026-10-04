@@ -264,11 +264,12 @@ class TestNarrativeFreshnessContract:
     """update-narrative-freshness（#189）：论据期次新鲜度契约。"""
 
     def test_bear_prompt_requires_latest_period_and_reversal_pairing(self):
-        from finance_agent.prompts.loader import load_prompt_with_meta
-
-        template = load_prompt_with_meta("bear_debater").template
-        assert "最新披露" in template
-        assert "并列呈现" in template
+        # 直读权威源（本文件其余契约同款 _load），不走 loader：
+        # loader 是 Langfuse production 优先，dev 环境 .env 密钥经 api 导入注入
+        # 进程后，本机 Langfuse 的过期部署快照会令权威源契约误红（快照滞后非
+        # 代码回归；AGENTS.md：prompts/*.md 是唯一权威源，Langfuse 仅为快照）。
+        assert "最新披露" in _load("bear_debater.md")
+        assert "并列呈现" in _load("bear_debater.md")
 
     def test_focus_summary_builder_requires_pairing(self):
         import inspect

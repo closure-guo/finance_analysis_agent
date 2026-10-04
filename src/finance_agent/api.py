@@ -1479,8 +1479,9 @@ async def _run_chat_task(
     """/api/chat 后台生成任务：quick/follow-up ReAct Agent。
 
     事件经 registry.publish 写入 journal 并 fan-out；客户端断开仅退订。
-    中断/异常时部分回复落库、status 流转，终态事件由任务自身与
-    registry._run_task 协作发布（终态 CAS 保证唯一）。
+    中断/异常时部分回复落库、status 流转；done/error 终态由任务自身经
+    publish_terminal 显式发布（journal 重试兜底；经 registry.start 包装运行时
+    _run_task 的自动终态被终态 CAS 拒绝，不会重复落库）。
     """
     from finance_agent.agent_factory import build_agent, stream_agent_to_sse
 
@@ -1527,10 +1528,11 @@ async def _run_chat_task(
                 await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
                 lastPersistTime = now
 
-        # 正常完成：最终持久化 + 状态流转 + done 终态
+        # 正常完成：最终持久化 + 状态流转 + done 终态（收拢到 publish_terminal
+        # 重试兜底；registry._run_task 的自动 done 被终态 CAS 拒绝）
         await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
         await asyncio.to_thread(update_session_status, session_id, "completed")
-        await registry.publish(
+        await registry.publish_terminal(
             session_id, {"type": "done", "session_id": session_id, "timestamp": _now()}
         )
     except asyncio.CancelledError:
@@ -1545,6 +1547,20 @@ async def _run_chat_task(
             "failed",
             failure_reason=f"{type(exc).__name__}: {exc}",
         )
+        # error 终态显式发布（收拢到 publish_terminal 重试兜底，与
+        # _run_react_analysis except 对齐）。终态 CAS 拒绝返回 0 静默容忍；
+        # publish_terminal 重试耗尽的 raise 只记日志——不得遮蔽正在上抛的原始异常。
+        try:
+            await registry.publish_terminal(
+                session_id,
+                {
+                    "type": "error",
+                    "session_id": session_id,
+                    "message": f"{type(exc).__name__}: {exc}",
+                },
+            )
+        except Exception:
+            _logger.exception("error 终态发布失败 session=%s", session_id)
         raise
 
 
@@ -1566,6 +1582,21 @@ async def _run_react_analysis(
     collector = _ChatCollector()
     collectedMetadata: dict = {}
     analysisExecuted = False
+    # thinking_token 批量落库（假卡死根因修复）：单条一次 SQLite 事务
+    # （fsync 主导）会把消费端限速到事件积压、终态事件迟到
+    # （601700 深研会话永远 running）。缓冲后经 publish_many 单事务
+    # 批量写入；非 thinking 事件/心跳/缓冲满时冲刷，保持 seq 顺序。
+    # 声明与冲刷助手均在 try 外：except 分支的终态前冲刷必须对 try 体内
+    # 任意位置的异常可用（如 build_agent 抛错时 error 终态仍须发布）。
+    pendingTokens: list[dict] = []
+    TOKEN_BATCH_MAX = 32
+
+    async def _flush_tokens() -> None:
+        nonlocal pendingTokens
+        if pendingTokens:
+            await registry.publish_many(session_id, pendingTokens)
+            pendingTokens = []
+
     try:
         if display_name is not None:
             await registry.publish(
@@ -1620,18 +1651,6 @@ async def _run_react_analysis(
 
         lastPersistTime = time.time()
         PERSIST_INTERVAL = 10
-        # thinking_token 批量落库（假卡死根因修复）：单条一次 SQLite 事务
-        # （fsync 主导）会把消费端限速到事件积压、终态事件迟到
-        # （601700 深研会话永远 running）。缓冲后经 publish_many 单事务
-        # 批量写入；非 thinking 事件/心跳/缓冲满时冲刷，保持 seq 顺序。
-        pendingTokens: list[dict] = []
-        TOKEN_BATCH_MAX = 32
-
-        async def _flush_tokens() -> None:
-            nonlocal pendingTokens
-            if pendingTokens:
-                await registry.publish_many(session_id, pendingTokens)
-                pendingTokens = []
 
         async for sse_str in stream_agent_to_sse(
             agent,
@@ -1657,7 +1676,12 @@ async def _run_react_analysis(
                     await _flush_tokens()
             else:
                 await _flush_tokens()
-                await registry.publish(session_id, data)
+                if data.get("type") == "report_ready":
+                    # report_ready 视同终态关键路径（承载报告产物）：走
+                    # publish_terminal 获得重试兜底（非 CAS 集合，必放行）
+                    await registry.publish_terminal(session_id, data)
+                else:
+                    await registry.publish(session_id, data)
             now = time.time()
             if now - lastPersistTime >= PERSIST_INTERVAL:
                 await asyncio.to_thread(_upsert_assistant_chat, session_id, collector)
@@ -1707,8 +1731,10 @@ async def _run_react_analysis(
                     _lf_clarify.flush()
         # 分析已执行：session 状态已被 _run_graph_streaming 更新为 completed
 
-        # done 终态（完整展示字段；registry._run_task 的自动 done 被终态 CAS 拒绝）
-        await registry.publish(
+        # done 终态（完整展示字段；registry._run_task 的自动 done 被终态 CAS 拒绝）。
+        # 发布前冲刷残余 pending（保 seq 单调），走 publish_terminal 获得重试兜底
+        await _flush_tokens()
+        await registry.publish_terminal(
             session_id,
             {
                 "type": "done",
@@ -1730,6 +1756,22 @@ async def _run_react_analysis(
             "failed",
             failure_reason=f"{type(exc).__name__}: {exc}",
         )
+        # error 终态显式发布（收拢到 publish_terminal 重试兜底，发布前冲刷残余
+        # pending）。经 registry.start 包装运行时，_run_task 的自动 error 被
+        # 终态 CAS 拒绝，不会重复落库；publish_terminal 重试耗尽的 raise 只记
+        # 日志——不得遮蔽正在上抛的原始异常。
+        try:
+            await _flush_tokens()
+            await registry.publish_terminal(
+                session_id,
+                {
+                    "type": "error",
+                    "session_id": session_id,
+                    "message": f"{type(exc).__name__}: {exc}",
+                },
+            )
+        except Exception:
+            _logger.exception("error 终态发布失败 session=%s", session_id)
         raise
 
 

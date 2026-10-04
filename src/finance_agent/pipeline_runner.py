@@ -236,6 +236,41 @@ def _progress(tree: list[dict]) -> float:
     return done / total
 
 
+# pending 明细缓冲上限（add-event-delivery-resilience Task 4）：flush 前防御性
+# 裁剪——异常路径下缓冲无限膨胀会拖垮内存并推后终态时延；thinking 明细是可丢的
+# 进度装饰，丢最旧保最新，终态事件不受影响。
+PENDING_TOKEN_MAX = 512
+
+
+def trim_pending_overflow(
+    pending: list[dict],
+    session_id: str,
+    record_drop: Callable[[str, str], None],
+    dropped_total: list[int],
+) -> int:
+    """flush 前 pending 超限防御：丢最旧至上限并计数，返回本次丢弃条数。
+
+    纯函数（record_drop 注入，便于单测）。丢弃计入 registry.backlog_stats 的
+    pending_overflow 桶；日志首条 + 每 100 条节流（对齐 agent_factory._put_event）。
+    dropped_total 为跨调用累计单元格（闭包可变状态用单元素 list 承载）。
+    """
+    overflow = len(pending) - PENDING_TOKEN_MAX
+    if overflow <= 0:
+        return 0
+    del pending[:overflow]
+    record_drop(session_id, "pending_overflow")
+    prev = dropped_total[0]
+    dropped_total[0] = prev + overflow
+    if prev == 0 or dropped_total[0] // 100 != prev // 100:
+        logger.warning(
+            "pending 明细溢出丢最旧 session=%s 本次=%s 累计=%s",
+            session_id,
+            overflow,
+            dropped_total[0],
+        )
+    return overflow
+
+
 # ── 后台执行器 ──
 
 
@@ -341,14 +376,38 @@ class PipelineRunner:
         # 批量写入；非 thinking 事件/心跳/缓冲满时冲刷，保持 seq 顺序。
         pending: list[dict] = []
         TOKEN_BATCH_MAX = 32
+        # pending 溢出丢弃累计（trim_pending_overflow 的跨调用单元格）
+        pendingDropped: list[int] = [0]
 
         def _flush_pending() -> None:
+            trim_pending_overflow(pending, session_id, stream_registry.record_drop, pendingDropped)
             if pending and loop is not None:
                 batch = pending[:]
                 pending.clear()
                 asyncio.run_coroutine_threadsafe(
                     stream_registry.publish_many(session_id, batch), loop
                 ).result(timeout=5)
+
+        def _publish_terminal(ev: dict) -> None:
+            """终态发布统一出口（后台线程侧）：走 publish_terminal 获得重试兜底。
+
+            - CAS 拒绝（同轮已有终态，返回 0）静默容忍，与原 publish 语义一致；
+            - 重试耗尽的 raise 只记日志不外抛：finally 中外抛会跳过 state.done
+              置位，is_running 永真、会话永远无法重开（publish_terminal 契约的
+              「调用方日志兜底」）；
+            - result 超时须覆盖最坏叠加窗口：publish_terminal 5×1s 重试 +
+              _get_db 6 次连接重试（≈3.1s 退避）+ busy_timeout 15s 单次写等待，
+              故 90s（普通 publish 单发 5s）。仅终态路径一次性行，不构成
+              常规写放大。
+            """
+            if loop is None:  # 仅 loop 桥接模式调用（调用侧均已守卫）；防御式收口
+                return
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    stream_registry.publish_terminal(session_id, ev), loop
+                ).result(timeout=90)
+            except Exception:
+                logger.exception("终态发布失败 session=%s type=%s", session_id, ev.get("type"))
 
         # thinking 高频时序写节流（对齐 agent_factory._background_consume 的
         # TIMELINE_PERSIST_INTERVAL）：每 token 全量序列化写库既是 SQLite
@@ -361,12 +420,7 @@ class PipelineRunner:
                 if state is not None and state.cancel_event.is_set():
                     if loop is not None:
                         _flush_pending()
-                        asyncio.run_coroutine_threadsafe(
-                            stream_registry.publish(
-                                session_id, {"type": "interrupted", "session_id": session_id}
-                            ),
-                            loop,
-                        ).result(timeout=5)
+                        _publish_terminal({"type": "interrupted", "session_id": session_id})
                         terminalPublished = True
                     break
                 # 超时检查：事件间检测，长时间无事件时标记 failed
@@ -376,17 +430,13 @@ class PipelineRunner:
                     )
                     if loop is not None:
                         _flush_pending()
-                        asyncio.run_coroutine_threadsafe(
-                            stream_registry.publish(
-                                session_id,
-                                {
-                                    "type": "error",
-                                    "session_id": session_id,
-                                    "message": "管线执行超时",
-                                },
-                            ),
-                            loop,
-                        ).result(timeout=5)
+                        _publish_terminal(
+                            {
+                                "type": "error",
+                                "session_id": session_id,
+                                "message": "管线执行超时",
+                            }
+                        )
                         terminalPublished = True
                     break
                 event = cls._parse_event(sse_str)
@@ -401,6 +451,11 @@ class PipelineRunner:
                             pending.append(event)
                             if len(pending) >= TOKEN_BATCH_MAX:
                                 _flush_pending()
+                        elif event.get("type") == "report_ready":
+                            # report_ready 视同终态关键路径（承载报告产物）：走
+                            # publish_terminal 获得重试兜底（非 CAS 集合，必放行）
+                            _flush_pending()
+                            _publish_terminal(event)
                         else:
                             _flush_pending()
                             asyncio.run_coroutine_threadsafe(
@@ -457,17 +512,13 @@ class PipelineRunner:
             )
             if loop is not None:
                 _flush_pending()
-                asyncio.run_coroutine_threadsafe(
-                    stream_registry.publish(
-                        session_id,
-                        {
-                            "type": "error",
-                            "session_id": session_id,
-                            "message": f"{type(e).__name__}: {e}",
-                        },
-                    ),
-                    loop,
-                ).result(timeout=5)
+                _publish_terminal(
+                    {
+                        "type": "error",
+                        "session_id": session_id,
+                        "message": f"{type(e).__name__}: {e}",
+                    }
+                )
                 terminalPublished = True
         finally:
             # 节流可能跳过末尾 thinking chunk 的时序写，结束时补写完整时序
@@ -482,10 +533,7 @@ class PipelineRunner:
             # flaky；回归用例 test_done_flag_not_set_before_terminal_event_published）
             if loop is not None and not terminalPublished:
                 _flush_pending()
-                asyncio.run_coroutine_threadsafe(
-                    stream_registry.publish(session_id, {"type": "done", "session_id": session_id}),
-                    loop,
-                ).result(timeout=5)
+                _publish_terminal({"type": "done", "session_id": session_id})
             if state is not None:
                 state.done = True
 
