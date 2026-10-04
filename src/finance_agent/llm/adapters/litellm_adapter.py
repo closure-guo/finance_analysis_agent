@@ -462,6 +462,12 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
         # kimi 四档 none/low/high/max（none=关思考）。
         if effort is not None:
             out["extra_body"] = {"reasoning_effort": effort}
+        if key == "kimi" and effort is not None:
+            # 实证（Kimi Code，2026-10-04）：端点采样温度锁死——思考档仅接受
+            # temperature=1、无思考档（effort=none）仅接受 0.6，其他值一律
+            # 400 "invalid temperature"。经内部契约抑制 temperature，交给
+            # 端点固定值（#216 降级重试是兜底而非常态）。
+            out["suppress_temperature"] = True
         return out
     if effort is not None:
         out["reasoning_effort"] = effort

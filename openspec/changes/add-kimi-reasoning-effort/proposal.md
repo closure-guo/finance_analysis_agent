@@ -14,9 +14,10 @@ judge 链路以 temperature=0.0 为口径（采样确定性），且逐 trace �
 - resolver 请求级白名单 `REQUEST_OVERRIDABLE["kimi"] = {"reasoning_effort"}`；模型族识别锚点：model 含 `kimi` 或 `k3/` 段（openai/ 前缀下）
 - adapter `_provider_options_key` 同锚点识别 kimi 族；`apply_provider_options` 对 kimi 产出 `extra_body={"reasoning_effort": <值>}`（与 ark-glm 同机制：litellm openai 路由拒收顶层 reasoning_effort）
 - judges.py 新增环境变量 `JUDGE_REASONING_EFFORT`：非空时并入 llm_config.provider_options，请求级透传；未设置时不传（跟随 Kimi 模型默认档），不新增隐式默认
+- adapter 对 kimi 在 effort 显式配置时产出 `suppress_temperature=True`（内部契约）：Kimi 端点采样温度锁死（实证 2026-10-04——思考档仅接受 temperature=1、无思考档仅接受 0.6），temperature 一律不发送，采样跟随端点固定值
 
 ## Impact
 
 - Affected specs: llm-provider-gateway（adapter 消费 + 透传机制）、llm-config（请求级白名单 + judge effort 配置入口）
 - Affected code: src/finance_agent/llm/registry.py、src/finance_agent/llm/resolver.py、src/finance_agent/llm/adapters/litellm_adapter.py、evals/judges.py
-- 不影响主管线（glm 族路径零改动）；不改动 temperature=0.0 judge 口径本身——effort=none 后 Kimi 无思考版预期接受 temperature=0（待 key 配置后实测验证，若仍拒收则由 #216 降级兜底并在 metrics.md 记口径备注）
+- 不影响主管线（glm 族路径零改动）。**judge 采样口径变化（实测后确认）**：Kimi Code 端点温度完全锁死，temperature=0.0 无法实现——kimi 请求不再发送 temperature，采样=端点固定值（无思考 K2.8 为 0.6）；judge 采样确定性较 temperature=0.0 弱化，已在 docs/evals/metrics.md 记口径备注。#216 温度降级重试保留为兜底（kimi 未配置 effort 的请求仍会先 400 再降级）

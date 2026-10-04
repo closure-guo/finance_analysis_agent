@@ -229,13 +229,19 @@ class TestKimiApplyProviderOptions:
 
         assert _provider_options_key(_kimi("openai/gpt-4o")) is None
 
-    def test_apply_none_effort_emits_extra_body(self):
+    def test_apply_none_effort_emits_extra_body_and_suppress(self):
         out = apply_provider_options(_kimi(**{"reasoning_effort": "none"}))
-        assert out == {"extra_body": {"reasoning_effort": "none"}}
+        assert out == {
+            "extra_body": {"reasoning_effort": "none"},
+            "suppress_temperature": True,
+        }
 
-    def test_apply_low_effort_emits_extra_body(self):
+    def test_apply_low_effort_emits_extra_body_and_suppress(self):
         out = apply_provider_options(_kimi(**{"reasoning_effort": "low"}))
-        assert out == {"extra_body": {"reasoning_effort": "low"}}
+        assert out == {
+            "extra_body": {"reasoning_effort": "low"},
+            "suppress_temperature": True,
+        }
 
     def test_apply_no_options_returns_empty(self):
         assert apply_provider_options(_kimi()) == {}
@@ -251,3 +257,18 @@ class TestKimiApplyProviderOptions:
     def test_plain_openai_options_not_consumed(self):
         """非 kimi/glm 的 openai 模型：schema 查无 → 不消费（既有语义回归）。"""
         assert apply_provider_options(_kimi("openai/gpt-4o", **{"reasoning_effort": "none"})) == {}
+
+    def test_apply_kimi_suppresses_temperature(self):
+        """Kimi 端点采样温度锁死（思考档=1、无思考档=0.6），任何自定义
+        temperature 都 400——effort 显式配置时经内部契约抑制 temperature，
+        交给端点固定值（#216 降级是兜底而非常态）。"""
+        out = apply_provider_options(_kimi(**{"reasoning_effort": "none"}))
+        assert out == {
+            "extra_body": {"reasoning_effort": "none"},
+            "suppress_temperature": True,
+        }
+
+    def test_apply_ark_glm_does_not_suppress_temperature(self):
+        """回归护栏：方舟 GLM 温度可调，suppress 是 kimi 专属，不得外溢。"""
+        out = apply_provider_options(_ark_glm(**{"reasoning_effort": "low"}))
+        assert out == {"extra_body": {"reasoning_effort": "low"}}
