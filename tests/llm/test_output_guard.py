@@ -57,6 +57,14 @@ def test_english_only_rejected_by_lang_ratio():
     assert "leak:lang_ratio" in v.hits
 
 
+def test_digit_dense_zh_fragment_passes():
+    # 数字密集合法中文（研究聚焦文体典型句）：CJK/拉丁分母不含数字，
+    # 数字密集中文的字母占比天然偏低，lang_ratio 阈值不得误伤（审查回归）
+    v = validate_deliverable_text("2026H1归母净利同比+143%，PE_ttm约16.76倍，MA20较MA60高15%。")
+    assert v.ok is True, f"数字密集干净片段被误伤: hits={v.hits}"
+    assert v.hits == []
+
+
 def test_empty_text_rejected():
     v = validate_deliverable_text("")
     assert v.ok is False

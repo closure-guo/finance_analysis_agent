@@ -26,8 +26,12 @@ _LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # 句中悬空收尾（截断启发式；finish_reason 缺失时的兜底信号）
 _TRUNCATED_TAIL = re.compile(r"(?:[0-9]+\.$|[,，、；;：:（(]$)")
 
-# 中文交付物最低中文字符占比（对 CJK+拉丁字母总数；容忍 PE_ttm/MACD 等术语）
-_ZH_RATIO_MIN = 0.6
+# 中文交付物最低中文字符占比（对 CJK+拉丁字母总数；容忍 PE_ttm/MACD 等术语）。
+# 校准依据：本规则定位是「英文独白主导」检测（incident 036 泄露样本占比约 0.17），
+# 阈值须容忍数字密集的合法中文（含术语与数字 token）——CJK/拉丁分母不含数字，
+# 数字密集中文摘要的字母占比天然偏低，0.6 会误伤研究聚焦等数字密集文体；
+# 误伤干净输出视为校验器缺陷（spec 明文）。
+_ZH_RATIO_MIN = 0.35
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _LATIN = re.compile(r"[A-Za-z]")
