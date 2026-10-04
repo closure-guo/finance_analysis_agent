@@ -227,13 +227,17 @@ class TestReportNodeMigration:
         assert kwargs["llm_config"] is None
 
     @patch(_REPORT_CT)
-    def test_focus_summary_empty_text_falls_back_to_reasoning(self, mock_ct):
+    def test_focus_summary_empty_text_does_not_deliver_reasoning(self, mock_ct):
+        """delta add-output-contract-guard 废除 raw_reasoning 交付回退（incident 036
+        根因 4）：content 为空时走定向重试后落结构化兜底，reasoning MUST NOT 进交付物。"""
         mock_ct.return_value = ("", {"raw_reasoning": "来自思考链的摘要"})
         from finance_agent.nodes.report import _build_focus_summary
 
         state = self._state_with_llm_config(None)
         result = _build_focus_summary(state, "估值", ["valuation"])
-        assert result == "来自思考链的摘要"
+        assert result == "[fundamental] 基本面强劲"
+        assert "来自思考链的摘要" not in result
+        assert mock_ct.call_count == 2  # 违约（空正文）→ 定向重试 1 次后兜底
 
     @patch(_REPORT_CT)
     def test_focus_summary_empty_all_falls_back_to_analyst(self, mock_ct):

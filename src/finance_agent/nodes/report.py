@@ -17,6 +17,7 @@ from typing import Any
 
 from finance_agent.charts import collect_chart_data, generate_all_charts
 from finance_agent.llm.gateway import complete_text
+from finance_agent.llm.output_guard import validate_deliverable_text
 from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
 from finance_agent.nodes.fund_manager import final_integrity_notes
 
@@ -327,20 +328,40 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
         f"股票: {stock_name}\n{focus_line}关注维度: {tags_desc}\n\n"
         f"各层分析产出:\n" + "\n".join(materials)
     )
-    with contextlib.suppress(Exception):
+
+    def _call(system_extra: str = "") -> tuple[str, dict]:
         text, meta = complete_text(
-            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            [
+                {"role": "system", "content": system + system_extra},
+                {"role": "user", "content": prompt},
+            ],
             purpose="quick",
             max_tokens=400,
             temperature=0.3,
             llm_config=_request_config_dict(state.get("llm_config"), api_key),
             trace={"name": "report", "metadata": {"agent": "report"}},
+            output_guard={"target_lang": "zh"},
         )
-        # legacy 行为保留：content 为空时回退 reasoning_content
-        resp = text or meta.get("raw_reasoning") or ""
-        resp = (resp or "").strip()
-        if resp:
+        return (text or "").strip(), meta
+
+    with contextlib.suppress(Exception):
+        resp, meta = _call()
+        # 调用侧判定（gateway 侧 output_guard 仅承担观测遥测；决策语义在本层）
+        if resp and validate_deliverable_text(resp, finish_reason=meta.get("finish_reason")).ok:
             return resp
+        # 违约（泄露/截断/空）→ 定向重试 1 次（incident 036：glm-5.3 间歇性
+        # 把任务独白写进正文；强化指令禁止思考输出）
+        retry_resp, retry_meta = _call(
+            "\n\n重要：直接输出最终摘要文本。禁止输出任务理解、要点清单、"
+            "约束重述、Draft 标记或任何思考过程；只输出面向读者的 150-200 字中文摘要。"
+        )
+        if (
+            retry_resp
+            and validate_deliverable_text(
+                retry_resp, finish_reason=retry_meta.get("finish_reason")
+            ).ok
+        ):
+            return retry_resp
 
     # 兜底：取首个分析师 summary 截断
     fallback = materials[0] if materials else ""
