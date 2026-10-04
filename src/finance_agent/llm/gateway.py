@@ -228,6 +228,7 @@ def complete_text(
     preset: str | None = None,
     temperature: float | None = None,
     trace: dict[str, Any] | None = None,
+    output_guard: dict[str, Any] | None = None,
     timeout_seconds: float = 300.0,
 ) -> tuple[str, dict]:
     """统一非流式 complete 入口（5.1-C：trace 观测 + sanitize + raw_* 元数据）。
@@ -249,6 +250,10 @@ def complete_text(
     返回 metadata 附 ``resume_count=1`` 且 finish_reason 取续写段；续写仍
     length → ``OutputTruncatedError``。``top_fields``（可选）：调用方 schema
     顶层字段清单，None 则不做进度标注（仅尾部续写）。
+
+    ``output_guard``（可选）：纯文本交付物输出合同（delta add-output-contract-guard）。
+    传 ``{"target_lang": "zh"}`` 时对 content 执行泄露/截断校验，判定落返回
+    metadata ``guard`` 与观测 metadata（仅遥测；处置决策在调用侧）。
     """
     profile = resolve_profile(purpose=purpose, llm_config=llm_config, preset=preset)
     ensure_litellm_runtime()
@@ -349,6 +354,23 @@ def complete_text(
                 _gen.update(metadata={"error_type": type(exc).__name__}, level="ERROR")
         _close_observation(_gen_cm)
         raise normalize_exception(exc) from exc
+    guard_verdict: dict[str, Any] | None = None
+    if output_guard is not None:
+        from finance_agent.llm.output_guard import validate_deliverable_text
+
+        _v = validate_deliverable_text(
+            raw_content,
+            target_lang=output_guard.get("target_lang", "zh"),
+            finish_reason=resp.choices[0].finish_reason,
+        )
+        guard_verdict = {"ok": _v.ok, "reason": _v.reason, "hits": _v.hits}
+    # 观测 metadata 补 finish_reason/resume_count/guard（incident 036 遥测缺口：
+    # 此前仅调用方 trace metadata 入观测，截断归因无从查起）
+    _obs_meta: dict[str, Any] = dict((trace or {}).get("metadata") or {})
+    _obs_meta["finish_reason"] = resp.choices[0].finish_reason
+    _obs_meta["resume_count"] = 1 if _resumed else 0
+    if guard_verdict is not None:
+        _obs_meta["guard"] = guard_verdict
     # Langfuse output.answer 与 legacy call_llm 对齐：content 为空时用
     # reasoning 作为 answer（legacy trace 行为），但返回 text 不做回退。
     _finalize_observation(
@@ -356,7 +378,7 @@ def complete_text(
         raw_content or raw_reasoning,
         raw_reasoning,
         getattr(resp, "usage", None),
-        metadata=(trace or {}).get("metadata"),
+        metadata=_obs_meta,
     )
     _close_observation(_gen_cm)
     text = raw_content
@@ -373,6 +395,8 @@ def complete_text(
     if _resumed:
         # 续写成功可追溯：resume_count=1 落返回 metadata（与观测侧一致）
         metadata["resume_count"] = 1
+    if guard_verdict is not None:
+        metadata["guard"] = guard_verdict
     return text, metadata
 
 
