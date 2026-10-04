@@ -69,3 +69,34 @@ def test_empty_text_rejected():
     v = validate_deliverable_text("")
     assert v.ok is False
     assert v.reason == "empty"
+
+
+def test_colon_tail_passes():
+    """Task1-a：冒号收尾是合法完整文体（如「核心风险提示如下：」），不得误判截断。"""
+    v = validate_deliverable_text("核心风险提示如下：")
+    assert v.ok is True, f"冒号收尾被误伤: hits={v.hits}"
+    assert v.hits == []
+
+
+def test_en_target_pure_english_passes():
+    """Task1-b 规则表泛化：target_lang=en 时纯英文交付文本 ok。"""
+    v = validate_deliverable_text(
+        "Piotech is a semiconductor equipment company with strong growth.",
+        target_lang="en",
+    )
+    assert v.ok is True, f"en 目标下纯英文被误伤: hits={v.hits}"
+
+
+def test_en_target_zh_dominant_hits_lang_ratio():
+    """Task1-b 规则表泛化：target_lang=en 时中文主导文本命中 leak:lang_ratio。"""
+    v = validate_deliverable_text(
+        "拓荆科技多空证据均衡，给予中性评级，维持观望。", target_lang="en"
+    )
+    assert v.ok is False
+    assert "leak:lang_ratio" in v.hits
+
+
+def test_unknown_target_lang_skips_ratio_check():
+    """Task1-b：未知目标语言不猜测——占比检查整体跳过，不做隐性 zh 假设。"""
+    v = validate_deliverable_text("Piotech is a semiconductor equipment company.", target_lang="fr")
+    assert v.ok is True, f"未知目标语言不应触发占比检查: hits={v.hits}"

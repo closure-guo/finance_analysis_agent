@@ -23,8 +23,10 @@ _LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("leak:let_me", re.compile(r"^\s*(?:Let me|I'll|I will|I need to)\b", re.MULTILINE)),
 )
 
-# 句中悬空收尾（截断启发式；finish_reason 缺失时的兜底信号）
-_TRUNCATED_TAIL = re.compile(r"(?:[0-9]+\.$|[,，、；;：:（(]$)")
+# 句中悬空收尾（截断启发式；finish_reason 缺失时的兜底信号）。
+# 全角/半角冒号不在字符类内：冒号收尾是合法完整文体（如「核心风险提示如下：」），
+# 计入会误伤并触发无谓重试
+_TRUNCATED_TAIL = re.compile(r"(?:[0-9]+\.$|[,，、；;（(]$)")
 
 # 中文交付物最低中文字符占比（对 CJK+拉丁字母总数；容忍 PE_ttm/MACD 等术语）。
 # 校准依据：本规则定位是「英文独白主导」检测（incident 036 泄露样本占比约 0.17），
@@ -35,6 +37,14 @@ _ZH_RATIO_MIN = 0.35
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _LATIN = re.compile(r"[A-Za-z]")
+
+# 语言占比规则表（Task1-b 泛化）：目标语言字符 / (目标语言字符 + 其他语言字母)
+# < 阈值 → leak:lang_ratio。zh 行为与 0.35 硬编码时代逐字节等价；
+# target_lang 不在表内时跳过该检查（未知目标语言不猜测）。
+_LANG_RULES: dict[str, tuple[re.Pattern[str], re.Pattern[str], float]] = {
+    "zh": (_CJK, _LATIN, _ZH_RATIO_MIN),
+    "en": (_LATIN, _CJK, _ZH_RATIO_MIN),
+}
 
 
 @dataclass
@@ -52,7 +62,12 @@ def validate_deliverable_text(
     target_lang: str = "zh",
     finish_reason: str | None = None,
 ) -> GuardVerdict:
-    """校验 LLM 文本能否直接嵌入交付物。不抛错，返回判定由调用方处置。"""
+    """校验 LLM 文本能否直接嵌入交付物。不抛错，返回判定由调用方处置。
+
+    ``target_lang``：目标语言（默认 zh）。语言占比检查按 _LANG_RULES 规则表
+    执行；不在表内的目标语言跳过该检查——未知目标语言不猜测，不做隐性
+    zh/英文假设。
+    """
     if not text or not text.strip():
         return GuardVerdict(ok=False, reason="empty", hits=["empty"])
 
@@ -64,10 +79,12 @@ def validate_deliverable_text(
         if pat.search(text):
             hits.append(name)
 
-    if target_lang == "zh":
-        cjk = len(_CJK.findall(text))
-        latin = len(_LATIN.findall(text))
-        if cjk + latin > 0 and cjk / (cjk + latin) < _ZH_RATIO_MIN:
+    rule = _LANG_RULES.get(target_lang)
+    if rule is not None:
+        target_pat, other_pat, ratio_min = rule
+        target_n = len(target_pat.findall(text))
+        other_n = len(other_pat.findall(text))
+        if target_n + other_n > 0 and target_n / (target_n + other_n) < ratio_min:
             hits.append("leak:lang_ratio")
 
     if "truncated:length" not in hits and _TRUNCATED_TAIL.search(text.rstrip()):
