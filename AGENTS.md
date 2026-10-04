@@ -27,7 +27,7 @@ LangGraph 多 Agent A 股分析系统：FastAPI 后端 + React 18/Vite 前端。
 ## 常用命令
 
 ```bash
-docker compose up -d --build          # 全栈启动
+docker compose up -d --build          # 全栈启动（重建前先查 /api/sessions 无 running 会话，见红线）
 uv run uvicorn finance_agent.api:app --host 127.0.0.1 --port 8000 --reload  # 后端
 cd frontend && npm run dev            # 前端
 uv run pytest                         # 后端测试
@@ -62,6 +62,7 @@ cd frontend && npm test               # 前端测试
 - [ ] E2E 禁止 mock 被测系统（`route.fulfill` / MSW 拦截业务接口响应 = 红线）；LLM/第三方 API 可用 `TESTING=1` stub，但须配 `@live` 用例 nightly 防漂移
 - [ ] archive 前置条件：`tasks.md` 全勾 + verification 通过 + E2E 门禁通过（交互类适用）+ 人工验证报告落 `tests/validation/`
 - [ ] 排查 bug 必须同时查后端日志和 Langfuse trace
+- [ ] 重建/重启后端（`docker compose up -d --build` / restart）前先查 `GET /api/sessions` 无 `status=running` 会话；有运行中分析须等其完成或经用户确认再动——宿主机改码不触发容器内 `--reload`（WSL2 bind mount 的 inotify 不传播），手动重建撞上运行中分析会把它杀成 interrupted（2026-10-04 一日三例）
 - [ ] 系统性问题记录到 `docs/incidents/`（编号文档 + 更新 README 索引）
 - [ ] 指标低 ≠ 能力差：任何聚合指标进入处置（重试 / 改 prompt / 判定 agent 缺陷 / 写进报告结论）前，必须先分桶归因、逐条人工终裁；自动化处置只允许挂在终裁为「真错误」的桶上（incident 026）
 - [ ] Issue 一律用 `gh` CLI；标签规范见 `docs/agents/triage-labels.md`
