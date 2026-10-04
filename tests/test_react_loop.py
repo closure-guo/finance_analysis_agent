@@ -472,3 +472,63 @@ class TestBudgetCalibrationFromUsage:
         # 无真值 → 保持估算态与派生预算（不得凭空调预算）
         assert budget.usage_estimated is True
         assert budget.max_context_tokens == 100000
+
+
+class TestStreamingToolEmptyOutput:
+    """incident 037：流式工具 TOOL_RESULT output 为空串时按工具失败处理。
+
+    空 output 与缺失等价——MUST NOT 让摘要 LLM 拿到空输入自由发挥
+    （空结果歧义产出「本次未返回有效报告内容」式幻觉）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_tool_output_treated_as_error(self):
+        """空 output 的 TOOL_RESULT → is_error=True、output 含「空结果」、analysis_completed 不置位。"""
+        from finance_agent.harness import StreamEvent, ToolResult
+
+        async def empty_result_tool():
+            """模拟管线异常终止的 run_deep_analysis：yield 一个空 output 的 TOOL_RESULT。"""
+            yield StreamEvent(
+                event_type=ActionType.TOOL_RESULT,
+                content="",
+                tool_result=ToolResult(tool_call_id="", name="run_deep_analysis", output=""),
+            )
+
+        mock_llm = MockLLMClient(
+            [
+                [
+                    LLMResponse(
+                        tool_calls=[_make_tool_call("run_deep_analysis", {})],
+                        is_finished=True,
+                    )
+                ],
+                [LLMResponse(text_delta="摘要", is_finished=True)],
+            ]
+        )
+        agent = Agent(
+            model="mock",
+            api_key="test",
+            permission_mode=PermissionMode.YOLO,
+            max_iterations=5,
+            llm=mock_llm,
+        )
+        agent.tools.register(empty_result_tool, name="run_deep_analysis")
+
+        events = [e async for e in agent.run("分析")]
+
+        # 要素 1+2：最终 TOOL_RESULT 为错误，output 含「空结果」
+        tool_results = [
+            e.tool_result
+            for e in events
+            if e.event_type == ActionType.TOOL_RESULT and e.tool_result
+        ]
+        assert tool_results, "缺少 TOOL_RESULT 事件"
+        final_result = tool_results[-1]
+        assert final_result.is_error is True
+        assert "空结果" in final_result.output
+
+        # 要素 3：analysis_completed 未置位——下一轮 LLM 调用仍带工具 schemas
+        # （若误置位，loop 清空 tool_schemas 强制摘要，last_tools 为 None）
+        assert mock_llm.last_tools, (
+            f"analysis_completed 不应置位（空结果不该触发强制摘要），实际 last_tools={mock_llm.last_tools}"
+        )

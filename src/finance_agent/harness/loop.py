@@ -596,6 +596,16 @@ class Agent:
                                     output="[错误] 流式工具未返回结果",
                                     is_error=True,
                                 )
+                            elif not (result.output or "").strip():
+                                # delta add-event-delivery-resilience spec「管线异常终止的工具结果显式错误语义」：
+                                # 空串结果与缺失等价——MUST NOT 让摘要 LLM 拿到空输入自由发挥
+                                # （incident 037：「本次未返回有效报告内容」的空结果歧义）
+                                result = ToolResult(
+                                    tool_call_id=tc.id,
+                                    name=tc.name,
+                                    output="[错误] 流式工具返回空结果",
+                                    is_error=True,
+                                )
                         else:
                             # 普通工具
                             result = await self.tools.execute(tc.id, tc.name, tc.arguments)
