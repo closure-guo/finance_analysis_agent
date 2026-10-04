@@ -1,7 +1,7 @@
 # Incident 037: 事件发布积压 + SQLite 瞬断——管线已完成但三个界面三种说法
 
 **日期**: 2026-10-04
-**状态**: 已登记（根因定位完成，修复待立项）
+**状态**: 已修复（delta `add-event-delivery-resilience` 已实施，PR #224 合并 + 部署 + ReAct 路径真实验证收口，见 `tests/validation/2026-10-05-add-event-delivery-resilience-validation.md`；同型第二实例 2026-10-04 20:39 拓荆误判超时已一并覆盖——看门狗现核对图真实完成状态）
 **关联**: [021（假卡死同族）](021-deep-analysis-session-stuck.md)、[014（高频 SQLite 写冻结）](014-refresh-clears-session-list-20260716.md)、[013（并发写 DB 数据丢失）](013-sse-concurrent-text-corruption-20260804.md)、`llm-output-resume`/`stream-store` spec
 
 ## 症状

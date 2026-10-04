@@ -11,8 +11,8 @@
 | 001  | 2026-06-01 | [LLM 幻觉：数据正确但输出失真](001-llm-hallucination-20260601.md)   | 已修复   |
 | [027](027-price-validate-state-keys-dropped-20260913.md) | 2026-09-13 | AnalysisState 未声明 price_check 家族/derived_metrics/citation 回路键——图合并静默丢弃，价位校验 fail 打回与修正在真实图从未生效 | 图通道契约测试锁死声明 |
 | [035](035-llm-config-state-key-dropped-20261004.md) | 2026-10-04 | AnalysisState 未声明 llm_config——LangGraph 静默过滤入口键，请求级模型配置在管线整条哑火回退 env（027 同族，门禁盲区=入口键） | 已修复（声明通道 + TestEntryChannels 入口键门禁） |
-| [036](036-glm53-thinking-leak-delivery-contract-20261004.md) | 2026-10-04 | 换 glm-5.3 后「研究聚焦」泄露模型英文独白进交付物（max_tokens=400 被推理吃满截断 + verbatim 嵌入零校验 + raw_reasoning 回退坑）——纯文本交付物不在 llm-output-contract 覆盖内 | 已登记（delta add-output-contract-guard 待实施） |
-| [037](037-event-backlog-sqlite-transient-terminal-loss-20261004.md) | 2026-10-04 | 6 万 thinking_token 积压（15 分钟滞后）× SQLite 瞬断落在积压排空窗口——管线已完成但 UI 冻结、run_deep_analysis 返回空、聊天谎称无报告，R2+ 节点事件永久丢失（021 同族复发） | 已登记（修复待立项：终态旁路/积压观测/瞬态重试/空结果语义） |
+| [036](036-glm53-thinking-leak-delivery-contract-20261004.md) | 2026-10-04 | 换 glm-5.3 后「研究聚焦」泄露模型英文独白进交付物（max_tokens=400 被推理吃满截断 + verbatim 嵌入零校验 + raw_reasoning 回退坑）——纯文本交付物不在 llm-output-contract 覆盖内 | 已修复（#221 合并+部署+拓荆真实验证收口） |
+| [037](037-event-backlog-sqlite-transient-terminal-loss-20261004.md) | 2026-10-04 | 6 万 thinking_token 积压（15 分钟滞后）× SQLite 瞬断落在积压排空窗口——管线已完成但 UI 冻结、run_deep_analysis 返回空、聊天谎称无报告，R2+ 节点事件永久丢失（021 同族复发） | 已修复（#224 合并+部署+ReAct 真实验证收口；含 20:39 同型误判超时第二实例） |
 | 002  | 2026-05-26 | [报告准确性复盘：茅台 FA 分析偏差](002-report-accuracy-20260526.md) | 部分修复 |
 | 003  | 2026-06-03 | [股票名称获取失败 + NaN 处理缺陷](003-stock-name-and-na-handling-20260603.md) | 已修复   |
 | 004  | 2026-06-04 | [数据准确性系统性问题 — efficiency 年份错位 + ROE 口径 + LLM 自算](004-data-accuracy-20260604.md) | 已修复 |
