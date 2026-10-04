@@ -42,13 +42,31 @@ class ArkGLMOptions(BaseModel):
     reasoning_effort: Literal["max", "high", "low"] | None = None
 
 
+class KimiOptions(BaseModel):
+    """kimi（Kimi Code API，openai/ 前缀接入）provider_options schema。
+
+    Kimi Code 官方文档：4 个模型 ID（k3/k3-256k/kimi-for-coding/
+    kimi-for-coding-highspeed）全系为思考模型，effort 档位 low/high/max；
+    ``none`` 为官方出口——关闭思考并路由到无思考版（judge 保持
+    temperature=0 采样口径的前提）。官方映射别名（medium→high 等）
+    不进 schema：配置显式性优先。extra="forbid" 拒绝未知配置项。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reasoning_effort: Literal["none", "low", "high", "max"] | None = None
+
+
 # provider_options 校验 schema（§7.1 registry 静态三件套之一）
 PROVIDER_OPTIONS_SCHEMAS: dict[str, type[BaseModel]] = {
     "deepseek": DeepSeekOptions,
     "ark-glm": ArkGLMOptions,
+    "kimi": KimiOptions,
 }
 
 # provider 静态默认 options（对齐 legacy deep 分支行为）
+# kimi 不设默认档：各模型默认不同（k3=high、kimi-for-coding=max），
+# 未显式配置时不携带参数、跟随端点默认（add-kimi-reasoning-effort D4）
 DEFAULT_PROVIDER_OPTIONS: dict[str, dict] = {
     "deepseek": {"thinking": "enabled", "reasoning_effort": "max"},
     "ark-glm": {"reasoning_effort": "max"},
@@ -58,6 +76,7 @@ DEFAULT_PROVIDER_OPTIONS: dict[str, dict] = {
 REQUEST_OVERRIDABLE: dict[str, set[str]] = {
     "deepseek": {"thinking", "reasoning_effort"},
     "ark-glm": {"reasoning_effort"},
+    "kimi": {"reasoning_effort"},
 }
 
 _NO_REASONING = {

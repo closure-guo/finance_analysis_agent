@@ -200,3 +200,54 @@ class TestApplyApiFormKwargs:
     def test_no_api_form_returns_empty(self):
         # 默认 profile 无 api_form（None）
         assert apply_api_form_kwargs(get_profile_preset("openai-official")) == {}
+
+
+def _kimi(model: str = "openai/kimi-for-coding", **options: object) -> ModelProfile:
+    """kimi 族 profile（request 分支构造形态：name=request:<model>）。"""
+    base = get_profile_preset("openai-compatible")
+    return dataclasses.replace(
+        base,
+        name=f"request:{model}",
+        model=model,
+        provider_options=dict(options),
+    )
+
+
+class TestKimiApplyProviderOptions:
+    """kimi 族 effort 透传（add-kimi-reasoning-effort）：与 ark-glm 同 extra_body 机制。"""
+
+    def test_provider_options_key_kimi_models(self):
+        from finance_agent.llm.adapters.litellm_adapter import _provider_options_key
+
+        assert _provider_options_key(_kimi("openai/kimi-for-coding")) == "kimi"
+        assert _provider_options_key(_kimi("openai/kimi-for-coding-highspeed")) == "kimi"
+        assert _provider_options_key(_kimi("openai/k3")) == "kimi"
+        assert _provider_options_key(_kimi("openai/k3-256k")) == "kimi"
+
+    def test_provider_options_key_plain_openai_none(self):
+        from finance_agent.llm.adapters.litellm_adapter import _provider_options_key
+
+        assert _provider_options_key(_kimi("openai/gpt-4o")) is None
+
+    def test_apply_none_effort_emits_extra_body(self):
+        out = apply_provider_options(_kimi(**{"reasoning_effort": "none"}))
+        assert out == {"extra_body": {"reasoning_effort": "none"}}
+
+    def test_apply_low_effort_emits_extra_body(self):
+        out = apply_provider_options(_kimi(**{"reasoning_effort": "low"}))
+        assert out == {"extra_body": {"reasoning_effort": "low"}}
+
+    def test_apply_no_options_returns_empty(self):
+        assert apply_provider_options(_kimi()) == {}
+
+    def test_apply_invalid_effort_raises(self):
+        with pytest.raises(ValidationError):
+            apply_provider_options(_kimi(**{"reasoning_effort": "medium"}))
+
+    def test_apply_unknown_key_raises(self):
+        with pytest.raises(ValidationError):
+            apply_provider_options(_kimi(thinking="enabled"))
+
+    def test_plain_openai_options_not_consumed(self):
+        """非 kimi/glm 的 openai 模型：schema 查无 → 不消费（既有语义回归）。"""
+        assert apply_provider_options(_kimi("openai/gpt-4o", **{"reasoning_effort": "none"})) == {}

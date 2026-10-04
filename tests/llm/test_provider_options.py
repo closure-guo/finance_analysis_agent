@@ -236,3 +236,82 @@ class TestResolverMerge:
                     "provider_options": {"thinking": "enabled"},  # 不在白名单
                 }
             )
+
+
+class TestKimiProviderOptions:
+    """Kimi 模型族（add-kimi-reasoning-effort）：openai/ 前缀下 kimi/k3 模型名识别。
+
+    Kimi Code 全系为思考模型（effort low/high/max），官方出口 reasoning_effort=none
+    关思考并路由无思考版——judge 切 Kimi 的前提通道。
+    """
+
+    def test_kimi_schema_validates_four_tiers(self):
+        for tier in ("none", "low", "high", "max"):
+            opts = PROVIDER_OPTIONS_SCHEMAS["kimi"].model_validate({"reasoning_effort": tier})
+            assert opts.reasoning_effort == tier
+
+    def test_kimi_schema_rejects_alias_tiers(self):
+        """官方映射别名（medium→high 等）不进 schema：配置显式性优先。"""
+        from pydantic import ValidationError
+
+        for tier in ("medium", "ultra", "xhigh", "minimum"):
+            with pytest.raises(ValidationError):
+                PROVIDER_OPTIONS_SCHEMAS["kimi"].model_validate({"reasoning_effort": tier})
+
+    def test_kimi_schema_rejects_unknown_key(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PROVIDER_OPTIONS_SCHEMAS["kimi"].model_validate({"thinking": "enabled"})
+
+    def test_kimi_request_overridable_whitelist(self):
+        assert REQUEST_OVERRIDABLE["kimi"] == {"reasoning_effort"}
+
+    def test_kimi_no_default_options(self):
+        """不设隐式默认档：未配置 = 跟随端点模型默认（Kimi 各模型默认档不同）。"""
+        assert DEFAULT_PROVIDER_OPTIONS.get("kimi") is None
+
+    def test_request_kimi_provider_options_preserved(self):
+        profile = resolve_profile(
+            llm_config={
+                "model": "kimi-for-coding",
+                "baseUrl": "https://api.kimi.com/coding/v1",
+                "apiKey": "k",
+                "provider_options": {"reasoning_effort": "none"},
+            }
+        )
+        assert profile.provider_options == {"reasoning_effort": "none"}
+
+    def test_request_k3_model_same_family(self):
+        profile = resolve_profile(
+            llm_config={
+                "model": "k3-256k",
+                "baseUrl": "https://api.kimi.com/coding/v1",
+                "apiKey": "k",
+                "provider_options": {"reasoning_effort": "low"},
+            }
+        )
+        assert profile.provider_options == {"reasoning_effort": "low"}
+
+    def test_request_kimi_non_whitelisted_key_rejected(self):
+        with pytest.raises(IncompleteLLMConfigError):
+            resolve_profile(
+                llm_config={
+                    "model": "kimi-for-coding",
+                    "baseUrl": "https://api.kimi.com/coding/v1",
+                    "apiKey": "k",
+                    "provider_options": {"thinking": "enabled"},
+                }
+            )
+
+    def test_request_plain_openai_still_no_options(self):
+        """非 kimi/glm 的 openai 模型不受影响：白名单仍为空。"""
+        with pytest.raises(IncompleteLLMConfigError):
+            resolve_profile(
+                llm_config={
+                    "model": "gpt-4o",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "apiKey": "k",
+                    "provider_options": {"reasoning_effort": "none"},
+                }
+            )

@@ -411,6 +411,9 @@ def _provider_options_key(profile: ModelProfile) -> str | None:
     - ark-glm：provider=openai 且（name 含 ``ark``——preset 名 ark-glm——
       或 model 含 ``glm``——env/request 分支构造的 env:openai/glm-5.3）
       → ``ark-glm``
+    - kimi：provider=openai 且（model 含 ``kimi`` 或 k3 前缀段——Kimi Code
+      4 个官方模型 ID：k3/k3-256k/kimi-for-coding/kimi-for-coding-highspeed）
+      → ``kimi``
     - 其余 provider → None（schema 查无 → 不消费）
     """
     name = (profile.name or "").lower()
@@ -419,6 +422,8 @@ def _provider_options_key(profile: ModelProfile) -> str | None:
         return "deepseek"
     if profile.provider == "openai" and ("ark" in name or "glm" in model):
         return "ark-glm"
+    if profile.provider == "openai" and ("kimi" in model or model.split("/")[-1].startswith("k3")):
+        return "kimi"
     return None
 
 
@@ -434,6 +439,9 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     - ark-glm（provider=openai + name 含 ark / model 含 glm）：
       仅产出 ``reasoning_effort`` 请求参数（官方 max/high/low 三档）；
       thinking/suppress_temperature 是 deepseek 专属，不透传。
+    - kimi（provider=openai + model 含 kimi / k3 前缀段）：与 ark-glm 同
+      extra_body 机制（litellm openai 路由拒收顶层 reasoning_effort）；
+      档位 none/low/high/max（none=关思考，路由无思考版）。
     其他 provider / 空 provider_options → ``{}``。
     """
     options = dict(getattr(profile, "provider_options", None) or {})
@@ -447,10 +455,11 @@ def apply_provider_options(profile: ModelProfile) -> dict[str, Any]:
     validated = PROVIDER_OPTIONS_SCHEMAS[key].model_validate(options)
     out: dict[str, Any] = {}
     effort = getattr(validated, "reasoning_effort", None)
-    if key == "ark-glm":
+    if key in ("ark-glm", "kimi"):
         # 实证（方舟 GLM-5.3）：顶层 reasoning_effort 被 litellm openai 路由
         # 判 UnsupportedParamsError 拒绝；必须放 extra_body 才透传到端点
-        # （OpenAI 兼容扩展字段）。官方三档 max/high/low。
+        # （OpenAI 兼容扩展字段）。ark-glm 三档 max/high/low；
+        # kimi 四档 none/low/high/max（none=关思考）。
         if effort is not None:
             out["extra_body"] = {"reasoning_effort": effort}
         return out

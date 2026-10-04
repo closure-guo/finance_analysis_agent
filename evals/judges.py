@@ -246,6 +246,12 @@ def _call_judge_llm(prompt: str) -> str:
         "baseUrl": base_url or "",
         "apiKey": _judge_api_key() or "",
     }
+    # 思考档位显式出口（add-kimi-reasoning-effort）：Kimi Code 全系思考模型，
+    # judge 用 effort=none 关思考（路由无思考版）以保持 temperature=0 口径。
+    # 未设置时不携带键——跟随端点模型默认档，不注入隐式默认。
+    judge_effort = os.getenv("JUDGE_REASONING_EFFORT", "")
+    if judge_effort:
+        llm_config["provider_options"] = {"reasoning_effort": judge_effort}
     text, _meta = complete_text(
         [{"role": "user", "content": prompt}],
         purpose="judge",

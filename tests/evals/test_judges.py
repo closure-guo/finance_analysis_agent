@@ -484,3 +484,44 @@ class TestReportRelevanceV4:
         assert "子问题" in rubric
         assert "逐一回答" in rubric
         assert "降 4" in rubric or "降4" in rubric
+
+
+class TestJudgeReasoningEffort:
+    """JUDGE_REASONING_EFFORT → llm_config.provider_options（add-kimi-reasoning-effort）。
+
+    Kimi Code 全系思考模型：judge 切 Kimi 后用 effort=none 关思考（路由无思考版），
+    保持 temperature=0.0 采样口径的可实现性。未设置时不携带键（跟随端点默认档）。
+    """
+
+    @patch.dict(
+        os.environ,
+        {
+            "JUDGE_BASE_URL": "https://api.kimi.com/coding/v1",
+            "JUDGE_API_KEY": "sk-kimi-test",
+            "JUDGE_REASONING_EFFORT": "none",
+        },
+    )
+    @patch(_GATEWAY)
+    def test_effort_set_included_in_provider_options(self, mock_llm):
+        mock_llm.return_value = _mock_completion('{"score": 3, "reason": "x"}')
+        run_judge("report_relevance", {"query": "q", "report": "r"})
+        _, kwargs = mock_llm.call_args
+        assert kwargs["llm_config"]["provider_options"] == {"reasoning_effort": "none"}
+
+    @patch.dict(
+        os.environ,
+        {
+            "JUDGE_BASE_URL": "https://api.kimi.com/coding/v1",
+            "JUDGE_API_KEY": "sk-kimi-test",
+        },
+        clear=False,
+    )
+    @patch(_GATEWAY)
+    def test_effort_unset_no_provider_options_key(self, mock_llm):
+        import os as _os
+
+        _os.environ.pop("JUDGE_REASONING_EFFORT", None)
+        mock_llm.return_value = _mock_completion('{"score": 3, "reason": "x"}')
+        run_judge("report_relevance", {"query": "q", "report": "r"})
+        _, kwargs = mock_llm.call_args
+        assert "provider_options" not in kwargs["llm_config"]
