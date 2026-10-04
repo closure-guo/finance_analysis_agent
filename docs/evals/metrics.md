@@ -186,6 +186,8 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 **运维控制台启用切点（2026-09-24，delta `add-eval-ops-console`，未跑批）**：设置中心新增「评估运维」分区（六页签），把日批五任务（判定 / 盯市 / 指标快照 / 完整性 / cohort）的状态与运行历史、手动补跑、cohort 开关与跑批时刻、回测批与泄漏探针触发、outcome 收口健康检查、回测报告注册表、预登记版本化与口径旋钮全部纳入界面（只读 + 触发；烧钱动作一律前端确认 + 后端沿用既有门禁，**预算熔断 / 串行 / usage 真值记账一行不改**）。**cohort 开关与跑批时刻的运行期唯一真相源由环境变量改为持久化 `ops_config` 表**（`cohort_enabled` / `cohort_hour` / `cohort_minute`；env 仅作进程启动引导默认值、已有表值不被覆盖，重启保持）——**跨此切点，「改 env 重启生效」的运维时代结束：旧的「env-only」运维期与切点后的界面期不可直接比较**（同一开关在两期的取值来源不同；切点后归因不得再把环境变量改动当作生效手段，须查 `ops_config` 现值与 `job_runs` 审计行）。调度器未启动（TESTING=1 或显式禁用）时状态接口显式返回「未运行」而非 500 或空列表。口径旋钮（判定窗口 / 中性带 / 探针阈值 / 最小已结算样本）的界面修改**只生成 `docs/evals/caliber-drafts/ops-caliber-draft-*` 草稿**，不写本文件、不改 `evals/outcome/caliber.py` 常量——生效仍须走 §1 口径修订 + delta 流程（草稿落在 `openspec/changes/` **之外**：骨架草稿未成 change，放进 changes/ 会让仓库级 `openspec validate --all --strict` 报错，见 `tests/validation/2026-09-24-add-eval-ops-console-validation.md` 残留风险）。**本切点不产生任何读数**：无 cohort 跑批、无回测正式批、无探针 LLM 调用，故 §2 时间线不加行。
 
+**judge 端点切换切点（2026-10-04，delta `add-kimi-reasoning-effort`（#218/#219）；未跑批）**：judge LLM 从 deepseek-v4-flash@方舟（temperature=0.0）切至 **kimi-for-coding@Kimi Code**（`JUDGE_REASONING_EFFORT=none` 关思考，路由无思考 K2.8；切换动机=方舟套餐到期 + 裁判与被评模型解耦）。**采样口径变化：Kimi Code 端点采样温度锁死（实证：思考档仅接受 temperature=1、无思考档仅接受 0.6，其他值一律 400），kimi 请求 temperature 一律不发送（adapter→gateway `suppress_temperature` 契约），judge 实际采样=端点固定值 0.6**——采样确定性较 T=0.0 弱化，单次判分噪声边界相应变化（K 次均值协议不变、rubric 版本不变、材料口径不变）。**跨此切点的 judge 绝对分不可直接比较**（judge 模型与采样双变），跨轮结论以同切点内比较为准。同日管线主 LLM env 回退链切 bigmodel glm-5.3（config-only，请求级配置不受影响；bigmodel 端点对 glm-5.3 接受 temperature=0.3，管线口径无变化）。
+
 ---
 
 ## 2.1 round7 预登记分析计划（标注前锁定，防事后口径漂移）
