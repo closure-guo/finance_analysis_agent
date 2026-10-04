@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from finance_agent.llm.errors import OutputTruncatedError
 from finance_agent.llm.gateway import complete_text
 
 _LEAKED = (
@@ -131,3 +134,141 @@ def test_observation_metadata_carries_finish_reason_and_guard(monkeypatch):
     assert last["finish_reason"] == "stop"
     assert last["resume_count"] == 0
     assert last["guard"]["ok"] is False
+
+
+# ---- 观测替身（合并式 metadata 断言用，shape 对齐 test_gateway_resume.py）----
+
+
+class _Obs:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def update(self, **kw):
+        self._updates.append(kw)
+
+
+class _ObsCM:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def __enter__(self):
+        return _Obs(self._updates)
+
+    def __exit__(self, *a):
+        return False
+
+
+class _ObsLF:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def start_as_current_observation(self, **kw):  # noqa: ARG002
+        return _ObsCM(self._updates)
+
+
+def _fake_length_completion(content: str):
+    """每次调用都返回 finish_reason=length（正文非空）的 raw_completion 替身。"""
+
+    def fake(**kwargs):  # noqa: ARG001
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=content, reasoning_content=None),
+                    finish_reason="length",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+
+    return fake
+
+
+def test_truncated_error_observation_merges_metadata(monkeypatch):
+    """Task2-a：OutputTruncatedError 路径观测合并式——error_type/truncated/
+    resume_count/finish_reason 同落在最终 metadata（整体替换会丢内层已写信号）。"""
+    updates = []
+    monkeypatch.setattr("finance_agent.langfuse_tracing.get_langfuse", lambda: _ObsLF(updates))
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion",
+        _fake_length_completion("前半"),
+    )
+    with pytest.raises(OutputTruncatedError):
+        complete_text(
+            [{"role": "user", "content": "hi"}],
+            purpose="quick",
+            llm_config=_LLM_CFG,
+            trace={"name": "report", "metadata": {"agent": "report"}},
+        )
+    metas = [u["metadata"] for u in updates if "metadata" in u]
+    last = metas[-1]
+    assert last["error_type"] == "OutputTruncatedError"
+    assert last["truncated"] is True
+    assert last["resume_count"] == 1
+    assert last["finish_reason"] == "length"
+
+
+def test_guard_empty_dict_defaults_zh(monkeypatch):
+    """Task2-b：output_guard={} 空 dict → target_lang 缺省 zh，guard 仍生效。"""
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion",
+        _fake_completion("中远海能多空证据大体均衡，给予中性评级，维持观望。"),
+    )
+    _, meta = complete_text(
+        [{"role": "user", "content": "hi"}],
+        purpose="quick",
+        llm_config=_LLM_CFG,
+        output_guard={},
+    )
+    assert meta["guard"]["ok"] is True
+
+
+def test_guard_validates_concatenated_text_after_resume(monkeypatch):
+    """guard-after-resume（incident 036 邻近场景）：续写拼接后 guard 校验全文。"""
+    updates = []
+    monkeypatch.setattr("finance_agent.langfuse_tracing.get_langfuse", lambda: _ObsLF(updates))
+    calls = []
+
+    def fake_raw_completion(**kwargs):  # noqa: ARG001
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="多空证据大体均衡，", reasoning_content=None
+                        ),
+                        finish_reason="length",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="给予中性评级，维持观望。", reasoning_content=None
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+
+    monkeypatch.setattr(
+        "finance_agent.llm.adapters.litellm_adapter.raw_completion", fake_raw_completion
+    )
+    text, meta = complete_text(
+        [{"role": "user", "content": "hi"}],
+        purpose="quick",
+        llm_config=_LLM_CFG,
+        output_guard={"target_lang": "zh"},
+        trace={"name": "report", "metadata": {"agent": "report"}},
+    )
+    assert text == "多空证据大体均衡，给予中性评级，维持观望。"
+    assert meta["guard"]["ok"] is True
+    assert meta["finish_reason"] == "stop"
+    assert meta["resume_count"] == 1
+    metas = [u["metadata"] for u in updates if "metadata" in u]
+    last = metas[-1]
+    assert last["resume_count"] == 1
+    assert last["guard"]["ok"] is True

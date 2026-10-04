@@ -290,11 +290,14 @@ def complete_text(
     if not suppress_temperature and temperature is not None:
         request_kwargs["temperature"] = temperature
     _resumed = False
+    last_finish_reason: str | None = None
     try:
         resp = _raw_completion_with_timeout(request_kwargs, timeout_seconds)
         message = resp.choices[0].message
         raw_content = message.content or ""
         raw_reasoning = getattr(message, "reasoning_content", "") or ""
+        # 错误路径观测信号源：resp 在异常时可能未绑定，finish_reason 先行留痕
+        last_finish_reason = resp.choices[0].finish_reason
         # 断点续写（llm-output-resume Task 5）：finish_reason=length 且正文非空
         # → 以「已生成正文尾部(+进度标注) + 剩余配额」构造续写请求二次调用拼接
         # （resume 上限 1）；续写仍 length → OutputTruncatedError（观测 truncated
@@ -351,7 +354,17 @@ def complete_text(
             from contextlib import suppress
 
             with suppress(Exception):  # 观测失败不阻断
-                _gen.update(metadata={"error_type": type(exc).__name__}, level="ERROR")
+                # 合并式观测（以调用方 trace metadata 为底）：整体替换会丢掉
+                # 内层 resume 路径已写的 truncated/resume_count；finish_reason
+                # 取 last_finish_reason（resp 在异常时可能未绑定）
+                _err_meta: dict[str, Any] = dict((trace or {}).get("metadata") or {})
+                _err_meta["error_type"] = type(exc).__name__
+                if last_finish_reason is not None:
+                    _err_meta["finish_reason"] = last_finish_reason
+                _err_meta["resume_count"] = 1 if _resumed else 0
+                if isinstance(exc, OutputTruncatedError):
+                    _err_meta["truncated"] = True
+                _gen.update(metadata=_err_meta, level="ERROR")
         _close_observation(_gen_cm)
         raise normalize_exception(exc) from exc
     guard_verdict: dict[str, Any] | None = None
