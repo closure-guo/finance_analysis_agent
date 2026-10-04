@@ -326,3 +326,78 @@ async def test_react_early_exception_still_publishes_error(tmp_path, monkeypatch
 
     assert "error" in via_terminal, f"早期异常的 error 也应经 publish_terminal: {via_terminal}"
     assert "error" in _journal_types(sid)
+
+
+# ── 场景 E：quick chat（_run_chat_task）终态走 publish_terminal ──
+
+
+@pytest.mark.asyncio
+async def test_chat_done_uses_publish_terminal(tmp_path, monkeypatch):
+    """api._run_chat_task 的 done MUST 走 publish_terminal（design 全量收拢要求）。
+
+    与 _run_react_analysis 同语义：publish_terminal CAS 拒绝返回 0 静默容忍。
+    """
+    import finance_agent.agent_factory as agent_factory
+    import finance_agent.api as api_mod
+
+    _setup_db(tmp_path, monkeypatch)
+    sid = session_store.create_session(status="running")
+    via_terminal, via_publish = _install_terminal_spies(monkeypatch)
+
+    async def fake_stream(agent, user_input, **kwargs):
+        yield "data: " + json.dumps({"type": "thinking_token", "token": "思考"}) + "\n\n"
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kw: object())
+    monkeypatch.setattr(agent_factory, "stream_agent_to_sse", fake_stream)
+
+    req = api_mod.ChatRequest(message="快速问答终态收拢")
+    await api_mod._run_chat_task(sid, req, None, None)
+
+    assert "done" in via_terminal, f"done 应经 publish_terminal 发布: {via_terminal}"
+    assert via_publish == [], f"终态不得走普通 publish: {via_publish}"
+
+    types = _journal_types(sid)
+    assert types[-1] == "done", f"journal 尾事件应为 done: {types}"
+    rows = session_store.list_session_events(sid, after_seq=0)
+    seqs = [r["seq"] for r in rows]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "seq 必须单调无重号"
+    row = session_store.get_session(sid)
+    assert row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_chat_exception_publishes_error_via_terminal(tmp_path, monkeypatch):
+    """chat 任务异常：error 终态 MUST 显式发布且走 publish_terminal。
+
+    原实现 except 分支仅置 failed，error 终态依赖 registry._run_task 兜底
+    （普通 publish，无 journal 重试）。
+    """
+    import finance_agent.agent_factory as agent_factory
+    import finance_agent.api as api_mod
+
+    _setup_db(tmp_path, monkeypatch)
+    sid = session_store.create_session(status="running")
+    via_terminal, _via_publish = _install_terminal_spies(monkeypatch)
+
+    async def fake_stream(agent, user_input, **kwargs):
+        yield "data: " + json.dumps({"type": "thinking_token", "token": "思考"}) + "\n\n"
+        raise RuntimeError("模拟 chat 异常")
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kw: object())
+    monkeypatch.setattr(agent_factory, "stream_agent_to_sse", fake_stream)
+
+    req = api_mod.ChatRequest(message="异常终态收拢")
+    with pytest.raises(RuntimeError, match="模拟 chat 异常"):
+        await api_mod._run_chat_task(sid, req, None, None)
+
+    assert "error" in via_terminal, f"error 应经 publish_terminal 发布: {via_terminal}"
+
+    types = _journal_types(sid)
+    assert "error" in types, f"error 终态必须显式落 journal: {types}"
+    # 异常前的 thinking_token 已由普通 publish 落库，不得丢失
+    assert "thinking_token" in types, f"异常前的事件不丢失: {types}"
+    assert types.index("thinking_token") < types.index("error")
+
+    row = session_store.get_session(sid)
+    assert row["status"] == "failed"
+    assert "模拟 chat 异常" in (row["failure_reason"] or "")
