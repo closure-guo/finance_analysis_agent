@@ -50,9 +50,21 @@ _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 _DATE_PATTERNS = (
     re.compile(r"\d{4}[-/年.]\d{1,2}[-/月.]\d{1,2}日?"),
     re.compile(r"\d{1,2}月\d{1,2}日?"),
+    # 无年份的连字日期（fix-decision-price-enumerators，600026 实证「（09-30
+    # neutral）」的 09/30 被误读为股价）；连字数值区间（「19-20」）同形——
+    # 区间是多值语境而非单一价位，一并豁免（误杀由观测通道承担，好过阻断）
+    re.compile(r"\d{1,2}-\d{1,2}"),
 )
+# 枚举序号整体排除（fix-decision-price-enumerators，600026 实证）：模型以
+# 「（1）（2）（3）」给论点编号是固定行文格式，打回重试也换不掉——括号内
+# 1-2 位裸整数是序号而非股价（600026 生产阻断消息「文本价位 3 与 近期低点
+# 14.06 偏差 78.66%」即出自「（3）赔率1.56:1」）。仅匹配括号内无其他文字的
+# 裸短整数，带小数点/上下文的括号价位（如「（13.0）」）不受豁免。
+_ENUM_SPAN_PATTERNS = (re.compile(r"[（(]\s*\d{1,2}\s*[)）]"),)
 # 数值后紧跟（可隔空格）即非价格量纲：百分比/倍率/比值/成交量/日期时间单位/均线
-_NON_PRICE_SUFFIX = "%％倍折万亿手天日均月年号时点分秒周季:："
+# + 计数量词（fix-decision-price-enumerators：「3个月」「3成仓」的 3 不是股价；
+# 计量字后接真实价位的表述不存在，不伤及正常价位提取）
+_NON_PRICE_SUFFIX = "%％倍折万亿手天日均月年号时点分秒周季:：个成档条项次笔轮层类种枚名步位线"
 # 数值前紧跟（可隔空格）即非价格上下文：比值冒号、序数
 _NON_PRICE_PREFIX = ":：第"
 # 数值前窗（8 字符）内出现即非价格量纲：技术指标（RSI/KDJ…）、财务与比率语义词
@@ -118,9 +130,14 @@ _NON_PRICE_KEYWORDS: tuple[str, ...] = (
 # （全部 occurrence 都收集），边界守卫防 MA5 命中 MA50、MA10 命中 MA100
 _ALIAS_TABLE: tuple[tuple[str, str, str], ...] = (
     ("ma60", "MA60", "MA60"),
+    ("ma 60", "MA60", "MA60"),  # 空格变体（fix-decision-price-enumerators：600845
+    # 实证「MA 60」的 60 曾被误读为股价——整体入别名排除区并就近归属 MA60）
     ("ma20", "MA20", "MA20"),
+    ("ma 20", "MA20", "MA20"),
     ("ma10", "MA10", "MA10"),
+    ("ma 10", "MA10", "MA10"),
     ("ma5", "MA5", "MA5"),
+    ("ma 5", "MA5", "MA5"),
     ("60日均线", "MA60", "MA60"),
     ("20日均线", "MA20", "MA20"),
     ("10日均线", "MA10", "MA10"),
@@ -262,9 +279,11 @@ def _alias_occurrences(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _exclusion_spans(text: str, aliases: list[tuple[int, int, str, str]]) -> list[tuple[int, int]]:
-    """数值提取排除区：点名指标 occurrence（MA60/60日均线的数字成分）+ 日期。"""
+    """数值提取排除区：点名指标 occurrence（MA60/60日均线的数字成分）+ 日期 + 枚举序号。"""
     spans = [(start, end) for start, end, _canonical, _key in aliases]
     for pattern in _DATE_PATTERNS:
+        spans.extend((m.start(), m.end()) for m in pattern.finditer(text))
+    for pattern in _ENUM_SPAN_PATTERNS:
         spans.extend((m.start(), m.end()) for m in pattern.finditer(text))
     return spans
 
