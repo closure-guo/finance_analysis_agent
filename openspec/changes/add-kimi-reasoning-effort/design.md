@@ -26,6 +26,10 @@ Kimi 文档映射表还接受 medium/minimum/light/ultra/xhigh 等别名（服�
 
 judges.py 始终走 resolver 请求级分支（JUDGE_* 三件套 → llm_config），故 effort 以 `llm_config.provider_options` 形式并入，复用既有白名单校验链，不在 resolver 加 judge 专属 env 映射（避免 JUDGE_* 面继续膨胀）。未设置时不含该键。
 
+### D6：effort 显式配置时抑制 temperature（key 配置后实测补充，2026-10-04）
+
+Kimi Code 端点采样温度锁死（实证）：思考档仅接受 `temperature=1`、无思考档（effort=none）仅接受 `0.6`，其他值一律 400 `invalid temperature`——temperature 完全不可调。复用 deepseek 先例的 adapter→gateway 内部契约：kimi 分支在 effort 显式配置时产出 `suppress_temperature=True`，gateway 据此不发送 temperature，采样跟随端点固定值（无思考 K2.8=0.6）。未配置 effort 的 kimi 请求不抑制（温度 400 由 #216 降级兜底）。suppress SHALL NOT 外溢 ark-glm（方舟温度可调，回归护栏测试）。
+
 ## 口径影响（评估 SOP）
 
-temperature=0.0 口径不变（代码继续发送）。effort=none 后 Kimi 无思考版对 temperature 的接受性待实测：接受 → 口径无损；拒收 → #216 降级兜底（丢 temperature 重试），需在 docs/evals/metrics.md 时间线记一行口径备注。
+judge temperature=0.0 口径在 Kimi 上不可实现（端点锁死）：kimi judge 实际采样=端点固定值 0.6（无思考档），采样确定性弱于 0.0。已在 docs/evals/metrics.md 时间线记口径备注；跨轮对比时注意 judge 切换点（deepseek-v4-flash T=0 → kimi-for-coding 无思考 T=0.6 固定）。

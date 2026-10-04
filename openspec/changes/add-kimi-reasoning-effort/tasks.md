@@ -25,5 +25,7 @@
 - [ ] 定向测试全绿（registry/resolver/adapter/judges）
 - [ ] 宽回归（uv run pytest tests/llm tests/evals + 触及模块相关套件）无新增失败
 - [ ] ruff + ruff-format 干净
-- [ ] CI 全绿 + PR 合并
-- [ ] （部署后）JUDGE_* 配 Kimi 实测：effort=none 请求成功 + temperature 接受性确认
+- [x] kimi effort 显式配置时 suppress_temperature（端点温度锁死实证，红→绿）
+- [x] CI 全绿 + PR 合并
+- [x] （部署后）JUDGE_* 配 Kimi 实测：effort=none 请求成功 + 温度锁死实证（思考档=1/无思考档=0.6，suppress 契约吸收）
+- [ ] 容器内 judge 链端到端验证 + metrics.md 口径备注

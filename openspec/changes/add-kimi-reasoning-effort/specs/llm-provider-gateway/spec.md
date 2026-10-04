@@ -22,3 +22,9 @@
 #### Scenario: k3 前缀模型同族识别
 - **WHEN** model 为 `openai/k3` 或 `openai/k3-256k`
 - **THEN** SHALL 识别为 kimi 族并走同一透传机制
+
+#### Scenario: effort 显式配置时抑制 temperature
+- **GIVEN** Kimi 端点采样温度锁死（实证：思考档仅接受 temperature=1，无思考档仅接受 0.6，其他值一律 400）
+- **WHEN** kimi 请求携带显式 reasoning_effort
+- **THEN** apply_provider_options SHALL 额外产出 `suppress_temperature=True`（adapter→gateway 内部契约，gateway 据此不发送 temperature，采样跟随端点固定值）
+- **AND** 该抑制 SHALL NOT 外溢到 ark-glm（方舟 GLM 温度可调）
