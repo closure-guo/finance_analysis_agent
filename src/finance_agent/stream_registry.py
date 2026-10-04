@@ -46,6 +46,8 @@ class StreamRegistry:
 
     def __init__(self) -> None:
         self._streams: dict[str, SessionStream] = {}
+        # 明细丢弃计数（spec「发布积压可观测与背压」：无计数无日志的静默丢弃 MUST NOT 存在）
+        self._drop_counts: dict[str, dict[str, int]] = {}
 
     async def start(self, session_id: str, coro: Coroutine[Any, Any, None]) -> bool:
         """启动后台生成任务。single-flight：已有活跃任务返回 False。
@@ -128,6 +130,35 @@ class StreamRegistry:
             self._fanout(session_id, stream, event)
         return seq
 
+    async def publish_terminal(self, session_id: str, event: dict) -> int:
+        """终态专用发布（spec「终态事件优先送达」）：CAS 去重 → journal 重试写 → fan-out。
+
+        终态落库值得比普通写更固执：5 次 × 1s 重试（_get_db 层短重试之上的
+        调用侧兜底）。重试耗尽 raise（显式失败，由调用方日志兜底），
+        MUST NOT 静默吞掉造成「管线完成但终态缺失」。
+        """
+        if not self._try_mark_terminal(session_id, event):
+            return 0
+        last_exc: Exception | None = None
+        for attempt in range(5):
+            try:
+                seq = await asyncio.to_thread(session_store.append_session_event, session_id, event)
+                break
+            except Exception as exc:  # noqa: BLE001 - journal 瞬断重试（终态关键路径）
+                last_exc = exc
+                _logger.warning(
+                    "终态落库重试 attempt=%s session=%s err=%s", attempt + 1, session_id, exc
+                )
+                await asyncio.sleep(1.0)
+        else:
+            raise last_exc  # type: ignore[misc]
+        event["seq"] = seq
+        stream = self._streams.get(session_id)
+        if stream:
+            stream.lastSeq = seq
+            self._fanout(session_id, stream, event)
+        return seq
+
     async def publish_many(self, session_id: str, events: list[dict]) -> list[int]:
         """批量先落 journal 再按序 fan-out（高频 thinking_token 的限速根因修复）。
 
@@ -164,6 +195,20 @@ class StreamRegistry:
                 stream.subscribers.remove(q)
                 with contextlib.suppress(asyncio.QueueFull):
                     q.put_nowait(None)
+
+    def record_drop(self, session_id: str, kind: str) -> None:
+        """明细事件丢弃计数（仅事件循环内调用，无锁）。"""
+        per = self._drop_counts.setdefault(session_id, {})
+        per[kind] = per.get(kind, 0) + 1
+
+    def backlog_stats(self, session_id: str) -> dict:
+        """积压可观测快照：丢弃计数 / 订阅者数 / 最后 seq。"""
+        stream = self._streams.get(session_id)
+        return {
+            "drops": dict(self._drop_counts.get(session_id, {})),
+            "subscribers": len(stream.subscribers) if stream else 0,
+            "last_seq": stream.lastSeq if stream else 0,
+        }
 
     def _publish_sync(self, session_id: str, event: dict) -> int:
         """同步版 publish：直接调用 session_store（不 await），用于 CancelledError 块。"""
