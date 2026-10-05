@@ -157,3 +157,56 @@ litellm 运行时开关（流式 logging 禁用、请求级 timeout）与库级�
 #### Scenario: 留空跟随默认
 - **WHEN** 请求与环境均未配置 contextLength
 - **THEN** capability.max_context 保持 registry 静态声明值，行为与现状一致
+
+### Requirement: kimi reasoning_effort 配置入口
+
+系统 SHALL 为 Kimi 模型族（openai/ 前缀下 model 含 `kimi` 或 `k3` 前缀段）提供 reasoning_effort 的配置入口并透传到请求：支持档位 `none/low/high/max`（`none` SHALL 表示关闭思考，Kimi 官方语义为路由到无思考版）；请求参数 SHALL 经 `extra_body={"reasoning_effort": <值>}` 透传（litellm openai 路由拒收顶层 `reasoning_effort`，与 ark-glm 同机制）。系统 SHALL NOT 为 kimi 族设置隐式默认档位——未显式配置时不携带该参数，跟随端点模型默认。
+
+#### Scenario: 请求级 effort=none 关思考
+- **GIVEN** llm_config.model 为 `openai/kimi-for-coding` 且 provider_options 为 `{"reasoning_effort": "none"}`
+- **THEN** 解析出的 profile provider_options SHALL 保留该值
+- **AND** apply_provider_options SHALL 产出 `extra_body={"reasoning_effort": "none"}`
+
+#### Scenario: 未配置时不携带
+- **GIVEN** kimi 模型请求未提供 provider_options
+- **THEN** 最终请求参数 SHALL 不含 reasoning_effort（不注入默认档）
+
+#### Scenario: 非法值拒绝
+- **WHEN** reasoning_effort 传入 `none/low/high/max` 之外的值（如 `medium`）
+- **THEN** SHALL 显式抛错（pydantic ValidationError），不静默忽略
+
+#### Scenario: k3 前缀模型同族识别
+- **WHEN** model 为 `openai/k3` 或 `openai/k3-256k`
+- **THEN** SHALL 识别为 kimi 族并走同一透传机制
+
+#### Scenario: effort 显式配置时抑制 temperature
+- **GIVEN** Kimi 端点采样温度锁死（实证：思考档仅接受 temperature=1，无思考档仅接受 0.6，其他值一律 400）
+- **WHEN** kimi 请求携带显式 reasoning_effort
+- **THEN** apply_provider_options SHALL 额外产出 `suppress_temperature=True`（adapter→gateway 内部契约，gateway 据此不发送 temperature，采样跟随端点固定值）
+- **AND** 该抑制 SHALL NOT 外溢到 ark-glm（方舟 GLM 温度可调）
+
+### Requirement: temperature 拒绝自动降级
+
+adapter raw 入口（raw_completion / raw_stream / raw_acompletion）SHALL 支持温度拒绝自动降级：请求携带 `temperature` 且端点以 temperature 相关错误拒绝（如思考型模型的 `invalid temperature: only 1 is allowed for this model`）时，剔除 `temperature` 后重试一次（走端点默认值）。降级 SHALL 记录 logger warning 并经 `update_current_span` 写 trace（`degradation=temperature_dropped_endpoint_rejected`）；重试仍失败 SHALL 按原有错误归一上抛，MUST NOT 无限重试；未携带 temperature 的请求 MUST NOT 触发本降级。
+
+#### Scenario: 思考型模型温度拒绝降级成功
+
+- **GIVEN** 请求携带 `temperature=0.3` 且模型端点仅允许 temperature=1
+- **WHEN** 端点返回 400 `invalid temperature: only 1 is allowed for this model`
+- **THEN** adapter 剔除 `temperature` 后重发一次并正常返回结果
+- **AND** trace 记录 `degradation=temperature_dropped_endpoint_rejected`，logger 记 warning
+
+#### Scenario: 降级后仍失败按原错误上抛
+
+- **WHEN** 剔除 temperature 重试后仍失败（如认证错误）
+- **THEN** 按归一化错误上抛，不再重试
+
+#### Scenario: 非 temperature 错误不触发降级
+
+- **WHEN** 端点错误信息不含 temperature（如 auth / model_not_found）
+- **THEN** 不剔除参数、不重试，走原有错误路径
+
+#### Scenario: 未携带 temperature 的请求不受影响
+
+- **WHEN** 请求未携带 `temperature`（如 capability probe、probe 探测调用）
+- **THEN** 本降级逻辑零介入，行为与现状一致

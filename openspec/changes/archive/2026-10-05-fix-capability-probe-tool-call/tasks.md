@@ -7,4 +7,4 @@
 - [x] 能力矩阵「未测」中性态（tool_call=false 时 tool_followup 显示未测而非不支持）+ warnings 机器码 → 人话映射（含未知码透传），单元测试覆盖
 - [x] 后端 `ruff check`（全过）+ `mypy`（零新增错误，api.py 存量 5 错误与 main 同款、CI 容忍）+ 相关 pytest 全绿（tests/llm/ + tests/test_api_llm_config.py = 320 passed）；前端 `npm test` 全绿（643 passed，含 tsc 类型检查干净）
 - [x] E2E 门禁通过（交互类变更）：非 @live 套件 23 passed；eval-ops-console 2 红经 main 基线对照确认为**本地环境存量态**（main 同 spec 挂 4 个，非本分支回归，CI 干净环境以 CI 为准）；@live 7 例属 nightly 职责（本地对 stub 后端按设计必挂）。本地门禁注意：docker 生产栈占用 8000/5173 时 playwright `reuseExistingServer` 会误测 docker 旧代码，须先停容器
-- [ ] 人工验证报告落 `tests/validation/`（含真实 provider 复测矩阵截图/记录）——自动化部分已落，**真实 Kimi 端点复测待用户执行**
+- [x] 人工验证报告落 `tests/validation/`（含真实 provider 复测矩阵截图/记录）——复测记录落 tests/validation/2026-10-05-fix-capability-probe-tool-call-retest.md：真实 Kimi 端点五项能力 5/5 ✓（含 tool_call，无需强制回退）、模型发现 4 模型、非法前缀结构化错误；未测态 UI 由已合并前端三态单测覆盖（真实端点无 tool_call=false 样本可造）
