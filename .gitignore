@@ -284,6 +284,9 @@ resume/
 frontend/data/
 tests/e2e/playwright/tmp_body.json
 
+# 实验原始日志临时目录（pass@k/重跑等，蒸馏结果入 docs/evals/，原始产物本地留存不入库）
+tests/e2e/_*/
+
 # judge 端点切换前的本地备份（含 key，不入库）
 .env.bak-*
 
