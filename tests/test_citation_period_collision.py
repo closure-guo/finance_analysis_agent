@@ -77,14 +77,28 @@ def test_unique_anchor_without_marker_passes() -> None:
     assert result.status == "PASS"
 
 
-def test_marker_mismatch_independent_of_collision() -> None:
-    """标记错配检查独立于值歧义：唯一锚点值 + 错配期次标记 → 仍 FAIL。"""
+def test_unique_anchor_marker_mismatch_tolerated() -> None:
+    """唯一锚点值 + 期次标记不认领 → 不拦（历史参照表述自由，002412 语料实证）。
+
+    「自2021年4.30次缓慢下行」类表述是合法历史参照，非撞车值不承担认领义务；
+    认领检查只在撞车档（锚点基数 ≥2）生效。
+    """
     claim = _claim("2026Q1单季毛利率34.95%", field_ref="profitability_metrics.毛利率.2025")
     claim.stated_value = 34.95
     claim.period = "2025"
     (result,) = verify_claims([claim], _collision_state())
-    assert result.status == "FAIL"
-    assert result.bucket == "semantic_period_mismatch"
+    assert result.status == "PASS"
+
+
+def test_empty_interpretation_legacy_claim_skipped() -> None:
+    """空 interpretation（旧格式 claim）+ 撞车值 → 跳过消歧（benchmark 语料实证）。
+
+    消歧义务针对正文标注；正文缺席降级不判，与 metric_name/period 未申报的
+    既有降级先例一致（claim_benchmark state_v1 合成撞车值误判 FAIL 的修复）。
+    """
+    claim = _claim("")
+    (result,) = verify_claims([claim], _collision_state())
+    assert result.status == "PASS"
 
 
 def test_comparative_exempt() -> None:

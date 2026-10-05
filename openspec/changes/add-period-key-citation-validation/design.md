@@ -6,10 +6,14 @@
 
 1. **索引构建** `_build_value_period_index(state) -> dict[float, set[str]]`：遍历序列型指标段（`profitability_metrics`/`solvency_metrics`/`efficiency_metrics`/`cashflow_metrics` 为 `{指标: {期次: 值}}` 两层结构；`quarterly_trend.gross_margin` 等 list 配 `quarters` 对齐），float 归一后入索引，值为 set[期次段]。索引按 state 惰性缓存于校验入口（verify_claims 单次调用内构建一次）。
 2. **期次标记抽取** `_extract_period_markers(text) -> set[str]`：正则抓 `YYYY`、`YYYYQn`、`年报/中报/季报/单季/Q[1-4]` 中文形态，经 `normalize_period` 归一；归一失败的词忽略（与「不误伤」纪律一致）。
-3. **消歧判定**（挂 `_check_period` 前置或独立 `_check_ambiguity`）：
-   - 锚点基数 ≥2 且 interpretation 无标记 → FAIL `ambiguous_value_undisambiguated`
-   - interpretation 有标记且标记集合 ∌ field_ref 溯源期次 → FAIL `semantic_period_mismatch`
-   - 该标记错配检查对所有带标记 claim 生效（独立于歧义）；无标记 claim 仅歧义时拦
+3. **消歧判定**（`_check_period_disambiguation`，挂 `_check_period` 之后）：
+   - 撞车判定先行：stated_value 在索引中锚点期次基数 ≥2 才进入消歧档
+   - 撞车档：interpretation 期次标记集合须含 field_ref 溯源期次——不含且标记非空 → FAIL `semantic_period_mismatch`（v4 形态）；标记为空 → FAIL `ambiguous_value_undisambiguated`
+   - 降级边界（三重不误伤，均有实证）：
+     - 比较型豁免（field_ref_b / claim_type=comparative）——interpretation 必含基期标记，双端申报结构自担期次语义
+     - interpretation 为空（旧格式）跳过——义务针对正文标注，正文缺席不判（benchmark 合成语料实证：state_v1 资产负债率 2022/2024 合成撞车 40.0 误判 FAIL）
+     - 唯一锚点跳过认领检查——「自 2021 年 4.30 次缓慢下行」类历史参照表述自由（002412 真实语料实证误伤后修正）
+   - 方案演进：首版对全部单值 claim 查标记认领（含唯一锚点），真实语料回归暴露历史参照误伤后收敛为「认领检查仅撞车档」——构造场景让位于实证语料
 
 ## Alternatives Considered
 

@@ -1106,34 +1106,29 @@ def _build_value_period_index(state: dict) -> dict[float, set[str]]:
 
 
 def _check_period_disambiguation(claim: Claim, state: dict) -> CitationResult | None:
-    """期次标记认领 + 同值跨期次消歧义务。
+    """同值跨期次消歧义务（仅撞车档生效）。
 
-    两条独立拦截路径（v4 案例 dual-fire）：
-    (a) interpretation 期次标记集合不含 field_ref 溯源期次 → semantic_period_mismatch
-        （对所有单值 claim 生效，独立于值是否撞车）；
-    (b) 撞车值（索引锚点期次基数 ≥2）且 interpretation 无期次标记 →
-        ambiguous_value_undisambiguated。
+    基准实例（拓荆 688072 第七轮评审终裁）：2024 年报毛利率 = 2026Q1 单季毛利率
+    = 41.69%，年报/单季两序列同值真实撞车，值存在性与期次声明校验全绿，
+    期次归属随 LLM 采样漂移。Q1 单季 ≈ 上年年报是财报常见现象，必然复发。
 
-    比较型 claim（field_ref_b / claim_type=comparative）豁免：interpretation
-    必然含基期期次标记，两值两期次语义由 stated_value_b/field_ref_b 结构承担，
-    「只要求 field_ref 期次被认领」语义对其不可用。
+    撞车值（索引锚点期次基数 ≥2）必须显式认领 field_ref 期次：有期次标记但
+    不含 field_ref 期次 → semantic_period_mismatch（v4 形态：正文标 2026Q1、
+    登记 2024 年报键）；无期次标记 → ambiguous_value_undisambiguated。
+
+    降级边界（不误伤）：
+    - 比较型 claim（field_ref_b / claim_type=comparative）豁免：interpretation
+      必然含基期期次标记，两值两期次语义由 stated_value_b/field_ref_b 结构承担；
+    - interpretation 为空（旧格式 claim）跳过——消歧义务针对正文标注，正文缺席
+      不判（benchmark 合成语料实证：空 interpretation + 合成撞车值，误判 FAIL）；
+    - 唯一锚点值跳过认领检查——「自 2021 年 4.30 次缓慢下行」类历史参照表述自由
+      （002412 真实语料实证），认领语义只对撞车值强制；
+    - 撞车值但 field_ref 锚点期次解析不出 → 缺口降级。
     """
     if claim.field_ref_b is not None or claim.claim_type == "comparative":
         return None
-    markers = _extract_period_markers(claim.interpretation or "")
-    ref_period = field_ref_period_segment(claim.field_ref) or _resolve_index_period(
-        claim.field_ref, state
-    )
-    ref_norm = normalize_period(ref_period) if ref_period else None
-
-    if markers and ref_norm is not None:
-        if not any(period_matches(m, ref_norm) for m in markers):
-            return CitationResult(status="FAIL", claim=claim, bucket="semantic_period_mismatch")
+    if not (claim.interpretation or "").strip():
         return None
-    if markers or ref_norm is None:
-        # 有标记但锚点期次解析不出 → 无法判定，降级不误伤；无锚点亦无消歧义务载体
-        return None
-    # 无标记路径：仅撞车值触发消歧义务
     try:
         claimed = float(claim.stated_value)
     except (TypeError, ValueError):
@@ -1141,12 +1136,25 @@ def _check_period_disambiguation(claim: Claim, state: dict) -> CitationResult | 
     if claimed != claimed:  # NaN
         return None
     index = _build_value_period_index(state)
-    for val, anchors in index.items():
-        if value_close(claimed, val) and len(anchors) >= 2:
-            return CitationResult(
-                status="FAIL", claim=claim, bucket="ambiguous_value_undisambiguated"
-            )
-    return None
+    anchors: set[str] | None = None
+    for val, ps in index.items():
+        if value_close(claimed, val):
+            anchors = ps
+            break
+    if anchors is None or len(anchors) < 2:
+        return None  # 唯一锚点：期次标记（含历史参照）不强制认领
+    ref_period = field_ref_period_segment(claim.field_ref) or _resolve_index_period(
+        claim.field_ref, state
+    )
+    ref_norm = normalize_period(ref_period) if ref_period else None
+    if ref_norm is None:
+        return None  # 撞车值但锚点期次解析不出 → 缺口降级，不误伤
+    markers = _extract_period_markers(claim.interpretation)
+    if markers:
+        if any(period_matches(m, ref_norm) for m in markers):
+            return None
+        return CitationResult(status="FAIL", claim=claim, bucket="semantic_period_mismatch")
+    return CitationResult(status="FAIL", claim=claim, bucket="ambiguous_value_undisambiguated")
 
 
 # ── claim 内部一致性（harden-citation-semantic-coverage）──
