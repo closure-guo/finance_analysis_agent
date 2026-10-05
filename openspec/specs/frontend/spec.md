@@ -2033,3 +2033,74 @@ assistant 消息 hover SHALL 显示复制与重新生成操作；管线进度时
 - **WHEN** 页面渲染与交互
 - **THEN** 入场、hover、删除收起等动画全部禁用，状态即时切换
 
+### Requirement: 跑赢指数对比卡片
+
+战绩页(track-record)SHALL 提供「跑赢指数对比」卡片:调用 `GET /api/v1/track-record/index-compare`,展示选定跨度内组合区间收益与各指数区间收益的横向对比条(组合条置顶,指数条按收益降序),每条含指数名、区间收益百分比与跑赢标记(跑赢 ↑ 绿 / 跑输 ↓ 红 / 无数据灰显);卡片标题 SHALL 展示「跑赢 N/M 个指数」摘要(N=beat=true 数,M=beat 非 null 数;M=0 时展示空态文案)。时间跨度 SHALL 复用战绩页既有跨度偏好(fa_track_prefs.timeSpan,进页时与净值图同源读取一次;偏好变更经重新进入页面生效,与净值图行为一致);指数 effective_start_date 非窗口首日时 SHALL 在该指数条上标注实际起算日。
+
+#### Scenario: 正常渲染
+
+- **GIVEN** index-compare 返回窗口内组合收益 5.2%,五只指数中三只低于 5.2%
+- **WHEN** 用户进入战绩页
+- **THEN** 卡片标题展示「跑赢 3/5 个指数」,组合条置顶,指数条按收益降序排列
+- **AND** 跑赢指数条带绿色↑标记,跑输带红色↓标记
+
+#### Scenario: 跨度偏好应用
+
+- **GIVEN** 用户在设置中心把默认时间跨度设为「近 3 月」
+- **WHEN** 进入战绩页
+- **THEN** 对比卡片以 span=3m 请求并渲染,与净值图使用同一跨度偏好
+
+#### Scenario: 指数缺数灰显
+
+- **GIVEN** 某指数 return/beat 为 null
+- **WHEN** 卡片渲染
+- **THEN** 该指数条灰显并标注「无数据」,不参与 N/M 摘要分母
+
+#### Scenario: 组合净值不足空态
+
+- **GIVEN** index-compare 返回 agent_return 为 null
+- **WHEN** 卡片渲染
+- **THEN** 展示空态文案(如「净值数据积累中」),SHALL NOT 渲染对比条与 N/M 摘要
+
+### Requirement: 总览 β/α 指标位
+
+战绩页总览指标区 SHALL 新增两个指标位:「β 市场敞口」与「α 年化超额」。β 显示两位小数(如 0.85 / −1.20,无百分号);α 沿 Delta 组件带符号百分比格式;两格 SHALL 各配一句口径副标题(β:接近 1 满仓跟随大盘,负值=反向敞口;α:剔除大盘影响后的独立判断收益)。后端 beta/jensen_alpha 为 null(样本不足)时两格 SHALL 显示 "—" 且不渲染副标题数字误导。
+
+#### Scenario: 正常渲染
+
+- **GIVEN** overview 返回 portfolio.beta = 0.85、portfolio.jensen_alpha = 0.031
+- **WHEN** 用户打开战绩页
+- **THEN** 「β 市场敞口」格显示 0.85,「α 年化超额」格显示 +3.10%
+- **AND** 两格副标题可见
+
+#### Scenario: 样本不足置空
+
+- **GIVEN** overview 返回 beta/jensen_alpha 为 null
+- **WHEN** 用户打开战绩页
+- **THEN** 两格显示 "—",页面其余指标不受影响
+
+#### Scenario: 负 β 展示
+
+- **GIVEN** overview 返回 beta = −1.20(净空结构)
+- **WHEN** 用户打开战绩页
+- **THEN** β 格显示 −1.20,不带百分号
+
+### Requirement: 观点日志标题与状态 tab
+
+战绩页观点表 SHALL 增加区块标题「观点日志」(副标题注明:每条 = 一次分析结论;当前持有 = 仍在 20 日判定窗口内)与三个状态 tab:**当前持有 / 已判定 / 全部**。缺省 SHALL 为「当前持有」(status=open,与总览卡观点总数同口径);tab 映射:当前持有 → status=open,已判定 → status=resolved(非 open 全集),全部 → 不过滤。切换 tab SHALL 重置分页并按服务端过滤重新拉取;当前 active tab SHALL 有视觉标识;表格行数变化时徽标(当前 tab 的 total)SHALL 随响应更新。
+
+#### Scenario: 缺省当前持有
+
+- **GIVEN** 库内有 57 条 open 与 51 条已判定观点
+- **WHEN** 用户进入战绩页
+- **THEN** 「当前持有」tab 为 active,请求携带 status=open,表格仅显示 open 记录,分页 total 为 57
+
+#### Scenario: 切换已判定
+
+- **WHEN** 用户点击「已判定」tab
+- **THEN** 请求携带 status=resolved,分页重置为第 1 页,total 更新为已判定子集大小
+
+#### Scenario: 全部审计视图
+
+- **WHEN** 用户点击「全部」tab
+- **THEN** 请求不携带 status 参数,表格显示全部状态记录
