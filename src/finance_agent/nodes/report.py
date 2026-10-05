@@ -339,6 +339,8 @@ def _build_focus_summary(state: dict, focus: str, focus_tags: list[str]) -> str:
         "引用财务数据时使用材料中的最新披露期次；当最新期次与历史趋势方向相反时"
         "（如年报口径连续下滑而最新中报回升），MUST 并列呈现两期状态（如「年报连续下滑，"
         "但最新中报已回升至 X%」），MUST NOT 只保留单边半句。"
+        "同一数值在年报/单季等多个期次并存时（如 Q1 单季毛利率恰等于上年年报毛利率），"
+        "引用 MUST 显式标注期次，MUST NOT 裸引数值。"
     )
     focus_line = f"用户关注点: {focus}\n" if focus else "（用户未指定关注点，请综合各维度要点）\n"
     prompt = (

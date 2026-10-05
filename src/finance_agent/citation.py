@@ -101,6 +101,9 @@ class CitationResult(BaseModel):
             # 值槽类型错填（eval-driven-contract-fixes 任务 2）：变化量入水平值槽，
             # claim 契约病——不算分析师幻觉、不触发修复（600276 A4 自然腿终裁）
             "claim_contract_error",
+            # 同值跨期次歧义未消解（add-period-key-citation-validation）：撞车值
+            # 正文无期次标注——消歧义务未履行，走定向重试由分析师补标注
+            "ambiguous_value_undisambiguated",
         ]
         | None
     ) = None
@@ -1024,6 +1027,128 @@ def _check_period(claim: Claim, state: dict) -> tuple[CitationResult | None, boo
     )
 
 
+# ── 同值跨期次歧义消解（add-period-key-citation-validation，issue #231）──
+#
+# 基准实例（拓荆 688072 第七轮评审终裁）：2024 年报毛利率 = 2026Q1 单季毛利率
+# = 41.69%，年报/单季两序列同值真实撞车，值存在性与期次声明校验全绿，
+# 期次归属随 LLM 采样漂移。Q1 单季 ≈ 上年年报是财报常见现象，必然复发。
+
+_PERIOD_MARKER_TOKEN = re.compile(r"(?:19|20)\d{2}\s*[Qq]\s*[1-4]|(?:19|20)\d{2}")
+
+_AMBIGUITY_INDEX_ROOTS = (
+    "profitability_metrics",
+    "solvency_metrics",
+    "efficiency_metrics",
+    "cashflow_metrics",
+)
+_AMBIGUITY_QUARTERLY_KEYS = (
+    "gross_margin",
+    "net_profit",
+    "revenue",
+    "yoy",
+    "qoq",
+    "revenue_yoy",
+)
+
+
+def _extract_period_markers(text: str) -> set[str]:
+    """interpretation 期次标记抽取：含 YYYY 的 token 归一为期次集合。
+
+    「单季」「年报」等无年份词归一失败即忽略——视为无标记（偏保守：撞车值
+    下「单季毛利率 41.69%」未消歧，必须补年份；唯一锚点不受影响）。
+    """
+    markers: set[str] = set()
+    for m in _PERIOD_MARKER_TOKEN.finditer(text or ""):
+        normalized = normalize_period(m.group(0))
+        if normalized:
+            markers.add(normalized)
+    return markers
+
+
+def _build_value_period_index(state: dict) -> dict[float, set[str]]:
+    """「数值→期次锚点集合」索引：四维指标段 + quarterly_trend 单季序列。
+
+    期次段经 normalize_period 归一；归一失败的锚点不入索引（不误伤优先）。
+    索引范围外的 state 段（dupont_tree/income_statement 等）不参与歧义判定。
+    """
+    index: dict[float, set[str]] = {}
+
+    def _add(val: object, period: object) -> None:
+        if isinstance(val, bool):
+            return
+        try:
+            f = float(val)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        normalized = normalize_period(str(period)) if period is not None else None
+        if normalized and f == f:  # NaN 不入索引
+            index.setdefault(f, set()).add(normalized)
+
+    for root in _AMBIGUITY_INDEX_ROOTS:
+        dim = state.get(root)
+        if not isinstance(dim, dict):
+            continue
+        for series in dim.values():
+            if isinstance(series, dict):
+                for period, val in series.items():
+                    _add(val, period)
+    qt = state.get("quarterly_trend")
+    if isinstance(qt, dict):
+        quarters = qt.get("quarters") or []
+        for key in _AMBIGUITY_QUARTERLY_KEYS:
+            seq = qt.get(key)
+            if not isinstance(seq, list):
+                continue
+            for i, val in enumerate(seq):
+                if i < len(quarters):
+                    _add(val, quarters[i])
+    return index
+
+
+def _check_period_disambiguation(claim: Claim, state: dict) -> CitationResult | None:
+    """期次标记认领 + 同值跨期次消歧义务。
+
+    两条独立拦截路径（v4 案例 dual-fire）：
+    (a) interpretation 期次标记集合不含 field_ref 溯源期次 → semantic_period_mismatch
+        （对所有单值 claim 生效，独立于值是否撞车）；
+    (b) 撞车值（索引锚点期次基数 ≥2）且 interpretation 无期次标记 →
+        ambiguous_value_undisambiguated。
+
+    比较型 claim（field_ref_b / claim_type=comparative）豁免：interpretation
+    必然含基期期次标记，两值两期次语义由 stated_value_b/field_ref_b 结构承担，
+    「只要求 field_ref 期次被认领」语义对其不可用。
+    """
+    if claim.field_ref_b is not None or claim.claim_type == "comparative":
+        return None
+    markers = _extract_period_markers(claim.interpretation or "")
+    ref_period = field_ref_period_segment(claim.field_ref) or _resolve_index_period(
+        claim.field_ref, state
+    )
+    ref_norm = normalize_period(ref_period) if ref_period else None
+
+    if markers and ref_norm is not None:
+        if not any(period_matches(m, ref_norm) for m in markers):
+            return CitationResult(status="FAIL", claim=claim, bucket="semantic_period_mismatch")
+        return None
+    if markers or ref_norm is None:
+        # 有标记但锚点期次解析不出 → 无法判定，降级不误伤；无锚点亦无消歧义务载体
+        return None
+    # 无标记路径：仅撞车值触发消歧义务
+    try:
+        claimed = float(claim.stated_value)
+    except (TypeError, ValueError):
+        return None
+    if claimed != claimed:  # NaN
+        return None
+    index = _build_value_period_index(state)
+    for val, anchors in index.items():
+        if value_close(claimed, val) and len(anchors) >= 2:
+            return CitationResult(
+                status="FAIL", claim=claim, bucket="ambiguous_value_undisambiguated"
+            )
+    return None
+
+
 # ── claim 内部一致性（harden-citation-semantic-coverage）──
 
 _NUMBER_PATTERN = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?\s*(?:%|％|亿|万|元)?")
@@ -1232,6 +1357,9 @@ def _verify_data_claim(
     period_fail, period_gap = _check_period(claim, state)
     if period_fail is not None:
         return period_fail
+    disambig_fail = _check_period_disambiguation(claim, state)
+    if disambig_fail is not None:
+        return disambig_fail
     # 缺口口径（D5）：任一申报字段缺失即计缺口，回声/方向提前 FAIL 不得丢失缺口标记
     gap = (
         term_gap
