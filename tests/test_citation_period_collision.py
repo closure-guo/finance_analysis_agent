@@ -124,6 +124,18 @@ def test_unparseable_marker_treated_as_no_marker() -> None:
     assert result.bucket == "ambiguous_value_undisambiguated"
 
 
+def test_ambiguous_bucket_not_repairable() -> None:
+    """歧义桶不进确定性单点修复白名单（repair 分流只捡 value_mismatch）。
+
+    锁定 citation_node.py 的分流常量：歧义桶 FAIL 走定向重试由分析师补标注，
+    不做 LLM 改写——正文期次标注是分析语义，程序侧无可确定性修复的目标值。
+    """
+    (result,) = verify_claims([_claim("毛利率41.69%，处于低位")], _collision_state())
+    assert result.status == "FAIL"
+    assert result.bucket == "ambiguous_value_undisambiguated"
+    assert result.bucket != "value_mismatch"
+
+
 def test_collision_state_absent_no_crash() -> None:
     """state 无序列段时消歧检查按缺口降级，不误伤不炸管线。"""
     (result,) = verify_claims([_claim("毛利率41.69%")], {"kline": None})

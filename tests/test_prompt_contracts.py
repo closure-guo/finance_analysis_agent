@@ -37,6 +37,15 @@ class TestAnalystAntiHallucination:
         assert "裸引" in text
 
 
+class TestSentimentCaliberDisclosure:
+    """板块口径显式化（update-report-data-disclosure，issue #233）。"""
+
+    def test_mandates_sector_caliber_annotation(self):
+        text = _load("sentiment_analyst.md")
+        assert "板块口径" in text
+        assert "混写" in text or "误读" in text
+
+
 DEBATERS = ["bull_debater", "bear_debater", "risk_debater"]
 
 

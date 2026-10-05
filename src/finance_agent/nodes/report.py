@@ -18,6 +18,7 @@ from typing import Any
 from finance_agent.charts import collect_chart_data, generate_all_charts
 from finance_agent.llm.gateway import complete_text
 from finance_agent.llm.output_guard import validate_deliverable_text
+from finance_agent.metric_vocab import render_date
 from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
 from finance_agent.nodes.fund_manager import final_integrity_notes
 
@@ -434,6 +435,14 @@ def generate_report(state: dict) -> dict:
         f"# {stock_name}({stock_code}) 投资分析报告",
         f"\n*报告日期: {date}" + (f" · 研究聚焦: {focus}*\n" if has_focus else "*\n"),
     ]
+
+    # 数据新鲜度披露（update-report-data-disclosure）：头部标注行情最后交易日，
+    # 读者可从成稿判断数据新鲜度（假期生成报告用的是节前数据）；kline 缺失时
+    # 省略而非回退到报告生成日期（不伪造新鲜度）
+    kline_df = state.get("kline")
+    if kline_df is not None and not kline_df.empty and "日期" in kline_df.columns:
+        cutoff = render_date(kline_df["日期"].iloc[-1])
+        sections[1] = sections[1].replace("*\n", f" · 行情数据截止: {cutoff}*\n", 1)
 
     seq = 0  # 章节序号计数器，统一管理编号，避免硬编码错位
 
