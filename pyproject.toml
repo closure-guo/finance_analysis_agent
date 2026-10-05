@@ -41,6 +41,7 @@ pythonpath = ["src"]
 asyncio_mode = "auto"
 markers = [
     "live: 真实 LLM 链路测试（需 DEEPSEEK_API_KEY，nightly 触发，不进 PR 门禁）",
+    "fault_regression: 故障注入回归集（add-fault-injection-regression-set，确定性零 token）",
 ]
 
 [tool.ruff]

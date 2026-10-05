@@ -1,0 +1,11 @@
+The user wants a 150-200 character (Chinese characters) research focus summary for 拓荆科技 (Piotech), synthesizing the analysis outputs. Key points to weave in:
+
+- Rating: 中性 (0.50 confidence), watch decision
+- 2026H1 revenue +49%, net profit +1324%
+- Annual gross margin declining: 47.11% (2023) -> 41.69% (2024) -> 34.95% (2025), but H1 2026 recovered to 41.0%
+
+Important constraint: cite financial data with latest disclosed period. Do not mention internal validation warnings.
+
+Draft:
+
+“综合裁决为中性（置信度0.50），交易决策维持watch观望。多空优势错位于时间维度……PE_ttm 85.

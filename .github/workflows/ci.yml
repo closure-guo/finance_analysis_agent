@@ -51,6 +51,12 @@ jobs:
       - name: Golden set gate (assertion-level, deterministic)
         run: uv run python -m evals.golden.gates
 
+      # 故障注入回归集（add-fault-injection-regression-set）：七轮评审故障样本
+      # （v5 推理泄露 / v2 报警外露 / 期次错位撞车）守卫拒绝断言，确定性零 token；
+      # prompt/模型/校验器变更后守卫被削弱即红
+      - name: Fault injection regression gate
+        run: uv run pytest tests/regression/fault_injection -m fault_regression -q
+
   e2e:
     runs-on: ubuntu-latest
     # 手动触发的完整 E2E（真后端+真前端+真 LLM），日常 E2E 门禁走 e2e-playwright.yml stub job

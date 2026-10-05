@@ -1,0 +1,9 @@
+Let me analyze the analyst outputs and synthesize a decision summary. I need to
+check the bull and bear arguments first, then weigh the evidence.
+
+The bull side cites revenue growth of 49% YoY with contract liabilities up 62%.
+The bear side points to the annual gross margin trend. I'll start with the
+most important points:
+
+- 综合置信度 0.55，维持中性判断
+- I will structure the summary around the valuation gap first
