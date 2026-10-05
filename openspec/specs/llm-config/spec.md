@@ -157,7 +157,7 @@ LLM 配置的注入 SHALL 不改变 Langfuse trace 的结构——trace 中仅 m
 
 ### Requirement: 模型自动发现
 
-系统 SHALL 提供模型自动发现功能，用户填写 base_url 后可拉取该端点支持的模型列表。模型发现请求 SHALL 由后端代理调用（非前端直连），规避 CORS 和密钥暴露问题。
+系统 SHALL 提供模型自动发现功能，用户填写 base_url 后可拉取该端点支持的模型列表。模型发现请求 SHALL 由后端代理调用（非前端直连），规避 CORS 和密钥暴露问题。用户从模型列表选择模型后自动拼接的前缀 SHALL 与后端 resolver 白名单一致：域名推导出的前缀不在白名单内时 MUST 回退 `openai/`（OpenAI 兼容端点语义），不得拼出后端必然拒绝的前缀。
 
 #### Scenario: 成功拉取模型列表
 
@@ -170,6 +170,11 @@ LLM 配置的注入 SHALL 不改变 Langfuse trace 的结构——trace 中仅 m
 
 - **WHEN** 用户从自动发现的模型下拉中选择 `deepseek-chat`（base_url 为 `https://api.deepseek.com/v1`）
 - **THEN** model 输入框 SHALL 自动填充为 `deepseek/deepseek-chat`（litellm 前缀格式）
+
+#### Scenario: 域名推导前缀不在白名单时回退 openai
+
+- **WHEN** 用户从自动发现的模型下拉中选择 `kimi-k2-0905-preview`（base_url 为 `https://api.kimi.ai/v1`，域名主体推导出的前缀 `kimi` 不在后端 resolver 白名单）
+- **THEN** model 输入框 SHALL 自动填充为 `openai/kimi-k2-0905-preview`（回退 OpenAI 兼容前缀，避免测试连接与解析必然失败）
 
 #### Scenario: base_url 为空时不回退环境变量（决策 A）
 
@@ -192,12 +197,12 @@ LLM 配置的注入 SHALL 不改变 Langfuse trace 的结构——trace 中仅 m
 
 ### Requirement: 连通性测试
 
-系统 SHALL 提供连通性测试功能，用户在保存配置前可验证 LLM 配置是否有效。测试请求 SHALL 由后端发送极简 LLM 请求验证，返回成功/失败结果及错误分类。
+系统 SHALL 提供连通性测试功能，用户在保存配置前可验证 LLM 配置是否有效。测试请求 SHALL 由后端发送探测 LLM 请求验证，返回成功/失败结果及错误分类。配置类错误（如模型名携带未知 provider 前缀）SHALL 返回结构化失败响应（`success=false` + `errorType` + 人话错误信息），MUST NOT 以未捕获异常 500 裸栈响应。
 
 #### Scenario: 测试成功
 
 - **WHEN** 用户填写了完整 LLM 配置并点击"测试连接"按钮
-- **THEN** 后端 SHALL 使用该配置发送一个极简 LLM 请求（`max_tokens=1`，prompt="Hi"）
+- **THEN** 后端 SHALL 使用该配置发送探测 LLM 请求
 - **AND** 若请求成功，前端 SHALL 展示成功状态（绿色）和响应延迟（毫秒）
 
 #### Scenario: 测试失败返回错误分类
@@ -215,6 +220,12 @@ LLM 配置的注入 SHALL 不改变 Langfuse trace 的结构——trace 中仅 m
 
 - **WHEN** 连通性测试返回 `error_type: "network"`
 - **THEN** 前端 SHALL 展示提示 "无法连接到 API 端点，请检查 Base URL"
+
+#### Scenario: 未知 provider 前缀返回结构化错误
+
+- **WHEN** 用户配置的模型名携带后端白名单外的 provider 前缀（如 `kimi/kimi-k2-0905-preview`）并点击"测试连接"
+- **THEN** 后端 SHALL 返回结构化失败响应：`success=false`、`errorType="model_prefix_invalid"`、错误信息含已知前缀列表与「OpenAI 兼容端点请使用 openai/<model>」指引
+- **AND** 响应 MUST NOT 为 HTTP 500 未捕获异常
 
 ### Requirement: 多配置管理（profiles）
 
@@ -357,3 +368,23 @@ LLM 配置的注入 SHALL 不改变 Langfuse trace 的结构——trace 中仅 m
 - **THEN** 激活 profile 仍为 P
 - **AND** 后续请求 SHALL 仍携带 profile P 的配置
 
+### Requirement: Kimi 族请求级 provider_options 白名单与 judge effort 配置
+
+resolver 请求级分支 SHALL 为 Kimi 模型族登记 provider_options 白名单 `REQUEST_OVERRIDABLE["kimi"] = {"reasoning_effort"}`，校验经 registry `KimiOptions` schema（`none/low/high/max`，extra=forbid）；白名单外的 key SHALL 显式报错。评估裁判 SHALL 支持环境变量 `JUDGE_REASONING_EFFORT`：非空时并入请求级 llm_config.provider_options 透传，未设置时 SHALL NOT 携带该键（跟随端点默认档）。
+
+#### Scenario: 请求级白名单校验
+- **GIVEN** llm_config.model 为 `openai/kimi-for-coding` 且 provider_options 为 `{"reasoning_effort": "none"}`
+- **THEN** resolve_profile SHALL 返回携带该 provider_options 的 profile
+
+#### Scenario: 白名单外 key 显式报错
+- **WHEN** kimi 模型请求级 provider_options 含 `{"thinking": "enabled"}`
+- **THEN** SHALL 抛 IncompleteLLMConfigError（键不在白名单）
+
+#### Scenario: judge effort 环境变量生效
+- **GIVEN** 环境变量 `JUDGE_REASONING_EFFORT=none`
+- **WHEN** judges 构建裁判请求
+- **THEN** llm_config.provider_options SHALL 为 `{"reasoning_effort": "none"}`
+
+#### Scenario: judge effort 未设置不带键
+- **GIVEN** 环境变量 `JUDGE_REASONING_EFFORT` 未设置
+- **THEN** judges 构建的 llm_config SHALL 不含 provider_options 键
