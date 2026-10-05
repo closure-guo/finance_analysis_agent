@@ -205,6 +205,21 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 - **THEN** SHALL 因无内部鉴权被拒绝
 - **AND** created_at SHALL 由服务端生成，不可由调用方指定
 
+### Requirement: 观点列表过滤
+
+`GET /api/v1/track-record/predictions` 的 `status` 参数 SHALL 支持组值 `resolved`:传 `status=resolved` 时返回全部非 open 状态(resolved_win/resolved_loss/resolved_neutral/avoidance/unresolvable 及后续新增的非 open 终态)的记录;其余取值 SHALL 保持精确匹配语义不变。分页 total SHALL 反映过滤后子集。
+(Previously: status 仅精确匹配单一状态值。)
+
+#### Scenario: resolved 组过滤
+
+- **WHEN** 请求 `?status=resolved`
+- **THEN** 响应仅含非 open 状态记录,total 为该子集大小
+
+#### Scenario: 精确匹配语义不变
+
+- **WHEN** 请求 `?status=open` 或 `?status=resolved_win`
+- **THEN** 行为与既有精确匹配一致
+
 ### Requirement: 战绩页面（总览 + 观点日志）
 
 系统 SHALL 在前端提供战绩页面：总览区（胜率、平均超额、样本量、as_of、**回避正确率（含样本数）、当前判定口径（caliber_horizon）、存量旧口径计数（legacy_settled）**）+ 观点日志列表。回避正确率 SHALL 与胜率同门槛（settled < 10 不展示，展示「样本积累中」而非 0 值）；口径与存量计数 SHALL 常驻展示（二者为口径披露，不受样本门槛限制）。页面 SHALL 固定展示风险提示「历史业绩不代表未来表现」，不可关闭；观点日志默认视图 SHALL 包含 loss 记录（不可隐藏）；进行中观点 SHALL 展示当前浮动收益并标注「未结算」；状态标签以颜色区分（命中=绿、未中=红、中性=灰、进行中=蓝、不可判定=灰斜杠、**回避=灰**——neutral 观点的回避终态 `status="avoidance"`，标签文本「回避」）。
