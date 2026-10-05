@@ -21,7 +21,7 @@
 | L1 前端  | React 18 + Vite | 自然语言输入 + SSE 流式渲染 + 报告展示 + 文件下载 + 会话管理      |
 | L2 Agent | LangGraph + ReAct Harness | 5 层架构 + 多 Agent 辩论 + Send 并行派发 + 三模式编排     |
 | L3 数据  | pandas + SQLite | AKShare 拉取 + 指标计算 + K 线/宏观/新闻 + 报表持久化 + 行情缓存  |
-| L4 LLM   | LLM Provider Gateway | ProfileResolver 唯一解析入口 + 能力探测门禁 + LiteLLM 收口适配 + fallback 链执行（typed error 按链自动切换 profile，每跳 trace 可审计；默认 opencode zen 网关 deepseek-v4-flash） |
+| L4 LLM   | LLM Provider Gateway | ProfileResolver 唯一解析入口 + 能力探测门禁（两级判定）+ LiteLLM 收口适配 + fallback 链执行（typed error 按链自动切换 profile，每跳 trace 可审计）+ 纯文本输出合同守卫（思考独白泄露/截断/空正文不进交付物）；默认 opencode zen 网关 deepseek-v4-flash |
 | 可观测性 | Langfuse        | LLM 调用链路追踪 + Prompt 版本管理 + 引用校验评分                 |
 
 > L2 Agent 5 层：4 分析师并行 -> Bull/Bear 辩论 -> Trader -> Risk Management 辩论 -> Fund Manager（详见 [ADR-0011](docs/adr/0011-five-layer-architecture.md)）
@@ -41,18 +41,20 @@
 
 - **三模式设计**：深度分析（5 层完整管线 -> 10 章报告）/ 快速搜索（Tavily Web 搜索，精简回答）/ 追问（基于已有报告的上下文问答）；标的不明确时 Agent 反问澄清（ADR-0017）
 - **自然语言输入**：支持股票名称（"宁德时代"）、代码（"300750"）或自然语言指令（"分析茅台"），AKShare 模糊匹配自动解析
-- **SSE 流式推送**：分析进度实时推送，前端渐进渲染——分层管线时间轴（节点状态/耗时/ETA 预估）、思考过程摘要、工具调用与搜索横幅
+- **SSE 流式推送**：分析进度实时推送，前端渐进渲染——分层管线时间轴（节点状态/耗时/ETA 预估）、思考过程摘要、工具调用与搜索横幅；事件投递韧性（终态事件优先送达 + SQLite 瞬断自动重试 + 背压可观测 + 看门狗核对图完成状态，防「图已完成却判超时」）
 - **会话管理**：侧边栏新建/切换/搜索/重命名/删除会话，后端 SQLite 持久化；刷新或切换会话后流式断点续传
 - **引用校验与展示**：Claim 6 类分类法 + computational 公式重算 + 术语/期次一致性校验，检测 LLM 幻觉（见 [citation.py](src/finance_agent/citation.py)）；前端行内引用上标 + hover 预览卡（校验状态三态配色）
-- **报告导出与下载中心**：Markdown 渲染 + ECharts 交互图表 + Word/PPT/PDF 导出；`/downloads` 独立页集中管理导出文件（类型筛选/搜索/增量加载）
-- **决策结果跟踪**：交易决策自动落库（价位申报必填——Trader 方案缺失 entry/stop/target 数值时校验打回重报），工作日收盘后日批结算（止损/目标/超期规则），APScheduler 进程内调度
-- **LLM 设置面板**：多 profile 管理 + 模型能力探测门禁（tool_call/json_output/stream 不满足时禁用对应模式入口并提示原因）
+- **报告导出与下载中心**：Markdown 渲染 + ECharts 交互图表 + Word/PPT/PDF 导出（md 图片 base64 内嵌自包含）；`/downloads` 独立页集中管理导出文件（类型筛选/搜索/增量加载）
+- **决策结果跟踪**：交易决策自动落库（价位申报必填——Trader 方案缺失 entry/stop/target 数值时校验打回重报）+ 决策滞回（证据均衡带 + 方向滞回，吸收 LLM 采样翻转），工作日收盘后日批结算（止损/目标/超期规则），APScheduler 进程内调度
+- **前向战绩仪表盘**：净值曲线 + 跑赢指数对比（五大指数区间收益，基期只向过去回退防前视）+ 组合 β/α 拆解（OLS β + Jensen α，重叠对 <20 置 null 拒产噪声读数）+ 观点日志状态 tab（当前持有/已判定/全部）；夏普比率无风险利率取中债 1Y 逐日真实数据源
+- **LLM 设置面板**：多 profile 管理 + 模型能力探测门禁（tool_call/json_output/stream 不满足时禁用对应模式入口并提示原因；探测两级判定根治工具调用假阴性）+ kimi 族 reasoning_effort 透传与采样温度抑制契约
+- **输出合同守卫**：纯文本交付物零契约防线——思考独白泄露/截断/空正文不进报告（incident 036 治理），泄露内容自动回退重生成
 - **深色模式与效率操作**：浅色/深色/跟随系统三态主题，Cmd/Ctrl+K 命令面板（会话搜索 + 快捷动作），全局快捷键（新建会话/折叠侧边栏/聚焦输入）
 - **Langfuse 可观测性**：LLM 调用链路追踪、Prompt 版本管理、引用校验评分上报
 
 ## 质量保障
 
-- 后端 266 个 pytest 测试文件（3,183 个用例，含 `tests/llm_contracts/` provider 合同套件）、前端 74 个 Vitest 测试文件（574 个用例）、29 个 Playwright E2E spec / 64 个用例（stub 套件为 CI 门禁，`@live` 标记用例不进门禁、真模型验证显式运行，nightly 防漂移）
+- 后端 310 个 pytest 测试文件（4,132 个用例，含 `tests/llm_contracts/` provider 合同套件）、前端 76 个 Vitest 测试文件（636 个用例）、36 个 Playwright E2E spec / 79 个用例（stub 套件 62 例为 CI 门禁，`@live` 标记 17 例不进门禁、真模型验证显式运行，nightly 防漂移）
 - `evals/` 评估框架（详见下节「评估体系」）：judge 评分与人工校准 / 版本对比 / 消融实验 / claim 验证基准 / golden set / 决策回放显著性检验
 
 ## 评估体系
@@ -210,8 +212,9 @@ src/finance_agent/
 ├── llm/                  # LLM Provider Gateway（防腐层）
 │   ├── resolver.py       # ProfileResolver：配置唯一解析入口 (请求级→preset→环境变量)
 │   ├── router.py         # PolicyRouter：按用途能力过滤 + fallback 链
-│   ├── probes.py         # 模型能力探测 (tool_call/json_output/stream 等)
+│   ├── probes.py         # 模型能力探测 (tool_call/json_output/stream 等，两级判定)
 │   ├── contracts.py      # 结构化输出合同 (extract → validate → repair)
+│   ├── output_guard.py   # 纯文本交付物输出合同守卫 (泄露独白/截断/空正文拦截)
 │   ├── registry.py       # provider 静态能力表
 │   └── adapters/litellm_adapter.py  # 唯一允许 import litellm 的位置
 ├── nodes/                # 图节点
@@ -256,7 +259,8 @@ src/finance_agent/
 │   ├── akshare_client.py # AKShare API 封装
 │   └── cache.py          # SQLite 持久化 + 缓存
 ├── events/               # 关键事件获取 (L1 预设库 → L2 Web 搜索 → L3 兜底)
-├── outcome/              # 决策结果跟踪 (decision_log 落库 + 日批结算 + APScheduler 调度)
+├── outcome/              # 决策结果跟踪 (决策落库 + 日批结算 + APScheduler 调度 + cohort 前向纸面批 + ops 运维接口)
+│   └── track_record/     # 战绩仪表盘 (净值/跑赢指数对比/组合 β/α/观点日志/夏普 rf 中债1Y)
 ├── agui/                 # AG-UI 协议通道 (quick 模式对话，双轨隔离)
 ├── export/               # 报告导出 (docx/pptx/pdf/md 四格式，service.py 统一收口)
 └── prompts/              # LLM prompt（Langfuse 托管，本地 .md 兜底，14 个模板）
@@ -284,7 +288,7 @@ frontend/src/
 - [x] **P8 Langfuse 可观测性** - LLM 追踪 + Prompt 管理 + 评分上报 (ADR-0015/0016)
 - [x] **P9 意图澄清对话流** - 标的不明确时 Agent 反问澄清 (ADR-0017)
 
-> P9 之后的演进以 OpenSpec delta 为单位管理（`openspec/changes/archive/` 已归档 108 个变更）。近期主题：LLM Provider Gateway 防腐层、Kimi 风格前端 UX（命令面板/下载中心/深色模式/报告侧栏）、引用校验语义覆盖强化（术语/期次一致性 + 分桶定向重试）、决策结果跟踪与价位申报必填化、评估体系 judge 人工校准与 rubric 判例迭代。
+> P9 之后的演进以 OpenSpec delta 为单位管理（`openspec/changes/archive/` 已归档 151 个变更）。近期主题：LLM Provider Gateway 防腐层、Kimi 风格前端 UX（命令面板/下载中心/深色模式/报告侧栏）、引用校验语义覆盖强化（术语/期次一致性 + 分桶定向重试）、决策结果跟踪与价位申报必填化、决策滞回与前向战绩仪表盘（跑赢指数对比/组合 β/α/观点日志状态 tab）、LLM 治理续章（能力探测两级判定/kimi reasoning_effort 温度契约/纯文本输出合同守卫）、事件投递韧性五联、评估体系 judge 人工校准与 rubric 判例迭代。
 
 ## 文档
 
@@ -296,9 +300,9 @@ frontend/src/
 - [专题设计](docs/design/) - LLM Provider Gateway、E2E 方案、评估体系等专项设计档案
 - [评估体系](evals/) - 评估框架（judge/对比/消融/claim 基准），基线说明见 [docs/evals/](docs/evals/)
 - [项目工作流](docs/project-workflow.md) - OpenSpec + Superpowers 双框架实施指南
-- [事故记录](docs/incidents/) - 系统性问题与解决方案（001-027，28 份）
+- [事故记录](docs/incidents/) - 系统性问题与解决方案（001-037，37 个编号 / 41 份文档）
 - [AGENTS.md](AGENTS.md) - Agent 工作指南（任务路由、契约红线、测试约束）
-- [OpenSpec](openspec/specs/) - 系统行为规范（唯一真相来源，53 个 capability）
+- [OpenSpec](openspec/specs/) - 系统行为规范（唯一真相来源，60 个 capability）
 
 ## 思路来源
 
@@ -307,10 +311,15 @@ frontend/src/
 | 来源 | 用途 | 说明 |
 |------|------|------|
 | [TradingAgents (arXiv:2412.20138)](https://arxiv.org/abs/2412.20138) | 5 层架构 | 4 分析师并行 -> Bull/Bear 辩论 -> Trader -> Risk Management 辩论 -> Fund Manager 的整体流程参考 |
+| [MarketSenseAI 2.0 (arXiv:2502.00415)](https://arxiv.org/abs/2502.00415) | 多源信号→综合 agent | 同团队单 LLM 版→agent 化的自然升级路径；组合级前瞻验证见其续作 [Signal or Noise (arXiv:2604.17327)](https://arxiv.org/abs/2604.17327)（4 agent 单独均不跑赢市场、优势集体涌现，+25.2% 超额 / 蒙特卡洛 99.7 分位） |
+| [Should we be going MAD? (arXiv:2311.17371)](https://arxiv.org/abs/2311.17371) | 辩论层选型的反面校准 | 算力对齐下标准多 agent 辩论常被单 agent 自一致性采样追平——本项目坚持对辩论层做两代消融实测的动机 |
+| [Why Do Multi-Agent LLM Systems Fail? (arXiv:2503.13657)](https://arxiv.org/abs/2503.13657) | 多 agent 失效模式意识 | MAST 分类学：协调/规范失效主导——本项目结构化通信与图状态通道契约测试（incident 027/035 治理）的动机 |
 | [FinGround (arXiv:2604.23588)](https://arxiv.org/abs/2604.23588) | 引用校验 | Claim 6 类分类法 + computational 公式重算机制（见 [citation.py](src/finance_agent/citation.py)） |
 | [LangChain qa_sources](https://python.langchain.com/docs/how_to/qa_sources/) | 引用结构 | 结构化 Citation 对象设计参考 |
 
 > 数据层（AKShare）、指标计算（四维度 + 杜邦 + 技术指标 + 风控指标）和报告结构为自主设计，详见 [CONTEXT.md](CONTEXT.md) 和 [ADR](docs/adr/)。
+>
+> **架构选型的证据现状**（完整调研见 [docs/evals/2026-10-05-多Agent对单Agent选型调研.md](docs/evals/2026-10-05-多Agent对单Agent选型调研.md)）：学界对「多 agent 是否优于单 agent」并无定论——值得注意的是 TradingAgents 原文并未设单 LLM 基线也未做消融（已核正文），其证明的是多 agent 优于规则策略。证据最强的两个子命题是**信息源分解**（多窗口并行深挖，本项目四分析师）与**专职否决层**（本项目风控辩论+基金经理，自有消融 v2 结论级盲评 19:1 支持）；对抗辩论层本身的 judge 维度增量在本仓消融 v1 中未获统计支持（有效 n=3，如实报告）——这正是本项目不照搬架构、而是持续用两代消融实测其核心假设的原因。
 
 ## License
 
