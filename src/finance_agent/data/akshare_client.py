@@ -165,6 +165,38 @@ def _add_prefix(code: str) -> str:
     return f"sz{code}"
 
 
+def _normalize_col_name(name: object) -> str:
+    """列名归一化：去除全部空白变体（半角/全角空格、不可见空白）。"""
+    return re.sub(r"\s+", "", str(name))
+
+
+# 归母口径列的列名候选（归一化后精确匹配）。覆盖新浪新旧模板与
+# 银行/制造业措辞差异；列位映射见 _LEGACY_POSITION_MAP（仅作回退）。
+_PARENT_COL_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "归母净利润": (
+        "归属于母公司所有者的净利润",
+        "归属于母公司的净利润",
+        "归属于母公司股东的净利润",
+        "归属于母公司股东的利润",
+    ),
+    "归母所有者权益": (
+        "归属于母公司股东权益合计",
+        "归属于母公司股东的权益",
+        "归属于母公司股东权益",
+        "归属于母公司所有者权益合计",
+        "归属于母公司所有者的权益",
+        "归属于母公司股东的所有者权益",
+        "归属于母公司所有者权益",
+    ),
+}
+# 遗留列位回退：基于新浪接口旧版稳定列序（制造业模板），
+# 仅当列名归一化无法命中时使用（编码损坏场景）。
+_LEGACY_POSITION_MAP: dict[int, str] = {
+    50: "归母净利润",
+    137: "归母所有者权益",
+}
+
+
 class AKShareClient:
     def __init__(self) -> None:
         # 实际生效的数据源留痕（供 cohort universe 登记文件落 `sources` 审计）：
@@ -200,28 +232,57 @@ class AKShareClient:
     def _rename_parent_cols(self, df: pd.DataFrame) -> pd.DataFrame:
         """重命名归母口径列，解决终端编码不一致问题。
 
-         AKShare 返回的中文列名在部分环境中出现编码差异，导致
-         row.get('归属于母公司股东的净利润') 返回 None。
-        通过列位置定位并统一重命名为标准列名。
+        解析策略（add-chart-data-integrity R1）：列名候选归一化匹配优先，
+        列位映射降级为列名损坏时的回退。新浪报表模板随行业不同列序不同——
+        银行利润表「归属于母公司的净利润」在列 44、资产负债表
+        「归属于母公司股东的权益」在列 141；制造业模板列位 50/137 恰为
+        真实列。按列位硬编码会把银行模板的「盈余公积转入」「未分配利润」
+        错当归母口径（601818 ROE 27.98% 事故根因），故列位仅作最后回退。
+
+        列名归一化：去除全部空白变体（半角/全角空格、不可见空白）后
+        与候选列名精确匹配，兼容线上出现过的空白/编码差异形态。
         """
         if df.empty:
             return df
         cols = list(df.columns)
+        # 归一化名 → 实际列名（重复时取首个）
+        norm_to_actual: dict[str, str] = {}
+        for c in cols:
+            norm_to_actual.setdefault(_normalize_col_name(c), str(c))
 
-        # 利润表：索引 50 = 归属于母公司股东的净利润, 索引 137 = 归属于母公司股东权益合计
-        # 资产负债表：索引 137 = 归属于母公司股东权益合计
-        # 这些索引基于 AKShare stock_financial_report_sina 的稳定列序
-        _rename_map = {
-            50: "归母净利润",
-            137: "归母所有者权益",
-        }
         rename_dict: dict[str, str] = {}
-        for idx, new_name in _rename_map.items():
-            if idx < len(cols):
-                old_name = cols[idx]
-                # 仅当该列尚未被重命名时才处理
-                if old_name != new_name and new_name not in cols:
-                    rename_dict[old_name] = new_name
+        resolved: dict[str, bool] = dict.fromkeys(_PARENT_COL_CANDIDATES, False)
+        for target, candidates in _PARENT_COL_CANDIDATES.items():
+            actual = norm_to_actual.get(_normalize_col_name(target))
+            if actual is not None:
+                if actual != target:
+                    # 标准列名自身的空白/编码变体 → 归一化为规范名
+                    rename_dict[actual] = target
+                resolved[target] = True
+                continue
+            for cand in candidates:
+                matched = norm_to_actual.get(_normalize_col_name(cand))
+                if matched is not None:
+                    rename_dict[matched] = target
+                    resolved[target] = True
+                    break
+
+        if not all(resolved.values()):
+            # 列名归一化未全部命中（编码损坏等）→ 遗留列位回退
+            # （基于新浪接口旧版稳定列序，制造业模板验证可用）
+            for idx, new_name in _LEGACY_POSITION_MAP.items():
+                if resolved.get(new_name):
+                    continue
+                if idx < len(cols):
+                    old_name = cols[idx]
+                    if (
+                        old_name != new_name
+                        and old_name not in rename_dict
+                        and new_name not in cols
+                        and _normalize_col_name(new_name) not in norm_to_actual
+                    ):
+                        rename_dict[old_name] = new_name
+
         if rename_dict:
             df = df.rename(columns=rename_dict)
         return df

@@ -19,7 +19,12 @@ fixture 数据手算验证（2024）：
 """
 
 from math import isclose
+from pathlib import Path
 
+import pandas as pd
+import pytest
+
+from finance_agent.data.akshare_client import AKShareClient
 from finance_agent.metrics.profitability import calc_profitability
 
 
@@ -197,3 +202,105 @@ class TestCalcProfitability:
         assert isclose(result["ROE"]["2025"], 200 / 640 * 100, rel_tol=1e-2)
         # 2024: 有 indicators → 用加权值 44.16
         assert isclose(result["ROE"]["2024"], 44.16, rel_tol=1e-2)
+
+
+class TestMissingInputSemantics:
+    """add-chart-data-integrity R2：派生比率缺失输入不产出伪值。
+
+    背景同 tests/data/test_parent_col_resolution.py——银行模板列解析
+    修复后，银行报表（无营业成本列、归母权益为真实列）走本模块时：
+    毛利率必须为 None 而非 100% 伪值；ROE 回退分母必须是真实归母权益。
+    """
+
+    @pytest.fixture
+    def bank_frames(self):
+        """返回 (改名后 income, 改名后 balance, 原始 income, 原始 balance)。
+
+        期望值从原始 frame 的真实归母列自算，保证断言值与被测值不同源。
+        """
+        fixtures = Path(__file__).resolve().parents[1] / "fixtures"
+        raw_income = pd.read_csv(fixtures / "sina_income_601818_bank.csv")
+        raw_balance = pd.read_csv(fixtures / "sina_balance_601818_bank.csv")
+        client = AKShareClient()
+        income = client._rename_parent_cols(raw_income.copy())
+        balance = client._rename_parent_cols(raw_balance.copy())
+        return income, balance, raw_income, raw_balance
+
+    def test_bank_report_gross_margin_all_none(self, bank_frames):
+        """银行利润表无营业成本列 → 毛利率各年 None，MUST NOT 出现 100.0。"""
+        income, balance, _raw_income, _raw_balance = bank_frames
+        result = calc_profitability(balance, income, None)
+        assert all(v is None for v in result["毛利率"].values())
+        assert 100.0 not in {v for v in result["毛利率"].values() if v is not None}
+
+    def test_bank_report_roe_uses_real_parent_equity(self, bank_frames):
+        """ROE 回退分母 = 真实归母权益（非「未分配利润」错列）。
+
+        期望值直接从 fixture 原始列自算（自洽，不硬编码财务数字）：
+        最旧年（序列末位）无上年权益 → 用当年归母权益。
+        """
+        income, balance, raw_income, raw_balance = bank_frames
+        result = calc_profitability(balance, income, None)
+        oldest = -1
+        ni = float(raw_income.iloc[oldest]["归属于母公司的净利润"])
+        equity = float(raw_balance.iloc[oldest]["归属于母公司股东的权益"])
+        expected = ni / equity * 100
+        year = str(income.iloc[oldest]["报告日"])[:4]
+        assert isclose(result["ROE"][year], expected, rel_tol=1e-6)
+        # 合理性护栏：银行 ROE 在个位数量级，MUST NOT 复现 28% 伪值
+        assert result["ROE"][year] < 20.0
+
+    def test_zero_cost_with_positive_revenue_is_missing_margin(self):
+        """营业成本为 0 而收入 > 0：视为缺失，毛利率 None。"""
+        bs = pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231"],
+                "资产总计": [1000.0, 900.0],
+                "所有者权益(或股东权益)合计": [600.0, 550.0],
+                "短期借款": [0.0] * 2,
+                "长期借款": [0.0] * 2,
+                "应付债券": [0.0] * 2,
+                "一年内到期的非流动负债": [0.0] * 2,
+            }
+        )
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231"],
+                "营业收入": [1000.0, 900.0],
+                "营业成本": [0.0, 0.0],
+                "净利润": [170.0, 153.0],
+                "利润总额": [200.0, 180.0],
+                "所得税费用": [30.0, 27.0],
+                "利息费用": [0.0, 0.0],
+            }
+        )
+        result = calc_profitability(bs, is_, None)
+        assert result["毛利率"]["2024"] is None
+        assert result["毛利率"]["2023"] is None
+
+    def test_roe_none_when_equity_input_missing(self):
+        """归母权益与所有者权益合计均缺失 → ROE 回退输出 None，不产出伪值。"""
+        bs = pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231"],
+                "资产总计": [1000.0, 900.0],
+                "短期借款": [0.0] * 2,
+                "长期借款": [0.0] * 2,
+                "应付债券": [0.0] * 2,
+                "一年内到期的非流动负债": [0.0] * 2,
+            }
+        )
+        is_ = pd.DataFrame(
+            {
+                "报告日": ["20241231", "20231231"],
+                "营业收入": [1000.0, 900.0],
+                "营业成本": [600.0, 550.0],
+                "归母净利润": [168.0, 151.0],
+                "利润总额": [200.0, 180.0],
+                "所得税费用": [30.0, 27.0],
+                "利息费用": [0.0, 0.0],
+            }
+        )
+        result = calc_profitability(bs, is_, None)
+        assert result["ROE"]["2024"] is None
+        assert result["ROE"]["2023"] is None

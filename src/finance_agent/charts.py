@@ -75,6 +75,48 @@ def _nan_series(values: list) -> list[float]:
     return [float("nan") if v is None else v for v in values]
 
 
+# 元 → 亿元（图表层呈现单位换算；数据层/quote 层「统一元」契约不变）
+_YI = 1e8
+
+_MISSING_MARK = "缺"
+
+
+def _ascending(values: list) -> list:
+    """年度序列升序呈现辅助。
+
+    数据契约「index 0 = 最新」（降序）供指标计算消费，MUST NOT 改变；
+    本函数仅用于图表呈现层的时间轴反转（add-chart-data-integrity R3）。
+    """
+    return list(reversed(values))
+
+
+def _yi_series(values: list) -> list[float]:
+    """元金额序列 → 亿元；缺失（None/NaN）→ nan（断柱/断线，禁填 0）。"""
+    out: list[float] = []
+    for v in values:
+        f = _safe_float(v)
+        out.append(f / _YI if f is not None else float("nan"))
+    return out
+
+
+def _all_missing(values: list) -> bool:
+    return all(v is None for v in values)
+
+
+def _placeholder_text(ax, text: str) -> None:
+    """整序列缺失时在坐标系内渲染占位说明（对齐市场份额占位图语义）。"""
+    ax.text(
+        0.5,
+        0.5,
+        text,
+        ha="center",
+        va="center",
+        fontsize=10,
+        color="#999",
+        transform=ax.transAxes,
+    )
+
+
 def _year_from_date(date_str) -> str:
     return str(date_str)[:4]
 
@@ -215,13 +257,14 @@ def _save_fig(fig, output_dir: str, name: str) -> str:
 
 
 def _chart_revenue_profit(data: dict, out: str) -> str | None:
-    """P0: 营业收入与归母净利润（双轴柱状图）。"""
+    """P0: 营业收入与归母净利润（双轴柱状图，亿元）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
-    revenue = [a.get("revenue") or 0 for a in annual]
-    profit = [a.get("net_profit") or 0 for a in annual]
+    revenue = _yi_series([a.get("revenue") for a in annual])
+    profit = _yi_series([a.get("net_profit") for a in annual])
 
     fig, ax1 = plt.subplots(figsize=_FIGSIZE_WIDE)
     x = np.arange(len(years))
@@ -247,13 +290,13 @@ def _chart_revenue_profit(data: dict, out: str) -> str | None:
 
 
 def _chart_growth(data: dict, out: str) -> str | None:
-    """P0: 同比增速（折线图）。"""
+    """P0: 同比增速（折线图，时间升序）。"""
     growth = data.get("growth", {})
-    years = growth.get("years", [])
+    years = _ascending(growth.get("years", []))
     if len(years) < 2:
         return None
-    rev_g = growth.get("revenue_growth", [])
-    profit_g = growth.get("profit_growth", [])
+    rev_g = _ascending(growth.get("revenue_growth", []))
+    profit_g = _ascending(growth.get("profit_growth", []))
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
     ax.plot(years, rev_g, marker="o", color=_C_BLUE, linewidth=2, label="营收增速")
@@ -290,13 +333,17 @@ def _chart_growth(data: dict, out: str) -> str | None:
 
 
 def _chart_margin(data: dict, out: str) -> str | None:
-    """P0: 毛利率与净利率（平滑折线图）。"""
+    """P0: 毛利率与净利率（平滑折线图，时间升序）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
     gm = [a.get("gross_margin") for a in annual]
     nm = [a.get("net_margin") for a in annual]
+    # 两条序列全缺 → 跳过（对齐 contract_liab/debt_ratio 全缺语义）
+    if _all_missing(gm) and _all_missing(nm):
+        return None
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
     ax.plot(years, gm, marker="o", color=_C_GREEN, linewidth=2.5, label="毛利率")
@@ -331,10 +378,11 @@ def _chart_margin(data: dict, out: str) -> str | None:
 
 
 def _chart_roe(data: dict, out: str) -> str | None:
-    """P0: ROE 变化（面积折线图 + 15% 优秀线）。"""
+    """P0: ROE 变化（面积折线图 + 15% 优秀线，时间升序）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
     roe = [a.get("roe") for a in annual]
 
@@ -362,20 +410,25 @@ def _chart_roe(data: dict, out: str) -> str | None:
 
 
 def _chart_cashflow(data: dict, out: str) -> str | None:
-    """P0: 经营现金流净额（柱状图）。"""
+    """P0: 经营现金流净额（柱状图，亿元、时间升序）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
-    ocf = [a.get("ocf") or 0 for a in annual]
+    ocf = _yi_series([a.get("ocf") for a in annual])
+    if all(np.isnan(v) for v in ocf):
+        return None
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
-    colors = [_C_BLUE if v >= 0 else _C_RED for v in ocf]
+    colors = [_C_BLUE if (np.isfinite(v) and v >= 0) else _C_RED for v in ocf]
     ax.bar(years, ocf, color=colors, alpha=0.85, edgecolor="white", linewidth=0.5)
     ax.set_ylabel("经营现金流净额（亿元）", fontsize=10)
     ax.set_xlabel("年份", fontsize=10)
     _style_ax(ax, "经营现金流净额")
     for i, v in enumerate(ocf):
+        if not np.isfinite(v):
+            continue
         ax.annotate(
             f"{v:.1f}",
             (i, v),
@@ -430,16 +483,17 @@ def _chart_stock_price(data: dict, out: str) -> str | None:
 
 
 def _chart_growth_vs_price(data: dict, out: str) -> str | None:
-    """P1: 财务增速 vs 股价涨幅对比。"""
+    """P1: 财务增速 vs 股价涨幅对比（时间升序）。"""
     annual = data.get("annual", [])
     daily = data.get("price", {}).get("daily", [])
     if len(annual) < 3 or len(daily) < 10:
         return None
 
-    # 计算各年股价涨跌幅
+    # 计算各年股价涨跌幅（时间升序）
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
-    rev_g = data.get("growth", {}).get("revenue_growth", [])
-    profit_g = data.get("growth", {}).get("profit_growth", [])
+    rev_g = _ascending(data.get("growth", {}).get("revenue_growth", []))
+    profit_g = _ascending(data.get("growth", {}).get("profit_growth", []))
 
     # 计算年度股价涨跌幅
     price_changes: list[float | None] = []
@@ -454,7 +508,7 @@ def _chart_growth_vs_price(data: dict, out: str) -> str | None:
             price_changes.append(None)
 
     # 对齐：growth 的 years 比 annual 少一年
-    growth_years = data.get("growth", {}).get("years", [])
+    growth_years = _ascending(data.get("growth", {}).get("years", []))
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
     x = np.arange(len(growth_years))
@@ -480,18 +534,25 @@ def _chart_growth_vs_price(data: dict, out: str) -> str | None:
     ax.axhline(y=0, color="#999", linewidth=0.8, linestyle="--")
     _style_ax(ax, "财务增速 vs 股价涨幅")
     ax.legend(fontsize=9)
+    if all(v is None for v in price_vals):
+        # 整序列缺失 → 占位说明，不得静默只画一半冒充完整对比
+        _placeholder_text(ax, "股价涨幅数据不足（K线窗口未覆盖完整年度）")
     fig.tight_layout()
     return _save_fig(fig, out, "chart_growth_vs_price")
 
 
 def _chart_assets(data: dict, out: str) -> str | None:
-    """P1: 总资产与归母权益（柱状图）。"""
+    """P1: 总资产与归母权益（柱状图，亿元、时间升序）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
-    assets = [a.get("total_assets") or 0 for a in annual]
-    equity = [a.get("equity") or 0 for a in annual]
+    assets = _yi_series([a.get("total_assets") for a in annual])
+    equity = _yi_series([a.get("equity") for a in annual])
+    # 两条序列全缺（如券商资产负债表未取到）→ 跳过，MUST NOT 画 0 高柱空白图
+    if all(np.isnan(v) for v in assets) and all(np.isnan(v) for v in equity):
+        return None
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
     x = np.arange(len(years))
@@ -508,15 +569,16 @@ def _chart_assets(data: dict, out: str) -> str | None:
 
 
 def _chart_contract_liab(data: dict, out: str) -> str | None:
-    """P1: 合同负债（柱状图）。"""
+    """P1: 合同负债（柱状图，亿元、时间升序）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
     cl = [a.get("contract_liab") for a in annual]
-    if all(v is None for v in cl):
+    if _all_missing(cl):
         return None
-    cl = [v or 0 for v in cl]
+    cl = _yi_series(cl)
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
     ax.bar(years, cl, color=_C_PINK, alpha=0.85, edgecolor="white", linewidth=0.5)
@@ -524,6 +586,8 @@ def _chart_contract_liab(data: dict, out: str) -> str | None:
     ax.set_xlabel("年份", fontsize=10)
     _style_ax(ax, "合同负债")
     for i, v in enumerate(cl):
+        if not np.isfinite(v):
+            continue
         ax.annotate(
             f"{v:.1f}",
             (i, v),
@@ -538,18 +602,20 @@ def _chart_contract_liab(data: dict, out: str) -> str | None:
 
 
 def _chart_debt_ratio(data: dict, out: str) -> str | None:
-    """P1: 资产负债率趋势。"""
+    """P1: 资产负债率趋势（时间升序）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
     dr = [a.get("debt_ratio") for a in annual]
-    if all(v is None for v in dr):
+    if _all_missing(dr):
         return None
+    dr_nan = _nan_series(dr)
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
-    ax.plot(years, dr, marker="o", color=_C_RED, linewidth=2.5)
-    ax.fill_between(range(len(years)), dr, alpha=0.1, color=_C_RED)
+    ax.plot(years, dr_nan, marker="o", color=_C_RED, linewidth=2.5)
+    ax.fill_between(range(len(years)), dr_nan, alpha=0.1, color=_C_RED)
     ax.set_ylabel("资产负债率（%）", fontsize=10)
     ax.set_xlabel("年份", fontsize=10)
     _style_ax(ax, "资产负债率趋势")
@@ -569,7 +635,7 @@ def _chart_debt_ratio(data: dict, out: str) -> str | None:
 
 
 def _chart_heatmap(data: dict, out: str) -> str | None:
-    """P2: 财报发布窗口期股价变化热力图。"""
+    """P2: 财报发布窗口期股价变化热力图（行序时间升序，缺失格标注「缺」）。"""
     daily = data.get("price", {}).get("daily", [])
     earnings_dates = data.get("price", {}).get("earnings_dates", [])
     if len(earnings_dates) < 2 or len(daily) < 30:
@@ -578,13 +644,13 @@ def _chart_heatmap(data: dict, out: str) -> str | None:
     # 计算每个财报日前后 N 天的收益率
     windows = [-5, -1, 0, 1, 5, 10, 30]
     years_labels = []
-    heatmap_data = []
+    heatmap_data: list[list[float | None]] = []
 
     for ed in earnings_dates:
         ed_dt = pd.to_datetime(ed)
         year_label = ed_dt.strftime("%Y年报")
         years_labels.append(year_label)
-        row = []
+        row: list[float | None] = []
         for offset in windows:
             target = ed_dt + pd.Timedelta(days=offset)
             # 找最近交易日
@@ -608,17 +674,24 @@ def _chart_heatmap(data: dict, out: str) -> str | None:
                     ret = (curr_close - prev_close) / prev_close * 100
                     row.append(round(ret, 2))
                 else:
-                    row.append(0.0)
+                    row.append(None)
             else:
-                row.append(0.0)
+                # 窗口不在 K 线覆盖范围内 → 缺失，MUST NOT 填 0 冒充无波动
+                row.append(None)
         heatmap_data.append(row)
 
     if not heatmap_data:
         return None
 
-    arr = np.array(heatmap_data)
+    # 行序时间升序（最旧在顶部）
+    years_labels = _ascending(years_labels)
+    heatmap_data = _ascending(heatmap_data)
+
+    arr = np.array([[np.nan if v is None else v for v in row] for row in heatmap_data], dtype=float)
+    masked = np.ma.masked_invalid(arr)
+    cmap = plt.cm.RdYlGn.with_extremes(bad="#e5e7eb")  # 缺失格灰底
     fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
-    im = ax.imshow(arr, cmap="RdYlGn", aspect="auto", vmin=-8, vmax=8)
+    im = ax.imshow(masked, cmap=cmap, aspect="auto", vmin=-8, vmax=8)
     ax.set_xticks(range(len(windows)))
     ax.set_xticklabels([f"T{w:+d}" if w != 0 else "T0" for w in windows])
     ax.set_yticks(range(len(years_labels)))
@@ -626,81 +699,111 @@ def _chart_heatmap(data: dict, out: str) -> str | None:
     ax.set_title(
         "年报发布窗口期股价变化（%）", fontsize=13, fontweight="bold", color="#333", pad=12
     )
-    # 标注数值
+    # 标注数值；缺失格标注「缺」，MUST NOT 渲染为 0.0
     for i in range(len(years_labels)):
         for j in range(len(windows)):
-            val = arr[i, j]
-            color = "white" if abs(val) > 5 else "#333"
-            ax.text(j, i, f"{val:.1f}", ha="center", va="center", fontsize=8, color=color)
+            val = masked[i, j]
+            if np.ma.is_masked(masked[i, j]) or (isinstance(val, float) and np.isnan(val)):
+                ax.text(j, i, _MISSING_MARK, ha="center", va="center", fontsize=8, color="#999")
+                continue
+            color = "white" if abs(float(val)) > 5 else "#333"
+            ax.text(j, i, f"{float(val):.1f}", ha="center", va="center", fontsize=8, color=color)
     fig.colorbar(im, ax=ax, shrink=0.8, label="收益率（%）")
     fig.tight_layout()
     return _save_fig(fig, out, "chart_heatmap")
 
 
 def _chart_dashboard(data: dict, out: str) -> str | None:
-    """P2: 综合仪表盘（多子图拼图）。"""
+    """P2: 综合仪表盘（多子图拼图，时间升序、金额亿元、全缺子图占位）。"""
     annual = data.get("annual", [])
     if len(annual) < 2:
         return None
 
+    annual = _ascending(annual)
     years = [a["year"] for a in annual]
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     fig.suptitle("财务指标综合仪表盘", fontsize=16, fontweight="bold", color="#333", y=0.98)
 
-    # 1. 营收 & 利润
+    # 1. 营收 & 净利润（亿元）
     ax = axes[0, 0]
-    ax.bar(years, [a.get("revenue") or 0 for a in annual], color=_C_BLUE, alpha=0.7, label="营收")
     ax.bar(
-        years, [a.get("net_profit") or 0 for a in annual], color=_C_RED, alpha=0.7, label="净利润"
+        years,
+        _yi_series([a.get("revenue") for a in annual]),
+        color=_C_BLUE,
+        alpha=0.7,
+        label="营收",
     )
+    ax.bar(
+        years,
+        _yi_series([a.get("net_profit") for a in annual]),
+        color=_C_RED,
+        alpha=0.7,
+        label="净利润",
+    )
+    ax.set_ylabel("亿元", fontsize=8)
     _style_ax(ax, "营收 & 净利润")
     ax.legend(fontsize=7)
 
     # 2. 毛利率 & 净利率
     ax = axes[0, 1]
-    ax.plot(
-        years,
-        [a.get("gross_margin") or 0 for a in annual],
-        marker="o",
-        color=_C_GREEN,
-        label="毛利率",
-    )
-    ax.plot(
-        years,
-        [a.get("net_margin") or 0 for a in annual],
-        marker="s",
-        color=_C_PURPLE,
-        label="净利率",
-    )
+    gm = [a.get("gross_margin") for a in annual]
+    nm = [a.get("net_margin") for a in annual]
+    if _all_missing(gm) and _all_missing(nm):
+        _placeholder_text(ax, "利润率数据缺失")
+        ax.set_xticks(range(len(years)))
+        ax.set_xticklabels(years, fontsize=7)
+    else:
+        ax.plot(years, _nan_series(gm), marker="o", color=_C_GREEN, label="毛利率")
+        ax.plot(years, _nan_series(nm), marker="s", color=_C_PURPLE, label="净利率")
+        ax.legend(fontsize=7)
     _style_ax(ax, "利润率")
-    ax.legend(fontsize=7)
 
     # 3. ROE
     ax = axes[0, 2]
-    ax.plot(years, [a.get("roe") or 0 for a in annual], marker="o", color=_C_ORANGE)
-    ax.axhline(y=15, color="#999", linewidth=0.8, linestyle="--")
+    roe = [a.get("roe") for a in annual]
+    if _all_missing(roe):
+        _placeholder_text(ax, "ROE 数据缺失")
+        ax.set_xticks(range(len(years)))
+        ax.set_xticklabels(years, fontsize=7)
+    else:
+        ax.plot(years, _nan_series(roe), marker="o", color=_C_ORANGE)
+        ax.axhline(y=15, color="#999", linewidth=0.8, linestyle="--")
     _style_ax(ax, "ROE")
 
-    # 4. 现金流
+    # 4. 现金流（亿元）
     ax = axes[1, 0]
-    ax.bar(years, [a.get("ocf") or 0 for a in annual], color=_C_CYAN, alpha=0.85)
+    ocf = _yi_series([a.get("ocf") for a in annual])
+    if all(np.isnan(v) for v in ocf):
+        _placeholder_text(ax, "经营现金流数据缺失")
+        ax.set_xticks(range(len(years)))
+        ax.set_xticklabels(years, fontsize=7)
+    else:
+        ax.bar(years, ocf, color=_C_CYAN, alpha=0.85)
+        ax.set_ylabel("亿元", fontsize=8)
     _style_ax(ax, "经营现金流")
 
     # 5. 资产负债率
     ax = axes[1, 1]
-    dr = [a.get("debt_ratio") or 0 for a in annual]
-    ax.plot(years, dr, marker="o", color=_C_RED)
-    ax.fill_between(range(len(years)), dr, alpha=0.1, color=_C_RED)
+    dr = [a.get("debt_ratio") for a in annual]
+    if _all_missing(dr):
+        # 券商等报表缺失时 MUST NOT 渲染 0.00% 与正文矛盾（#238）
+        _placeholder_text(ax, "资产负债率数据缺失")
+        ax.set_xticks(range(len(years)))
+        ax.set_xticklabels(years, fontsize=7)
+    else:
+        dr_nan = _nan_series(dr)
+        ax.plot(years, dr_nan, marker="o", color=_C_RED)
+        ax.fill_between(range(len(years)), dr_nan, alpha=0.1, color=_C_RED)
     _style_ax(ax, "资产负债率")
 
     # 6. 增速
     ax = axes[1, 2]
     growth = data.get("growth", {})
-    gy = growth.get("years", [])
+    gy = _ascending(growth.get("years", []))
     if gy:
         ax.bar(
             np.arange(len(gy)) - 0.15,
-            _nan_series(growth.get("revenue_growth", [])),
+            _nan_series(_ascending(growth.get("revenue_growth", []))),
             0.3,
             color=_C_BLUE,
             alpha=0.7,
@@ -708,14 +811,14 @@ def _chart_dashboard(data: dict, out: str) -> str | None:
         )
         ax.bar(
             np.arange(len(gy)) + 0.15,
-            _nan_series(growth.get("profit_growth", [])),
+            _nan_series(_ascending(growth.get("profit_growth", []))),
             0.3,
             color=_C_RED,
             alpha=0.7,
             label="利润增速",
         )
         ax.set_xticks(range(len(gy)))
-        ax.set_xticklabels(gy)
+        ax.set_xticklabels(gy, fontsize=7)
         ax.axhline(y=0, color="#999", linewidth=0.5, linestyle="--")
         ax.legend(fontsize=7)
     _style_ax(ax, "同比增速")
