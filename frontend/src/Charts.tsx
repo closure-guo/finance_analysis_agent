@@ -38,9 +38,17 @@ export function getChartTheme() {
 type ChartTheme = ReturnType<typeof getChartTheme>
 
 // ── Base chart wrapper ──
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+function ChartCard({
+  title,
+  children,
+  testId,
+}: {
+  title: string
+  children: React.ReactNode
+  testId?: string
+}) {
   return (
-    <div className="border rounded-xl p-4" style={{ background: 'var(--card)', borderColor: 'var(--border-neutral-l1)' }}>
+    <div className="border rounded-xl p-4" style={{ background: 'var(--card)', borderColor: 'var(--border-neutral-l1)' }} data-testid={testId}>
       <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-default)' }}>{title}</h4>
       {children}
     </div>
@@ -200,43 +208,112 @@ export function CashflowChart({ data }: { data: ChartData }) {
   )
 }
 
-// ── P1: Stock price ──
+// ── P1: Stock price（update-price-chart-kline：K 线主图+MA 均线+决策价位线+成交量副图；
+// 历史 chartData 仅含收盘价时降级为收盘折线）──
 export function StockPriceChart({ data }: { data: ChartData }) {
   const daily = data.price.daily
   if (daily.length < 10) return null
   const dates = daily.map(d => d.date)
-  const closes = daily.map(d => d.close)
-  const earningsDates = data.price.earnings_dates
-
+  const hasOHLC = daily[0].open != null && daily[0].high != null && daily[0].low != null
   const theme = getChartTheme()
-  const markLines = earningsDates.map(ed => ({
+
+  if (!hasOHLC) {
+    const closes = daily.map(d => d.close)
+    const markLines = data.price.earnings_dates.map(ed => ({
+      xAxis: ed,
+      label: { show: false },
+      lineStyle: { color: theme.coral, type: 'dashed', opacity: 0.5 },
+    }))
+    const option = {
+      ...baseOption(theme),
+      xAxis: { type: 'category', data: dates, axisLabel: { color: theme.axisLabelColor, fontSize: 9, rotate: 30 }, axisLine: { lineStyle: { color: theme.splitLine } } },
+      yAxis: { type: 'value', name: '元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 15, bottom: 0 }],
+      series: [{ type: 'line', data: closes, itemStyle: { color: theme.brand }, areaStyle: { opacity: 0.08 }, symbol: 'none', markLine: { data: markLines, symbol: 'none' } }],
+    }
+    return (
+      <ChartCard title="股价趋势（红色虚线为年报发布日）" testId="chart-stock-price">
+        <ReactECharts option={option} style={{ height: '300px' }} />
+      </ChartCard>
+    )
+  }
+
+  // K 线分支：ECharts 蜡烛数据序 [open, close, low, high]
+  const ohlc = daily.map(d => [d.open, d.close, d.low, d.high])
+  const volumes = daily.map(d => ({
+    value: d.volume ?? 0,
+    itemStyle: { color: (d.close ?? 0) >= (d.open ?? 0) ? theme.coral : theme.mint, opacity: 0.7 },
+  }))
+  const markLineData: unknown[] = data.price.earnings_dates.map(ed => ({
     xAxis: ed,
     label: { show: false },
     lineStyle: { color: theme.coral, type: 'dashed', opacity: 0.5 },
   }))
+  const levels = data.price.decision_levels
+  if (levels?.entry_price != null) {
+    markLineData.push({ yAxis: levels.entry_price, label: { formatter: '入场', position: 'insideEndTop', color: theme.sky }, lineStyle: { color: theme.sky, type: 'dashed' } })
+  }
+  if (levels?.stop_loss != null) {
+    markLineData.push({ yAxis: levels.stop_loss, label: { formatter: '止损', position: 'insideEndBottom', color: theme.mint }, lineStyle: { color: theme.mint, type: 'dashed' } })
+  }
+  if (levels?.target_price != null) {
+    markLineData.push({ yAxis: levels.target_price, label: { formatter: '目标', position: 'insideEndTop', color: theme.coral }, lineStyle: { color: theme.coral, type: 'dashed' } })
+  }
+  const maLine = (key: 'ma5' | 'ma20' | 'ma60', color: string) => ({
+    name: key.toUpperCase(),
+    type: 'line',
+    xAxisIndex: 0,
+    yAxisIndex: 0,
+    data: data.price.ma?.[key] ?? [],
+    symbol: 'none',
+    lineStyle: { width: 1, color },
+    itemStyle: { color },
+  })
 
   const option = {
     ...baseOption(theme),
-    xAxis: {
-      type: 'category',
-      data: dates,
-      axisLabel: { color: theme.axisLabelColor, fontSize: 9, rotate: 30 },
-      axisLine: { lineStyle: { color: theme.splitLine } },
+    legend: { data: ['MA5', 'MA20', 'MA60'], bottom: 20, textStyle: { color: theme.textColor, fontSize: 10 } },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: theme.tooltipBg,
+      borderColor: theme.tooltipBorder,
+      textStyle: { color: theme.tooltipTextColor },
+      axisPointer: { type: 'cross' },
     },
-    yAxis: { type: 'value', name: '元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 15, bottom: 0 }],
-    series: [{
-      type: 'line', data: closes,
-      itemStyle: { color: theme.brand },
-      areaStyle: { opacity: 0.08 },
-      symbol: 'none',
-      markLine: { data: markLines, symbol: 'none' },
-    }],
+    grid: [
+      { left: '8%', right: '8%', top: '6%', height: '58%' },
+      { left: '8%', right: '8%', top: '72%', height: '14%' },
+    ],
+    xAxis: [
+      { type: 'category', data: dates, gridIndex: 0, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.splitLine } } },
+      { type: 'category', data: dates, gridIndex: 1, axisLabel: { color: theme.axisLabelColor, fontSize: 9, rotate: 30 }, axisLine: { lineStyle: { color: theme.splitLine } } },
+    ],
+    yAxis: [
+      { type: 'value', scale: true, gridIndex: 0, name: '元', axisLabel: { color: theme.axisLabelColor }, splitLine: { lineStyle: { color: theme.splitLine } } },
+      { type: 'value', gridIndex: 1, axisLabel: { show: false }, splitLine: { show: false } },
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1] },
+      { type: 'slider', xAxisIndex: [0, 1], height: 15, bottom: 0 },
+    ],
+    series: [
+      {
+        name: 'K线',
+        type: 'candlestick',
+        data: ohlc,
+        itemStyle: { color: theme.coral, color0: theme.mint, borderColor: theme.coral, borderColor0: theme.mint },
+        markLine: { data: markLineData, symbol: 'none' },
+      },
+      maLine('ma5', theme.amber),
+      maLine('ma20', theme.violet),
+      maLine('ma60', theme.teal),
+      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes },
+    ],
   }
 
   return (
-    <ChartCard title="股价趋势（红色虚线为年报发布日）">
-      <ReactECharts option={option} style={{ height: '300px' }} />
+    <ChartCard title="股价 K 线（MA5/20/60；虚线为入场/止损/目标价）" testId="chart-stock-price">
+      <ReactECharts option={option} style={{ height: '380px' }} />
     </ChartCard>
   )
 }

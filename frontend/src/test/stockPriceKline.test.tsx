@@ -1,0 +1,108 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render } from '@testing-library/react'
+import { StockPriceChart } from '../Charts'
+import type { ChartData } from '../types'
+
+// update-price-chart-kline：股价图 K 线双分支契约。
+// OHLC 在场 → candlestick（数据序 [open,close,low,high]）+ 成交量副图 + MA 叠加
+// + 决策价位 markLine（yAxis 坐标）；仅收盘价（历史会话）→ 收盘折线降级，不报错。
+
+const captured: unknown[] = []
+vi.mock('echarts-for-react', () => ({
+  default: ({ option }: { option: unknown }) => {
+    captured.push(option)
+    return null
+  },
+}))
+
+type DailyEntry = ChartData['price']['daily'][number]
+
+function makeDaily(n: number, withOHLC: boolean): DailyEntry[] {
+  return Array.from({ length: n }, (_, i) => {
+    const close = 10 + i * 0.1
+    const entry: DailyEntry = {
+      date: `2026-01-${String(i + 1).padStart(2, '0')}`,
+      close,
+    }
+    if (withOHLC) {
+      entry.open = close - 0.05
+      entry.high = close + 0.2
+      entry.low = close - 0.2
+      entry.volume = 1000 + i
+    }
+    return entry
+  })
+}
+
+function baseData(withOHLC: boolean): ChartData {
+  return {
+    stock_code: '600519',
+    stock_name: '贵州茅台',
+    annual: [],
+    growth: { years: [], revenue_growth: [], profit_growth: [] },
+    price: {
+      daily: makeDaily(12, withOHLC),
+      earnings_dates: ['2026-01-03'],
+      ma: withOHLC
+        ? { ma5: Array.from({ length: 12 }, (_, i) => (i >= 4 ? 10.1 : null)), ma20: [], ma60: [] }
+        : undefined,
+      decision_levels: withOHLC
+        ? { entry_price: 11.2, stop_loss: 9.9, target_price: 12.5 }
+        : undefined,
+    },
+    kpi: {},
+    market_share: null,
+  } as ChartData
+}
+
+function seriesOf(opt: any): any[] {
+  return Array.isArray(opt?.series) ? opt.series : [opt?.series]
+}
+
+describe('StockPriceChart K 线分支', () => {
+  beforeEach(() => {
+    captured.length = 0
+  })
+
+  it('OHLC 在场渲染 candlestick + 成交量副图 + MA 叠加 + 决策价位 markLine', () => {
+    render(<StockPriceChart data={baseData(true)} />)
+    const opt: any = captured[captured.length - 1]
+    const candle = seriesOf(opt).find((s) => s?.type === 'candlestick')
+    expect(candle).toBeDefined()
+    // ECharts 蜡烛数据序 [open, close, low, high]
+    expect(candle.data[0]).toEqual([9.95, 10, 9.8, 10.2])
+    expect(seriesOf(opt).some((s) => s?.name === '成交量' && s?.type === 'bar')).toBe(true)
+    expect(seriesOf(opt).filter((s) => typeof s?.name === 'string' && s.name.startsWith('MA')).length).toBe(3)
+    const mlItems: any[] = candle.markLine.data
+    expect(mlItems.filter((i) => 'xAxis' in i).length).toBe(1) // 财报日
+    expect(mlItems.filter((i) => i?.yAxis === 11.2).length).toBe(1) // 入场
+    expect(mlItems.filter((i) => i?.yAxis === 9.9).length).toBe(1) // 止损
+    expect(mlItems.filter((i) => i?.yAxis === 12.5).length).toBe(1) // 目标
+  })
+
+  it('仅收盘价（历史会话）降级为收盘折线，无 candlestick', () => {
+    render(<StockPriceChart data={baseData(false)} />)
+    const opt: any = captured[captured.length - 1]
+    expect(seriesOf(opt).some((s) => s?.type === 'candlestick')).toBe(false)
+    expect(seriesOf(opt)[0]?.type).toBe('line')
+  })
+
+  it('OHLC 半缺（open 缺失）按降级处理', () => {
+    const d = baseData(true)
+    ;(d.price.daily as any[]).forEach((e) => delete e.open)
+    render(<StockPriceChart data={d} />)
+    const opt: any = captured[captured.length - 1]
+    expect(seriesOf(opt).some((s) => s?.type === 'candlestick')).toBe(false)
+  })
+
+  it('决策价位半缺只画在场价位', () => {
+    const d = baseData(true)
+    d.price.decision_levels = { entry_price: 11.2 }
+    render(<StockPriceChart data={d} />)
+    const opt: any = captured[captured.length - 1]
+    const candle = seriesOf(opt).find((s) => s?.type === 'candlestick')
+    const yItems: any[] = candle.markLine.data.filter((i: any) => 'yAxis' in i)
+    expect(yItems.length).toBe(1)
+    expect(yItems[0].yAxis).toBe(11.2)
+  })
+})
