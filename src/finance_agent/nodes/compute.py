@@ -292,7 +292,9 @@ def _derive_pe_ttm(
         # NaN 同样不得外泄（审查 F1）
         return None, "TTM 归母净利润非正或缺失，PE 无意义"
     if ttm <= 0:
-        return None, f"TTM 归母净利润({ttm})非正，PE 无意义"
+        # 内插数值格式化（add-output-lint R2）：原始 float 尾巴（如
+        # -13.060000000000002，2026-10-05 南航实例）MUST NOT 进交付文案
+        return None, f"TTM 归母净利润({ttm:.2f})非正，PE 无意义"
     return round(market_cap_yi / ttm, 2), None
 
 

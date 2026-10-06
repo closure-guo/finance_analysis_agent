@@ -181,6 +181,52 @@ def _sanitize_claims(data: dict, agent_name: str = "", round_no: int = 0) -> dic
 
 
 def _parse_analyst_report(response: str, agent_name: str, round_no: int = 0) -> AnalystReport:
+    """解析 LLM 响应为 AnalystReport，装配后执行批注剥离（add-output-lint R1）。"""
+    report = _parse_analyst_report_raw(response, agent_name, round_no)
+    return _strip_editor_notes(report)
+
+
+# 括号内以「需修正」收尾的自我修正批注：内容无嵌套括号、≤48 字符；
+# 「无/不/必」否定 lookbehind 排除「无需修正/不必修正/不需修正」合法语义。
+_EDITOR_NOTE_RE = re.compile(r"（[^（）]{0,48}(?<!无)(?<!不)(?<!必)需修正）")
+
+
+def _strip_editor_note_text(text: str) -> tuple[str, int]:
+    """剥离单段文本中的自我修正批注，返回 (新文本, 命中数)。"""
+    if not text or "需修正）" not in text:
+        return text, 0
+    return _EDITOR_NOTE_RE.subn("", text)
+
+
+def _strip_editor_notes(report: AnalystReport) -> AnalystReport:
+    """剥离四个交付字段中的自我修正批注（add-output-lint R1）。
+
+    LLM 偶发把内部工作笔记（如「（低于MA20约1.9%需修正）」，2026-10-05
+    深南电路实例）写进交付字段——过程性内容 MUST NOT 进入终稿。仅命中
+    括号收尾形态；「无需/不必修正」与未括号包裹的辩论用语不受影响
+    （正则 lookbehind + 无括号不命中）。claims 不剥离（引用校验契约另治）。
+    命中数经 trace metadata 可观测。
+    """
+    hits = 0
+    report.summary, n = _strip_editor_note_text(report.summary)
+    hits += n
+    report.plain_conclusion, n = _strip_editor_note_text(report.plain_conclusion)
+    hits += n
+    stripped_findings = []
+    for finding in report.key_findings:
+        cleaned, n = _strip_editor_note_text(finding)
+        hits += n
+        stripped_findings.append(cleaned)
+    report.key_findings = stripped_findings
+    report.markdown, n = _strip_editor_note_text(report.markdown)
+    hits += n
+    if hits:
+        logger.info("分析师 %s 剥离自我修正批注 %d 处", report.agent_name, hits)
+        update_current_span(metadata={"editor_notes_stripped": hits})
+    return report
+
+
+def _parse_analyst_report_raw(response: str, agent_name: str, round_no: int = 0) -> AnalystReport:
     """解析 LLM 响应为 AnalystReport，解析失败时降级为原始文本报告。
 
     降级保障单个分析师解析失败不拖垮整条管线，但会产出 claims=[]，
