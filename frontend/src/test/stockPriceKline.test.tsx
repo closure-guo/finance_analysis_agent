@@ -106,3 +106,49 @@ describe('StockPriceChart K 线分支', () => {
     expect(yItems[0].yAxis).toBe(11.2)
   })
 })
+
+describe('K 线 tooltip formatter（开高低收/涨跌幅/成交量/MA）', () => {
+  beforeEach(() => {
+    captured.length = 0
+  })
+
+  // 构造 axis 触发的 params：candlestick 项 + 3 个 MA 项 + 成交量项（data 为 { value } 对象）。
+  // idx=5 → 2026-01-06：open 10.45 / close 10.5 / low 10.3 / high 10.7 / volume 1005。
+  function buildParams(idx: number, candleData?: (number | null)[]): unknown[] {
+    const d = makeDaily(12, true)[idx]
+    return [
+      { seriesName: 'K线', seriesType: 'candlestick', axisValue: d.date, data: candleData ?? [d.open, d.close, d.low, d.high] },
+      { seriesName: 'MA5', seriesType: 'line', axisValue: d.date, data: 10.1 },
+      { seriesName: 'MA20', seriesType: 'line', axisValue: d.date, data: null },
+      { seriesName: 'MA60', seriesType: 'line', axisValue: d.date, data: null },
+      { seriesName: '成交量', seriesType: 'bar', axisValue: d.date, data: { value: d.volume, itemStyle: {} } },
+    ]
+  }
+
+  function formatterOf(): (p: unknown) => string {
+    render(<StockPriceChart data={baseData(true)} />)
+    const opt: any = captured[captured.length - 1]
+    expect(typeof opt.tooltip.formatter).toBe('function')
+    return opt.tooltip.formatter
+  }
+
+  it('呈现开/高/低/收、涨跌幅、成交量与 MA 值（MA 缺失显示 --）', () => {
+    const fmt = formatterOf()
+    const out = fmt(buildParams(5))
+    expect(out).toContain('开 10.45')
+    expect(out).toContain('高 10.70')
+    expect(out).toContain('低 10.30')
+    expect(out).toContain('收 10.50')
+    expect(out).toContain('+0.5%') // (10.5-10.45)/10.45 ≈ +0.478% → 一位小数
+    expect(out).toContain('成交量 1005')
+    expect(out).toContain('MA5 10.10') // ma5[5] = 10.1（组件闭包按日期下标取值）
+    expect(out).toContain('MA20 --') // ma20 序列为空 → '--'
+    expect(out).toContain('MA60 --')
+  })
+
+  it('open 为 0 或 null 时涨跌幅显示 --', () => {
+    const fmt = formatterOf()
+    expect(fmt(buildParams(5, [0, 10.5, 10.3, 10.7]))).toContain('涨跌幅 --')
+    expect(fmt(buildParams(5, [null, 10.5, 10.3, 10.7]))).toContain('涨跌幅 --')
+  })
+})

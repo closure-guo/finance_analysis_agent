@@ -270,6 +270,44 @@ export function StockPriceChart({ data }: { data: ChartData }) {
     itemStyle: { color },
   })
 
+  // K 线 tooltip formatter：兑现 spec「悬浮 tooltip（开高低收、涨跌幅、成交量）」契约。
+  // params 为 axis 触发的数组，按 seriesType/seriesName 取数：
+  // - candlestick 项 data 序 [open, close, low, high]（开盘 index 0、收盘 index 1）
+  // - 成交量项 data 为 { value } 对象或裸 number
+  // - MA 值不逐项取：序列已按 daily 逐日对齐，按 axisValue（日期字符串）在 dates 中的
+  //   下标从 data.price.ma 闭包取；null/缺失显示 '--'
+  // 涨跌幅 = (收-开)/开，一位小数百分比；开为 0/null 时无意义显示 '--'；涨红（coral）跌绿（mint）。
+  const klineFormatter = (params: unknown): string => {
+    const items: any[] = Array.isArray(params) ? params : [params]
+    const axisValue = String(items[0]?.axisValue ?? '')
+    const idx = dates.indexOf(axisValue)
+    const candleItem = items.find((p) => p?.seriesType === 'candlestick' || p?.seriesName === 'K线')
+    const candle = Array.isArray(candleItem?.data) ? (candleItem.data as (number | null)[]) : []
+    const [open, close, low, high] = candle
+    const fmt2 = (v: number | null | undefined) => (v == null ? '--' : v.toFixed(2))
+    let chgHtml = '--'
+    if (open != null && open !== 0 && close != null) {
+      const pct = ((close - open) / open) * 100
+      const color = pct >= 0 ? theme.coral : theme.mint
+      chgHtml = `<span style="color:${color}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`
+    }
+    const volRaw = items.find((p) => p?.seriesName === '成交量')?.data
+    const vol = volRaw != null && typeof volRaw === 'object' ? (volRaw as { value?: number | null }).value : volRaw
+    const maText = (key: 'ma5' | 'ma20' | 'ma60') => {
+      const arr = data.price.ma?.[key]
+      const v = idx >= 0 && arr ? arr[idx] : null
+      return v == null ? '--' : v.toFixed(2)
+    }
+    return [
+      `<div style="font-weight:600">${axisValue}</div>`,
+      `<div>开 ${fmt2(open)}　高 ${fmt2(high)}</div>`,
+      `<div>低 ${fmt2(low)}　收 ${fmt2(close)}</div>`,
+      `<div>涨跌幅 ${chgHtml}</div>`,
+      `<div>成交量 ${vol == null ? '--' : String(vol)}</div>`,
+      `<div>MA5 ${maText('ma5')}　MA20 ${maText('ma20')}　MA60 ${maText('ma60')}</div>`,
+    ].join('')
+  }
+
   const option = {
     ...baseOption(theme),
     legend: { data: ['MA5', 'MA20', 'MA60'], bottom: 20, textStyle: { color: theme.textColor, fontSize: 10 } },
@@ -279,6 +317,7 @@ export function StockPriceChart({ data }: { data: ChartData }) {
       borderColor: theme.tooltipBorder,
       textStyle: { color: theme.tooltipTextColor },
       axisPointer: { type: 'cross' },
+      formatter: klineFormatter,
     },
     grid: [
       { left: '8%', right: '8%', top: '6%', height: '58%' },
