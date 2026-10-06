@@ -117,6 +117,37 @@ def _placeholder_text(ax, text: str) -> None:
     )
 
 
+_DECISION_LEVEL_KEYS = ("entry_price", "stop_loss", "target_price")
+
+
+def _moving_average(values: list[float | None], window: int) -> list[float | None]:
+    """简单移动平均：窗口不足或窗口内含 None 的位置为 None。"""
+    out: list[float | None] = [None] * len(values)
+    for i in range(window - 1, len(values)):
+        seg = [v for v in values[i - window + 1 : i + 1] if v is not None]
+        if len(seg) < window:
+            continue
+        out[i] = sum(seg) / window
+    return out
+
+
+def _extract_decision_levels(state: dict) -> dict[str, float]:
+    """提取交易决策价位（dict/属性双形态，与 report._format_trade_decision 同源逻辑）。
+
+    缺失/非法价位的字段不携带；决策整体无价位时返回空 dict（调用侧不挂键）。
+    """
+    decision = state.get("final_trade_decision") or state.get("trader_plan")
+    if decision is None:
+        return {}
+    levels: dict[str, float] = {}
+    for key in _DECISION_LEVEL_KEYS:
+        raw = decision.get(key) if isinstance(decision, dict) else getattr(decision, key, None)
+        val = _safe_float(raw)
+        if val is not None:
+            levels[key] = val
+    return levels
+
+
 def _year_from_date(date_str) -> str:
     return str(date_str)[:4]
 
@@ -128,7 +159,7 @@ def collect_chart_data(state: dict) -> dict:
         "stock_name": state.get("stock_name", ""),
         "annual": [],
         "growth": {"years": [], "revenue_growth": [], "profit_growth": []},
-        "price": {"daily": [], "earnings_dates": []},
+        "price": {"daily": [], "earnings_dates": [], "ma": {"ma5": [], "ma20": [], "ma60": []}},
         "kpi": {},
         "market_share": None,
     }
@@ -195,7 +226,7 @@ def collect_chart_data(state: dict) -> dict:
         "pb": _safe_float(quote.get("PB")),
     }
 
-    # ── 股价日线 ──
+    # ── 股价日线（update-price-chart-kline：补齐 OHLCV + MA 均线）──
     kline = state.get("kline")
     if kline is not None and not kline.empty:
         # 取最近 250 个交易日（约一年）
@@ -204,13 +235,32 @@ def collect_chart_data(state: dict) -> dict:
             date_str = str(row.get("日期", row.get("date", "")))[:10]
             close = _safe_float(row.get("收盘", row.get("close")))
             if date_str and close is not None:
-                chart_data["price"]["daily"].append({"date": date_str, "close": close})
+                chart_data["price"]["daily"].append(
+                    {
+                        "date": date_str,
+                        "close": close,
+                        "open": _safe_float(row.get("开盘", row.get("open"))),
+                        "high": _safe_float(row.get("最高", row.get("high"))),
+                        "low": _safe_float(row.get("最低", row.get("low"))),
+                        "volume": _safe_float(row.get("成交量", row.get("volume"))),
+                    }
+                )
 
-        # 52周高低
+        # ── MA 均线：全量 kline 计算后切尾对齐（窗口前段 None），口径同技术指标 ──
         if chart_data["price"]["daily"]:
+            closes_all: list[float | None] = [_safe_float(v) for v in kline["收盘"]]
+            offset = len(closes_all) - len(chart_data["price"]["daily"])
+            for w in (5, 20, 60):
+                chart_data["price"]["ma"][f"ma{w}"] = _moving_average(closes_all, w)[offset:]
+
             closes = [d["close"] for d in chart_data["price"]["daily"]]
             chart_data["kpi"]["52w_high"] = max(closes)
             chart_data["kpi"]["52w_low"] = min(closes)
+
+    # ── 交易决策价位（独立于 kline，缺失不携带）──
+    decision_levels = _extract_decision_levels(state)
+    if decision_levels:
+        chart_data["price"]["decision_levels"] = decision_levels
 
     # ── 财报发布日期（从年报报告日推算）──
     if income is not None and not income.empty:
