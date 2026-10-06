@@ -5,5 +5,5 @@
 - [ ] 服务端 PNG：`_chart_stock_price` 重绘为蜡烛主图+成交量副图+均线叠加+决策价位水平线+财报日标注保留，图表 key/文件名不变（单测验证产物生成）
 - [ ] 前端 K 线：`StockPriceChart` 改造为 ECharts candlestick + 成交量副图 + MA 叠加 + markLine 决策价位 + dataZoom/tooltip（组件测试两分支全绿）
 - [ ] 历史会话后向兼容：close-only chartData 降级为收盘折线渲染，不报错不空白（组件测试覆盖）
-- [ ] E2E spec 覆盖核心场景（股价图 K 线渲染 + 历史会话降级），e2e 门禁全绿
+- [ ] E2E spec 覆盖核心场景（深度分析完成后股价 K 线图渲染），e2e 门禁全绿；历史会话降级由组件测试覆盖（管线 stub 恒产 OHLC，E2E 无法构造历史形态会话，不作虚假覆盖）
 - [ ] 真实会话人工验证（PNG 与前端观感：250 根密度/涨跌配色/参考线可读性），报告落 `tests/validation/`
