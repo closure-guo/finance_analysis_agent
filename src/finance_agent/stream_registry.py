@@ -88,6 +88,10 @@ class StreamRegistry:
             # 队列已满，订阅者会被自身消费逻辑断开
             with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(None)
+        # drop 计数随运行终结一并清理（issue #227.1：per-session 计数随进程
+        # 驻留是慢性泄漏）。清理后极少数 straggler record_drop（后台线程收尾
+        # flush 直调）会经 setdefault 复活单条目，规模有界可接受。
+        self._drop_counts.pop(session_id, None)
         # 注销：只删除当前 stream（避免删掉新 start 创建的）
         if self._streams.get(session_id) is stream:
             del self._streams[session_id]
@@ -209,18 +213,37 @@ class StreamRegistry:
                     q.put_nowait(None)
 
     def record_drop(self, session_id: str, kind: str) -> None:
-        """明细事件丢弃计数（仅事件循环内调用，无锁）。"""
+        """明细事件丢弃计数。
+
+        调用语境（issue #227.5）：事件循环内调用为精确语义（无锁，单线程
+        序列化）；后台线程直调（如 PipelineRunner._flush_pending 的收尾
+        flush）为尽力语义——CPython GIL 下 dict 单操作原子，计数可容忍
+        轻微竞态，不追求精确一致。
+        """
         per = self._drop_counts.setdefault(session_id, {})
         per[kind] = per.get(kind, 0) + 1
 
+    def clear_drop_counts(self, session_id: str) -> None:
+        """清除指定会话的丢弃计数（运行终结时调用，issue #227.1）。未注册会话静默。"""
+        self._drop_counts.pop(session_id, None)
+
     def backlog_stats(self, session_id: str) -> dict:
-        """积压可观测快照：丢弃计数 / 订阅者数 / 最后 seq。"""
+        """积压可观测快照：丢弃计数 / 订阅者数 / 各订阅者队列深度 / 最后 seq。"""
         stream = self._streams.get(session_id)
         return {
             "drops": dict(self._drop_counts.get(session_id, {})),
             "subscribers": len(stream.subscribers) if stream else 0,
+            "queue_depths": [q.qsize() for q in stream.subscribers] if stream else [],
             "last_seq": stream.lastSeq if stream else 0,
         }
+
+    def all_backlog_stats(self) -> dict[str, dict]:
+        """全部活跃会话的积压快照（ops 出口 `GET /api/v1/ops/stream-backlog` 数据源）。
+
+        仅含 registry 持有 stream 的会话（含订阅期间的 fast path 临时 stream）；
+        已终结会话的计数在运行收尾清理，不在此出现。
+        """
+        return {sid: self.backlog_stats(sid) for sid in list(self._streams)}
 
     def _publish_sync(self, session_id: str, event: dict) -> int:
         """同步版 publish：直接调用 session_store（不 await），用于 CancelledError 块。"""

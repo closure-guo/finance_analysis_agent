@@ -336,3 +336,65 @@ async def test_subscribe_no_injection_by_default(tmp_path, monkeypatch):
     received = [e["type"] async for e in gen]
 
     assert "user_message" not in received
+
+
+# ── add-event-delivery-hardening（issue #227 第 1/3 项）：drop 计数清理与积压快照 ──
+
+
+@pytest.mark.asyncio
+async def test_drop_counts_cleared_on_task_cleanup(tmp_path, monkeypatch):
+    """#227.1：任务结束清理 per-session drop 计数，终结慢性泄漏。"""
+    _setup_db(tmp_path, monkeypatch)
+    reg = stream_registry.StreamRegistry()
+    sid = session_store.create_session(status="running")
+
+    async def dropping_task():
+        reg.record_drop(sid, "thinking")
+        reg.record_drop(sid, "undeliverable")
+
+    assert await reg.start(sid, dropping_task()) is True
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if not reg.is_active(sid):
+            break
+    assert not reg.is_active(sid)
+    assert reg.backlog_stats(sid)["drops"] == {}
+
+
+def test_clear_drop_counts_direct():
+    """clear_drop_counts 直清指定会话；未注册会话静默无异常。"""
+    reg = stream_registry.StreamRegistry()
+    reg.record_drop("s-x", "thinking")
+    reg.clear_drop_counts("s-x")
+    assert reg.backlog_stats("s-x")["drops"] == {}
+    reg.clear_drop_counts("s-never-registered")  # 不抛
+
+
+def test_backlog_stats_includes_queue_depth():
+    """#227.3：积压快照含订阅者队列深度（spec「积压状态可查询」）。"""
+    from finance_agent.stream_registry import SessionStream, StreamRegistry
+
+    reg = StreamRegistry()
+    sid = "s-backlog-1"
+    stream = reg._streams.setdefault(sid, SessionStream())  # noqa: SLF001
+    q: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=4)
+    stream.subscribers.append(q)
+    q.put_nowait({"type": "thinking_token"})
+    q.put_nowait({"type": "thinking_token"})
+    stats = reg.backlog_stats(sid)
+    assert stats["queue_depths"] == [2]
+    assert stats["subscribers"] == 1
+    assert stats["drops"] == {}
+
+
+def test_all_backlog_stats_lists_active_streams():
+    """#227.3：全会话积压快照（ops 出口数据源）。"""
+    from finance_agent.stream_registry import SessionStream, StreamRegistry
+
+    reg = StreamRegistry()
+    reg._streams.setdefault("s-a", SessionStream())  # noqa: SLF001
+    reg.record_drop("s-a", "thinking")
+    reg.record_drop("s-a", "thinking")
+    snapshot = reg.all_backlog_stats()
+    assert set(snapshot.keys()) == {"s-a"}
+    assert snapshot["s-a"]["drops"] == {"thinking": 2}
