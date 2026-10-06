@@ -7,6 +7,7 @@ from finance_agent.outcome.track_record.model import (
     FrozenFieldError,
     avoidance_stats,
     count_predictions,
+    duplicate_prediction_ids,
     init_predictions,
     insert_prediction,
     list_predictions,
@@ -50,6 +51,8 @@ def test_statuses_enum():
         "resolved_neutral",
         "avoidance",  # neutral 回避判定终态(delta update-decision-settlement-contract)
         "unresolvable",
+        # 同日重复观点关闭终态(add-prediction-pool-integrity)：不计统计分母
+        "duplicate_of_day",
     )
 
 
@@ -556,3 +559,34 @@ def test_prediction_ids_by_direction(db):
     assert got == {neutral_id}
     assert prediction_ids_by_direction("long", db_path=db) == {long_id}
     assert prediction_ids_by_direction("short", db_path=db) == set()
+
+
+# ---- add-prediction-pool-integrity: duplicate_of_day 状态与 helper ----
+
+
+def test_duplicate_of_day_is_valid_status_total_but_not_win_rate_denominator(db):
+    """是合法状态且计入总数不计入统计分母：新增终态入枚举；total 不受限（UI 展示），
+    settled/胜率分母不含它。"""
+    dup_id = _insert(db, symbol="600519.SH", direction="neutral")
+    update_prediction_status(
+        dup_id,
+        {"status": "duplicate_of_day", "resolution_rule": "duplicate_of_day"},
+        db_path=db,
+    )
+    assert "duplicate_of_day" in PREDICTIONS_STATUSES
+    stats = prediction_stats(db_path=db)
+    assert stats["total"] == 1  # 总数不受限（UI 展示）
+    assert stats["settled"] == 0 and stats["win_rate"] is None  # 不进胜率分母
+
+
+def test_duplicate_prediction_ids_filters_by_resolution_rule(db):
+    """按 resolution_rule 筛选：helper 只认 resolution_rule='duplicate_of_day' 的行
+    （marks 聚合排除用）。"""
+    dup_id = _insert(db, symbol="600519.SH", direction="neutral")
+    _insert(db, symbol="000001.SZ", direction="long")
+    update_prediction_status(
+        dup_id,
+        {"status": "duplicate_of_day", "resolution_rule": "duplicate_of_day"},
+        db_path=db,
+    )
+    assert duplicate_prediction_ids(db_path=db) == {dup_id}
