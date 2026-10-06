@@ -112,3 +112,70 @@ def test_no_kline_degrades_silently():
     assert chart["price"]["daily"] == []
     assert chart["price"]["ma"] == {"ma5": [], "ma20": [], "ma60": []}
     assert "decision_levels" not in chart["price"]
+
+
+# ── PNG 渲染（Task 2）──
+
+from finance_agent.charts import generate_all_charts  # noqa: E402
+
+
+def _chart_data_with_ohlc(n: int = 30) -> dict:
+    """直接构造 OHLC 形态的 chart_data（绕过 state，供 PNG 生成器测试）。"""
+    df = _synth_kline(n)
+    daily = [
+        {
+            "date": str(r["日期"]),
+            "open": float(r["开盘"]),
+            "high": float(r["最高"]),
+            "low": float(r["最低"]),
+            "close": float(r["收盘"]),
+            "volume": float(r["成交量"]),
+        }
+        for _, r in df.iterrows()
+    ]
+    closes = [d["close"] for d in daily]
+
+    def _ma(w: int) -> list:
+        out: list = [None] * n
+        for i in range(w - 1, n):
+            out[i] = round(sum(closes[i - w + 1 : i + 1]) / w, 2)
+        return out
+
+    return {
+        "price": {
+            "daily": daily,
+            "earnings_dates": [daily[5]["date"]],
+            "ma": {"ma5": _ma(5), "ma20": _ma(20), "ma60": _ma(60)},
+            "decision_levels": {
+                "entry_price": closes[-1] + 0.5,
+                "stop_loss": closes[-1] - 0.5,
+                "target_price": closes[-1] + 1.5,
+            },
+        }
+    }
+
+
+def test_stock_price_png_candlestick(tmp_path):
+    charts = generate_all_charts(_chart_data_with_ohlc(), str(tmp_path))
+    assert "chart_stock_price" in charts
+    assert charts["chart_stock_price"].endswith(".png")
+
+
+def test_stock_price_png_close_only_fallback(tmp_path):
+    """仅 close 的历史形态数据降级为收盘折线渲染，不缺图不崩溃。"""
+    data = _chart_data_with_ohlc()
+    for d in data["price"]["daily"]:
+        for k in ("open", "high", "low", "volume"):
+            d.pop(k)
+    data["price"].pop("ma")
+    charts = generate_all_charts(data, str(tmp_path))
+    assert "chart_stock_price" in charts
+
+
+def test_stock_price_png_doji_no_crash(tmp_path):
+    """十字星（open==close）零高度实体不得崩溃。"""
+    data = _chart_data_with_ohlc(12)
+    for d in data["price"]["daily"]:
+        d["open"] = d["close"]
+    charts = generate_all_charts(data, str(tmp_path))
+    assert "chart_stock_price" in charts

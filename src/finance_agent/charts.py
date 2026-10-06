@@ -492,26 +492,19 @@ def _chart_cashflow(data: dict, out: str) -> str | None:
     return _save_fig(fig, out, "chart_cashflow")
 
 
-def _chart_stock_price(data: dict, out: str) -> str | None:
-    """P1: 股价趋势（含财报标注）。"""
-    daily = data.get("price", {}).get("daily", [])
-    if len(daily) < 10:
-        return None
-    dates = [d["date"] for d in daily]
-    closes = [d["close"] for d in daily]
-    earnings_dates = data.get("price", {}).get("earnings_dates", [])
+_STOCK_PRICE_MA_SPECS = (("ma5", _C_ORANGE, 1.0), ("ma20", _C_PURPLE, 1.0), ("ma60", _C_CYAN, 1.2))
+_DECISION_LEVEL_SPECS = (
+    ("entry_price", "入场", _C_BLUE),
+    ("stop_loss", "止损", _C_GREEN),
+    ("target_price", "目标", _C_RED),
+)
 
-    fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
-    ax.plot(dates, closes, color=_C_BLUE, linewidth=1.5)
-    ax.fill_between(range(len(dates)), closes, alpha=0.1, color=_C_BLUE)
-    ax.set_ylabel("股价（元）", fontsize=10)
-    ax.set_xlabel("日期", fontsize=10)
-    _style_ax(ax, "股价趋势")
 
-    # 标注财报发布日
+def _mark_earnings(ax, daily: list[dict], closes: list, earnings_dates: list[str]) -> None:
+    """财报发布日竖线标注（K 线/折线两形态共用）。"""
     for ed in earnings_dates:
-        for i, d in enumerate(dates):
-            if d == ed:
+        for i, d in enumerate(daily):
+            if d["date"] == ed:
                 ax.axvline(x=i, color=_C_RED, linewidth=0.8, linestyle="--", alpha=0.5)
                 ax.annotate(
                     "财报",
@@ -523,11 +516,114 @@ def _chart_stock_price(data: dict, out: str) -> str | None:
                 )
                 break
 
-    # X 轴日期格式化（只显示少量标签）
+
+def _set_date_ticks(ax, dates: list[str]) -> None:
     n = len(dates)
     step = max(1, n // 8)
     ax.set_xticks(range(0, n, step))
     ax.set_xticklabels([dates[i] for i in range(0, n, step)], rotation=30, ha="right")
+
+
+def _chart_stock_price_line(
+    daily: list[dict], dates: list[str], earnings_dates: list[str], out: str
+) -> str:
+    """历史形态（仅 close）的收盘折线渲染（升级前行为，原样保留）。"""
+    closes = [d["close"] for d in daily]
+    fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
+    ax.plot(dates, closes, color=_C_BLUE, linewidth=1.5)
+    ax.fill_between(range(len(dates)), closes, alpha=0.1, color=_C_BLUE)
+    ax.set_ylabel("股价（元）", fontsize=10)
+    ax.set_xlabel("日期", fontsize=10)
+    _style_ax(ax, "股价趋势")
+    _mark_earnings(ax, daily, closes, earnings_dates)
+    _set_date_ticks(ax, dates)
+    fig.tight_layout()
+    return _save_fig(fig, out, "chart_stock_price")
+
+
+def _chart_stock_price(data: dict, out: str) -> str | None:
+    """股价 K 线图（update-price-chart-kline）：蜡烛主图 + MA 均线 + 决策价位线 + 成交量副图。
+
+    历史形态（缺 OHLC 字段）降级为收盘折线，保持升级前渲染。
+    """
+    daily = data.get("price", {}).get("daily", [])
+    if len(daily) < 10:
+        return None
+    dates = [d["date"] for d in daily]
+    earnings_dates = data.get("price", {}).get("earnings_dates", [])
+    has_ohlc = all(
+        d.get("open") is not None and d.get("high") is not None and d.get("low") is not None
+        for d in daily
+    )
+    if not has_ohlc:
+        return _chart_stock_price_line(daily, dates, earnings_dates, out)
+
+    ma = data.get("price", {}).get("ma", {})
+    levels = data.get("price", {}).get("decision_levels", {})
+
+    x = np.arange(len(dates))
+    opens = [d["open"] for d in daily]
+    highs = [d["high"] for d in daily]
+    lows = [d["low"] for d in daily]
+    closes = [d["close"] for d in daily]
+    colors = [_C_RED if c >= o else _C_GREEN for o, c in zip(opens, closes, strict=False)]
+    # 蜡烛实体宽度随样本数自适应（250 根时约 0.12）；十字星给最小可见高度
+    candle_w = max(0.12, min(0.8, 30.0 / len(dates)))
+    price_range = max(highs) - min(lows) or 1.0
+    body = [
+        max(abs(c - o), candle_w * 1e-3 * price_range) for o, c in zip(opens, closes, strict=False)
+    ]
+
+    fig = plt.figure(figsize=(_FIGSIZE_WIDE[0], _FIGSIZE_WIDE[1] + 1.6))
+    # 不显式传 hspace：matplotlib 3.11 下 gridspec 固定 hspace 与 tight_layout
+    # 不兼容（触发 UserWarning 且 tight_layout 失效回退默认边距）；
+    # 3:1 高度比由 tight_layout 自行给出紧凑间距，效果等同。
+    gs = fig.add_gridspec(2, 1, height_ratios=[3, 1])
+    ax = fig.add_subplot(gs[0])
+    ax_vol = fig.add_subplot(gs[1])
+
+    ax.vlines(x, lows, highs, colors=colors, linewidth=0.7)
+    ax.bar(
+        x,
+        body,
+        bottom=[min(o, c) for o, c in zip(opens, closes, strict=False)],
+        width=candle_w,
+        color=colors,
+    )
+
+    for key, color, lw in _STOCK_PRICE_MA_SPECS:
+        series = ma.get(key) or []
+        if len(series) == len(dates):
+            ax.plot(x, _nan_series(series), color=color, linewidth=lw, label=key.upper())
+    if any(len(ma.get(key) or []) == len(dates) for key, _, _ in _STOCK_PRICE_MA_SPECS):
+        ax.legend(fontsize=8, loc="upper left")
+
+    for key, label, color in _DECISION_LEVEL_SPECS:
+        if key in levels:
+            ax.axhline(y=levels[key], color=color, linewidth=1.0, linestyle="--", alpha=0.85)
+            ax.annotate(
+                label,
+                xy=(1.0, levels[key]),
+                xycoords=("axes fraction", "data"),
+                xytext=(3, 0),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+                va="center",
+            )
+
+    _mark_earnings(ax, daily, closes, earnings_dates)
+    ax.set_ylabel("股价（元）", fontsize=10)
+    _style_ax(ax, "股价 K 线（MA5/20/60，虚线为决策价位）")
+    ax.tick_params(labelbottom=False)
+
+    volumes = [d.get("volume") or 0 for d in daily]
+    ax_vol.bar(x, volumes, width=candle_w, color=colors, alpha=0.7)
+    ax_vol.set_ylabel("成交量", fontsize=9)
+    ax_vol.set_xlabel("日期", fontsize=10)
+    _style_ax(ax_vol)
+    _set_date_ticks(ax_vol, dates)
+
     fig.tight_layout()
     return _save_fig(fig, out, "chart_stock_price")
 
