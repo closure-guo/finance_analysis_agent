@@ -1,0 +1,104 @@
+"""add-prediction-pool-integrity Task 5:IC/ICIR/蒙特卡洛零模型纯函数。"""
+
+from finance_agent.outcome.track_record.significance import (
+    excess_quantile,
+    icir,
+    monthly_ic,
+    simulate_random_excess,
+)
+
+
+class TestMonthlyIC:
+    def test_ic_counts_long_short_two_state(self):
+        """方向 IC 只计 long/short 的 resolved_win/loss；neutral 与 avoidance 行不进分子分母。"""
+        rows = [
+            {"resolved_at": "2026-11-03", "status": "resolved_win", "direction": "long"},
+            {"resolved_at": "2026-11-04", "status": "resolved_loss", "direction": "short"},
+            {"resolved_at": "2026-11-05", "status": "resolved_neutral", "direction": "long"},
+            {"resolved_at": "2026-11-06", "status": "avoidance", "direction": "neutral"},
+        ]
+        series = monthly_ic(rows)
+        assert len(series) == 1
+        s = series[0]
+        assert s["month"] == "2026-11" and s["wins"] == 1 and s["losses"] == 1
+        assert s["ic"] == 0.5 and s["sample"] == 2 and s["insufficient"] is True
+
+    def test_months_sorted_ascending(self):
+        """跨月分组按结算月升序返回。"""
+        rows = [
+            {"resolved_at": "2026-12-01", "status": "resolved_win", "direction": "long"},
+            {"resolved_at": "2026-11-02", "status": "resolved_loss", "direction": "long"},
+        ]
+        assert [s["month"] for s in monthly_ic(rows)] == ["2026-11", "2026-12"]
+
+    def test_avoidance_series_separate_from_direction_ic(self):
+        """回避类单独成列（kind="avoidance"），不混入方向 IC。"""
+        rows = [
+            {"resolved_at": "2026-11-05", "status": "avoidance_win", "direction": "neutral"},
+            {"resolved_at": "2026-11-06", "status": "avoidance_loss", "direction": "neutral"},
+            {"resolved_at": "2026-11-03", "status": "resolved_win", "direction": "long"},
+        ]
+        assert monthly_ic(rows, kind="direction")[0]["wins"] == 1  # 回避行不进方向 IC
+        av = monthly_ic(rows, kind="avoidance")
+        assert av[0]["wins"] == 1 and av[0]["losses"] == 1 and av[0]["ic"] == 0.5
+
+
+class TestICIR:
+    def test_icir_returns_none_below_min_periods(self):
+        """有效期数不足 6 期 → None。"""
+        series = [{"ic": 0.6, "insufficient": False}] * 5
+        assert icir(series) is None
+
+    def test_icir_excludes_insufficient_periods(self):
+        """样本不足期被剔除后不足 6 期 → None。"""
+        series = [{"ic": 0.6, "insufficient": False}] * 5 + [{"ic": 0.9, "insufficient": True}]
+        assert icir(series) is None
+
+    def test_icir_population_std_six_periods(self):
+        """6 期有效序列计算总体标准差 ICIR。"""
+        series = [{"ic": 0.5 + 0.01 * i, "insufficient": False} for i in range(6)]
+        value = icir(series)
+        assert value is not None and value > 0
+
+
+class TestMonteCarlo:
+    UNIVERSE = ["600519", "000001", "600030", "601818", "300750"]
+
+    def _closes(self):
+        return {
+            s: {"2026-11-03": 10.0, "2026-12-01": 10.0 + i * 0.1}
+            for i, s in enumerate(self.UNIVERSE)
+        }
+
+    def test_monte_carlo_exposure_aligned_and_reproducible(self):
+        """敞口对齐：模拟注数与真实组合每归属日每方向一致；同种子结果复现。"""
+        sims = simulate_random_excess(
+            universe=self.UNIVERSE,
+            long_counts={"2026-11-03": 2},
+            short_counts={"2026-11-03": 1},
+            closes=self._closes(),
+            entry_map={"2026-11-03": "2026-11-03"},
+            exit_date="2026-12-01",
+            benchmark_return=-0.04,
+            n_sims=200,
+            seed=42,
+        )
+        assert len(sims) == 200
+        # 复现性：同种子同分布
+        sims2 = simulate_random_excess(
+            universe=self.UNIVERSE,
+            long_counts={"2026-11-03": 2},
+            short_counts={"2026-11-03": 1},
+            closes=self._closes(),
+            entry_map={"2026-11-03": "2026-11-03"},
+            exit_date="2026-12-01",
+            benchmark_return=-0.04,
+            n_sims=200,
+            seed=42,
+        )
+        assert sims == sims2
+
+    def test_quantile_conservative_p_value(self):
+        """右尾定位含真实读数自身：p=(greater+1)/(n+1) 保守口径。"""
+        q = excess_quantile(0.10, [0.01, 0.02, 0.03])
+        assert q["n_sims"] == 3 and q["quantile"] == 1.0 and q["p_value"] == 0.25
