@@ -46,6 +46,26 @@ class TestMonthlyIC:
         av = monthly_ic(rows, kind="avoidance")
         assert av[0]["wins"] == 1 and av[0]["losses"] == 1 and av[0]["ic"] == 0.5
 
+    def test_avoidance_db_shape_status_column(self):
+        """DB 真实形状：status='avoidance'（终态）+ 独立 avoidance_status 列，能正确聚合。"""
+        rows = [
+            {
+                "resolved_at": "2026-11-05",
+                "status": "avoidance",
+                "avoidance_status": "avoidance_win",
+                "direction": "neutral",
+            },
+            {
+                "resolved_at": "2026-11-06",
+                "status": "avoidance",
+                "avoidance_status": "avoidance_loss",
+                "direction": "neutral",
+            },
+        ]
+        av = monthly_ic(rows, kind="avoidance")
+        assert len(av) == 1
+        assert av[0]["wins"] == 1 and av[0]["losses"] == 1 and av[0]["ic"] == 0.5
+
 
 class TestICIR:
     def test_icir_returns_none_below_min_periods(self):
@@ -148,3 +168,21 @@ class TestWithoutReplacement:
         assert len(sims) == 5
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings and "回退" in warnings[0].message
+
+    def test_empty_pool_returns_empty_with_warning(self, caplog):
+        """pool 为空（universe 无一含行情）：不抛 IndexError，warning + 返回空列表。"""
+        closes = {"000001": {"2026-11-03": 10.0, "2026-12-01": 9.0}}  # universe 标的不在 closes
+        with caplog.at_level(logging.WARNING):
+            sims = simulate_random_excess(
+                universe=["600519"],
+                long_counts={"2026-11-03": 2},
+                short_counts={},
+                closes=closes,
+                entry_map={"2026-11-03": "2026-11-03"},
+                exit_date="2026-12-01",
+                benchmark_return=0.0,
+                n_sims=5,
+                seed=42,
+            )
+        assert sims == []
+        assert any(r.levelno == logging.WARNING for r in caplog.records)

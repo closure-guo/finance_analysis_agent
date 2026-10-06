@@ -22,9 +22,12 @@ def monthly_ic(rows: list[dict], kind: str = "direction") -> list[dict]:
 
     kind="direction"（默认）：long/short 的 resolved_win/resolved_loss；
     kind="avoidance"：neutral 的 avoidance_win/avoidance_loss（回避类单独成列，
-    SHALL NOT 混入方向 IC）。其余状态（resolved_neutral/unresolvable）与
-    duplicate_of_day 行不进分子分母（防御性再过滤，输入方仍须只喂日主行）。
-    返回按月升序：[{month, wins, losses, sample, ic, insufficient}]。
+    SHALL NOT 混入方向 IC）。回避状态取值字段 = r.get("avoidance_status") or
+    r.get("status")，拍平兼容两种形状：DB 行为 status='avoidance'（生命周期终态，
+    judgment.TERMINAL_AVOIDANCE_STATUS）+ 独立 avoidance_status 结果列；拍平行则
+    status 直接为 avoidance_win/loss。其余状态（resolved_neutral/unresolvable/
+    avoidance_neutral）与 duplicate_of_day 行不进分子分母（防御性再过滤，输入方
+    仍须只喂日主行）。返回按月升序：[{month, wins, losses, sample, ic, insufficient}]。
     """
     want_status = (
         ("resolved_win", "resolved_loss")
@@ -37,11 +40,15 @@ def monthly_ic(rows: list[dict], kind: str = "direction") -> list[dict]:
     for r in rows:
         if r.get("direction") not in want_dirs:
             continue
-        if r.get("status") not in want_status:
+        if kind == "avoidance":
+            status = r.get("avoidance_status") or r.get("status")
+        else:
+            status = r.get("status")
+        if status not in want_status:
             continue
         month = str(r["resolved_at"])[:7]
         slot = agg.setdefault(month, [0, 0])
-        slot[0 if r["status"] == win_status else 1] += 1
+        slot[0 if status == win_status else 1] += 1
     out: list[dict] = []
     for month in sorted(agg):
         wins, losses = agg[month]
@@ -106,7 +113,8 @@ def simulate_random_excess(
     closes: symbol → {date: close}（至少含各 entry 实际交易日与 exit_date 两档）；
     entry_map: 归属日 → 实际入场交易日（与真实组合 settle_entry_price 派生同源）。
     每注收益 = sign × (exit_close/entry_close − 1)；组合收益 = 全注等权均值；模拟超额 =
-    组合收益 − benchmark_return（与真实读数同基准同窗）。返回长度 n_sims 的模拟超额列表。
+    组合收益 − benchmark_return（与真实读数同基准同窗）。返回模拟超额列表——行情缺失注
+    逐注剔除、整轮无有效注的轮次跳过，实际条数可能少于 n_sims。
     """
     rng = random.Random(seed)  # noqa: S311  蒙特卡洛零模型非密码用途；种子注入保证复现
     groups: list[tuple[str, float, int]] = []  # (entry 交易日, sign, 注数)；组间独立
@@ -119,6 +127,11 @@ def simulate_random_excess(
     if not groups:
         return []
     pool = [s for s in universe if s in closes]
+    if not pool:
+        logger.warning(
+            "simulate_random_excess: 池为空（universe 无一含行情 closes），无标的可抽——返回空列表"
+        )
+        return []
     out: list[float] = []
     fallback_used = False
     for _ in range(n_sims):
