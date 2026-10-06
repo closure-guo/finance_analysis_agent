@@ -1,4 +1,4 @@
-"""add-prediction-pool-integrity Task 6:/api/track-record/significance 只读端点。"""
+"""add-prediction-pool-integrity Task 6:/api/v1/track-record/significance 只读端点。"""
 
 from fastapi.testclient import TestClient
 
@@ -50,7 +50,7 @@ def test_significance_empty_db_insufficient_state(monkeypatch, tmp_path):
     端点永不单独返回点估计。
     """
     _use_db(monkeypatch, tmp_path)
-    resp = TestClient(app).get("/api/track-record/significance")
+    resp = TestClient(app).get("/api/v1/track-record/significance")
     assert resp.status_code == 200
     body = resp.json()
     assert body["ic_series"] == [] and body["avoidance_series"] == []
@@ -76,7 +76,7 @@ def test_significance_duplicate_rows_never_enter_ic_series(monkeypatch, tmp_path
         },
         db_path=db,
     )
-    body = TestClient(app).get("/api/track-record/significance").json()
+    body = TestClient(app).get("/api/v1/track-record/significance").json()
     assert len(body["ic_series"]) == 1
     assert body["ic_series"][0]["sample"] == 2  # duplicate 行不计入分子分母
 
@@ -98,7 +98,7 @@ def test_significance_monthly_series_and_insufficient_marking(monkeypatch, tmp_p
             "resolved_win" if i < 4 else "resolved_loss",
             "2026-12",
         )
-    body = TestClient(app).get("/api/track-record/significance").json()
+    body = TestClient(app).get("/api/v1/track-record/significance").json()
     series = body["ic_series"]
     assert [s["month"] for s in series] == ["2026-11", "2026-12"]
     assert series[0]["sample"] == 10
@@ -124,8 +124,32 @@ def test_significance_avoidance_separate_column_not_in_direction_ic(monkeypatch,
             db_path=db,
         )
     _settle(db, _insert(db, symbol="l.SH"), "resolved_win", "2026-11")
-    body = TestClient(app).get("/api/track-record/significance").json()
+    body = TestClient(app).get("/api/v1/track-record/significance").json()
     assert len(body["ic_series"]) == 1 and body["ic_series"][0]["sample"] == 1
     assert len(body["avoidance_series"]) == 1
     assert body["avoidance_series"][0]["sample"] == 3
     assert body["avoidance_series"][0]["wins"] == 3
+
+
+def test_significance_beyond_100_rows_oldest_month_not_truncated(monkeypatch, tmp_path):
+    """回归(P1):已判定行 >100 时最老月份不得被 list_predictions 旧钳制静默丢弃。
+
+    生产库 predictions 已 127 行,首批结算报告恰是受害时点。旧钳制
+    min(limit,100) 下端点只取到最新 100 行 → 2026-07 整月(最老 10 行)消失;
+    放宽上限后最老月份须完整进入 ic_series。
+    """
+    db = _use_db(monkeypatch, tmp_path)
+    for i in range(10):  # 最老月 2026-07,created_at 全库最早
+        pid = _insert(db, symbol=f"old{i}.SH", created_at=f"2026-07-{i + 1:02d}T10:00:00")
+        _settle(db, pid, "resolved_win" if i < 7 else "resolved_loss", "2026-07")
+    for i in range(100):  # 次月 100 行,created_at 均晚于 2026-07 组
+        pid = _insert(
+            db, symbol=f"new{i}.SH", created_at=f"2026-08-01T{i // 60:02d}:{i % 60:02d}:00"
+        )
+        _settle(db, pid, "resolved_win" if i % 2 else "resolved_loss", "2026-08")
+    body = TestClient(app).get("/api/v1/track-record/significance").json()
+    months = [s["month"] for s in body["ic_series"]]
+    assert months == ["2026-07", "2026-08"]  # 最老月份不得被截断
+    assert body["ic_series"][0]["sample"] == 10
+    assert body["ic_series"][0]["ic"] == 0.7
+    assert body["ic_series"][1]["sample"] == 100

@@ -930,7 +930,10 @@ def list_predictions(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> list[dict[str, Any]]:
-    limit = max(1, min(int(limit), 100))
+    # 上限 100_000:add-prediction-pool-integrity P1——生产库已 127 行,旧钳 100 会把
+    # 显著性端点(limit=10000)静默截到 100 行、丢最老结算月。仅放宽上限:默认 50 不动,
+    # 未显式传大值的既有调用方行为不变(无 offset 分页,无 tiebreaker 丢重行风险)。
+    limit = max(1, min(int(limit), 100_000))
     conn = _connect(db_path)
     try:
         clauses, params = _prediction_filters(

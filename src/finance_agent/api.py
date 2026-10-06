@@ -2356,7 +2356,7 @@ async def track_record_calibration() -> dict[str, Any]:
     }
 
 
-@app.get("/api/track-record/significance")
+@app.get("/api/v1/track-record/significance")
 async def track_record_significance() -> dict[str, Any]:
     """结算显著性与信号一致性只读端点（add-prediction-pool-integrity；口径 §1.9-v2）。
 
