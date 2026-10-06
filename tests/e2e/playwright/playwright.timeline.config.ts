@@ -30,6 +30,9 @@ export default defineConfig({
     'agui-toolcall.spec.ts',
   // 报告导出抽屉：依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175）
   'report-export.spec.ts',
+  // 股价 K 线图：依赖 STUB_SCENARIO=pipeline 的 5 层管线后端（8002/5175），
+  // 与 report-export 同环境（update-price-chart-kline）
+  'report-kline-chart.spec.ts',
   // 报告面板与主顶栏层叠：同 pipeline 环境（8002/5175），面板打开后断言
   // 面板操作栏行不被主顶栏覆盖、主顶栏无圆形装饰占位（fix-report-panel-header-overlay）
   'report-panel-overlay.spec.ts',
