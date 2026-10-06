@@ -39,6 +39,93 @@ from finance_agent.tool_registry import (
 
 logger = logging.getLogger("finance_agent.agent_factory")
 
+# ── 事件有界入队（spec「发布积压可观测与背压」+ add-event-delivery-hardening） ──
+
+# 非可丢弃事件的有界入队等待（消费者停滞时显式放弃的上限）
+EVENT_PUT_TIMEOUT_SECONDS = 30.0
+# 连续 undeliverable 熔断阈值：达到后非终态事件降级为丢弃+计数（issue #227.6），
+# 避免消费端长期僵死时边界事件逐个等满 30s（~40 边界事件最坏 15-20 分钟收尾）
+UNDELIVERABLE_BREAKER_THRESHOLD = 3
+
+
+class BoundedEventSink:
+    """SSE 事件有界入队列（分级处置 + 连续 undeliverable 熔断降级）。
+
+    - droppable（thinking_token 明细）：队列满即丢弃，计数 thinking 桶 + 节流日志；
+    - 其余事件与流终结哨兵（None）：阻塞入队不丢弃，EVENT_PUT_TIMEOUT_SECONDS
+      有界等待后放弃并计 undeliverable 桶——宁可显式放弃不可无限阻塞泄漏任务；
+    - 熔断（issue #227.6）：连续 N 次 undeliverable 后，非终态事件降级为立即
+      丢弃（breaker_degraded 桶），MUST NOT 再逐个有界等待；哨兵 MUST 保留
+      有界等待路径（终态不因熔断被丢弃，spec 约束保持）；任一事件成功入队
+      重置连续计数。
+
+    timeout / breaker_threshold 可注入，满队列终态送达与熔断行为可单测
+    （tests/test_bounded_event_sink.py）。
+    """
+
+    def __init__(
+        self,
+        queue: asyncio.Queue,
+        session_id: str,
+        record_drop: Callable[[str, str], None],
+        *,
+        timeout: float = EVENT_PUT_TIMEOUT_SECONDS,
+        breaker_threshold: int = UNDELIVERABLE_BREAKER_THRESHOLD,
+    ) -> None:
+        self._queue = queue
+        self._session_id = session_id
+        self._record_drop = record_drop
+        self._timeout = timeout
+        self._breaker_threshold = breaker_threshold
+        self._consecutive_undeliverable = 0
+        self._thinking_dropped = 0
+
+    @property
+    def _breaker_tripped(self) -> bool:
+        return self._breaker_threshold > 0 and (
+            self._consecutive_undeliverable >= self._breaker_threshold
+        )
+
+    async def put(self, evt: Any, *, droppable: bool = False) -> str:
+        """入队单事件，返回处置结果：enqueued / dropped_thinking /
+        breaker_degraded / undeliverable。"""
+        if droppable and self._queue.full():
+            self._thinking_dropped += 1
+            self._record_drop(self._session_id, "thinking")
+            if self._thinking_dropped == 1 or self._thinking_dropped % 100 == 0:
+                logger.warning(
+                    "thinking 明细丢弃（队列满）session=%s 累计=%s",
+                    self._session_id,
+                    self._thinking_dropped,
+                )
+            return "dropped_thinking"
+        # 熔断降级：仅非终态事件（哨兵 None 豁免——终态 MUST NOT 被熔断丢弃）
+        if self._breaker_tripped and evt is not None:
+            self._record_drop(self._session_id, "breaker_degraded")
+            logger.warning(
+                "连续 undeliverable 熔断降级 session=%s type=%s 连续=%s",
+                self._session_id,
+                getattr(evt, "event_type", None)
+                or (evt.get("type") if isinstance(evt, dict) else evt),
+                self._consecutive_undeliverable,
+            )
+            return "breaker_degraded"
+        try:
+            await asyncio.wait_for(self._queue.put(evt), timeout=self._timeout)
+        except TimeoutError:
+            self._consecutive_undeliverable += 1
+            self._record_drop(self._session_id, "undeliverable")
+            logger.error(
+                "事件入队超时（消费者停滞）session=%s type=%s 连续=%s",
+                self._session_id,
+                evt,
+                self._consecutive_undeliverable,
+            )
+            return "undeliverable"
+        self._consecutive_undeliverable = 0
+        return "enqueued"
+
+
 # ───────────────────────────────────────────────
 # System Prompts（ADR-0016：从 prompts/*.md 加载，Langfuse 优先 + 本地兜底）
 # ───────────────────────────────────────────────
@@ -595,37 +682,19 @@ def _make_run_deep_analysis(
             # 且按 TIMELINE_PERSIST_INTERVAL 节流，避免每个 thinking chunk 都写库。
             last_timeline_persist = 0.0
             TIMELINE_PERSIST_INTERVAL = 0.5  # 秒
-            # thinking 明细丢弃累计（droppable 背压），供节流日志判断
-            _thinking_dropped = 0
+            # thinking 明细丢弃累计（droppable 背压）：由 sink 内部计数与节流
             # 报告产出标记：updates 分支见到含 final_report 键的 update dict
             # （真实图最后一个 updates chunk 的标记）即置位。tail_thinking 压缩
             # 以「报告已产出」为准而非 graph_done——后者只证明生产者发完流，
             # chunk_queue 中可能仍缓冲着报告前的合法 thinking（消费滞后场景）。
             report_seen = False
+            # 有界入队 + 熔断降级逻辑收敛到 BoundedEventSink（可单测），
+            # 闭包薄委托保持既有调用点形态
+            sink = BoundedEventSink(event_queue, session_id or "", registry.record_drop)
 
             async def _put_event(evt, *, droppable: bool = False) -> None:
-                """事件入队（spec「发布积压可观测与背压」分级处置）。
-
-                droppable（thinking_token 明细）：队列满即丢弃，计数 + 节流日志。
-                其余（节点边界/工具/终态）：阻塞入队不丢弃；下游消费者消失时
-                30s 有界等待后放弃并显式日志——宁可显式放弃不可无限阻塞泄漏任务。
-                """
-                nonlocal _thinking_dropped
-                if droppable and event_queue.full():
-                    _thinking_dropped += 1
-                    registry.record_drop(session_id or "", "thinking")
-                    if _thinking_dropped == 1 or _thinking_dropped % 100 == 0:
-                        logger.warning(
-                            "thinking 明细丢弃（队列满）session=%s 累计=%s",
-                            session_id,
-                            _thinking_dropped,
-                        )
-                    return
-                try:
-                    await asyncio.wait_for(event_queue.put(evt), timeout=30.0)
-                except TimeoutError:
-                    registry.record_drop(session_id or "", "undeliverable")
-                    logger.error("事件入队超时（消费者停滞）session=%s type=%s", session_id, evt)
+                """事件入队（spec「发布积压可观测与背压」分级处置），见 BoundedEventSink。"""
+                await sink.put(evt, droppable=droppable)
 
             try:
                 while True:
@@ -1041,6 +1110,9 @@ def _make_run_deep_analysis(
                 await _put_event(None)
                 if session_id:
                     _background_tasks.pop(session_id, None)
+                    # drop 计数随运行终结清理（issue #227.1：慢性泄漏）；哨兵
+                    # 自身若 undeliverable 已计数并日志，此处清除不影响审计
+                    registry.clear_drop_counts(session_id)
 
         bg_task = asyncio.create_task(_background_consume())
         if session_id:
