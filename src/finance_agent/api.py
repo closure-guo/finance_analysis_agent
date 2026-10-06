@@ -2356,6 +2356,46 @@ async def track_record_calibration() -> dict[str, Any]:
     }
 
 
+@app.get("/api/track-record/significance")
+async def track_record_significance() -> dict[str, Any]:
+    """结算显著性与信号一致性只读端点（add-prediction-pool-integrity；口径 §1.9-v2）。
+
+    只读、不触发写操作。IC 只消费日主口径已判定行：先滤 resolution_rule=
+    'duplicate_of_day'，再以 duplicate_prediction_ids() 二次防御（§1.9-v2：
+    duplicate 永不进入）；long/short 方向 IC 与 neutral 回避序列分别成列。
+
+    蒙特卡洛零模型：本端点恒为 available=false + reason（首批 T+20 结算时由结算
+    报告任务产出，需个股行情面板，端点只披露可用状态）。红线「日主可判定样本
+    <10 零模型 SHALL NOT 产出」由 11 月结算报告任务在消费 simulate_random_excess
+    前执行（预登记 §1.9-v2），不在本端点判定；抽样 10,000 次为预登记默认值，
+    本端点不提供配置项。「结论必附分位」契约由响应形态保证：excess 点估计与
+    quantile/p_value 字段必须成对出现，本端点永不单独返回点估计。
+    """
+    from finance_agent.outcome.track_record.model import duplicate_prediction_ids, list_predictions
+    from finance_agent.outcome.track_record.significance import icir, monthly_ic
+
+    rows = await asyncio.to_thread(list_predictions, limit=10000)
+    dup_ids = await asyncio.to_thread(duplicate_prediction_ids)
+    clean = [
+        r
+        for r in rows
+        if r.get("resolution_rule") != "duplicate_of_day" and r["prediction_id"] not in dup_ids
+    ]
+    series = monthly_ic(clean, kind="direction")
+    avoidance = monthly_ic(clean, kind="avoidance")
+    return {
+        "ic_series": series,
+        "icir": icir(series),
+        "avoidance_series": avoidance,
+        "monte_carlo": {
+            "available": False,
+            "reason": "首批 T+20 结算时由结算报告任务产出（需个股行情面板）",
+        },
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
 @app.get("/api/v1/track-record/segments")
 async def track_record_segments() -> dict[str, Any]:
     """add-track-record-stage-c:四维切片指标（持有期/行业/市值/市场环境）。
