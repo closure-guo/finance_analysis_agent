@@ -8,6 +8,7 @@
 
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from finance_agent.models import AnalystReport, TradeDecision
@@ -204,6 +205,37 @@ class TestGenerateReport:
         report = result["final_report"]
         assert "贵州茅台" in report
         assert "600519" in report
+
+    def test_report_header_declares_kline_cutoff(self):
+        """报告头部声明行情数据截止日期（取 kline 最后交易日，确定性渲染）。"""
+        state = {
+            "stock_name": "拓荆科技",
+            "stock_code": "688072",
+            "kline": pd.DataFrame(
+                {
+                    "日期": ["2026-09-26", "2026-09-29", "2026-09-30"],
+                    "收盘": [100.0, 101.0, 102.0],
+                }
+            ),
+        }
+        report = generate_report(state)["final_report"]
+        assert "行情数据截止: 2026-09-30" in report
+
+    def test_report_header_omits_cutoff_when_kline_missing(self):
+        """kline 缺失时头部不出现行情截止声明（不得占位或编造日期）。"""
+        state = {"stock_name": "贵州茅台", "stock_code": "600519"}
+        report = generate_report(state)["final_report"]
+        assert "行情数据截止" not in report
+
+    def test_report_header_omits_cutoff_when_kline_unparseable(self):
+        """kline 为空 DataFrame / 日期列缺失时同样省略声明。"""
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "kline": pd.DataFrame(),
+        }
+        report = generate_report(state)["final_report"]
+        assert "行情数据截止" not in report
 
     def test_focus_reorders_and_folds_sections(self, monkeypatch):
         """focus 命中维度时：重点分析师前置并标星，非重点折叠，出现研究聚焦摘要。"""

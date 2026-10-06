@@ -15,6 +15,8 @@ import tempfile
 from datetime import datetime
 from typing import Any
 
+import pandas as pd
+
 from finance_agent.charts import collect_chart_data, generate_all_charts
 from finance_agent.llm.gateway import complete_text
 from finance_agent.llm.output_guard import validate_deliverable_text
@@ -155,6 +157,32 @@ def _ruling_confidence(state: dict) -> float | None:
 
 
 # ── 财务口径披露（确定性渲染，不依赖 LLM 引用） ──
+
+
+def _kline_cutoff_date(state: dict) -> str | None:
+    """取输入 kline 的最后一个交易日（YYYY-MM-DD），供报告头部行情截止声明。
+
+    spec agent-node-contracts「报告头部行情数据截止声明」：渲染层直读 state，
+    不经 LLM（与财务数据口径披露同一确定性渲染纪律）。kline 缺失、为空、无
+    日期列或日期不可解析时返回 None——声明整体省略，MUST NOT 占位或编造。
+    """
+    kline = state.get("kline")
+    if kline is None or getattr(kline, "empty", True):
+        return None
+    if "日期" not in getattr(kline, "columns", []):
+        return None
+    try:
+        last = kline["日期"].iloc[-1]
+    except (IndexError, TypeError, ValueError):
+        return None
+    try:
+        # pd.Timestamp 显式构造（to_datetime 按 stubs 返回 Any），非法输入走异常分支
+        stamp = pd.Timestamp(last)
+    except (ValueError, TypeError):
+        return None
+    if stamp is pd.NaT or pd.isna(stamp):
+        return None
+    return stamp.strftime("%Y-%m-%d")
 
 
 def _format_freshness_section(state: dict) -> str | None:
@@ -428,9 +456,13 @@ def generate_report(state: dict) -> dict:
         ("chart_market_share", "全球市场份额"),
     ]
 
+    # 行情数据截止声明（agent-node-contracts）：确定性取 kline 最后交易日，
+    # 缺失时整体省略——读者可从成稿直接判断行情新鲜度（如休市期间看到节前末日）
+    kline_cutoff = _kline_cutoff_date(state)
+    cutoff_seg = f" · 行情数据截止: {kline_cutoff}" if kline_cutoff else ""
     sections: list[str] = [
         f"# {stock_name}({stock_code}) 投资分析报告",
-        f"\n*报告日期: {date}" + (f" · 研究聚焦: {focus}*\n" if has_focus else "*\n"),
+        f"\n*报告日期: {date}{cutoff_seg}" + (f" · 研究聚焦: {focus}*\n" if has_focus else "*\n"),
     ]
 
     seq = 0  # 章节序号计数器，统一管理编号，避免硬编码错位
