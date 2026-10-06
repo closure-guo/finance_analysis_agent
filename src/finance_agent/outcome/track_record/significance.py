@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import logging
 import random
+
+logger = logging.getLogger(__name__)
 
 IC_MIN_SAMPLE = 10  # 单期可判定样本 < 10 → 该期「样本不足」，不进 ICIR
 ICIR_MIN_PERIODS = 6  # 有效期数 < 6 → ICIR 不展示
@@ -71,6 +74,19 @@ def icir(ic_series: list[dict]) -> float | None:
     return round(mu / sd, 4)
 
 
+def _draw_group_symbols(rng: random.Random, pool: list[str], n: int) -> tuple[list[str], bool]:
+    """单组（同归属日同方向）抽 n 个标的：**无放回**（对齐日主唯一性）。
+
+    日主去重后，真实组合在同一 (归属日, 方向) 内不可能两注同股（每 symbol 每归属日
+    至多一条日主观点）——零模型无放回才不产生真实组合支撑空间之外的样本。
+    n > len(pool) 理论不可达（真实组合注数 ≤ 池大小），回退有放回仅为防御路径，
+    返回 (symbols, fallback_used)，调用方负责在返回前 log。
+    """
+    if n <= len(pool):
+        return rng.sample(pool, n), False
+    return [rng.choice(pool) for _ in range(n)], True
+
+
 def simulate_random_excess(
     universe: list[str],
     long_counts: dict[str, int],
@@ -84,28 +100,37 @@ def simulate_random_excess(
 ) -> list[float]:
     """敞口对齐零模型：同 universe 随机替换选股，保持每归属日每方向注数一致（§1.9-v2）。
 
+    「随机替换选股」指替换标的身份，非有放回抽样：同 (归属日, 方向) 内**无放回**
+    （对齐日主唯一性，见 _draw_group_symbols）；跨方向 / 跨归属日独立抽取。
+    RNG 共享、种子注入、复现确定。
     closes: symbol → {date: close}（至少含各 entry 实际交易日与 exit_date 两档）；
     entry_map: 归属日 → 实际入场交易日（与真实组合 settle_entry_price 派生同源）。
-    每次模拟：各归属日按注数无放回抽取（RNG 共享、种子注入、复现确定）；每注收益 =
-    sign × (exit_close/entry_close − 1)；组合收益 = 全注等权均值；模拟超额 = 组合收益 −
-    benchmark_return（与真实读数同基准同窗）。返回长度 n_sims 的模拟超额列表。
+    每注收益 = sign × (exit_close/entry_close − 1)；组合收益 = 全注等权均值；模拟超额 =
+    组合收益 − benchmark_return（与真实读数同基准同窗）。返回长度 n_sims 的模拟超额列表。
     """
     rng = random.Random(seed)  # noqa: S311  蒙特卡洛零模型非密码用途；种子注入保证复现
-    plans: list[tuple[str, str, float]] = []
+    groups: list[tuple[str, float, int]] = []  # (entry 交易日, sign, 注数)；组间独立
     for day, n in long_counts.items():
-        plans += [(day, entry_map[day], 1.0)] * int(n)
+        if int(n) > 0:
+            groups.append((entry_map[day], 1.0, int(n)))
     for day, n in short_counts.items():
-        plans += [(day, entry_map[day], -1.0)] * int(n)
-    if not plans:
+        if int(n) > 0:
+            groups.append((entry_map[day], -1.0, int(n)))
+    if not groups:
         return []
     pool = [s for s in universe if s in closes]
     out: list[float] = []
+    fallback_used = False
     for _ in range(n_sims):
-        picks = [
-            rng.choice(pool) for _ in plans
-        ]  # 有放回近似（池≥注数×10 时差异可忽略；§1.9-v2 简化口径）
+        plans: list[tuple[str, float]] = []  # (entry, sign)，与 picks 一一对应
+        picks: list[str] = []
+        for entry, sign, n in groups:
+            syms, fell_back = _draw_group_symbols(rng, pool, n)
+            fallback_used = fallback_used or fell_back
+            plans += [(entry, sign)] * n
+            picks += syms
         rets = []
-        for (_day, entry, sign), sym in zip(plans, picks, strict=True):
+        for (entry, sign), sym in zip(plans, picks, strict=True):
             entry_close = closes[sym].get(entry)
             exit_close = closes[sym].get(exit_date)
             if not entry_close or not exit_close:
@@ -114,6 +139,13 @@ def simulate_random_excess(
         if not rets:
             continue
         out.append(sum(rets) / len(rets) - benchmark_return)
+    if fallback_used:
+        logger.warning(
+            "simulate_random_excess: 存在注数(%d)超过池大小(%d)的组，同组回退有放回抽样——"
+            "零模型样本含真实组合支撑空间外情形，结果不可用于显著性终裁",
+            max(n for _, _, n in groups),
+            len(pool),
+        )
     return out
 
 

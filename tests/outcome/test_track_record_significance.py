@@ -1,6 +1,10 @@
 """add-prediction-pool-integrity Task 5:IC/ICIR/蒙特卡洛零模型纯函数。"""
 
+import logging
+import random
+
 from finance_agent.outcome.track_record.significance import (
+    _draw_group_symbols,
     excess_quantile,
     icir,
     monthly_ic,
@@ -102,3 +106,45 @@ class TestMonteCarlo:
         """右尾定位含真实读数自身：p=(greater+1)/(n+1) 保守口径。"""
         q = excess_quantile(0.10, [0.01, 0.02, 0.03])
         assert q["n_sims"] == 3 and q["quantile"] == 1.0 and q["p_value"] == 0.25
+
+
+class TestWithoutReplacement:
+    """零模型无放回口径（裁决：同 (归属日, 方向) 内无放回，对齐日主唯一性）。"""
+
+    UNIVERSE = ["600519", "000001", "600030", "601818", "300750"]
+
+    def test_group_draw_no_duplicates_within_direction(self):
+        """注数 3、池 5：单次组抽取内同方向 symbol 无重复（固定种子重放 100 次）。"""
+        rng = random.Random(42)  # noqa: S311  固定种子重放抽样序列，非密码用途
+        for _ in range(100):
+            syms, fell_back = _draw_group_symbols(rng, self.UNIVERSE, 3)
+            assert fell_back is False
+            assert len(syms) == 3 and len(set(syms)) == 3
+
+    def test_group_draw_falls_back_when_pool_too_small(self):
+        """注数 > 池大小（理论不可达）：回退有放回，不抛异常、返回注数个标的。"""
+        rng = random.Random(42)  # noqa: S311  固定种子复现回退路径，非密码用途
+        syms, fell_back = _draw_group_symbols(rng, ["600519", "000001"], 3)
+        assert fell_back is True and len(syms) == 3
+
+    def test_pool_too_small_logs_warning_before_return(self, caplog):
+        """走公开 API 触发回退：返回前 log warning，不抛异常，仍返回 n_sims 条模拟。"""
+        closes = {
+            "600519": {"2026-11-03": 10.0, "2026-12-01": 11.0},
+            "000001": {"2026-11-03": 10.0, "2026-12-01": 9.0},
+        }
+        with caplog.at_level(logging.WARNING):
+            sims = simulate_random_excess(
+                universe=["600519", "000001"],
+                long_counts={"2026-11-03": 3},
+                short_counts={},
+                closes=closes,
+                entry_map={"2026-11-03": "2026-11-03"},
+                exit_date="2026-12-01",
+                benchmark_return=0.0,
+                n_sims=5,
+                seed=42,
+            )
+        assert len(sims) == 5
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings and "回退" in warnings[0].message
