@@ -93,6 +93,42 @@ def derive_entry(prediction: dict, kline: pd.DataFrame) -> tuple[str, float] | N
     return str(row["日期"]), float(row["收盘"])
 
 
+def derive_attribution_date(created_at: str, calendar: list[str]) -> str:
+    """决策归属日：收盘前产出→当日（或其后首个交易日）；收盘后/非交易日→次一/首个交易日。
+
+    与 derive_entry 同源（同用 CLOSE_TIME_CUTOFF，口径 §1.9-v2）；calendar 为升序
+    交易日字符串列表（日批判定传基准指数交易日）。晚于全部交易日或空日历 → 返回
+    产出日本身（降级：同日去重仍按自然日成立）。
+    """
+    day, _, time_part = str(created_at).partition("T")
+    before_close = (time_part or "00:00:00")[:5] < CLOSE_TIME_CUTOFF
+    if before_close:
+        for d in calendar:
+            if d >= day:
+                return d
+    else:
+        for d in calendar:
+            if d > day:
+                return d
+    return day
+
+
+def day_master_ids(predictions: list[dict], calendar: list[str]) -> set[str]:
+    """日主观点 id 集合：同 (symbol, 归属日) 取 created_at 最晚者（§1.9-v2 样本口径）。
+
+    同 created_at 并列时取 prediction_id 最大者（uuid hex，确定性 tiebreak）。
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for p in predictions:
+        day = derive_attribution_date(str(p["created_at"]), calendar)
+        groups.setdefault((str(p["symbol"]), day), []).append(p)
+    masters: set[str] = set()
+    for group in groups.values():
+        winner = max(group, key=lambda p: (str(p["created_at"]), str(p["prediction_id"])))
+        masters.add(str(winner["prediction_id"]))
+    return masters
+
+
 def resolve_prediction(
     prediction: dict,
     kline: pd.DataFrame,

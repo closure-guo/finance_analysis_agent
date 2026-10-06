@@ -11,6 +11,8 @@ import pandas as pd
 from finance_agent.outcome.track_record.judgment import (
     Resolution,
     _effective_horizon,
+    day_master_ids,
+    derive_attribution_date,
     derive_entry,
     direction_for_action,
     resolve_prediction,
@@ -278,3 +280,61 @@ def test_direction_for_action_single_source_across_consumers():
 
     assert ingest.direction_for_action is direction_for_action
     assert model.direction_for_action is direction_for_action
+
+
+# ---- add-prediction-pool-integrity: 归属日 + 日主视图 ----
+
+
+class TestDeriveAttributionDate:
+    CALENDAR = ["2026-10-09", "2026-10-12", "2026-10-13"]  # 10/10、10/11 为周末
+
+    def test_before_close_attributes_to_same_trading_day(self):
+        # 收盘前产出 → 归属当日交易日（10-09 为交易日，10:00 产出 → 归属 10-09）
+        assert derive_attribution_date("2026-10-09T10:00:00", self.CALENDAR) == "2026-10-09"
+
+    def test_after_close_attributes_to_next_trading_day(self):
+        # 收盘后产出 → 归属次一交易日
+        assert derive_attribution_date("2026-10-09T18:01:00", self.CALENDAR) == "2026-10-12"
+
+    def test_non_trading_day_attributes_to_first_trading_day_after(self):
+        # 非交易日产出（无论时点）→ 归属其后首个交易日（周六 10-10、周日 10-11 → 10-12）
+        assert derive_attribution_date("2026-10-10T11:00:00", self.CALENDAR) == "2026-10-12"
+        assert derive_attribution_date("2026-10-11T20:00:00", self.CALENDAR) == "2026-10-12"
+
+    def test_after_all_trading_days_falls_back_to_created_day(self):
+        # 晚于全部交易日 → 回退产出日本身
+        assert derive_attribution_date("2026-10-20T10:00:00", self.CALENDAR) == "2026-10-20"
+
+    def test_empty_calendar_falls_back_to_created_day(self):
+        # 空日历 → 回退产出日
+        assert derive_attribution_date("2026-10-09T18:00:00", []) == "2026-10-09"
+
+
+class TestDayMasterIds:
+    CALENDAR = TestDeriveAttributionDate.CALENDAR
+
+    def _p(self, pid, created, symbol="600519.SH"):
+        return {"prediction_id": pid, "symbol": symbol, "created_at": created}
+
+    def test_same_day_group_takes_latest_created_at(self):
+        # 同日多条取 created_at 最晚；收盘后产出归属次一交易日，独立成组
+        preds = [
+            self._p("a", "2026-10-09T10:00:00"),
+            self._p("b", "2026-10-09T18:01:00"),  # 收盘后 → 归属 10-12，不与上两条同组
+            self._p("c", "2026-10-09T11:00:00"),
+        ]
+        masters = day_master_ids(preds, self.CALENDAR)
+        assert masters == {"b", "c"}  # a/c 同日（10-09）取晚的 c；b 归属 10-12 独立成主
+
+    def test_tie_takes_max_prediction_id(self):
+        # 同 created_at 并列取 prediction_id 最大
+        preds = [self._p("z", "2026-10-09T10:00:00"), self._p("a", "2026-10-09T10:00:00")]
+        assert day_master_ids(preds, self.CALENDAR) == {"z"}
+
+    def test_different_symbols_not_merged(self):
+        # 跨标的不合并
+        preds = [
+            self._p("a", "2026-10-09T10:00:00", symbol="600519.SH"),
+            self._p("b", "2026-10-09T10:00:00", symbol="000001.SZ"),
+        ]
+        assert day_master_ids(preds, self.CALENDAR) == {"a", "b"}
