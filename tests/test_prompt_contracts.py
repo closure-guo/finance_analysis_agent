@@ -280,3 +280,24 @@ class TestNarrativeFreshnessContract:
         assert "最新披露期次" in src
         assert "并列呈现" in src
         assert "单边" in src
+
+
+class TestSentimentExternalCaliberDisclosure:
+    """spec agent-prompt-contracts「舆情分析师外部口径显式化」（issue #233）。
+
+    板块/行业/全市场口径的市场数据出现在个股报告语境时，必须显式标注口径主体
+    与来源属性，防止读者误读为个股自身口径（第七轮评审 688072 实证：科创板
+    板块主力净流入 10.31 亿被表述为个股报告正文而未标注口径）。
+    """
+
+    def test_sentiment_prompt_carries_caliber_explicitization(self):
+        text = _load("sentiment_analyst.md")
+        # 口径主体粒度（板块/行业/全市场）显式出现
+        assert "板块" in text
+        assert "全市场" in text
+        # 来源属性标注要求（新闻源口径）
+        assert "新闻源口径" in text
+        # 反误读约束：MUST NOT 使读者误读为个股口径
+        assert "误读" in text
+        # 口径主体未明时的降权处理
+        assert "口径主体未明" in text
