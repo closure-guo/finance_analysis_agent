@@ -99,7 +99,7 @@ class TestMonteCarlo:
     def test_monte_carlo_exposure_aligned_and_reproducible(self):
         """敞口对齐：模拟注数与真实组合每归属日每方向一致；同种子结果复现。"""
         kwargs: dict = {
-            "universe": self.UNIVERSE,
+            "universe_by_day": {"2026-11-03": self.UNIVERSE},
             "long_counts": {"2026-11-03": 2},
             "short_counts": {"2026-11-03": 1},
             "closes": self._closes(),
@@ -141,7 +141,10 @@ class TestMonteCarlo:
             "2026-12-01": 103.0,
         }
         sims = simulate_random_excess(
-            universe=universe,
+            universe_by_day={
+                "2026-11-03": universe,
+                "2026-11-04": universe,
+            },
             long_counts={"2026-11-03": 2, "2026-11-04": 1},
             short_counts={},
             closes=closes,
@@ -190,7 +193,7 @@ class TestWithoutReplacement:
         }
         with caplog.at_level(logging.WARNING):
             sims = simulate_random_excess(
-                universe=["600519", "000001"],
+                universe_by_day={"2026-11-03": ["600519", "000001"]},
                 long_counts={"2026-11-03": 3},
                 short_counts={},
                 closes=closes,
@@ -205,11 +208,11 @@ class TestWithoutReplacement:
         assert warnings and "回退" in warnings[0].message
 
     def test_empty_pool_returns_empty_with_warning(self, caplog):
-        """pool 为空（universe 无一含行情）：不抛 IndexError，warning + 返回空列表。"""
-        closes = {"000001": {"2026-11-03": 10.0, "2026-12-01": 9.0}}  # universe 标的不在 closes
+        """某日池过滤后为空（该日无一标的行情齐全）：不抛异常，warning + 返回空列表。"""
+        closes = {"000001": {"2026-11-03": 10.0, "2026-12-01": 9.0}}  # 池内 600519 无行情
         with caplog.at_level(logging.WARNING):
             sims = simulate_random_excess(
-                universe=["600519"],
+                universe_by_day={"2026-11-03": ["600519"]},
                 long_counts={"2026-11-03": 2},
                 short_counts={},
                 closes=closes,
@@ -221,3 +224,71 @@ class TestWithoutReplacement:
             )
         assert sims == []
         assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+class TestPerDayUniverse:
+    """per-day universe 口径（§1.9-v2「归属日当日起作用的池」；结算报告消费端）。"""
+
+    EXIT = "2026-12-01"
+    BENCH = {"2026-11-03": 100.0, "2026-11-04": 100.0, "2026-12-01": 100.0}
+
+    def test_stock_missing_entry_day_close_excluded_from_that_day_pool(self):
+        """X 缺 A 日收盘但有 B 日：A 日抽样池不含 X（旧全局过滤一次的口径病必红）。
+
+        A 日池过滤后只剩 Y（池内唯一）→ 每轮两槽全有效 → n_sims 条全产出且值恒定
+        （Y 的 A 槽 0.2 + X 的 B 槽 0.1 等权均值 0.15）。旧实现全局过滤会把 X 留在
+        池里再被逐槽剔除：A 日抽中 X 的轮次只剩 B 单槽 → 值 0.1，均值不恒定。
+        """
+        closes = {
+            "X": {"2026-11-04": 10.0, "2026-12-01": 11.0},  # 缺 A 日（11-03）收盘
+            "Y": {"2026-11-03": 10.0, "2026-12-01": 12.0},
+        }
+        sims = simulate_random_excess(
+            universe_by_day={"2026-11-03": ["X", "Y"], "2026-11-04": ["X"]},
+            long_counts={"2026-11-03": 1, "2026-11-04": 1},
+            short_counts={},
+            closes=closes,
+            entry_map={"2026-11-03": "2026-11-03", "2026-11-04": "2026-11-04"},
+            exit_date=self.EXIT,
+            benchmark_closes=self.BENCH,
+            n_sims=50,
+            seed=42,
+        )
+        assert len(sims) == 50
+        assert all(s == pytest.approx((0.2 + 0.1) / 2) for s in sims)
+
+    def test_stock_usable_on_day_with_complete_closes(self):
+        """X 仅缺 A 日：B 日池仍含 X——per-day 过滤不是全局拉黑（B 槽仍可能抽中 X）。"""
+        closes = {
+            "X": {"2026-11-04": 10.0, "2026-12-01": 11.0},  # 缺 A 日收盘，B 日齐全
+            "Y": {"2026-11-03": 10.0, "2026-12-01": 12.0},
+        }
+        sims = simulate_random_excess(
+            universe_by_day={"2026-11-03": ["X"], "2026-11-04": ["X", "Y"]},
+            long_counts={"2026-11-03": 1, "2026-11-04": 1},
+            short_counts={},
+            closes=closes,
+            entry_map={"2026-11-03": "2026-11-03", "2026-11-04": "2026-11-04"},
+            exit_date=self.EXIT,
+            benchmark_closes=self.BENCH,
+            n_sims=50,
+            seed=42,
+        )
+        # A 日池过滤后为空 → 该组跳过；B 日每轮单槽 = X(0.1) 或 Y(0.2)
+        assert len(sims) == 50
+        assert all(abs(s - 0.1) < 1e-9 or abs(s - 0.2) < 1e-9 for s in sims)
+
+    def test_missing_day_key_raises_keyerror(self):
+        """universe_by_day 缺归属日键 = 行情面板装配缺陷：fail loud 抛 KeyError。"""
+        with pytest.raises(KeyError):
+            simulate_random_excess(
+                universe_by_day={},  # 缺 2026-11-03
+                long_counts={"2026-11-03": 1},
+                short_counts={},
+                closes={"X": {"2026-11-03": 10.0, "2026-12-01": 11.0}},
+                entry_map={"2026-11-03": "2026-11-03"},
+                exit_date=self.EXIT,
+                benchmark_closes=self.BENCH,
+                n_sims=5,
+                seed=42,
+            )
