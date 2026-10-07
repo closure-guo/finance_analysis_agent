@@ -131,7 +131,9 @@ def settle_open_predictions(
         "duplicates_closed": 0,
     }
     try:
-        open_preds = list_predictions(status="open", db_path=db_path)
+        # 显式 limit=100_000（与 model.py 钳制上限一致）：open 池日批必须全量读取，
+        # 默认 50 会静默截断（生产库 76 条 open 时最老 26 条永不进判定/盯市）
+        open_preds = list_predictions(status="open", db_path=db_path, limit=100_000)
     except Exception as e:  # noqa: BLE001
         logger.error("读取 open 观点失败,本批终止: %s", e)
         result["errors"] += 1
@@ -229,7 +231,8 @@ def settle_open_predictions(
     # 最晚者进入 horizon 判定,其余关闭为 duplicate_of_day(无读数、不计分母、
     # 不上报 Score;§1.9-v2)。基准行情缺失 → calendar 空 → 归属日退化为自然日,
     # 同日去重仍成立(降级模式,日志 WARN)。
-    remaining_open = list_predictions(status="open", db_path=db_path)
+    # 同款显式 limit=100_000：重读漏传会截掉最老观点，日主/horizon 判定不完整
+    remaining_open = list_predictions(status="open", db_path=db_path, limit=100_000)
     calendar = (
         [str(d) for d in benchmark["日期"]] if benchmark is not None and not benchmark.empty else []
     )

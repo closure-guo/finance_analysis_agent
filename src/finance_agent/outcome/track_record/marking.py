@@ -107,7 +107,10 @@ def mark_open_predictions(
     result = {"marked": 0, "skipped": 0, "errors": 0}
 
     try:
-        open_preds = list_predictions(status="open", db_path=db_path)
+        # 显式 limit=100_000（与 model.py 钳制上限一致）：盯市必须覆盖全量 open，
+        # 默认 50 会静默截断（最老观点漏盯市）；回归钉见 test_track_record_job.py
+        # test_open_pool_beyond_50_rows_not_truncated
+        open_preds = list_predictions(status="open", db_path=db_path, limit=100_000)
     except Exception as e:  # noqa: BLE001
         logger.error("读取 open 观点失败,盯市批终止: %s", e)
         result["errors"] += 1

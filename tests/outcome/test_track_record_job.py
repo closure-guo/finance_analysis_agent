@@ -565,6 +565,41 @@ def test_superseded_settles_before_duplicate_dedup_in_same_day_chain(tmp_path):
     assert all(r["status"] != "duplicate_of_day" for r in rows.values() if r["direction"] == "long")
 
 
+def test_open_pool_beyond_50_rows_not_truncated(tmp_path):
+    """>50 条 open 全量进入判定（修复波 F1：open 池读取截断回归钉）。
+
+    list_predictions 默认 limit=50 会把 open 池静默截断——生产库 76 条 open 时
+    最老 26 条永远不进判定/盯市。日批三处取数调用点必须显式 limit=100_000
+    （与 model.py 钳制上限一致）：
+      1. job.settle_open_predictions 首读（superseded 分组）
+      2. job.settle_open_predictions remaining_open 重读（日主/horizon 判定）
+      3. marking.mark_open_predictions（盯市）
+    本例 55 条 open，最老两行构成 supersede 对：截断首读 → superseded 丢成 0；
+    截断重读 → horizon 判定只处理最新 50 条 → settled 丢成 50。两条断言分别
+    钉住 job 两处读数；marking 层为同款显式 limit（见该调用点注释）。
+    """
+    db = _db(tmp_path)
+    # 最老两行：同标的方向反转（long → short）→ 阶段一应 supersede 旧观点
+    old = _insert(db, symbol="600000.SH", direction="long", created="2026-09-01T09:59:00")
+    _insert(db, symbol="600000.SH", direction="short", created="2026-09-01T10:00:00")
+    # 其余 53 个标的各 1 条 → 共 55 条 open（created_at 依次递增，截断丢最老 5 条）
+    for i in range(1, 54):
+        _insert(db, symbol=f"600{i:03d}.SH", created=f"2026-09-01T10:{i:02d}:00")
+    kline = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 115]
+    codes = [f"600{i:03d}" for i in range(0, 54)]
+    client = _StubClient(
+        {c: _kline(kline) for c in codes},
+        benchmark=_kline([4000.0] * 11, start="2026-09-01"),
+    )
+    result = settle_open_predictions(client=client, db_path=db)
+    assert result["errors"] == 0
+    assert result["superseded"] == 1  # 截断首读 → 0（最老 pair 被丢出池）
+    assert result["settled"] == 54  # 截断重读 → 50（只判最新 50 条）
+    assert result["duplicates_closed"] == 0
+    rows = {r["prediction_id"]: r for r in list_predictions(limit=100_000, db_path=db)}
+    assert rows[old]["resolution_rule"] == "superseded"
+
+
 def test_cross_day_predictions_are_each_day_master(tmp_path):
     """跨日两条各自为日主：归属日不同 → 不去重，duplicates_closed == 0，各自独立判定。"""
     db = _db(tmp_path)
