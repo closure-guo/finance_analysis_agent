@@ -26,6 +26,7 @@ from finance_agent.outcome.track_record.model import (
     insert_daily_mark,
     insert_prediction,
     list_daily_marks,
+    update_prediction_status,
     upsert_equity_point,
     upsert_metrics_daily,
 )
@@ -698,3 +699,70 @@ class TestSchedulerJobs:
             assert "decision_settle_daily" in jobs
             assert "daily_marking" in jobs
             assert "metrics_snapshot" in jobs
+
+
+# ---- add-prediction-pool-integrity: duplicate 行 marks 不进组合 ----
+
+
+def test_duplicate_marks_excluded_from_portfolio_aggregation(db):
+    """部署前残留的 duplicate marks 行不得进组合净值。
+
+    master 正常盯市（+1%→+2%），dup 为关闭前已写入的残留（+50%→+60%）；
+    排除 dup 后净值只由 master 推进：首盯市日贡献 0（次日 nav=1.01），
+    若混入 dup 则次日 nav≈1.055。
+    """
+    insert_daily_mark("p_master", "2026-10-09", cum_return=0.01, benchmark_price=4000.0, db_path=db)
+    insert_daily_mark("p_master", "2026-10-10", cum_return=0.02, benchmark_price=4010.0, db_path=db)
+    insert_daily_mark("p_dup", "2026-10-09", cum_return=0.50, benchmark_price=4000.0, db_path=db)
+    insert_daily_mark("p_dup", "2026-10-10", cum_return=0.60, benchmark_price=4010.0, db_path=db)
+    pm = compute_metrics_from_marks(
+        list_daily_marks(db_path=db),
+        exclude_prediction_ids={"p_dup"},
+    )
+    assert abs(pm.nav_points[1]["agent_nav"] - 1.01) < 1e-6
+
+
+def test_build_equity_curve_points_excludes_neutral_and_duplicate(db):
+    """净值聚合排除集合 = neutral ∪ duplicate。
+
+    库内仅剩 neutral 与 duplicate_of_day 两类行各一份 mark，两者都必须被
+    排除——否则 dup 残留 marks 混入净值曲线（部署前数据永久留表）。
+    全部排除后无 marks 可聚合 → 空点列。
+    """
+    neu_id = _insert(db, prediction_id="p_neu", direction="neutral")
+    dup_id = _insert(db, prediction_id="p_dup", direction="long")
+    update_prediction_status(
+        dup_id,
+        {"status": "duplicate_of_day", "resolution_rule": "duplicate_of_day"},
+        db_path=db,
+    )
+    insert_daily_mark(neu_id, "2026-10-09", cum_return=0.30, benchmark_price=4000.0, db_path=db)
+    insert_daily_mark(dup_id, "2026-10-09", cum_return=0.40, benchmark_price=4000.0, db_path=db)
+    assert build_equity_curve_points(db_path=db) == []
+
+
+def test_superseded_marks_kept_in_portfolio_aggregation(db):
+    """修复波 F3（钉行为，现状应绿）：superseded 行有 marks → 仍进 NAV 聚合。
+
+    metrics 排除集合 = neutral ∪ duplicate_of_day；superseded 提前结算保留完整
+    读数链（§1.9-v2），MUST NOT 被误排除——否则其持仓期收益将从净值曲线消失。
+    断言形态与上方 duplicate 排除用例对照：同款 marks（+1%→+2%）进聚合时
+    首盯市日贡献 0 → 次日 nav = 1.01。
+    """
+    sup_id = _insert(db, prediction_id="p_sup")
+    update_prediction_status(
+        sup_id,
+        {
+            "status": "resolved_win",
+            "resolution_rule": "superseded",
+            "exit_price": 115.0,
+            "raw_return": 0.15,
+            "resolved_at": "2026-10-10",
+        },
+        db_path=db,
+    )
+    insert_daily_mark(sup_id, "2026-10-09", cum_return=0.01, benchmark_price=4000.0, db_path=db)
+    insert_daily_mark(sup_id, "2026-10-10", cum_return=0.02, benchmark_price=4010.0, db_path=db)
+    points = build_equity_curve_points(db_path=db)
+    assert len(points) == 2
+    assert abs(points[1]["agent_nav"] - 1.01) < 1e-6

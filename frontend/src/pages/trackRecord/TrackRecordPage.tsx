@@ -489,7 +489,9 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             </div>
           ) : (
             <>
-              <div className="rounded-xl overflow-hidden border" style={{ borderColor: 'var(--border-neutral-l1)' }}>
+              {/* prediction-log = 观点日志表格容器测试钩子（add-prediction-pool-integrity
+                  Task 8，纯属性不改布局）；空态时本元素不渲染（走 track-record-empty） */}
+              <div className="rounded-xl overflow-hidden border" data-testid="prediction-log" style={{ borderColor: 'var(--border-neutral-l1)' }}>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-xs" style={{ color: 'var(--text-tertiary)' }}>

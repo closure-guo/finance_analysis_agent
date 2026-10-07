@@ -62,6 +62,8 @@ PREDICTIONS_STATUSES = (
     # neutral 回避判定的生命周期终态（结果本身在 avoidance_status 列）
     "avoidance",
     "unresolvable",
+    # 同日重复观点关闭终态（add-prediction-pool-integrity）：无结算读数、不计统计分母
+    "duplicate_of_day",
 )
 _FROZEN_FIELDS = (
     "direction",
@@ -864,6 +866,7 @@ _STATUS_LABELS = {
     "中性": "resolved_neutral",
     "回避": "avoidance",
     "不可判定": "unresolvable",
+    "同日重复": "duplicate_of_day",
 }
 
 
@@ -927,7 +930,10 @@ def list_predictions(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> list[dict[str, Any]]:
-    limit = max(1, min(int(limit), 100))
+    # 上限 100_000:add-prediction-pool-integrity P1——生产库已 127 行,旧钳 100 会把
+    # 显著性端点(limit=10000)静默截到 100 行、丢最老结算月。仅放宽上限:默认 50 不动,
+    # 未显式传大值的既有调用方行为不变(无 offset 分页,无 tiebreaker 丢重行风险)。
+    limit = max(1, min(int(limit), 100_000))
     conn = _connect(db_path)
     try:
         clauses, params = _prediction_filters(
@@ -1073,6 +1079,18 @@ def avoidance_stats(
             "settled": settled,
             "avoidance_rate": round(wins / settled, 4) if settled else None,
         }
+    finally:
+        conn.close()
+
+
+def duplicate_prediction_ids(db_path: str | Path | None = None) -> set[str]:
+    """resolution_rule='duplicate_of_day' 的行 id（marks 聚合排除用；§1.9-v2）。"""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT prediction_id FROM predictions WHERE resolution_rule='duplicate_of_day'"
+        ).fetchall()
+        return {str(r["prediction_id"]) for r in rows}
     finally:
         conn.close()
 

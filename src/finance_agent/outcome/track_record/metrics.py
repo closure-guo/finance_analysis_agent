@@ -300,15 +300,20 @@ def build_equity_curve_points(
     """读库内全部 daily_marks → 净值点序列（供 equity_curve 表与 API 共用）。
 
     calendar_dates/benchmark_by_date 由日批透传（基准交易日历与收盘）；缺省
-    退化为 marks-only 口径。neutral 方向观点一律排除（incident 032 根因 A）。
+    退化为 marks-only 口径。neutral 方向观点一律排除（incident 032 根因 A）；
+    duplicate_of_day 行部署前残留的 marks 一并排除（§1.9-v2）——superseded
+    行读数合法，保留。
     """
     from finance_agent.outcome.track_record.model import (
+        duplicate_prediction_ids,
         list_daily_marks,
         prediction_ids_by_direction,
     )
 
     marks = list_daily_marks(db_path=db_path)
-    excl = prediction_ids_by_direction("neutral", db_path=db_path)
+    excl = prediction_ids_by_direction("neutral", db_path=db_path) | duplicate_prediction_ids(
+        db_path=db_path
+    )
     return compute_metrics_from_marks(
         marks,
         calendar_dates=calendar_dates,
@@ -326,17 +331,21 @@ def compute_metrics_snapshot(
 
     头条口径按 `horizon_days=DEFAULT_HORIZON_DAYS` 过滤（与 overview 同口径），
     避免日批快照把跨切点的 252 存量行混入同一读数（口径切点分段，metrics.md §1.9）。
-    组合指标聚合排除 neutral 方向观点（incident 032 根因 A）。
+    组合指标聚合排除 neutral 方向观点（incident 032 根因 A）与 duplicate_of_day
+    行残留 marks（§1.9-v2）。
     """
     from finance_agent.outcome.track_record.judgment import DEFAULT_HORIZON_DAYS
     from finance_agent.outcome.track_record.model import (
+        duplicate_prediction_ids,
         list_daily_marks,
         prediction_ids_by_direction,
         prediction_stats,
     )
 
     stats = prediction_stats(source_type=None, db_path=db_path, horizon_days=DEFAULT_HORIZON_DAYS)
-    excl = prediction_ids_by_direction("neutral", db_path=db_path)
+    excl = prediction_ids_by_direction("neutral", db_path=db_path) | duplicate_prediction_ids(
+        db_path=db_path
+    )
     marks = list_daily_marks(db_path=db_path)
     # update-risk-free-rate-source：库内 rf 序列（空表 → risk_free_series 内部
     # 回退常数 TRACK_RISK_FREE_RATE，快照照常产出）
@@ -372,10 +381,13 @@ def recompute_rf_metrics_history(db_path: Any = None) -> list[dict[str, Any]]:
 
     as-of 纪律：重算某 metric_date 行只用 mark_date ≤ 该日数据；基准收益取
     marks 内 benchmark_price（marks-only 口径，不拉今日行情——as-of 保真）。
+    聚合排除 neutral 方向观点（incident 032 根因 A）与 duplicate_of_day 行
+    残留 marks（§1.9-v2）。
     只 UPDATE sharpe/beta/jensen_alpha 三列（rf 相关）；年化/波动/回撤/风险分
     口径未变，保留原值。返回逐行前后对照。
     """
     from finance_agent.outcome.track_record.model import (
+        duplicate_prediction_ids,
         list_daily_marks,
         list_metric_dates,
         prediction_ids_by_direction,
@@ -384,7 +396,9 @@ def recompute_rf_metrics_history(db_path: Any = None) -> list[dict[str, Any]]:
     from finance_agent.outcome.track_record.risk_free import risk_free_series
 
     marks_all = list_daily_marks(db_path=db_path)
-    excl = prediction_ids_by_direction("neutral", db_path=db_path)
+    excl = prediction_ids_by_direction("neutral", db_path=db_path) | duplicate_prediction_ids(
+        db_path=db_path
+    )
     out: list[dict[str, Any]] = []
     for md in list_metric_dates(db_path=db_path):
         marks = [m for m in marks_all if str(m["mark_date"]) <= md]

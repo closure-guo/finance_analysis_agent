@@ -464,7 +464,8 @@ export interface DecisionStats {
 // 观点判定状态（add-track-record：与后端 PREDICTIONS_STATUSES 一致）
 // avoidance = neutral 观点回避判定的生命周期终态（细粒度结果 avoidance_win/loss/neutral 在
 // avoidance_status 列，不进胜率）——update-decision-settlement-contract
-export type PredictionStatus = 'open' | 'resolved_win' | 'resolved_loss' | 'resolved_neutral' | 'avoidance' | 'unresolvable'
+// duplicate_of_day = 同日重复观点关闭终态，无结算读数、不计统计分母——add-prediction-pool-integrity
+export type PredictionStatus = 'open' | 'resolved_win' | 'resolved_loss' | 'resolved_neutral' | 'avoidance' | 'unresolvable' | 'duplicate_of_day'
 export type PredictionDirection = 'long' | 'short' | 'neutral'
 
 // 观点记录（GET /api/v1/track-record/predictions 返回项）

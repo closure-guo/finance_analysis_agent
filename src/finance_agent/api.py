@@ -695,8 +695,9 @@ if TESTING:
         顶层可选 pipeline_timelines（{node: [TimelineItem]}）与 pipeline_snapshot（dict），
         分别经 update_pipeline_timelines / update_pipeline_snapshot 落库，
         供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）；
-        顶层可选 track_record（{equity_curve, index_closes, metrics_snapshot}）写战绩页造数表
-        （add-index-performance-compare / add-portfolio-beta-alpha），无需 chat_history
+        顶层可选 track_record（{equity_curve, index_closes, metrics_snapshot,
+        predictions}）写战绩页造数表（add-index-performance-compare /
+        add-portfolio-beta-alpha / add-prediction-pool-integrity），无需 chat_history
         也可单独使用，且不创建会话。
         """
         # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约；
@@ -734,6 +735,44 @@ if TESTING:
             metrics_snapshot = track_seed.get("metrics_snapshot")
             if isinstance(metrics_snapshot, dict):
                 upsert_metrics_daily(_track_as_of(), metrics_snapshot)
+            # predictions 造数（add-prediction-pool-integrity）：duplicate 徽标 E2E 用。
+            # open 行原样插入；非 open 状态经 update_prediction_status 置终态，与生产
+            # dedup/判定同一条状态变更路径（产生审计行）。逐行落 predictions 表，
+            # 库路径与上方造数同源（模块默认,随 SESSIONS_DB_PATH 指向测试库）。
+            seed_predictions = track_seed.get("predictions")
+            if isinstance(seed_predictions, list):
+                from finance_agent.outcome.track_record.model import (
+                    insert_prediction as _seed_insert_prediction,
+                )
+                from finance_agent.outcome.track_record.model import (
+                    update_prediction_status as _seed_update_status,
+                )
+
+                for row in seed_predictions:
+                    pid = _seed_insert_prediction(
+                        {
+                            "source_type": "live",
+                            "symbol": row["symbol"],
+                            "symbol_name": row.get("symbol_name", row["symbol"]),
+                            "direction": row.get("direction", "neutral"),
+                            "entry_price": row.get("entry_price", 10.0),
+                            "target_price": row.get("target_price"),
+                            "horizon_days": row.get("horizon_days", 20),
+                            "confidence": row.get("confidence", 0.6),
+                            "rationale_snapshot": {},
+                            "langfuse_trace_id": None,
+                            "created_at": row["created_at"],
+                            "resolution_rule": None,
+                        }
+                    )
+                    if row.get("status") and row["status"] != "open":
+                        resolved: dict[str, Any] = {
+                            "status": row["status"],
+                            "resolution_rule": row.get("resolution_rule", row["status"]),
+                        }
+                        if row.get("resolved_at"):
+                            resolved["resolved_at"] = row["resolved_at"]
+                        _seed_update_status(pid, resolved)
         # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
         if "chat_history" not in req:
             return {"status": "ok", "mode": "testing"}
@@ -2351,6 +2390,46 @@ async def track_record_calibration() -> dict[str, Any]:
         "buckets": result.buckets,
         "brier": result.brier,
         "sample_size": result.sample_size,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/significance")
+async def track_record_significance() -> dict[str, Any]:
+    """结算显著性与信号一致性只读端点（add-prediction-pool-integrity；口径 §1.9-v2）。
+
+    只读、不触发写操作。IC 只消费日主口径已判定行：先滤 resolution_rule=
+    'duplicate_of_day'，再以 duplicate_prediction_ids() 二次防御（§1.9-v2：
+    duplicate 永不进入）；long/short 方向 IC 与 neutral 回避序列分别成列。
+
+    蒙特卡洛零模型：本端点恒为 available=false + reason（首批 T+20 结算时由结算
+    报告任务产出，需个股行情面板，端点只披露可用状态）。红线「日主可判定样本
+    <10 零模型 SHALL NOT 产出」由 11 月结算报告任务在消费 simulate_random_excess
+    前执行（预登记 §1.9-v2），不在本端点判定；抽样 10,000 次为预登记默认值，
+    本端点不提供配置项。「结论必附分位」契约由响应形态保证：excess 点估计与
+    quantile/p_value 字段必须成对出现，本端点永不单独返回点估计。
+    """
+    from finance_agent.outcome.track_record.model import duplicate_prediction_ids, list_predictions
+    from finance_agent.outcome.track_record.significance import icir, monthly_ic
+
+    rows = await asyncio.to_thread(list_predictions, limit=10000)
+    dup_ids = await asyncio.to_thread(duplicate_prediction_ids)
+    clean = [
+        r
+        for r in rows
+        if r.get("resolution_rule") != "duplicate_of_day" and r["prediction_id"] not in dup_ids
+    ]
+    series = monthly_ic(clean, kind="direction")
+    avoidance = monthly_ic(clean, kind="avoidance")
+    return {
+        "ic_series": series,
+        "icir": icir(series),
+        "avoidance_series": avoidance,
+        "monte_carlo": {
+            "available": False,
+            "reason": "首批 T+20 结算时由结算报告任务产出（需个股行情面板）",
+        },
         "as_of": _track_as_of(),
         "disclaimer": _DISCLAIMER,
     }

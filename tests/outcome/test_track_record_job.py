@@ -483,3 +483,167 @@ def test_superseded_zero_entry_skips(tmp_path):
     assert row["status"] == "open"
     assert row["settle_entry_price"] is None
     assert row["resolution_rule"] is None
+
+
+# ---- add-prediction-pool-integrity: 日主两阶段判定 ----
+
+
+def _insert_open(db, symbol, created, direction="neutral", **kw):
+    """落一条 open 观点（timestamp 即 created_at；与 ingest 落库同形）。"""
+    return insert_prediction(
+        {
+            "source_type": "live",
+            "symbol": symbol,
+            "symbol_name": symbol,
+            "direction": direction,
+            "entry_price": 10.0,
+            "horizon_days": 20,
+            "confidence": 0.6,
+            "rationale_snapshot": {},
+            "langfuse_trace_id": None,
+            "timestamp": created,
+            "resolution_rule": None,
+        },
+        db_path=db,
+        **kw,
+    )
+
+
+def test_same_day_rerun_closes_earlier_open_as_duplicate_of_day(tmp_path):
+    """同日重跑：同 (symbol, 归属日) 仅 created_at 最晚者留池判定，其余关闭 duplicate_of_day。
+
+    duplicate 行无结算读数（raw_return/resolved_at 均 NULL）、resolution_rule 标记；
+    日主未到 horizon → 保持 open。
+    """
+    db = _db(tmp_path)
+    # 688072 同日 10:00 与 11:00 各一条 neutral（收盘前 → 同归属日）
+    _insert_open(db, "688072.SH", "2026-10-09T10:00:00")
+    _insert_open(db, "688072.SH", "2026-10-09T11:00:00")
+    klines = {"688072": _kline([10.0, 10.5, 11.0], start="2026-10-09")}
+    result = settle_open_predictions(
+        client=_StubClient(klines, benchmark=_kline([4000, 4010, 4020], start="2026-10-09")),
+        db_path=db,
+        langfuse=None,
+    )
+    rows = {r["prediction_id"]: r for r in list_predictions(db_path=db)}
+    assert result["duplicates_closed"] == 1
+    # 11:00（created_at 晚）为日主保持 open（未到 horizon）；10:00 关闭为 duplicate_of_day
+    dup_rows = [r for r in rows.values() if r["status"] == "duplicate_of_day"]
+    assert len(dup_rows) == 1
+    dup_row = dup_rows[0]
+    assert dup_row["created_at"].startswith("2026-10-09T10:00:00")  # 关的是早的那条
+    # duplicate 行无结算读数
+    assert dup_row["raw_return"] is None and dup_row["resolved_at"] is None
+    assert dup_row["resolution_rule"] == "duplicate_of_day"
+    master = next(r for r in rows.values() if r["status"] == "open")
+    assert master["created_at"].startswith("2026-10-09T11:00:00")  # 留的是晚的那条
+
+
+def test_superseded_settles_before_duplicate_dedup_in_same_day_chain(tmp_path):
+    """同日观点变更链：superseded 先行（阶段一，读数保留），重跑观点不被误关 duplicate。
+
+    short → long（方向变更 → 旧 short 按 superseded 结算保留读数），剩余 open 仅
+    long 一条 → 无同日重复可关，duplicates_closed == 0。
+    """
+    db = _db(tmp_path)
+    # 同日先 short 后 long（方向变更 → superseded 保留读数），再补一条 neutral 重跑
+    _insert_open(db, "600519.SH", "2026-10-09T10:00:00", direction="short")
+    _insert_open(db, "600519.SH", "2026-10-09T11:00:00", direction="long")
+    klines = {"600519": _kline([10.0, 10.5, 11.0], start="2026-10-09")}
+    result = settle_open_predictions(
+        client=_StubClient(klines, benchmark=_kline([4000, 4010, 4020], start="2026-10-09")),
+        db_path=db,
+        langfuse=None,
+    )
+    assert result["superseded"] == 1
+    assert result["duplicates_closed"] == 0
+    rows = {r["prediction_id"]: r for r in list_predictions(db_path=db)}
+    by_status = {}
+    for r in rows.values():
+        by_status.setdefault(r["status"], []).append(r)
+    assert "resolved_loss" in by_status or "resolved_win" in by_status  # short 被结算（读数保留）
+    assert all(r["status"] != "duplicate_of_day" for r in rows.values() if r["direction"] == "long")
+
+
+def test_open_pool_beyond_50_rows_not_truncated(tmp_path):
+    """>50 条 open 全量进入判定（修复波 F1：open 池读取截断回归钉）。
+
+    list_predictions 默认 limit=50 会把 open 池静默截断——生产库 76 条 open 时
+    最老 26 条永远不进判定/盯市。日批三处取数调用点必须显式 limit=100_000
+    （与 model.py 钳制上限一致）：
+      1. job.settle_open_predictions 首读（superseded 分组）
+      2. job.settle_open_predictions remaining_open 重读（日主/horizon 判定）
+      3. marking.mark_open_predictions（盯市）
+    本例 55 条 open，最老两行构成 supersede 对：截断首读 → superseded 丢成 0；
+    截断重读 → horizon 判定只处理最新 50 条 → settled 丢成 50。两条断言分别
+    钉住 job 两处读数；marking 层为同款显式 limit（见该调用点注释）。
+    """
+    db = _db(tmp_path)
+    # 最老两行：同标的方向反转（long → short）→ 阶段一应 supersede 旧观点
+    old = _insert(db, symbol="600000.SH", direction="long", created="2026-09-01T09:59:00")
+    _insert(db, symbol="600000.SH", direction="short", created="2026-09-01T10:00:00")
+    # 其余 53 个标的各 1 条 → 共 55 条 open（created_at 依次递增，截断丢最老 5 条）
+    for i in range(1, 54):
+        _insert(db, symbol=f"600{i:03d}.SH", created=f"2026-09-01T10:{i:02d}:00")
+    kline = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 115]
+    codes = [f"600{i:03d}" for i in range(0, 54)]
+    client = _StubClient(
+        {c: _kline(kline) for c in codes},
+        benchmark=_kline([4000.0] * 11, start="2026-09-01"),
+    )
+    result = settle_open_predictions(client=client, db_path=db)
+    assert result["errors"] == 0
+    assert result["superseded"] == 1  # 截断首读 → 0（最老 pair 被丢出池）
+    assert result["settled"] == 54  # 截断重读 → 50（只判最新 50 条）
+    assert result["duplicates_closed"] == 0
+    rows = {r["prediction_id"]: r for r in list_predictions(limit=100_000, db_path=db)}
+    assert rows[old]["resolution_rule"] == "superseded"
+
+
+def test_second_pool_read_failure_terminates_batch(tmp_path, monkeypatch, caplog):
+    """修复波 F2：remaining_open 重读失败 → 与首读同形守卫（logger.error + errors+1
+    + 整批 return），调用方拿到 result dict 而非异常。
+
+    文件头「失败隔离」承诺：读库失败不得炸 APScheduler 日批调用方；首读
+    （:133-138）已有守卫，重读漏守卫与其不一致。
+    """
+    import finance_agent.outcome.track_record.job as job_module
+
+    db = _db(tmp_path)
+    _insert(db)
+    real_list = job_module.list_predictions
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("db busy")
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(job_module, "list_predictions", flaky)
+    client = _StubClient({"600519": _kline([100, 101])})
+    with caplog.at_level(logging.ERROR):
+        result = settle_open_predictions(client=client, db_path=db)
+    assert calls["n"] == 2  # 首读成功、重读触发异常
+    assert isinstance(result, dict)  # 返回 dict 而非抛出
+    assert result["errors"] == 1
+    assert result["settled"] == 0  # 整批终止：未进入 horizon 判定
+    assert list_predictions(db_path=db)[0]["status"] == "open"
+    assert any("读取 open 观点失败" in r.message for r in caplog.records)
+
+
+def test_cross_day_predictions_are_each_day_master(tmp_path):
+    """跨日两条各自为日主：归属日不同 → 不去重，duplicates_closed == 0，各自独立判定。"""
+    db = _db(tmp_path)
+    # 两个不同交易日各一条（合成日历含 10-09、10-10 → 各归属各日，独立成主）
+    _insert_open(db, "600519.SH", "2026-10-09T10:00:00")
+    _insert_open(db, "600519.SH", "2026-10-10T10:00:00")
+    klines = {"600519": _kline([10.0] * 30, start="2026-10-09")}
+    result = settle_open_predictions(
+        client=_StubClient(klines, benchmark=_kline([4000.0] * 30, start="2026-10-09")),
+        db_path=db,
+        langfuse=None,
+    )
+    assert result["duplicates_closed"] == 0
+    rows = list_predictions(db_path=db)
+    assert all(r["status"] != "duplicate_of_day" for r in rows)

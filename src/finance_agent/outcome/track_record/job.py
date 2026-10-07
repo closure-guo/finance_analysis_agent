@@ -11,6 +11,10 @@ delta update-decision-settlement-contract:两路径入场基准均为派生 sett
 "avoidance"(不写 resolved_*,也不再留在 open 池);long/short 结算后向 Langfuse 上报
 decision_hit/return/excess(superseded 提前结算同样上报,excess 不可得故只报两个;Score
 失败仅 WARN)。unresolvable 无结算日,resolved_at 写 NULL。
+
+delta add-prediction-pool-integrity:日主两阶段判定——superseded 先行(阶段一,变更链
+读数已保留)之后,剩余 open 中同 (symbol, 归属日) 仅 created_at 最晚者进入 horizon 判定,
+其余关闭 duplicate_of_day(无结算读数、不计统计分母、不上报 Score;§1.9-v2)。
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from finance_agent.outcome.track_record.judgment import (
     DEFAULT_NEUTRAL_BAND,
     TERMINAL_AVOIDANCE_STATUS,
     Resolution,
+    day_master_ids,
     derive_entry,
     resolve_prediction,
     should_supersede,
@@ -104,7 +109,7 @@ def settle_open_predictions(
     langfuse: Any = None,
 ) -> dict[str, int]:
     """遍历 open predictions 日批判定。返回 {settled, superseded, unresolvable, skipped,
-    scores_reported, errors}。"""
+    scores_reported, errors, duplicates_closed}。"""
     if client is None:
         from finance_agent.data.akshare_client import AKShareClient
 
@@ -123,9 +128,12 @@ def settle_open_predictions(
         "skipped": 0,
         "scores_reported": 0,
         "errors": 0,
+        "duplicates_closed": 0,
     }
     try:
-        open_preds = list_predictions(status="open", db_path=db_path)
+        # 显式 limit=100_000（与 model.py 钳制上限一致）：open 池日批必须全量读取，
+        # 默认 50 会静默截断（生产库 76 条 open 时最老 26 条永不进判定/盯市）
+        open_preds = list_predictions(status="open", db_path=db_path, limit=100_000)
     except Exception as e:  # noqa: BLE001
         logger.error("读取 open 观点失败,本批终止: %s", e)
         result["errors"] += 1
@@ -135,6 +143,9 @@ def settle_open_predictions(
     try:
         benchmark = client.fetch_index_kline(BENCHMARK_CODE, days=kline_days)
         if benchmark is not None and not benchmark.empty:
+            # 日主判定(day_master_ids)假定交易日历升序——fetch_index_kline 内部已按
+            # 「日期」sort_values 升序返回,_normalize_dates 仅规范化字符串不改顺序,
+            # 此前提在此锚定(勿改用倒序/无序取数源)
             benchmark = _normalize_dates(benchmark)
     except Exception as e:  # noqa: BLE001
         logger.warning("基准行情拉取失败,本批按无基准降级: %s", e)
@@ -215,8 +226,43 @@ def settle_open_predictions(
                         logger.warning("superseded 判定失败 %s: %s", old["prediction_id"], e)
                         result["errors"] += 1
 
+    # 日主两阶段·第二阶段(add-prediction-pool-integrity):superseded 已先行(第一
+    # 阶段,观点变更链读数已保留),剩余 open 中同 (symbol, 归属日) 仅 created_at
+    # 最晚者进入 horizon 判定,其余关闭为 duplicate_of_day(无读数、不计分母、
+    # 不上报 Score;§1.9-v2)。基准行情缺失 → calendar 空 → 归属日退化为自然日,
+    # 同日去重仍成立(降级模式,日志 WARN)。
+    # 同款显式 limit=100_000：重读漏传会截掉最老观点，日主/horizon 判定不完整
+    try:
+        remaining_open = list_predictions(status="open", db_path=db_path, limit=100_000)
+    except Exception as e:  # noqa: BLE001
+        logger.error("读取 open 观点失败,本批终止: %s", e)
+        result["errors"] += 1
+        return result
+    calendar = (
+        [str(d) for d in benchmark["日期"]] if benchmark is not None and not benchmark.empty else []
+    )
+    if not calendar:
+        logger.warning("基准交易日历不可得,日主判定退化为自然日归属")
+    masters = day_master_ids(remaining_open, calendar)
+    for p in remaining_open:
+        if str(p["prediction_id"]) in masters:
+            continue
+        try:
+            update_prediction_status(
+                p["prediction_id"],
+                {
+                    "status": "duplicate_of_day",
+                    "resolution_rule": "duplicate_of_day",
+                    "resolved_at": None,
+                },
+                db_path,
+            )
+            result["duplicates_closed"] += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("同日重复关闭失败 %s: %s", p["prediction_id"], e)
+            result["errors"] += 1
+    remaining = [p for p in remaining_open if str(p["prediction_id"]) in masters]
     # 剩余 open 观点:horizon 到点判定 / 长期无行情 unresolvable
-    remaining = list_predictions(status="open", db_path=db_path)
     for p in remaining:
         try:
             kline = client.fetch_kline(

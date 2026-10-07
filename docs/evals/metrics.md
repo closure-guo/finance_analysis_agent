@@ -123,6 +123,32 @@ Spearman / MAE / 方向一致率（>3 分界）/ Cohen's κ；阈值 Spearman≥
 
 首个预登记：`evals/ablation/preregister/2026-09-23-outcome-forward-and-backtest.md`（门禁字段：主指标 / MDE / 决策阈值 / 样本量依据 / 停止规则 / 成本分型 / 泄漏控制；解析见 `evals/causal_ablation/preregister.py::OUTCOME_REQUIRED_FIELDS`，与因果消融的差异 = 无 rubric、增成本分型与泄漏控制）。
 
+### §1.9-v2 结算显著性与信号一致性口径（预登记 2026-10-06，首批 T+20 结算前冻结）
+
+**样本口径**：全部读数仅消费日主观点（add-prediction-pool-integrity：同 (symbol, 决策归属日)
+取 created_at 最晚者；duplicate_of_day 行永不进入任何分子分母）。归属日派生与
+settle_entry_price 同源（收盘前→当日；收盘后/非交易日→次一交易日）。
+
+**IC/ICIR**：IC(月) = 当月判定完成的日主 long/short 观点中 resolved_win 占
+(resolved_win + resolved_loss) 比例（resolved_neutral/unresolvable 不进；回避类单独成列）。
+单期可判定样本 < 10 → 该期「样本不足」，不进 ICIR 序列；序列期数 < 6 → ICIR 不展示
+（仅展示逐期 IC 与样本数；按月积攒，预计 2027-04 满足）。
+ICIR 的 std = 总体标准差（ddof=0；量化惯例，Grinold-Kahn）（澄清 2026-10-06，无读数前修订）。
+
+**蒙特卡洛零模型（敞口对齐）**：对任何对外报告的组合区间超额读数，产出具分布定位——
+随机化对象 = 同 universe 内随机替换选股；约束 = 每决策归属日每方向（long/short/neutral）
+注数与真实组合完全一致；抽取 = 归属日当日起作用的池内均匀随机（无前视）；次数 10,000
+（种子显式注入可复现）；报告 = 真实读数在零模型分布中的右尾分位与 p 值（含真实读数本身的
+保守 p）。「跑赢/跑输」类结论必须附分位读数，单独出现的点估计 = 口径违规。
+日主可判定样本 < 10 → 不产出（沿 settled<10 红线）。
+「每方向注数一致」中 neutral 注 = 零敞口、不占抽样槽位（long/short 槽位对齐即等价）
+（澄清 2026-10-06，无读数前修订）；同 (归属日, 方向) 内抽取为无放回（对齐日主唯一性，
+每 symbol 每归属日至多一条日主观点）（澄清 2026-10-06，无读数前修订，随 Task 5 裁决落地）。
+
+**分母口径切点**：胜率/平均超额/回避正确率/样本量的「全观点 → 日主」切换登记为口径切点
+（2026-10-06，切点时无任何已结算读数——纯声明性登记，无历史读数需重算/分段）。净值正式
+积累自 2026-10-08 重启，天然无跨切点混算。
+
 ### 1.10 健康度/红黄绿灯行业口径（delta `update-financial-freshness-and-valuation`，2026-09-29 登记）
 
 | 项 | 口径 |

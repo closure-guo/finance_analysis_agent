@@ -508,3 +508,71 @@ def test_seed_metrics_snapshot_block(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("TESTING", raising=False)
         importlib.reload(api_module)
+
+
+# ── add-prediction-pool-integrity Task 8：test/seed 的 predictions 造数 ──
+
+
+def test_seed_predictions_block(monkeypatch, tmp_path):
+    """seed track_record.predictions → 逐行 insert + 非 open 置终态 → 落库可查。
+
+    duplicate 徽标 E2E（track-record 专属套件）的造数通道：open 行原样插入；
+    非 open 状态（duplicate_of_day）经 update_prediction_status 置终态——与生产
+    dedup 判定同一条状态变更路径。duplicate 行不进已结算分母（settled=win+loss）。
+    """
+    _use_db(monkeypatch, tmp_path)
+    # reload 模式沿 test_seed_track_record_block（Testing=1 + importlib.reload + finally 恢复）
+    monkeypatch.setenv("TESTING", "1")
+    import importlib
+
+    import finance_agent.api as api_module
+    import finance_agent.session_store as session_store_module
+
+    monkeypatch.setattr(session_store_module, "_DB_PATH", tmp_path / "sessions.db")
+    session_store_module.init_db()
+
+    importlib.reload(api_module)
+    try:
+        client = TestClient(api_module.app)
+        resp = client.post(
+            "/api/test/seed",
+            json={
+                "track_record": {
+                    "predictions": [
+                        {
+                            "symbol": "600519.SH",
+                            "direction": "neutral",
+                            "created_at": "2026-10-09T10:00:00",
+                        },
+                        {
+                            "symbol": "600519.SH",
+                            "direction": "neutral",
+                            "created_at": "2026-10-09T11:00:00",
+                            "status": "duplicate_of_day",
+                            "resolution_rule": "duplicate_of_day",
+                        },
+                    ]
+                }
+            },
+        )
+        assert resp.status_code == 200
+        # track_record-only 造数返回占位响应，不创建会话
+        assert resp.json() == {"status": "ok", "mode": "testing"}
+        assert client.get("/api/sessions").json()["sessions"] == []
+        # 落库可查：两条观点，一条 open、一条 duplicate_of_day 终态
+        from finance_agent.outcome.track_record.model import list_predictions
+
+        rows = list_predictions(sort_by="created_at", sort_dir="asc")
+        assert len(rows) == 2
+        assert rows[0]["status"] == "open"
+        assert rows[0]["created_at"].startswith("2026-10-09T10:00:00")
+        dup = rows[1]
+        assert dup["status"] == "duplicate_of_day"
+        assert dup["resolution_rule"] == "duplicate_of_day"
+        assert dup["created_at"].startswith("2026-10-09T11:00:00")
+        # duplicate 不进已结算分母：总览 total=2（含 duplicate）、settled=0
+        stats = client.get("/api/v1/track-record/overview").json()
+        assert stats["total"] == 2 and stats["settled"] == 0
+    finally:
+        monkeypatch.delenv("TESTING", raising=False)
+        importlib.reload(api_module)
