@@ -739,3 +739,30 @@ def test_build_equity_curve_points_excludes_neutral_and_duplicate(db):
     insert_daily_mark(neu_id, "2026-10-09", cum_return=0.30, benchmark_price=4000.0, db_path=db)
     insert_daily_mark(dup_id, "2026-10-09", cum_return=0.40, benchmark_price=4000.0, db_path=db)
     assert build_equity_curve_points(db_path=db) == []
+
+
+def test_superseded_marks_kept_in_portfolio_aggregation(db):
+    """修复波 F3（钉行为，现状应绿）：superseded 行有 marks → 仍进 NAV 聚合。
+
+    metrics 排除集合 = neutral ∪ duplicate_of_day；superseded 提前结算保留完整
+    读数链（§1.9-v2），MUST NOT 被误排除——否则其持仓期收益将从净值曲线消失。
+    断言形态与上方 duplicate 排除用例对照：同款 marks（+1%→+2%）进聚合时
+    首盯市日贡献 0 → 次日 nav = 1.01。
+    """
+    sup_id = _insert(db, prediction_id="p_sup")
+    update_prediction_status(
+        sup_id,
+        {
+            "status": "resolved_win",
+            "resolution_rule": "superseded",
+            "exit_price": 115.0,
+            "raw_return": 0.15,
+            "resolved_at": "2026-10-10",
+        },
+        db_path=db,
+    )
+    insert_daily_mark(sup_id, "2026-10-09", cum_return=0.01, benchmark_price=4000.0, db_path=db)
+    insert_daily_mark(sup_id, "2026-10-10", cum_return=0.02, benchmark_price=4010.0, db_path=db)
+    points = build_equity_curve_points(db_path=db)
+    assert len(points) == 2
+    assert abs(points[1]["agent_nav"] - 1.01) < 1e-6
