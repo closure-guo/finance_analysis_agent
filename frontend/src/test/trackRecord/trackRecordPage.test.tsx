@@ -53,6 +53,7 @@ const PREDICTIONS: Record<string, unknown>[] = [
     direction: 'long', entry_price: 100, target_price: 120, horizon_days: 252,
     confidence: 0.8, benchmark: '000300.SH', langfuse_trace_id: null,
     status: 'resolved_win', created_at: '2026-09-01T10:00:00', resolved_at: '2026-09-02',
+    settle_entry_price: 112.5,
     exit_price: 115, raw_return: 0.15, excess_return: 0.1, resolution_rule: 'expiry',
   },
   {
@@ -60,6 +61,7 @@ const PREDICTIONS: Record<string, unknown>[] = [
     direction: 'neutral', entry_price: 100, target_price: null, horizon_days: 252,
     confidence: 0.5, benchmark: '000300.SH', langfuse_trace_id: null,
     status: 'open', created_at: '2026-09-02T10:00:00', resolved_at: null,
+    settle_entry_price: null,
     exit_price: null, raw_return: null, excess_return: null, resolution_rule: null,
   },
 ]
@@ -141,6 +143,55 @@ describe('track-record 战绩页（add-track-record）', () => {
     renderPage()
     await screen.findByText('贵州茅台')
     expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+})
+
+describe('结算价格同口径展示（update-track-record-settle-price-display）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('fa_api_key', 'test-key')
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const renderPage = (awaited = '贵州茅台') => {
+    render(<TrackRecordPage />)
+    return screen.findByText(awaited)
+  }
+
+  it('列头口径标注：参考价（盘面）/ 结算入场价（后复权）/ 结算价（后复权）', async () => {
+    mockFetch({ overview: OVERVIEW, predictions: PREDICTIONS })
+    await renderPage()
+    expect(screen.getByText('参考价（盘面）')).toBeInTheDocument()
+    expect(screen.getByText('结算入场价（后复权）')).toBeInTheDocument()
+    expect(screen.getByText('结算价（后复权）')).toBeInTheDocument()
+  })
+
+  it('已结算行展示 settle_entry_price（与 exit_price 同口径可比）', async () => {
+    mockFetch({
+      overview: OVERVIEW,
+      predictions: [
+        { ...PREDICTIONS[0], settle_entry_price: 112.5 },
+      ],
+    })
+    await renderPage()
+    const row = screen.getByTestId('prediction-row-p1')
+    expect(within(row).getByText('112.50')).toBeInTheDocument()
+    expect(within(row).getByText('115.00')).toBeInTheDocument()
+  })
+
+  it('进行中行结算入场价占位「—」且新列头不带排序按钮', async () => {
+    mockFetch({
+      overview: OVERVIEW,
+      predictions: [{ ...PREDICTIONS[1], settle_entry_price: null }],
+    })
+    await renderPage('中际旭创')
+    const row = screen.getByTestId('prediction-row-p2')
+    expect(within(row).getAllByText('—').length).toBeGreaterThanOrEqual(2)
+    // 新列不参与排序：后端 _SORT_WHITELIST 不含该键，前端不应渲染 sort 按钮
+    expect(screen.queryByTestId('sort-settle_entry_price')).not.toBeInTheDocument()
   })
 })
 
@@ -536,6 +587,7 @@ describe('回避终态标签（update-decision-settlement-contract：status=avoi
     direction: 'neutral', entry_price: 100, target_price: null, horizon_days: 20,
     confidence: 0.5, benchmark: '000300.SH', langfuse_trace_id: null,
     status: 'avoidance', created_at: '2026-09-02T10:00:00', resolved_at: '2026-09-30',
+    settle_entry_price: 100,
     exit_price: 92, raw_return: -0.08, excess_return: -0.06, resolution_rule: 'expiry',
   }
 

@@ -15,14 +15,17 @@ const DIRECTION_LABEL: Record<string, string> = {
   neutral: '中性',
 }
 
-// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐
-const COLUMNS: Array<{ key: string; label: string; numeric?: boolean }> = [
+// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐。
+// settle_entry_price 为纯展示列（后端白名单不含该键，sortable:false 不渲染排序按钮）；
+// 价格三列口径标注：参考价=决策时点盘面口径，结算两列=hfq 后复权（update-track-record-settle-price-display）
+const COLUMNS: Array<{ key: string; label: string; numeric?: boolean; sortable?: boolean }> = [
   { key: 'created_at', label: '建立日期' },
   { key: 'symbol', label: '标的' },
   { key: 'direction', label: '方向' },
   { key: 'status', label: '状态' },
-  { key: 'entry_price', label: '入场价', numeric: true },
-  { key: 'exit_price', label: '结算价', numeric: true },
+  { key: 'entry_price', label: '参考价（盘面）', numeric: true },
+  { key: 'settle_entry_price', label: '结算入场价（后复权）', numeric: true, sortable: false },
+  { key: 'exit_price', label: '结算价（后复权）', numeric: true },
   { key: 'raw_return', label: '区间收益', numeric: true },
   { key: 'excess_return', label: '基准超额', numeric: true },
 ]
@@ -497,15 +500,19 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                     <tr className="text-left text-xs" style={{ color: 'var(--text-tertiary)' }}>
                       {COLUMNS.map(c => (
                         <th key={c.key} className={`px-4 py-2 font-normal ${c.numeric ? 'text-right' : ''}`}>
-                          <button
-                            type="button"
-                            data-testid={`sort-${c.key}`}
-                            onClick={() => onSort(c.key)}
-                            className="inline-flex items-center gap-0.5 hover:opacity-80"
-                            style={{ color: 'var(--text-tertiary)' }}
-                          >
-                            {c.label}{arrow(c.key)}
-                          </button>
+                          {c.sortable === false ? (
+                            c.label
+                          ) : (
+                            <button
+                              type="button"
+                              data-testid={`sort-${c.key}`}
+                              onClick={() => onSort(c.key)}
+                              className="inline-flex items-center gap-0.5 hover:opacity-80"
+                              style={{ color: 'var(--text-tertiary)' }}
+                            >
+                              {c.label}{arrow(c.key)}
+                            </button>
+                          )}
                         </th>
                       ))}
                     </tr>
@@ -532,6 +539,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                           )}
                         </td>
                         <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
+                        <td className="px-4 py-3 text-right">{fmt(r.settle_entry_price)}</td>
                         <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
                         <td className="px-4 py-3 text-right"><Delta value={r.raw_return} /></td>
                         <td className="px-4 py-3 text-right"><Delta value={r.excess_return} /></td>
