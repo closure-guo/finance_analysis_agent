@@ -60,7 +60,13 @@ _DATE_PATTERNS = (
 # 1-2 位裸整数是序号而非股价（600026 生产阻断消息「文本价位 3 与 近期低点
 # 14.06 偏差 78.66%」即出自「（3）赔率1.56:1」）。仅匹配括号内无其他文字的
 # 裸短整数，带小数点/上下文的括号价位（如「（13.0）」）不受豁免。
-_ENUM_SPAN_PATTERNS = (re.compile(r"[（(]\s*\d{1,2}\s*[)）]"),)
+# 后括号形式「1) 2)」（issue #254，600515 实证「；1) 相对近窗…；2) 止损
+# 距离…」）：负向后顾拦「2.6171）」的尾数（前邻数字/小数点不是序号起点），
+# 真实括号价位（「（止损 9.99）」）不受豁免（反掩蔽锚见测试）。
+_ENUM_SPAN_PATTERNS = (
+    re.compile(r"[（(]\s*\d{1,2}\s*[)）]"),
+    re.compile(r"(?<![\d.])\d{1,2}[)）]"),
+)
 # 数值后紧跟（可隔空格）即非价格量纲：百分比/倍率/比值/成交量/日期时间单位/均线
 # + 计数量词（fix-decision-price-enumerators：「3个月」「3成仓」的 3 不是股价；
 # 计量字后接真实价位的表述不存在，不伤及正常价位提取）
@@ -255,9 +261,14 @@ def _in_reference_bands(value: float, bands: list[tuple[float, float]]) -> bool:
 
 
 def _alias_boundary_ok(lower_text: str, start: int, end: int, alias: str) -> bool:
-    """MA 别名边界守卫：MA5 不命中 MA50（后随数字）、不命中 XMA5（前邻字母数字）。"""
+    """MA 别名边界守卫：MA5 不命中 MA50（后随数字）、不命中 XMA5（前邻 ASCII 字母数字）。
+
+    前缀只拦 ASCII：CJK 汉字的 str.isalnum() 亦为 True，不限定 isascii 时
+    中文行文「上穿MA60」的 ma60 别名会被误拒，60 被提为价位（issue #254，
+    600845/600026 生产阻断实证；打回重试不可能修复，行文必含汉字）。
+    """
     if alias.startswith("ma"):
-        if start > 0 and lower_text[start - 1].isalnum():
+        if start > 0 and lower_text[start - 1].isascii() and lower_text[start - 1].isalnum():
             return False
         if end < len(lower_text) and lower_text[end].isdigit():
             return False
