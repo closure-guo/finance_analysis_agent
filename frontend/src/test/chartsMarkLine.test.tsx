@@ -27,10 +27,10 @@ const baseData: ChartData = {
   ] as never,
   growth: { years: [], revenue_growth: [], profit_growth: [] },
   price: {
-    daily: [
-      { date: '2026-08-01', close: 1700 },
-      { date: '2026-08-02', close: 1710 },
-    ],
+    daily: Array.from({ length: 12 }, (_, i) => ({
+      date: `2026-08-${String(i + 1).padStart(2, '0')}`,
+      close: 1700 + i,
+    })),
     earnings_dates: ['2026-08-01'],
   },
   kpi: {},

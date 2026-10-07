@@ -117,6 +117,37 @@ def _placeholder_text(ax, text: str) -> None:
     )
 
 
+_DECISION_LEVEL_KEYS = ("entry_price", "stop_loss", "target_price")
+
+
+def _moving_average(values: list[float | None], window: int) -> list[float | None]:
+    """简单移动平均：窗口不足或窗口内含 None 的位置为 None。"""
+    out: list[float | None] = [None] * len(values)
+    for i in range(window - 1, len(values)):
+        seg = [v for v in values[i - window + 1 : i + 1] if v is not None]
+        if len(seg) < window:
+            continue
+        out[i] = sum(seg) / window
+    return out
+
+
+def _extract_decision_levels(state: dict) -> dict[str, float]:
+    """提取交易决策价位（dict/属性双形态，与 report._format_trade_decision 同源逻辑）。
+
+    缺失/非法价位的字段不携带；决策整体无价位时返回空 dict（调用侧不挂键）。
+    """
+    decision = state.get("final_trade_decision") or state.get("trader_plan")
+    if decision is None:
+        return {}
+    levels: dict[str, float] = {}
+    for key in _DECISION_LEVEL_KEYS:
+        raw = decision.get(key) if isinstance(decision, dict) else getattr(decision, key, None)
+        val = _safe_float(raw)
+        if val is not None:
+            levels[key] = val
+    return levels
+
+
 def _year_from_date(date_str) -> str:
     return str(date_str)[:4]
 
@@ -128,7 +159,7 @@ def collect_chart_data(state: dict) -> dict:
         "stock_name": state.get("stock_name", ""),
         "annual": [],
         "growth": {"years": [], "revenue_growth": [], "profit_growth": []},
-        "price": {"daily": [], "earnings_dates": []},
+        "price": {"daily": [], "earnings_dates": [], "ma": {"ma5": [], "ma20": [], "ma60": []}},
         "kpi": {},
         "market_share": None,
     }
@@ -195,7 +226,7 @@ def collect_chart_data(state: dict) -> dict:
         "pb": _safe_float(quote.get("PB")),
     }
 
-    # ── 股价日线 ──
+    # ── 股价日线（update-price-chart-kline：补齐 OHLCV + MA 均线）──
     kline = state.get("kline")
     if kline is not None and not kline.empty:
         # 取最近 250 个交易日（约一年）
@@ -204,13 +235,32 @@ def collect_chart_data(state: dict) -> dict:
             date_str = str(row.get("日期", row.get("date", "")))[:10]
             close = _safe_float(row.get("收盘", row.get("close")))
             if date_str and close is not None:
-                chart_data["price"]["daily"].append({"date": date_str, "close": close})
+                chart_data["price"]["daily"].append(
+                    {
+                        "date": date_str,
+                        "close": close,
+                        "open": _safe_float(row.get("开盘", row.get("open"))),
+                        "high": _safe_float(row.get("最高", row.get("high"))),
+                        "low": _safe_float(row.get("最低", row.get("low"))),
+                        "volume": _safe_float(row.get("成交量", row.get("volume"))),
+                    }
+                )
 
-        # 52周高低
+        # ── MA 均线：全量 kline 计算后切尾对齐（窗口前段 None），口径同技术指标 ──
         if chart_data["price"]["daily"]:
+            closes_all: list[float | None] = [_safe_float(v) for v in kline["收盘"]]
+            offset = len(closes_all) - len(chart_data["price"]["daily"])
+            for w in (5, 20, 60):
+                chart_data["price"]["ma"][f"ma{w}"] = _moving_average(closes_all, w)[offset:]
+
             closes = [d["close"] for d in chart_data["price"]["daily"]]
             chart_data["kpi"]["52w_high"] = max(closes)
             chart_data["kpi"]["52w_low"] = min(closes)
+
+    # ── 交易决策价位（独立于 kline，缺失不携带）──
+    decision_levels = _extract_decision_levels(state)
+    if decision_levels:
+        chart_data["price"]["decision_levels"] = decision_levels
 
     # ── 财报发布日期（从年报报告日推算）──
     if income is not None and not income.empty:
@@ -442,26 +492,19 @@ def _chart_cashflow(data: dict, out: str) -> str | None:
     return _save_fig(fig, out, "chart_cashflow")
 
 
-def _chart_stock_price(data: dict, out: str) -> str | None:
-    """P1: 股价趋势（含财报标注）。"""
-    daily = data.get("price", {}).get("daily", [])
-    if len(daily) < 10:
-        return None
-    dates = [d["date"] for d in daily]
-    closes = [d["close"] for d in daily]
-    earnings_dates = data.get("price", {}).get("earnings_dates", [])
+_STOCK_PRICE_MA_SPECS = (("ma5", _C_ORANGE, 1.0), ("ma20", _C_PURPLE, 1.0), ("ma60", _C_CYAN, 1.2))
+_DECISION_LEVEL_SPECS = (
+    ("entry_price", "入场", _C_BLUE),
+    ("stop_loss", "止损", _C_GREEN),
+    ("target_price", "目标", _C_RED),
+)
 
-    fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
-    ax.plot(dates, closes, color=_C_BLUE, linewidth=1.5)
-    ax.fill_between(range(len(dates)), closes, alpha=0.1, color=_C_BLUE)
-    ax.set_ylabel("股价（元）", fontsize=10)
-    ax.set_xlabel("日期", fontsize=10)
-    _style_ax(ax, "股价趋势")
 
-    # 标注财报发布日
+def _mark_earnings(ax, daily: list[dict], closes: list, earnings_dates: list[str]) -> None:
+    """财报发布日竖线标注（K 线/折线两形态共用）。"""
     for ed in earnings_dates:
-        for i, d in enumerate(dates):
-            if d == ed:
+        for i, d in enumerate(daily):
+            if d["date"] == ed:
                 ax.axvline(x=i, color=_C_RED, linewidth=0.8, linestyle="--", alpha=0.5)
                 ax.annotate(
                     "财报",
@@ -473,11 +516,114 @@ def _chart_stock_price(data: dict, out: str) -> str | None:
                 )
                 break
 
-    # X 轴日期格式化（只显示少量标签）
+
+def _set_date_ticks(ax, dates: list[str]) -> None:
     n = len(dates)
     step = max(1, n // 8)
     ax.set_xticks(range(0, n, step))
     ax.set_xticklabels([dates[i] for i in range(0, n, step)], rotation=30, ha="right")
+
+
+def _chart_stock_price_line(
+    daily: list[dict], dates: list[str], earnings_dates: list[str], out: str
+) -> str:
+    """历史形态（仅 close）的收盘折线渲染（升级前行为，原样保留）。"""
+    closes = [d["close"] for d in daily]
+    fig, ax = plt.subplots(figsize=_FIGSIZE_WIDE)
+    ax.plot(dates, closes, color=_C_BLUE, linewidth=1.5)
+    ax.fill_between(range(len(dates)), closes, alpha=0.1, color=_C_BLUE)
+    ax.set_ylabel("股价（元）", fontsize=10)
+    ax.set_xlabel("日期", fontsize=10)
+    _style_ax(ax, "股价趋势")
+    _mark_earnings(ax, daily, closes, earnings_dates)
+    _set_date_ticks(ax, dates)
+    fig.tight_layout()
+    return _save_fig(fig, out, "chart_stock_price")
+
+
+def _chart_stock_price(data: dict, out: str) -> str | None:
+    """股价 K 线图（update-price-chart-kline）：蜡烛主图 + MA 均线 + 决策价位线 + 成交量副图。
+
+    历史形态（缺 OHLC 字段）降级为收盘折线，保持升级前渲染。
+    """
+    daily = data.get("price", {}).get("daily", [])
+    if len(daily) < 10:
+        return None
+    dates = [d["date"] for d in daily]
+    earnings_dates = data.get("price", {}).get("earnings_dates", [])
+    has_ohlc = all(
+        d.get("open") is not None and d.get("high") is not None and d.get("low") is not None
+        for d in daily
+    )
+    if not has_ohlc:
+        return _chart_stock_price_line(daily, dates, earnings_dates, out)
+
+    ma = data.get("price", {}).get("ma", {})
+    levels = data.get("price", {}).get("decision_levels", {})
+
+    x = np.arange(len(dates))
+    opens = [d["open"] for d in daily]
+    highs = [d["high"] for d in daily]
+    lows = [d["low"] for d in daily]
+    closes = [d["close"] for d in daily]
+    colors = [_C_RED if c >= o else _C_GREEN for o, c in zip(opens, closes, strict=False)]
+    # 蜡烛实体宽度随样本数自适应（250 根时约 0.12）；十字星给最小可见高度
+    candle_w = max(0.12, min(0.8, 30.0 / len(dates)))
+    price_range = max(highs) - min(lows) or 1.0
+    body = [
+        max(abs(c - o), candle_w * 1e-3 * price_range) for o, c in zip(opens, closes, strict=False)
+    ]
+
+    fig = plt.figure(figsize=(_FIGSIZE_WIDE[0], _FIGSIZE_WIDE[1] + 1.6))
+    # 不显式传 hspace：matplotlib 3.11 下 gridspec 固定 hspace 与 tight_layout
+    # 不兼容（触发 UserWarning 且 tight_layout 失效回退默认边距）；
+    # 3:1 高度比由 tight_layout 自行给出紧凑间距，效果等同。
+    gs = fig.add_gridspec(2, 1, height_ratios=[3, 1])
+    ax = fig.add_subplot(gs[0])
+    ax_vol = fig.add_subplot(gs[1])
+
+    ax.vlines(x, lows, highs, colors=colors, linewidth=0.7)
+    ax.bar(
+        x,
+        body,
+        bottom=[min(o, c) for o, c in zip(opens, closes, strict=False)],
+        width=candle_w,
+        color=colors,
+    )
+
+    for key, color, lw in _STOCK_PRICE_MA_SPECS:
+        series = ma.get(key) or []
+        if len(series) == len(dates):
+            ax.plot(x, _nan_series(series), color=color, linewidth=lw, label=key.upper())
+    if any(len(ma.get(key) or []) == len(dates) for key, _, _ in _STOCK_PRICE_MA_SPECS):
+        ax.legend(fontsize=8, loc="upper left")
+
+    for key, label, color in _DECISION_LEVEL_SPECS:
+        if key in levels:
+            ax.axhline(y=levels[key], color=color, linewidth=1.0, linestyle="--", alpha=0.85)
+            ax.annotate(
+                label,
+                xy=(1.0, levels[key]),
+                xycoords=("axes fraction", "data"),
+                xytext=(3, 0),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+                va="center",
+            )
+
+    _mark_earnings(ax, daily, closes, earnings_dates)
+    ax.set_ylabel("股价（元）", fontsize=10)
+    _style_ax(ax, "股价 K 线（MA5/20/60，虚线为决策价位）")
+    ax.tick_params(labelbottom=False)
+
+    volumes = [d.get("volume") or 0 for d in daily]
+    ax_vol.bar(x, volumes, width=candle_w, color=colors, alpha=0.7)
+    ax_vol.set_ylabel("成交量", fontsize=9)
+    ax_vol.set_xlabel("日期", fontsize=10)
+    _style_ax(ax_vol)
+    _set_date_ticks(ax_vol, dates)
+
     fig.tight_layout()
     return _save_fig(fig, out, "chart_stock_price")
 

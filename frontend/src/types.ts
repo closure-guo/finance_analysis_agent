@@ -188,8 +188,17 @@ export interface ChartData {
     profit_growth: (number | null)[]
   }
   price: {
-    daily: Array<{ date: string; close: number }>
+    daily: Array<{
+      date: string
+      close: number
+      open?: number | null
+      high?: number | null
+      low?: number | null
+      volume?: number | null
+    }>
     earnings_dates: string[]
+    ma?: { ma5: (number | null)[]; ma20: (number | null)[]; ma60: (number | null)[] }
+    decision_levels?: { entry_price?: number; stop_loss?: number; target_price?: number }
   }
   kpi: {
     current_price?: number
