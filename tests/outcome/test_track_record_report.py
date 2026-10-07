@@ -128,6 +128,10 @@ UNIVERSE_BY_DAY = {
     "2026-10-09": ["600519", "000001"],
     "2026-10-10": ["600519", "000001"],
 }
+# 六标的池：⚠1/⚠2 用例需要 ≥6 槽/日 且避免有放回回退噪声
+POOL6 = ["600519", "000001", "600030", "601818", "300750", "600036"]
+CLOSES6 = {s: {"2026-10-09": 10.0, "2026-10-10": 10.0, "2026-11-06": 11.0} for s in POOL6}
+UBD6 = {"2026-10-09": list(POOL6), "2026-10-10": list(POOL6)}
 
 
 class TestBuildReportData:
@@ -185,6 +189,101 @@ class TestBuildReportData:
         text = render_marketing_report({**data, "as_of": "2026-11-03"})
         assert "跑赢" not in text and "平均槽位超额" not in text
         assert "无有效模拟轮次" in text
+
+    def test_superseded_non_master_row_excluded_from_sample_and_real_excess(self):
+        """⚠1 第三道防御：同 (symbol, 归属日) 非日主行（superseded 旧行）不入任何统计。
+
+        旧行（superseded 已结算，excess=0.99 毒值）与 open 新行同 (symbol, 归属日)
+        ——日主 = created_at 更晚的新行；sample 只计日主可判定行，real_excess
+        不被毒值污染（§1.9-v2：全部读数仅消费日主观点）。
+        """
+        settled = (
+            [
+                _row(
+                    i,
+                    direction="long" if i % 2 == 0 else "short",
+                    day="2026-10-09",
+                    symbol=f"{POOL6[i]}.SH",
+                )
+                for i in range(5)
+            ]
+            + [
+                {
+                    "prediction_id": "p_old",
+                    "symbol": "600099.SH",
+                    "direction": "long",
+                    "status": "resolved_win",
+                    "resolved_at": "2026-11-06T15:00:00",
+                    "excess_return": 0.99,
+                    "created_at": "2026-10-09T09:00:00",
+                    "resolution_rule": "superseded",
+                },
+                {
+                    "prediction_id": "p_new",
+                    "symbol": "600099.SH",
+                    "direction": "long",
+                    "status": "open",
+                    "resolved_at": None,
+                    "excess_return": None,
+                    "created_at": "2026-10-09T14:00:00",
+                    "resolution_rule": None,
+                },
+            ]
+            + [
+                _row(
+                    i + 5,
+                    direction="short" if i % 2 == 0 else "long",
+                    day="2026-10-10",
+                    symbol=f"{POOL6[i]}.SH",
+                )
+                for i in range(6)
+            ]
+        )
+        data = build_report_data(settled, UBD6, CLOSES6, BENCH, "2026-11-06", n_sims=200, seed=42)
+        # 13 行输入 → 日主 12 行（p_old 非日主剔除）→ 可判定 11 行（p_new open 无读数）
+        assert data["sample"] == 11
+        mc = data["monte_carlo"]
+        assert mc["available"] is True
+        assert abs(mc["real_excess"] - 0.02) < 1e-9  # 毒值 0.99 未入均值
+
+    def test_slot_symbol_outside_day_pool_logs_warning(self, caplog):
+        """⚠2 观测：真实槽 symbol（归一化去后缀后）不在归属日池内 → warning。
+
+        池外选股使零模型不同框——首批可忽略但要有观测；在池内行不告警。
+        """
+        import logging
+
+        settled = (
+            [
+                _row(
+                    i,
+                    direction="long" if i % 2 == 0 else "short",
+                    day="2026-10-09",
+                    symbol=f"{POOL6[i]}.SH",
+                )
+                for i in range(5)
+            ]
+            + [
+                _row(
+                    i + 5,
+                    direction="short" if i % 2 == 0 else "long",
+                    day="2026-10-10",
+                    symbol=f"{POOL6[i]}.SH",
+                )
+                for i in range(4)
+            ]
+            + [
+                _row(9, direction="long", day="2026-10-10", symbol="688888.SH")  # 池外
+            ]
+        )
+        with caplog.at_level(logging.WARNING):
+            data = build_report_data(
+                settled, UBD6, CLOSES6, BENCH, "2026-11-06", n_sims=200, seed=42
+            )
+        assert data["sample"] == 10
+        assert data["monte_carlo"]["available"] is True  # 观测不阻断
+        outside = [r for r in caplog.records if "不同框" in r.message]
+        assert len(outside) == 1  # 仅 688888.SH（归一化后不在日池）
 
     def test_ten_samples_produce_real_excess_quantile_and_caliber(self):
         """正常分支：10 条可判定行 → 真实超额等权均值 + 分位/p 值 + caliber 字段。

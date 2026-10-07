@@ -258,10 +258,14 @@ class TestPerDayUniverse:
         assert all(s == pytest.approx((0.2 + 0.1) / 2) for s in sims)
 
     def test_stock_usable_on_day_with_complete_closes(self):
-        """X 仅缺 A 日：B 日池仍含 X——per-day 过滤不是全局拉黑（B 槽仍可能抽中 X）。"""
+        """X 仅缺 A 日：B 日池仍含 X——per-day 过滤不是全局拉黑（B 槽仍可能抽中 X）。
+
+        L1 修复：Y 补齐 B 日入场档——否则 Y 恒被逐槽过滤，0.2 分支永不发生，
+        测试退化为只验 X 单值。修复后 B 日池 [X, Y] 双标的真实参与抽样。
+        """
         closes = {
             "X": {"2026-11-04": 10.0, "2026-12-01": 11.0},  # 缺 A 日收盘，B 日齐全
-            "Y": {"2026-11-03": 10.0, "2026-12-01": 12.0},
+            "Y": {"2026-11-03": 10.0, "2026-11-04": 10.0, "2026-12-01": 12.0},
         }
         sims = simulate_random_excess(
             universe_by_day={"2026-11-03": ["X"], "2026-11-04": ["X", "Y"]},
@@ -274,9 +278,11 @@ class TestPerDayUniverse:
             n_sims=50,
             seed=42,
         )
-        # A 日池过滤后为空 → 该组跳过；B 日每轮单槽 = X(0.1) 或 Y(0.2)
+        # A 日池过滤后为空 → 该组跳过；B 日每轮单槽 = X(0.1) 或 Y(0.2)，双分支均出现
         assert len(sims) == 50
         assert all(abs(s - 0.1) < 1e-9 or abs(s - 0.2) < 1e-9 for s in sims)
+        assert any(abs(s - 0.1) < 1e-9 for s in sims)  # X 确被抽中（非全局拉黑）
+        assert any(abs(s - 0.2) < 1e-9 for s in sims)  # Y 确被抽中（夹具修复后可达）
 
     def test_missing_day_key_raises_keyerror(self):
         """universe_by_day 缺归属日键 = 行情面板装配缺陷：fail loud 抛 KeyError。"""
