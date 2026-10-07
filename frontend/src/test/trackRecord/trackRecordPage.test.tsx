@@ -157,7 +157,7 @@ describe('结算价格同口径展示（update-track-record-settle-price-display
   })
 
   const renderPage = (awaited = '贵州茅台') => {
-    render(<TrackRecordPage />)
+    render(<TrackRecordPage onBack={vi.fn()} />)
     return screen.findByText(awaited)
   }
 

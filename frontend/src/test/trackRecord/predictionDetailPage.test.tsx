@@ -17,7 +17,7 @@ const DETAIL = {
     direction: 'long', entry_price: 100, target_price: 120, horizon_days: 252,
     confidence: 0.8, benchmark: '000300.SH', rationale_snapshot: '{"decision":"buy","markdown":"原文快照"}',
     langfuse_trace_id: null, status: 'resolved_win', created_at: '2026-09-01T10:00:00',
-    resolved_at: '2026-09-02', exit_price: 115, raw_return: 0.15, excess_return: 0.1,
+    resolved_at: '2026-09-02', settle_entry_price: 112.5, exit_price: 115, raw_return: 0.15, excess_return: 0.1,
     resolution_rule: 'expiry', updated_at: 'x', version_seq: null, snapshot_hash: 'abc',
   },
   audit: [
@@ -51,6 +51,21 @@ describe('观点详情页（add-track-record-stage-c）', () => {
     expect(screen.getByTestId('prediction-decision').textContent).toContain('命中')
     expect(screen.getByTestId('prediction-decision').textContent).toContain('0.80')
     expect(screen.getByTestId('prediction-decision').textContent).toContain('+15.00%')
+  })
+
+  it('价格区三格口径展示（update-track-record-settle-price-display）', async () => {
+    mockFetch()
+    renderPage()
+    const card = await screen.findByTestId('prediction-decision')
+    // 三格标签带口径标注
+    expect(card.textContent).toContain('参考价（盘面）')
+    expect(card.textContent).toContain('结算入场价（后复权）')
+    expect(card.textContent).toContain('结算价（后复权）')
+    // 三格数值：100（参考价）、112.50（结算入场价）、115.00（结算价）
+    expect(card.textContent).toContain('112.50')
+    expect(card.textContent).toContain('115.00')
+    // 不再出现无口径标注的裸标签
+    expect(card.textContent).not.toContain('入场价参考价')
   })
 
   it('渲染叠加图/快照/审计时间轴', async () => {
