@@ -101,7 +101,7 @@ def simulate_random_excess(
     closes: dict[str, dict[str, float]],
     entry_map: dict[str, str],
     exit_date: str,
-    benchmark_return: float,
+    benchmark_closes: dict[str, float],
     n_sims: int = MC_DEFAULT_N,
     seed: int = 20261006,
 ) -> list[float]:
@@ -111,10 +111,14 @@ def simulate_random_excess(
     （对齐日主唯一性，见 _draw_group_symbols）；跨方向 / 跨归属日独立抽取。
     RNG 共享、种子注入、复现确定。
     closes: symbol → {date: close}（至少含各 entry 实际交易日与 exit_date 两档）；
-    entry_map: 归属日 → 实际入场交易日（与真实组合 settle_entry_price 派生同源）。
-    每注收益 = sign × (exit_close/entry_close − 1)；组合收益 = 全注等权均值；模拟超额 =
-    组合收益 − benchmark_return（与真实读数同基准同窗）。返回模拟超额列表——行情缺失注
-    逐注剔除、整轮无有效注的轮次跳过，实际条数可能少于 n_sims。
+    entry_map: 归属日 → 实际入场交易日（与真实组合 settle_entry_price 派生同源）；
+    benchmark_closes: date → 基准收盘（T+20 槽位入场日不同、同期基准收益不同——
+    基准按槽位逐档取，禁组合层减单一标量）。每槽超额 =
+    sign × ((exit/entry − 1) − (bench_exit/bench_entry − 1))，bench 取 entry 与
+    exit_date 两档收盘（同 judgment.resolve_prediction 的基准口径）；组合收益 =
+    各槽超额等权均值。返回模拟超额列表（语义 = 随机组合的平均槽位超额，与真实
+    读数的逐槽超额均值同构可比）——行情/基准缺失注逐注剔除、整轮无有效注的轮次
+    跳过，实际条数可能少于 n_sims。
     """
     rng = random.Random(seed)  # noqa: S311  蒙特卡洛零模型非密码用途；种子注入保证复现
     groups: list[tuple[str, float, int]] = []  # (entry 交易日, sign, 注数)；组间独立
@@ -125,6 +129,9 @@ def simulate_random_excess(
         if int(n) > 0:
             groups.append((entry_map[day], -1.0, int(n)))
     if not groups:
+        return []
+    if not benchmark_closes:
+        logger.warning("simulate_random_excess: benchmark_closes 为空，无基准可比——返回空列表")
         return []
     pool = [s for s in universe if s in closes]
     if not pool:
@@ -146,12 +153,16 @@ def simulate_random_excess(
         for (entry, sign), sym in zip(plans, picks, strict=True):
             entry_close = closes[sym].get(entry)
             exit_close = closes[sym].get(exit_date)
-            if not entry_close or not exit_close:
-                continue  # 行情缺失注剔除（与真实读数的缺失处理一致）
-            rets.append(sign * (exit_close / entry_close - 1.0))
+            bench_entry = benchmark_closes.get(entry)
+            bench_exit = benchmark_closes.get(exit_date)
+            if not entry_close or not exit_close or not bench_entry or not bench_exit:
+                continue  # 行情/基准缺失注剔除（与真实读数的缺失处理一致）
+            rets.append(
+                sign * ((exit_close / entry_close - 1.0) - (bench_exit / bench_entry - 1.0))
+            )
         if not rets:
             continue
-        out.append(sum(rets) / len(rets) - benchmark_return)
+        out.append(sum(rets) / len(rets))
     if fallback_used:
         logger.warning(
             "simulate_random_excess: 存在注数(%d)超过池大小(%d)的组，同组回退有放回抽样——"
