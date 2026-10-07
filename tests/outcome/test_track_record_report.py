@@ -1,12 +1,15 @@
 """结算报告消费端测试（issue #250：collect/build/render，口径 §1.9-v2）。"""
 
 import pytest
-from finance_agent.outcome.track_record.report import collect_settled_day_masters
 
 from finance_agent.outcome.track_record.model import (
     init_predictions,
     insert_prediction,
     update_prediction_status,
+)
+from finance_agent.outcome.track_record.report import (
+    build_report_data,
+    collect_settled_day_masters,
 )
 
 BASE = {
@@ -92,3 +95,101 @@ class TestCollectSettledDayMasters:
     def test_empty_db_returns_empty_list(self, db):
         """空库返回空列表，不抛异常。"""
         assert collect_settled_day_masters(db_path=db) == []
+
+
+def _row(
+    i: int,
+    direction: str = "long",
+    excess: float | None = 0.02,
+    day: str = "2026-10-09",
+    status: str = "resolved_win",
+):
+    """构造已结算日主行（build_report_data 纯函数输入，不经 DB）。"""
+    return {
+        "prediction_id": f"p{i}",
+        "symbol": f"6{i:05d}.SH",
+        "direction": direction,
+        "status": status,
+        "resolved_at": None if status == "unresolvable" else "2026-11-06T15:00:00",
+        "excess_return": excess,
+        "created_at": f"{day}T10:00:00",
+        "resolution_rule": "expiry",
+    }
+
+
+BENCH = {"2026-10-09": 100.0, "2026-10-10": 100.0, "2026-11-06": 100.0}
+CLOSES = {
+    "600519": {"2026-10-09": 10.0, "2026-10-10": 10.0, "2026-11-06": 11.0},
+    "000001": {"2026-10-09": 10.0, "2026-10-10": 10.0, "2026-11-06": 11.0},
+}
+UNIVERSE_BY_DAY = {
+    "2026-10-09": ["600519", "000001"],
+    "2026-10-10": ["600519", "000001"],
+}
+
+
+class TestBuildReportData:
+    def test_red_line_nine_samples_blocks_monte_carlo(self):
+        """红线：可判定样本 9<10 → 零模型不产出，reason 引用 §1.9-v2 与样本数。"""
+        settled = [_row(i, direction="long" if i % 2 == 0 else "short") for i in range(9)]
+        data = build_report_data(
+            settled, UNIVERSE_BY_DAY, CLOSES, BENCH, "2026-11-06", n_sims=200, seed=42
+        )
+        assert data["caliber"] == "§1.9-v2"
+        assert data["sample"] == 9
+        mc = data["monte_carlo"]
+        assert mc["available"] is False
+        assert "样本 9<10" in mc["reason"] and "§1.9-v2" in mc["reason"]
+        assert "quantile" not in mc  # 降级分支不产出任何分位/点估计读数
+        assert "ic_series" in data and "icir" in data and "avoidance_series" in data
+
+    def test_sample_counts_only_rows_with_excess_reading(self):
+        """可判定样本口径：excess_return 为空的 long/short 行（unresolvable 等）不计入。
+
+        10 行 long/short 中 2 行无超额读数 → sample=8 → 红线触发（8<10）。
+        """
+        settled = [_row(i, direction="long" if i % 2 == 0 else "short") for i in range(8)] + [
+            _row(8, direction="long", excess=None, status="unresolvable"),
+            _row(9, direction="short", excess=None, status="unresolvable"),
+        ]
+        data = build_report_data(
+            settled, UNIVERSE_BY_DAY, CLOSES, BENCH, "2026-11-06", n_sims=200, seed=42
+        )
+        assert data["sample"] == 8
+        assert data["monte_carlo"]["available"] is False
+        assert "样本 8<10" in data["monte_carlo"]["reason"]
+
+    def test_ten_samples_produce_real_excess_quantile_and_caliber(self):
+        """正常分支：10 条可判定行 → 真实超额等权均值 + 分位/p 值 + caliber 字段。
+
+        构造：真实超额 9×0.02 + 1×0.06 → 均值 0.024；零模型每槽 raw=10%、基准 0%
+        → 模拟值恒 0.1 > 0.024 → quantile=0.0、p=(200+1)/(200+1)=1.0（确定性）。
+        """
+        settled = (
+            [
+                _row(i, direction="long" if i % 2 == 0 else "short", day="2026-10-09")
+                for i in range(5)
+            ]
+            + [
+                _row(i + 5, direction="short" if i % 2 == 0 else "long", day="2026-10-10")
+                for i in range(4)
+            ]
+            + [_row(9, direction="long", excess=0.06, day="2026-10-10")]
+        )
+        data = build_report_data(
+            settled, UNIVERSE_BY_DAY, CLOSES, BENCH, "2026-11-06", n_sims=200, seed=42
+        )
+        assert data["caliber"] == "§1.9-v2"
+        assert data["sample"] == 10
+        mc = data["monte_carlo"]
+        assert mc["available"] is True
+        assert abs(mc["real_excess"] - 0.024) < 1e-9
+        assert 0.0 <= mc["quantile"] <= 1.0
+        assert 0.0 <= mc["p_value"] <= 1.0
+        assert mc["n_sims"] == 200 and mc["seed"] == 42
+        assert mc["months_covered"] == 1
+        # 复现性：同种子零模型分布确定
+        again = build_report_data(
+            settled, UNIVERSE_BY_DAY, CLOSES, BENCH, "2026-11-06", n_sims=200, seed=42
+        )
+        assert again["monte_carlo"] == mc
