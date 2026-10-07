@@ -600,6 +600,38 @@ def test_open_pool_beyond_50_rows_not_truncated(tmp_path):
     assert rows[old]["resolution_rule"] == "superseded"
 
 
+def test_second_pool_read_failure_terminates_batch(tmp_path, monkeypatch, caplog):
+    """修复波 F2：remaining_open 重读失败 → 与首读同形守卫（logger.error + errors+1
+    + 整批 return），调用方拿到 result dict 而非异常。
+
+    文件头「失败隔离」承诺：读库失败不得炸 APScheduler 日批调用方；首读
+    （:133-138）已有守卫，重读漏守卫与其不一致。
+    """
+    import finance_agent.outcome.track_record.job as job_module
+
+    db = _db(tmp_path)
+    _insert(db)
+    real_list = job_module.list_predictions
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("db busy")
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(job_module, "list_predictions", flaky)
+    client = _StubClient({"600519": _kline([100, 101])})
+    with caplog.at_level(logging.ERROR):
+        result = settle_open_predictions(client=client, db_path=db)
+    assert calls["n"] == 2  # 首读成功、重读触发异常
+    assert isinstance(result, dict)  # 返回 dict 而非抛出
+    assert result["errors"] == 1
+    assert result["settled"] == 0  # 整批终止：未进入 horizon 判定
+    assert list_predictions(db_path=db)[0]["status"] == "open"
+    assert any("读取 open 观点失败" in r.message for r in caplog.records)
+
+
 def test_cross_day_predictions_are_each_day_master(tmp_path):
     """跨日两条各自为日主：归属日不同 → 不去重，duplicates_closed == 0，各自独立判定。"""
     db = _db(tmp_path)
