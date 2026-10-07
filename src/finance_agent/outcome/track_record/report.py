@@ -11,6 +11,7 @@ collect（读库取结算日主行）→ build_report_data（纯函数组装读�
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from finance_agent.outcome.track_record.significance import (
     monthly_ic,
     simulate_random_excess,
 )
+
+logger = logging.getLogger(__name__)
 
 SETTLED_MC_MIN_SAMPLE = 10  # §1.9-v2：可判定日主样本 < 10 → 零模型 SHALL NOT 产出
 
@@ -111,6 +114,20 @@ def build_report_data(
         seed=seed,
     )
     q = excess_quantile(real_excess, sims)
+    if q["quantile"] is None:
+        # M1：零模型无有效模拟轮次（行情面板整体不可得/全部槽被剔除）——不得以
+        # available=True + quantile=None 逃逸（render/CLI 格式化会崩）；无分位
+        # 不出现点估计，real_excess 一并不落盘。
+        logger.warning(
+            "build_report_data: 零模型无有效模拟轮次（行情面板不可得或槽位全部缺失），不产出读数"
+        )
+        data["monte_carlo"] = {
+            "available": False,
+            "reason": (
+                "行情面板不可得/零模型无有效模拟轮次，读数不产出（§1.9-v2：无分位不出现点估计）"
+            ),
+        }
+        return data
     data["monte_carlo"] = {
         "available": True,
         "real_excess": round(real_excess, 6),
@@ -392,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         + (
             f"产出（quantile={mc['quantile']:.4f}, p={mc['p_value']:.4f}）"
             if mc["available"]
-            else "不产出（红线降级）"
+            else "不产出（样本红线或行情面板降级，详见报告）"
         )
     )
     return 0
