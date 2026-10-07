@@ -3,6 +3,8 @@
 import logging
 import random
 
+import pytest
+
 from finance_agent.outcome.track_record.significance import (
     _draw_group_symbols,
     excess_quantile,
@@ -96,31 +98,64 @@ class TestMonteCarlo:
 
     def test_monte_carlo_exposure_aligned_and_reproducible(self):
         """敞口对齐：模拟注数与真实组合每归属日每方向一致；同种子结果复现。"""
-        sims = simulate_random_excess(
-            universe=self.UNIVERSE,
-            long_counts={"2026-11-03": 2},
-            short_counts={"2026-11-03": 1},
-            closes=self._closes(),
-            entry_map={"2026-11-03": "2026-11-03"},
-            exit_date="2026-12-01",
-            benchmark_return=-0.04,
-            n_sims=200,
-            seed=42,
-        )
+        kwargs: dict = {
+            "universe": self.UNIVERSE,
+            "long_counts": {"2026-11-03": 2},
+            "short_counts": {"2026-11-03": 1},
+            "closes": self._closes(),
+            "entry_map": {"2026-11-03": "2026-11-03"},
+            "exit_date": "2026-12-01",
+            "benchmark_closes": {"2026-11-03": 100.0, "2026-12-01": 96.0},
+            "n_sims": 200,
+            "seed": 42,
+        }
+        sims = simulate_random_excess(**kwargs)
         assert len(sims) == 200
         # 复现性：同种子同分布
-        sims2 = simulate_random_excess(
-            universe=self.UNIVERSE,
-            long_counts={"2026-11-03": 2},
-            short_counts={"2026-11-03": 1},
-            closes=self._closes(),
-            entry_map={"2026-11-03": "2026-11-03"},
+        sims2 = simulate_random_excess(**kwargs)
+        assert sims == sims2
+
+    def test_per_slot_benchmark_excess_differs_by_entry_day(self):
+        """per-slot 基准超额：每槽减自己入场档的基准收益（T+20 槽位入场日不同、同期基准不同）。
+
+        两日槽位原始收益相同（10.0→11.0 = +10%），但 D1/D2 的基准收益不同
+        （100→103 = +3%；102→103 ≈ +0.98%），注数比 2:1——期望 = 10% − 按注数加权
+        的逐槽基准均值。组合层减单一 benchmark_return 的旧实现无法表达该差值。
+        """
+        universe = ["600519", "000001"]
+        closes = {
+            "600519": {
+                "2026-11-03": 10.0,
+                "2026-11-04": 10.0,
+                "2026-12-01": 11.0,
+            },
+            "000001": {
+                "2026-11-03": 10.0,
+                "2026-11-04": 10.0,
+                "2026-12-01": 11.0,
+            },
+        }
+        benchmark_closes = {
+            "2026-11-03": 100.0,
+            "2026-11-04": 102.0,
+            "2026-12-01": 103.0,
+        }
+        sims = simulate_random_excess(
+            universe=universe,
+            long_counts={"2026-11-03": 2, "2026-11-04": 1},
+            short_counts={},
+            closes=closes,
+            entry_map={"2026-11-03": "2026-11-03", "2026-11-04": "2026-11-04"},
             exit_date="2026-12-01",
-            benchmark_return=-0.04,
-            n_sims=200,
+            benchmark_closes=benchmark_closes,
+            n_sims=50,
             seed=42,
         )
-        assert sims == sims2
+        bench_d1 = 103.0 / 100.0 - 1.0
+        bench_d2 = 103.0 / 102.0 - 1.0
+        expected = 0.1 - (2 * bench_d1 + bench_d2) / 3
+        assert len(sims) == 50
+        assert all(s == pytest.approx(expected) for s in sims)
 
     def test_quantile_conservative_p_value(self):
         """右尾定位含真实读数自身：p=(greater+1)/(n+1) 保守口径。"""
@@ -161,7 +196,7 @@ class TestWithoutReplacement:
                 closes=closes,
                 entry_map={"2026-11-03": "2026-11-03"},
                 exit_date="2026-12-01",
-                benchmark_return=0.0,
+                benchmark_closes={"2026-11-03": 100.0, "2026-12-01": 100.0},
                 n_sims=5,
                 seed=42,
             )
@@ -180,7 +215,7 @@ class TestWithoutReplacement:
                 closes=closes,
                 entry_map={"2026-11-03": "2026-11-03"},
                 exit_date="2026-12-01",
-                benchmark_return=0.0,
+                benchmark_closes={"2026-11-03": 100.0, "2026-12-01": 100.0},
                 n_sims=5,
                 seed=42,
             )
