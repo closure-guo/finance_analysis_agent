@@ -121,3 +121,282 @@ def build_report_data(
         "months_covered": len({str(r["resolved_at"])[:7] for r in slots}),
     }
     return data
+
+
+def render_marketing_report(data: dict[str, Any]) -> str:
+    """渲染 markdown 结算报告（纯字符串拼装，可精确断言）。
+
+    契约（§1.9-v2）：点估计与分位必须同段出现——零模型可用时真实超额、分位、p 值
+    同行并排（含「跑赢」字样的行必附分位/p 值读数）；红线触发时只渲染降级说明，
+    绝不单独出现点估计。诚实边界段逐条列出触发的门槛。
+    data: build_report_data 的输出 + 可选 as_of（报告日期，由 CLI 注入）。
+    """
+    as_of = str(data.get("as_of") or "")
+    caliber = str(data.get("caliber") or "")
+    ic_series: list[dict[str, Any]] = data.get("ic_series") or []
+    avoidance_series: list[dict[str, Any]] = data.get("avoidance_series") or []
+    mc: dict[str, Any] = data.get("monte_carlo") or {}
+
+    lines: list[str] = [f"# T+20 结算报告（{as_of} · 口径 {caliber}）", ""]
+    lines.append("IC/ICIR 与零模型读数仅消费日主口径（duplicate_of_day 永不进入）。")
+    lines.append("")
+
+    lines.append("## 方向 IC（月度，long/short 日主）")
+    lines.append("")
+    if ic_series:
+        lines.append("| 月份 | 胜 | 负 | 样本 | IC | 备注 |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for s in ic_series:
+            note = "样本不足（<10，不进 ICIR）" if s.get("insufficient") else ""
+            ic_text = f"{s['ic']:.4f}" if s.get("ic") is not None else "—"
+            lines.append(
+                f"| {s['month']} | {s['wins']} | {s['losses']} | {s['sample']} | {ic_text} | {note} |"
+            )
+    else:
+        lines.append("（暂无方向 IC 数据）")
+    lines.append("")
+
+    lines.append("## ICIR")
+    lines.append("")
+    icir_value = data.get("icir")
+    lines.append(
+        f"ICIR：{icir_value:.4f}"
+        if icir_value is not None
+        else "ICIR：期数不足不展示（有效期数 <6）"
+    )
+    lines.append("")
+
+    lines.append("## 回避序列（neutral，单独成列）")
+    lines.append("")
+    if avoidance_series:
+        lines.append("| 月份 | 回避正确 | 错失上涨 | 样本 | IC | 备注 |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for s in avoidance_series:
+            note = "样本不足（<10）" if s.get("insufficient") else ""
+            ic_text = f"{s['ic']:.4f}" if s.get("ic") is not None else "—"
+            lines.append(
+                f"| {s['month']} | {s['wins']} | {s['losses']} | {s['sample']} | {ic_text} | {note} |"
+            )
+    else:
+        lines.append("（暂无回避判定样本）")
+    lines.append("")
+
+    lines.append("## 蒙特卡洛零模型（敞口对齐）")
+    lines.append("")
+    if mc.get("available"):
+        # 口径契约：点估计与分位同一行——「跑赢」结论必须同行附分位与 p 值
+        lines.append(
+            f"真实组合平均槽位超额 {mc['real_excess']:.4f}，位于零模型分位 "
+            f"{mc['quantile']:.4f}（p 值 {mc['p_value']:.4f}）——跑赢 "
+            f"{float(mc['quantile']) * 100:.1f}% 的随机组合"
+            f"（n_sims={mc['n_sims']}，seed={mc['seed']}，覆盖 {mc['months_covered']} 个结算月）。"
+        )
+    else:
+        lines.append(f"零模型读数不产出：{mc.get('reason', '原因未提供')}")
+    lines.append("")
+
+    gates: list[str] = []
+    for s in ic_series:
+        if s.get("insufficient"):
+            gates.append(f"方向 IC {s['month']} 月样本 {s['sample']}（<10），该期不进 ICIR")
+    for s in avoidance_series:
+        if s.get("insufficient"):
+            gates.append(f"回避序列 {s['month']} 月样本 {s['sample']}（<10）")
+    if icir_value is None:
+        gates.append("有效期数 <6，ICIR 不展示")
+    if mc.get("available"):
+        if not mc.get("n_sims"):
+            gates.append("零模型无有效模拟轮次（行情面板可能整体缺失）")
+    else:
+        gates.append(f"零模型未产出：{mc.get('reason', '')}")
+    lines.append("## 诚实边界（触发的门槛）")
+    lines.append("")
+    if gates:
+        lines.extend(f"- {g}" for g in gates)
+    else:
+        lines.append("- 无（本期无触发门槛）")
+    lines.append("")
+    return "\n".join(lines)
+
+
+MARKET_SLEEP_SECONDS = 0.5  # AKShare 逐股拉取间隔（限流是已知坑）
+POOL_JSON_PATH = Path("data/cohort/universe-v1.pool.json")
+
+
+def _load_pool_tickers() -> list[str]:
+    """读取预登记抽样框（universe-v1.pool.json，296 只沪深300）。"""
+    import json
+
+    if not POOL_JSON_PATH.exists():
+        raise SystemExit(f"池文件不存在：{POOL_JSON_PATH}（需在仓库根目录运行）")
+    entries: list[dict[str, Any]] = json.loads(POOL_JSON_PATH.read_text(encoding="utf-8"))
+    return [str(e["ticker"]) for e in entries]
+
+
+def _fetch_benchmark_closes(days: int = 250) -> dict[str, float]:
+    """基准指数日 K → date→close（BENCHMARK_CODE 与判定 job 同源）。"""
+    from finance_agent.data.akshare_client import AKShareClient
+    from finance_agent.outcome.track_record.job import BENCHMARK_CODE
+
+    client = AKShareClient()
+    df = client.fetch_index_kline(BENCHMARK_CODE, days=days)
+    if df is None or df.empty:
+        raise SystemExit("基准指数日 K 拉取失败（返回空），无法确定交易日历——中止")
+    return {str(r["日期"])[:10]: float(r["收盘"]) for r in df.to_dict("records")}
+
+
+def _fetch_stock_closes(
+    tickers: list[str], universe_by_day: dict[str, list[str]], days: int = 400
+) -> dict[str, dict[str, float]]:
+    """逐股拉取收盘面板（网络 IO，不做单测——函数层已全测）。
+
+    AKShare 逐股拉取有限流已知坑：逐股间隔 0.5s、失败重试 1 次；仍失败 → WARN
+    并从当日池剔除——per-day universe 语义天然容忍缺股（见
+    simulate_random_excess docstring），但调用方应关注 WARN 量级。
+    """
+    import logging
+    import time
+
+    from finance_agent.data.akshare_client import SETTLEMENT_ADJUST, AKShareClient
+
+    logger = logging.getLogger(__name__)
+    client = AKShareClient()
+    closes: dict[str, dict[str, float]] = {}
+    dropped: list[str] = []
+    for i, ticker in enumerate(tickers):
+        if i:
+            time.sleep(MARKET_SLEEP_SECONDS)
+        df = None
+        try:
+            df = client.fetch_kline(ticker, days=days, adjust=SETTLEMENT_ADJUST)
+        except Exception as exc:  # 网络异常不中断整批，该股走降级路径
+            logger.warning("report CLI: %s 行情拉取异常（%s）", ticker, exc)
+        if df is None or df.empty:
+            time.sleep(MARKET_SLEEP_SECONDS)
+            try:  # 失败重试 1 次
+                df = client.fetch_kline(ticker, days=days, adjust=SETTLEMENT_ADJUST)
+            except Exception as exc:
+                logger.warning("report CLI: %s 重试仍异常（%s）", ticker, exc)
+        if df is None or df.empty:
+            logger.warning(
+                "report CLI: %s 行情拉取失败（重试 1 次后仍失败），从当日池剔除"
+                "（per-day universe 语义天然容忍缺股）",
+                ticker,
+            )
+            dropped.append(ticker)
+            continue
+        closes[ticker] = {str(r["日期"])[:10]: float(r["收盘"]) for r in df.to_dict("records")}
+    if dropped:
+        drop = set(dropped)
+        for day, pool in universe_by_day.items():
+            universe_by_day[day] = [t for t in pool if t not in drop]
+    return closes
+
+
+def _exit_date_for(calendar: list[str], attribution_days: list[str]) -> str:
+    """exit_date = 最晚归属日后第 DEFAULT_HORIZON_DAYS 个基准交易日（越界取末日并 WARN）。"""
+    import logging
+
+    from finance_agent.outcome.track_record.judgment import DEFAULT_HORIZON_DAYS
+
+    logger = logging.getLogger(__name__)
+    last_day = max(attribution_days)
+    if last_day in calendar:
+        idx = calendar.index(last_day)
+    else:
+        logger.warning("report CLI: 归属日 %s 不在基准日历内，以日历末日为基点", last_day)
+        idx = len(calendar) - 1
+    idx += DEFAULT_HORIZON_DAYS
+    if idx >= len(calendar):
+        logger.warning(
+            "report CLI: 基准日历不足最晚归属日 + %d 个交易日，exit_date 取日历末日 %s",
+            DEFAULT_HORIZON_DAYS,
+            calendar[-1],
+        )
+        idx = len(calendar) - 1
+    return calendar[idx]
+
+
+def main(argv: list[str] | None = None) -> int:
+    """薄 CLI：行情面板组装（AKShare）→ build_report_data → 渲染落盘。
+
+    --n-sims/--seed 默认即预登记值（不建 env 配置管线，issue #250 裁决）；
+    --db/--out 缺省走 SESSIONS_DB_PATH 与 reports/settlement/<今日>-settlement-report.md。
+    """
+    import argparse
+    from datetime import date
+
+    parser = argparse.ArgumentParser(
+        prog="python -m finance_agent.outcome.track_record.report",
+        description="生成 T+20 结算报告（口径 §1.9-v2；只读，不写库）",
+    )
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="sessions DB 路径（缺省 SESSIONS_DB_PATH，其次 data/sessions.db）",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="输出 md 路径（缺省 reports/settlement/<今日>-settlement-report.md）",
+    )
+    parser.add_argument(
+        "--n-sims",
+        type=int,
+        default=MC_DEFAULT_N,
+        help="零模型抽样次数（预登记默认 10_000，不建 env 配置管线）",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=20261006,
+        help="零模型种子（预登记默认 20261006）",
+    )
+    args = parser.parse_args(argv)
+
+    from finance_agent.outcome.track_record.judgment import derive_attribution_date
+
+    settled = collect_settled_day_masters(db_path=args.db)
+    benchmark_closes = _fetch_benchmark_closes()
+    calendar = sorted(benchmark_closes)
+    attribution_days = sorted(
+        {
+            derive_attribution_date(str(r["created_at"]), calendar)
+            for r in settled
+            if r.get("direction") in ("long", "short")
+        }
+    )
+    universe_by_day = {day: list(_load_pool_tickers()) for day in attribution_days}
+    pool_tickers = next(iter(universe_by_day.values()), [])
+    closes = _fetch_stock_closes(pool_tickers, universe_by_day) if attribution_days else {}
+    exit_date = _exit_date_for(calendar, attribution_days) if attribution_days else calendar[-1]
+    data = build_report_data(
+        settled,
+        universe_by_day,
+        closes,
+        benchmark_closes,
+        exit_date,
+        n_sims=args.n_sims,
+        seed=args.seed,
+    )
+    data["as_of"] = date.today().isoformat()
+    out_path = Path(
+        args.out or f"reports/settlement/{date.today().isoformat()}-settlement-report.md"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(render_marketing_report(data), encoding="utf-8")
+    mc = data["monte_carlo"]
+    print(f"结算报告已写入：{out_path}")
+    print(
+        f"可判定日主样本 {data['sample']}；零模型："
+        + (
+            f"产出（quantile={mc['quantile']:.4f}, p={mc['p_value']:.4f}）"
+            if mc["available"]
+            else "不产出（红线降级）"
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
