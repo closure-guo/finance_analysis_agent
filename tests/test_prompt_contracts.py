@@ -30,6 +30,21 @@ class TestAnalystAntiHallucination:
     def test_mandates_data_sufficiency_declaration(self, name):
         assert "数据不足" in _load(f"{name}.md")
 
+    def test_mandates_period_annotation_discipline(self, name):
+        """期次标注纪律（add-period-key-citation-validation）：多期次并存数值不得裸引。"""
+        text = _load(f"{name}.md")
+        assert "显式标注期次" in text
+        assert "裸引" in text
+
+
+class TestSentimentCaliberDisclosure:
+    """板块口径显式化（update-report-data-disclosure，issue #233）。"""
+
+    def test_mandates_sector_caliber_annotation(self):
+        text = _load("sentiment_analyst.md")
+        assert "板块口径" in text
+        assert "混写" in text or "误读" in text
+
 
 DEBATERS = ["bull_debater", "bear_debater", "risk_debater"]
 
@@ -43,6 +58,11 @@ class TestDebaterAdversarialInstruction:
         text = _load(f"{name}.md")
         assert "反驳" in text
         assert "对方" in text
+
+    def test_mandates_period_annotation_discipline(self, name):
+        """辩论者引用财务数据同样承担期次标注纪律（issue #231）。"""
+        text = _load(f"{name}.md")
+        assert "显式标注期次" in text
 
 
 DECISION_PROMPTS = ["trader", "risk_judge", "fund_manager"]
