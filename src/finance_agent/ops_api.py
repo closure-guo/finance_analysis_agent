@@ -396,6 +396,19 @@ def _degraded_jobs_payload(exc: BaseException) -> dict[str, Any]:
 # ── 端点:状态 / 补跑 / 单条运行 ──
 
 
+@router.get("/stream-backlog")
+async def get_stream_backlog() -> dict[str, Any]:
+    """活跃会话流投递积压快照(session-streaming「发布积压可观测与背压」)。
+
+    返回 ``{"sessions": {session_id: {drops, subscribers, queue_depths, last_seq}}}``。
+    纯内存读(registry 进程内结构,单 worker 前提),无活跃会话时返回空映射,
+    不以 500 或空数据冒充异常。
+    """
+    from finance_agent.stream_registry import registry as stream_registry
+
+    return {"sessions": stream_registry.all_backlog_stats()}
+
+
 @router.get("/jobs")
 async def get_jobs() -> dict[str, Any]:
     """五任务排程 / 下次触发 / 最近运行 / 历史 + cohort 块(调度器未运行显式披露)。

@@ -536,6 +536,10 @@ class PipelineRunner:
                 _publish_terminal({"type": "done", "session_id": session_id})
             if state is not None:
                 state.done = True
+            # drop 计数随运行终结清理（issue #227.1：fast path 无 registry task，
+            # 不走 _notify_and_cleanup，须在此显式清）；收尾 flush 的丢弃已计数
+            # 并日志，清除不影响事后审计
+            stream_registry.clear_drop_counts(session_id)
 
     @staticmethod
     def _parse_event(sse_str: str) -> dict | None:

@@ -154,3 +154,36 @@ def test_record_drop_and_backlog_stats():
     assert stats["drops"] == {"thinking": 2, "chunk": 1}
     assert stats["subscribers"] == 0
     assert stats["last_seq"] == 0
+
+
+# ── add-event-delivery-hardening（issue #227 第 4 项）：incident 037 形状专测 ──
+
+
+@pytest.mark.asyncio
+async def test_reconnect_with_lost_details_sees_terminal_without_hang(tmp_path, monkeypatch):
+    """incident 037 形状：明细永久丢失 + 终态在 journal，重连即见终态不挂起。
+
+    spec 场景「重连客户端不依赖积压排空即见终态」：客户端 after_seq 之后只剩
+    终态事件时，重放必须立即下发终态并关闭流——不得等待「永远不会再来的」
+    缺失明细，不得出现「会话实际完成但界面看不到完成」的中间态。
+    """
+    _setup_db(tmp_path, monkeypatch)
+    sid = session_store.create_session(status="completed")
+    seq_detail = session_store.append_session_event(sid, {"type": "thinking_token"})
+    seq_done = session_store.append_session_event(sid, {"type": "done"})
+    assert (seq_detail, seq_done) == (1, 2)
+
+    reg = stream_registry.StreamRegistry()
+    gen = reg.subscribe(sid, after_seq=1)
+    # 收集至流结束：首个事件即 journal 终态（seq=1 的明细已永久丢失）；
+    # 终态后不得再有任何非终态事件（不等待「永远不会再来的」缺失明细）；
+    # 整个消费在超时内自然结束（不挂起）。无活跃任务路径在 journal 终态后
+    # 会补发一个按会话状态推导的合成终态（既有行为，前端取首个终态即关流）。
+    events: list[dict] = []
+    with pytest.raises(StopAsyncIteration):
+        while True:
+            events.append(await asyncio.wait_for(gen.__anext__(), timeout=1.0))
+    assert events, "重连必须至少下发终态事件"
+    assert events[0]["type"] == "done"
+    assert events[0].get("seq") == 2
+    assert all(e["type"] in ("done", "interrupted", "error") for e in events)
