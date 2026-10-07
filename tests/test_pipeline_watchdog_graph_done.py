@@ -197,6 +197,9 @@ async def test_scenario_c_queue_full_drops_thinking_but_keeps_boundary_events(
         first = await gen.__anext__()  # 启动管线，拿到首个事件
         # 暂停消费：让 150 条 thinking 涌入塞满 event_queue(maxsize=100)
         await asyncio.sleep(0.5)
+        # drop 计数随运行终结清理（issue #227.1 生命周期契约），采样必须在
+        # 会话活跃窗口内：此刻队列满，生产端被阻塞在边界事件入队上未终结
+        flood_stats = registry.backlog_stats(sid)
 
         events = [first]
         while True:
@@ -212,9 +215,8 @@ async def test_scenario_c_queue_full_drops_thinking_but_keeps_boundary_events(
         with contextlib.suppress(Exception):
             await gen.aclose()
 
-    stats = registry.backlog_stats(sid)
-    assert stats["drops"].get("thinking", 0) >= 1, (
-        f"队列满时 thinking 明细 SHALL 丢弃并计数，实际 drops: {stats['drops']}"
+    assert flood_stats["drops"].get("thinking", 0) >= 1, (
+        f"队列满时 thinking 明细 SHALL 丢弃并计数，实际 drops: {flood_stats['drops']}"
     )
     assert "thinking 明细丢弃" in caplog.text, "丢弃 SHALL 有 WARNING 日志（不可静默）"
 
@@ -240,6 +242,21 @@ async def test_scenario_d_tail_thinking_compressed_after_graph_done(tmp_path, mo
     sid = _setup(tmp_path, monkeypatch, "30")
     tail_count = 50
 
+    # drop 计数随运行终结清理（issue #227.1 生命周期），终态事件入队前
+    # _background_consume 收尾即清——消费侧不存在活跃采样窗口。改以 spy
+    # 验证「压缩即计数」契约；record_drop→backlog_stats 集成由
+    # test_stream_registry.py 与场景 C 活跃窗口断言覆盖。
+    tail_drops = 0
+    real_record_drop = registry.record_drop
+
+    def _spy_record_drop(session_id: str, kind: str) -> None:
+        nonlocal tail_drops
+        if session_id == sid and kind == "tail_thinking":
+            tail_drops += 1
+        real_record_drop(session_id, kind)
+
+    monkeypatch.setattr(registry, "record_drop", _spy_record_drop)
+
     def _stream(initial_state, config=None, session_id=None):
         yield ("updates", {"check_cache": {"cached": True}})
         yield _final_updates_chunk()
@@ -260,9 +277,8 @@ async def test_scenario_d_tail_thinking_compressed_after_graph_done(tmp_path, mo
     assert not tail_thinks, (
         f"图完成后的思考明细 SHALL 压缩丢弃、不出现在事件流中，实际透出 {len(tail_thinks)} 条"
     )
-    stats = registry.backlog_stats(sid)
-    assert stats["drops"].get("tail_thinking") == tail_count, (
-        f"tail_thinking 计数应等于压缩条数 {tail_count}，实际 drops: {stats['drops']}"
+    assert tail_drops == tail_count, (
+        f"tail_thinking 计数应等于压缩条数 {tail_count}，实际 {tail_drops}"
     )
     assert events, "事件流不应为空"
     final = events[-1]
