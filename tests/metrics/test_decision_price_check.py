@@ -252,6 +252,59 @@ class TestScenarioNonPriceDimensions:
         assert anomalies[0]["deviation_pct"] == pytest.approx(4.06, abs=0.01)
 
 
+class TestCjkEmbeddedAliasesAndTrailingEnumerators:
+    """10-07 生产误拦回归（issue #254）：中文行文嵌入的 MA 别名 + 「1) 2)」后括号序号。
+
+    根因一：_alias_boundary_ok 用 str.isalnum() 拦「XMA5」前缀，但 CJK 汉字的
+    isalnum() 亦为 True——「上穿MA60」的 ma60 别名被拒，60 被提取为价位、
+    就近归属 MA20，偏差 243% 打回（600845 10-07 cohort 阻断逐字复现）。
+    打回重试不可能修复：中文行文必然含汉字。
+
+    根因二：_ENUM_SPAN_PATTERNS 只挡「（1）」前括号序号，600515 实证
+    「；1) 相对近窗…；2) 止损距离…」的 1/2 被提为价位。
+    """
+
+    def test_ma60_preceded_by_cjk_not_extracted(self):
+        """「上穿MA60」前邻汉字：60 不得当价位（600845 10-07 生产原文）。"""
+        decision = _decision(
+            reeval_triggers=["MA20上穿MA60确认中期趋势反转"],
+            inaction_reason="中期技术趋势未反转（MA20低于MA60）",
+        )
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert anomalies == []
+
+    def test_ma5_preceded_by_cjk_not_extracted(self):
+        """「若MA5上穿MA20」：MA5 前邻汉字同样中招（600026「价位 5」同桶）。"""
+        decision = _decision(reeval_triggers=["若MA5上穿MA20则转积极"])
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert anomalies == []
+
+    def test_ascii_prefix_still_rejects_alias(self):
+        """守卫本意保留：「EMA5」「XMA60」前邻 ASCII 字母数字仍不得读作别名。"""
+        from finance_agent.metrics.decision_price_check import _alias_occurrences
+
+        assert _alias_occurrences("ema5金叉") == []
+        assert _alias_occurrences("xma60压力") == []
+        # 中文前邻不受影响（正向锚）
+        assert len(_alias_occurrences("穿ma60确认")) == 1
+
+    def test_trailing_paren_enumerators_not_extracted(self):
+        """「1) … 2) …」后括号序号（600515 10-07 生产原文）不得当价位。"""
+        decision = _decision(
+            reeval_triggers=["放量跌破 17.90 确认技术破位"],
+            inaction_reason="1) 相对近窗 neutral 前判翻转纪律不满足；2) 止损距离与 VaR 未分离",
+        )
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert anomalies == []
+
+    def test_price_before_closing_paren_not_masked(self):
+        """守卫不得反向掩蔽：紧邻右括号的真实价位「（止损 9.99）」仍须受校验。"""
+        decision = _decision(reeval_triggers=["跌破（止损 9.99）则离场观望"])
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert len(anomalies) == 1
+        assert anomalies[0]["kind"] == "deviation"
+
+
 class TestFieldCoverage:
     """reeval_triggers 每条 + inaction_reason + reasoning 三字段全覆盖。"""
 
