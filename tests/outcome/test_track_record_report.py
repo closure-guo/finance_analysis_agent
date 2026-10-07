@@ -10,6 +10,7 @@ from finance_agent.outcome.track_record.model import (
 from finance_agent.outcome.track_record.report import (
     build_report_data,
     collect_settled_day_masters,
+    render_marketing_report,
 )
 
 BASE = {
@@ -193,3 +194,82 @@ class TestBuildReportData:
             settled, UNIVERSE_BY_DAY, CLOSES, BENCH, "2026-11-06", n_sims=200, seed=42
         )
         assert again["monte_carlo"] == mc
+
+
+def _render_data(**overrides):
+    """渲染测试夹具：红线降级形态为默认，overrides 覆盖顶层键。"""
+    data = {
+        "caliber": "§1.9-v2",
+        "as_of": "2026-11-03",
+        "ic_series": [
+            {
+                "month": "2026-11",
+                "wins": 3,
+                "losses": 1,
+                "sample": 4,
+                "ic": 0.75,
+                "insufficient": True,
+            }
+        ],
+        "avoidance_series": [],
+        "icir": None,
+        "sample": 4,
+        "monte_carlo": {
+            "available": False,
+            "reason": "可判定日主样本 4<10（§1.9-v2 settled<10 红线），不产出零模型读数",
+        },
+    }
+    data.update(overrides)
+    return data
+
+
+MC_OK = {
+    "available": True,
+    "real_excess": 0.024,
+    "quantile": 0.973,
+    "p_value": 0.027,
+    "n_sims": 10000,
+    "seed": 20261006,
+    "months_covered": 1,
+}
+
+
+class TestRenderMarketingReport:
+    def test_title_carries_date_and_caliber(self):
+        """标题带报告日期与口径版本（§1.9-v2 预登记版本引用）。"""
+        text = render_marketing_report(_render_data())
+        first = text.splitlines()[0]
+        assert "2026-11-03" in first and "§1.9-v2" in first
+
+    def test_point_estimate_and_quantile_in_same_line(self):
+        """点估计与分位同段：含「跑赢」的行必须同行含分位与 p 值（§1.9-v2 口径违规防线）。"""
+        text = render_marketing_report(_render_data(monte_carlo=MC_OK, sample=10, icir=0.421))
+        beat_lines = [ln for ln in text.splitlines() if "跑赢" in ln]
+        assert len(beat_lines) == 1
+        line = beat_lines[0]
+        assert "0.0240" in line  # real_excess 点估计
+        assert "分位" in line and "0.9730" in line  # 零模型分位
+        assert "p 值" in line and "0.0270" in line  # 保守 p
+
+    def test_degraded_mc_renders_reason_without_point_estimate(self):
+        """红线触发：渲染降级说明（reason），不出现「跑赢」与单独点估计。"""
+        text = render_marketing_report(_render_data())
+        assert "不产出零模型读数" in text
+        assert "样本 4<10" in text and "§1.9-v2" in text
+        assert "跑赢" not in text
+        assert "平均槽位超额" not in text
+
+    def test_icir_none_shows_insufficient_note_and_month_mark(self):
+        """ICIR 为 None → 「期数不足不展示」；样本不足月份在 IC 表逐月标注。"""
+        text = render_marketing_report(_render_data())
+        assert "期数不足不展示" in text
+        assert "样本不足" in text
+        assert "2026-11" in text
+
+    def test_honesty_boundary_lists_triggered_gates(self):
+        """诚实边界段逐条列出触发的门槛（样本不足期 / ICIR 不展示 / 零模型红线）。"""
+        text = render_marketing_report(_render_data())
+        boundary = text.split("诚实边界")[1]
+        assert "2026-11 月样本 4（<10）" in boundary
+        assert "ICIR 不展示" in boundary
+        assert "零模型未产出" in boundary and "§1.9-v2" in boundary
