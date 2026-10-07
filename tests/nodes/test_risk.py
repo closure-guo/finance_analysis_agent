@@ -515,6 +515,26 @@ class TestDecisionPriceGate:
         assert "83.33" in retry_context  # 偏差幅度
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_retry_feedback_includes_mechanical_rules(self, mock_llm):
+        """打回反馈 MUST 附机械可执行的修正规则（601066 10-07 阻断复盘，#254 后继）。
+
+        实证死循环：无规则时修正 LLM 补了 24.60 有效门槛却保留「站上 entry_ref
+        23.03」，改写文本成为新 source_text → 恶化判据（owner 批准的精确集合
+        比较）阻断。规则须说到可执行：上破严格高于/跌破严格低于收盘价、等于
+        收盘价的价位（含 entry_ref）禁止留在触发条件、确认语义建议。
+        """
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            _sell_decision_json(_GOOD_TRIGGER),
+        ]
+        risk_judge(dict(_PRICE_GATE_STATE))
+        retry_context = mock_llm.call_args_list[1].args[0]
+        assert "严格高于最新收盘价" in retry_context
+        assert "严格低于最新收盘价" in retry_context
+        assert "entry_ref" in retry_context  # 点名 601066 实证违规形态
+        assert "放量突破" in retry_context  # 确认语义建议
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_price_gate_retry_to_watch_rechecks_sibling_notes(self, mock_llm):
         """评审 Minor：价位门禁重试换代（sell→watch 缺理由）→ 兄弟结论如实改注。
 
