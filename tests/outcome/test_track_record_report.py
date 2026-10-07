@@ -104,11 +104,12 @@ def _row(
     excess: float | None = 0.02,
     day: str = "2026-10-09",
     status: str = "resolved_win",
+    symbol: str | None = None,
 ):
     """构造已结算日主行（build_report_data 纯函数输入，不经 DB）。"""
     return {
         "prediction_id": f"p{i}",
-        "symbol": f"6{i:05d}.SH",
+        "symbol": symbol or f"6{i:05d}.SH",
         "direction": direction,
         "status": status,
         "resolved_at": None if status == "unresolvable" else "2026-11-06T15:00:00",
@@ -159,6 +160,31 @@ class TestBuildReportData:
         assert data["sample"] == 8
         assert data["monte_carlo"]["available"] is False
         assert "样本 8<10" in data["monte_carlo"]["reason"]
+
+    def test_empty_market_panel_degrades_mc_without_point_estimate(self):
+        """M1：sample≥10 但行情面板整体不可得（closes 空）→ available=False + reason。
+
+        无分位不出现点估计：mc 段不含 real_excess/quantile 键；render 不抛异常、
+        不渲染「跑赢」与槽位超额点估计。
+        """
+        settled = [_row(i, direction="long" if i % 2 == 0 else "short") for i in range(12)]
+        data = build_report_data(
+            settled,
+            {"2026-10-09": ["600519", "000001"]},  # 池键齐全，但 closes 全空 = 面板整体失败
+            {},
+            BENCH,
+            "2026-11-06",
+            n_sims=200,
+            seed=42,
+        )
+        assert data["sample"] == 12
+        mc = data["monte_carlo"]
+        assert mc["available"] is False
+        assert "无有效模拟轮次" in mc["reason"]
+        assert "quantile" not in mc and "real_excess" not in mc
+        text = render_marketing_report({**data, "as_of": "2026-11-03"})
+        assert "跑赢" not in text and "平均槽位超额" not in text
+        assert "无有效模拟轮次" in text
 
     def test_ten_samples_produce_real_excess_quantile_and_caliber(self):
         """正常分支：10 条可判定行 → 真实超额等权均值 + 分位/p 值 + caliber 字段。
