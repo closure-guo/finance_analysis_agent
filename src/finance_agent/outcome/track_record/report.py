@@ -15,7 +15,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from finance_agent.outcome.track_record.judgment import derive_attribution_date
+from finance_agent.outcome.track_record.judgment import (
+    day_master_ids,
+    derive_attribution_date,
+)
 from finance_agent.outcome.track_record.model import list_predictions
 from finance_agent.outcome.track_record.significance import (
     MC_DEFAULT_N,
@@ -53,32 +56,41 @@ def build_report_data(
 ) -> dict[str, Any]:
     """组装结算报告读数（纯函数；口径 §1.9-v2，顶层 caliber 引用预登记版本）。
 
-    settled: collect_settled_day_masters 的输出（已结算日主行）；
-    universe_by_day/closes/benchmark_closes/exit_date: 零模型行情面板（语义见
-    simulate_random_excess）；n_sims/seed: 零模型抽样次数与种子（预登记默认
-    10_000 / 20261006）。
+    settled: collect_settled_day_masters 的输出（已结算日主行）；入参会重算
+    day_master_ids 做第三道防御——非日主行（如同日 superseded 旧行）剔除后再进
+    任何统计；universe_by_day/closes/benchmark_closes/exit_date: 零模型行情面板
+    （语义见 simulate_random_excess）；n_sims/seed: 零模型抽样次数与种子（预登记
+    默认 10_000 / 20261006）。
 
     IC/ICIR：方向 IC（long/short 的 resolved_win/loss）与回避序列（neutral）
     分别成列；icir 剔除样本不足期后期数 <6 → None。
-    蒙特卡洛（红线先判）：可判定日主样本 = settled 中 long/short 且 excess_return
+    蒙特卡洛（红线先判）：可判定日主样本 = 日主中 long/short 且 excess_return
     非空的行数（unresolvable 等无读数行不是「可判定」样本）——< 10 → 零模型段
     available=False + reason（引用 §1.9-v2 与样本数），不产出任何零模型读数。
     ≥ 10 执行：真实读数 = 可判定行 excess_return 等权均值（与零模型的「平均槽位
     超额」同构可比——两侧都是逐槽 T+20 超额均值）；posture = 可判定行按归属日
     （derive_attribution_date(created_at, calendar)，calendar 取基准交易日升序
     列表 = sorted(benchmark_closes)）分组计数；零模型 entry_map = {归属日: 归属日}
-    （归属日已按日历吸附为交易日，与 settle_entry_price 派生同源）。
+    （归属日已按日历吸附为交易日，与 settle_entry_price 派生同源）。全部槽共用
+    单 exit_date（CLI 取最晚归属日 + DEFAULT_HORIZON_DAYS 个基准交易日）——
+    跨月槽位混合前须预登记修订为逐日 exit。真实槽 symbol（归一化去后缀）不在
+    归属日池内 → logger.warning（池外选股使零模型不同框，观测项不阻断）。
+    零模型无有效模拟轮次（行情面板不可得）→ available=False，无分位不出现点估计。
 
     返回 dict：caliber / ic_series / avoidance_series / icir / sample / monte_carlo
     （available=True 时含 real_excess / quantile / p_value / n_sims / seed /
-    months_covered）。
+    months_covered；available=False 时仅 available + reason）。
     """
     calendar = sorted(benchmark_closes)
-    ic_series = monthly_ic(settled, kind="direction")
-    avoidance_series = monthly_ic(settled, kind="avoidance")
+    # ⚠1 第三道防御：对入参重算日主（§1.9-v2）并剔除非日主行——collect 只滤
+    # duplicate_of_day，同日 superseded 旧行（盘中翻向）会漏入，此处兜底。
+    masters = day_master_ids(settled, calendar)
+    rows = [r for r in settled if str(r.get("prediction_id")) in masters]
+    ic_series = monthly_ic(rows, kind="direction")
+    avoidance_series = monthly_ic(rows, kind="avoidance")
     slots = [
         r
-        for r in settled
+        for r in rows
         if r.get("direction") in ("long", "short") and r.get("excess_return") is not None
     ]
     sample = len(slots)
@@ -100,6 +112,16 @@ def build_report_data(
     short_counts: dict[str, int] = {}
     for r in slots:
         day = derive_attribution_date(str(r["created_at"]), calendar)
+        # ⚠2 观测：真实槽不在归属日池内（归一化去 .SH/.SZ 后缀，同 job._code 口径）
+        # → 池外选股使零模型不同框；首批可忽略但须有观测，不阻断。
+        if str(r.get("symbol", "")).split(".")[0] not in universe_by_day.get(day, []):
+            logger.warning(
+                "build_report_data: 真实槽 %s symbol=%s 不在归属日 %s 的日池内——"
+                "池外选股使零模型不同框",
+                r.get("prediction_id"),
+                r.get("symbol"),
+                day,
+            )
         counts = long_counts if r["direction"] == "long" else short_counts
         counts[day] = counts.get(day, 0) + 1
     sims = simulate_random_excess(
@@ -241,7 +263,7 @@ POOL_JSON_PATH = Path("data/cohort/universe-v1.pool.json")
 
 
 def _load_pool_tickers() -> list[str]:
-    """读取预登记抽样框（universe-v1.pool.json，296 只沪深300）。"""
+    """读取预登记抽样框（universe-v1.pool.json，实测 300 条沪深300 成分）。"""
     import json
 
     if not POOL_JSON_PATH.exists():
