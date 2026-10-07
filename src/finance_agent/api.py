@@ -695,8 +695,9 @@ if TESTING:
         顶层可选 pipeline_timelines（{node: [TimelineItem]}）与 pipeline_snapshot（dict），
         分别经 update_pipeline_timelines / update_pipeline_snapshot 落库，
         供历史会话恢复等 E2E 确定性构造会话（persist-full-session-timeline delta）；
-        顶层可选 track_record（{equity_curve, index_closes, metrics_snapshot}）写战绩页造数表
-        （add-index-performance-compare / add-portfolio-beta-alpha），无需 chat_history
+        顶层可选 track_record（{equity_curve, index_closes, metrics_snapshot,
+        predictions}）写战绩页造数表（add-index-performance-compare /
+        add-portfolio-beta-alpha / add-prediction-pool-integrity），无需 chat_history
         也可单独使用，且不创建会话。
         """
         # 旧版 smoke 断言（{symbol}）保持占位响应，避免破坏既有契约；
@@ -734,6 +735,44 @@ if TESTING:
             metrics_snapshot = track_seed.get("metrics_snapshot")
             if isinstance(metrics_snapshot, dict):
                 upsert_metrics_daily(_track_as_of(), metrics_snapshot)
+            # predictions 造数（add-prediction-pool-integrity）：duplicate 徽标 E2E 用。
+            # open 行原样插入；非 open 状态经 update_prediction_status 置终态，与生产
+            # dedup/判定同一条状态变更路径（产生审计行）。逐行落 predictions 表，
+            # 库路径与上方造数同源（模块默认,随 SESSIONS_DB_PATH 指向测试库）。
+            seed_predictions = track_seed.get("predictions")
+            if isinstance(seed_predictions, list):
+                from finance_agent.outcome.track_record.model import (
+                    insert_prediction as _seed_insert_prediction,
+                )
+                from finance_agent.outcome.track_record.model import (
+                    update_prediction_status as _seed_update_status,
+                )
+
+                for row in seed_predictions:
+                    pid = _seed_insert_prediction(
+                        {
+                            "source_type": "live",
+                            "symbol": row["symbol"],
+                            "symbol_name": row.get("symbol_name", row["symbol"]),
+                            "direction": row.get("direction", "neutral"),
+                            "entry_price": row.get("entry_price", 10.0),
+                            "target_price": row.get("target_price"),
+                            "horizon_days": row.get("horizon_days", 20),
+                            "confidence": row.get("confidence", 0.6),
+                            "rationale_snapshot": {},
+                            "langfuse_trace_id": None,
+                            "created_at": row["created_at"],
+                            "resolution_rule": None,
+                        }
+                    )
+                    if row.get("status") and row["status"] != "open":
+                        resolved: dict[str, Any] = {
+                            "status": row["status"],
+                            "resolution_rule": row.get("resolution_rule", row["status"]),
+                        }
+                        if row.get("resolved_at"):
+                            resolved["resolved_at"] = row["resolved_at"]
+                        _seed_update_status(pid, resolved)
         # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
         if "chat_history" not in req:
             return {"status": "ok", "mode": "testing"}
