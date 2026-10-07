@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PREDICTION_STATUS_CLS, PREDICTION_STATUS_LABEL } from './predictionStatus'
+import { PREDICTION_STATUS_CLS, PREDICTION_STATUS_LABEL } from '../../pages/trackRecord/predictionStatus'
 
 describe('duplicate_of_day 状态映射（add-prediction-pool-integrity）', () => {
   it('标签为「同日重复」', () => {
