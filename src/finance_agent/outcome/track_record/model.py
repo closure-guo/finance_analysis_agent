@@ -975,6 +975,51 @@ def count_predictions(
         conn.close()
 
 
+def list_current_predictions(
+    source_type: str | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """当前立场视图(add-current-stance-view):每股最新一条 status='open' 的观点。
+
+    立场语义 = 最新一条仍在窗口内的活跃主张:dup/superseded/已结算行不代表当前
+    立场,一律排除;跨日多条 open 由 MAX(created_at) 收敛为每股一行。日主机制
+    保证同股同日至多一条 open,本函数不改变任何统计口径,纯展示查询。
+    """
+    conn = _connect(db_path)
+    try:
+        cond = ""
+        params: list[Any] = []
+        if source_type:
+            cond = " AND source_type=?"
+            params.append(source_type)
+        # 列名固定字面量、值参数化;created_at 并列时 prediction_id 作确定性 tiebreak,
+        # Python 层按 symbol 去重保首行(防御同秒双 open 的理论并列)
+        rows = conn.execute(
+            f"""
+            SELECT p.* FROM predictions p
+            JOIN (
+                SELECT symbol, MAX(created_at) AS max_created
+                FROM predictions WHERE status='open'{cond}
+                GROUP BY symbol
+            ) m ON p.symbol = m.symbol AND p.created_at = m.max_created
+            WHERE p.status='open'{" AND p.source_type=?" if source_type else ""}
+            ORDER BY p.created_at DESC, p.prediction_id DESC
+            """,  # noqa: S608
+            params + ([source_type] if source_type else []),
+        ).fetchall()
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            if d["symbol"] in seen:
+                continue
+            seen.add(d["symbol"])
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
 def get_prediction(prediction_id: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
     conn = _connect(db_path)
     try:
