@@ -98,8 +98,10 @@ def persist_prediction_from_accumulated(
                 # add-watch-trigger-tracking：会话关联 + watch 双向触发位（写入即冻结）。
                 # 触发位仅取终稿决策结构化字段；不解析 reeval_triggers 自由文本。
                 "session_id": session_id,
-                "trigger_high": decision.get("trigger_high"),
-                "trigger_low": decision.get("trigger_low"),
+                # 触发位仅 watch 决策落数值；buy/sell/hold 等非 watch 决策强制 NULL
+                # （spec: 观点数据模型——未申报或非 watch 决策时为 NULL）。
+                "trigger_high": decision.get("trigger_high") if action == "watch" else None,
+                "trigger_low": decision.get("trigger_low") if action == "watch" else None,
                 "timestamp": _now_iso(),
                 "resolution_rule": resolution_rule,
             },

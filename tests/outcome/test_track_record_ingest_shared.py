@@ -207,6 +207,51 @@ def test_ingest_buy_decision_triggers_null_session_id_written(monkeypatch, tmp_p
     assert row["trigger_low"] is None
 
 
+def test_ingest_buy_decision_with_stray_triggers_forced_null(monkeypatch, tmp_path):
+    """buy 决策即使携带杂散 trigger_high/trigger_low → 两列强制落 NULL。
+
+    spec 观点数据模型：触发位仅 watch 决策落数值，非 watch 决策时为 NULL。
+    """
+    db = _db(monkeypatch, tmp_path)
+    persist_prediction_from_accumulated(
+        _reat_accumulated(
+            final_trade_decision={
+                "action": "buy",
+                "confidence": 0.8,
+                "trigger_high": 24.6,
+                "trigger_low": 22.91,
+            },
+        ),
+        "sess_buy_stray",
+        "600519",
+        "贵州茅台",
+    )
+    row = _trigger_row(db)
+    assert row["trigger_high"] is None
+    assert row["trigger_low"] is None
+
+
+def test_ingest_hold_decision_with_triggers_forced_null(monkeypatch, tmp_path):
+    """hold 决策（非 watch）即使携带触发位 → 两列强制落 NULL。"""
+    db = _db(monkeypatch, tmp_path)
+    persist_prediction_from_accumulated(
+        _reat_accumulated(
+            final_trade_decision={
+                "action": "hold",
+                "confidence": 0.5,
+                "trigger_high": 24.6,
+                "trigger_low": 22.91,
+            },
+        ),
+        "sess_hold_stray",
+        "600519",
+        "贵州茅台",
+    )
+    row = _trigger_row(db)
+    assert row["trigger_high"] is None
+    assert row["trigger_low"] is None
+
+
 def test_ingest_pydantic_watch_decision_triggers_persisted(monkeypatch, tmp_path):
     """pydantic TradeDecision 路径（真实管线 state）：model_dump 后触发位照常落库。"""
     from finance_agent.models import TradeDecision
