@@ -30,13 +30,13 @@
 
 **D3 浮动收益：列表行内嵌最新盯市，服务端批量注入。** `list_predictions` 返回行新增可选字段 `latest_mark: {mark_date, cum_return, cum_excess} | null`（对 open 行批量查 daily_marks 每观点最新一条，单条 SQL 窗口函数，页 ≤50 行成本可控）。前端 open 行区间收益/基准超额列读 latest_mark，附 title=盯市日期。**不选**前端另发 marks 请求：表格与浮点值同源渲染避免两跳闪烁。已结算行字段为 null、展示不变。closed/neutral 判定口径与浮动的语义差由「未结算」标注承载。
 
-**D4 legacy_open：prediction_stats 加一维计数。** `COUNT(*) WHERE status='open' AND horizon_days != caliber_horizon`（参数同现有查询，版本/口径过滤链复用）。与 legacy_settled 分列返回。0 值不渲染分句（与 legacy_settled=0 明示「无存量」的不对称是刻意的：已结算是合规披露常驻项，进行中是解释性补充）。
+**D4 legacy_open：overview 端点差值法，与 legacy_settled 完全对称。** `legacy_open = max(0, legacy_all["open"] - stats["open"])`——legacy_all（无口径过滤）与 headline（horizon 过滤）两次查询 overview 本来就在发，零新增 SQL；语义=不在头条口径内的 open 计数（含 252 与潜在 NULL horizon）。0 值不渲染分句（与 legacy_settled=0 明示「无存量」的不对称是刻意的：已结算是合规披露常驻项，进行中是解释性补充）。
 
 **D5 切片空态折叠：前端按 settled=0 隐藏。** 数据源 `/segments` 不改（含 143 未知桶的响应照旧，供后续结算期直接可用）；前端 settled==0 时整区渲染一行说明。**不选**后端跳过计算：端点语义保持稳定，避免 settled 翻转时响应形状突变。
 
 **D6 术语映射单一真源。** 「带内中性」落在 `predictionStatus.ts`（前端标签）+ 后端 `_STATUS_KEYWORDS`（keyword 匹配）双侧同步；详情页方向/判定规则中文映射新建 `predictionDisplay.ts` 小映射模块（direction/resolution_rule → 中文），列表与详情共用，避免两处漂移。keyword 集合更新同步既有过滤用例。
 
-**D7 E2E 造数缺口：seed 通道补 daily_marks。** 现 `/api/test/seed` 的 track_record 通道只支持 predictions；浮动收益 E2E 需要盯市行——seed 通道扩展 `track_record.marks`（走生产 `upsert_daily_mark` 同路径）。折叠/窗口列用现有 predictions 通道即可。
+**D7 E2E 造数缺口：seed 通道补 daily_marks。** 现 `/api/test/seed` 的 track_record 通道只支持 predictions；浮动收益 E2E 需要盯市行——predictions 造数行支持可选 `marks` 子数组（[{mark_date, cum_return, cum_excess, mark_price?}]，落库走生产 `insert_daily_mark` 同路径）。子键形态的原因：prediction_id 服务端生成，顶层数组无法引用，marks 必须按行携带。折叠/窗口列用现有 predictions 通道即可。
 
 ## Risks / Trade-offs
 
