@@ -863,7 +863,9 @@ _STATUS_LABELS = {
     "进行中": "open",
     "命中": "resolved_win",
     "未中": "resolved_loss",
-    "中性": "resolved_neutral",
+    # update-track-record-display-clarity:「中性」→「带内中性」——与方向「中性」(观望)消歧，
+    # keyword=中性 现在只匹配 direction=neutral（_DIRECTION_LABELS）
+    "带内中性": "resolved_neutral",
     "回避": "avoidance",
     "不可判定": "unresolvable",
     "同日重复": "duplicate_of_day",

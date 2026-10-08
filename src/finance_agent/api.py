@@ -743,6 +743,9 @@ if TESTING:
             seed_predictions = track_seed.get("predictions")
             if isinstance(seed_predictions, list):
                 from finance_agent.outcome.track_record.model import (
+                    insert_daily_mark as _seed_insert_mark,
+                )
+                from finance_agent.outcome.track_record.model import (
                     insert_prediction as _seed_insert_prediction,
                 )
                 from finance_agent.outcome.track_record.model import (
@@ -774,6 +777,17 @@ if TESTING:
                         if row.get("resolved_at"):
                             resolved["resolved_at"] = row["resolved_at"]
                         _seed_update_status(pid, resolved)
+                    # update-track-record-display-clarity:行内 marks 子数组——浮动收益
+                    # E2E 造数（prediction_id 服务端生成，顶层数组无法引用，按行携带）
+                    for mk in row.get("marks") or []:
+                        _seed_insert_mark(
+                            pid,
+                            mk["mark_date"],
+                            mk.get("mark_price"),
+                            mk.get("cum_return"),
+                            mk.get("cum_excess"),
+                            mk.get("benchmark_price"),
+                        )
         # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
         if "chat_history" not in req:
             return {"status": "ok", "mode": "testing"}

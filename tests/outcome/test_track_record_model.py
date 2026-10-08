@@ -675,3 +675,18 @@ def test_list_predictions_latest_mark_null_for_closed_and_unmarked(db):
     rows = {r["prediction_id"]: r for r in list_predictions(db_path=db)}
     assert rows[unmarked]["latest_mark"] is None
     assert rows[closed]["latest_mark"] is None
+
+
+def test_keyword_band_neutral_label_matches_status_only(db):
+    """「带内中性」匹配 resolved_neutral；「中性」只剩方向 neutral 语义（消歧）。"""
+    neutral_dir = _insert(
+        db, symbol="600015.SH", direction="neutral", created_at="2026-10-01T10:00:00"
+    )
+    band = _insert(db, symbol="600016.SH", direction="short", created_at="2026-10-01T11:00:00")
+    update_prediction_status(
+        band, {"status": "resolved_neutral", "resolution_rule": "superseded"}, db_path=db
+    )
+    band_rows = list_predictions(keyword="带内中性", db_path=db)
+    assert [r["prediction_id"] for r in band_rows] == [band]
+    dir_rows = list_predictions(keyword="中性", db_path=db)
+    assert {r["prediction_id"] for r in dir_rows} == {neutral_dir}
