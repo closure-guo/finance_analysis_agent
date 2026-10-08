@@ -680,14 +680,18 @@ def _fmt_price(value: object) -> str:
 
 
 # add-watch-trigger-tracking：行情截止与报告日最大可接受间隔（自然日），超出即提示
-# 数据真空（跳空缺口可能使触发条件失真）
-_DATA_VACUUM_THRESHOLD_DAYS = 3
+# 数据真空（跳空缺口可能使触发条件失真）。间隔阈值 SHALL 为配置项——env 覆盖默认 3；
+# 非法 env 值回退默认，不因配置错误炸渲染链（OUTCOME_DEFAULT_HORIZON_DAYS 同款先例）
+try:
+    _DATA_VACUUM_THRESHOLD_DAYS = int(os.getenv("REPORT_DATA_VACUUM_THRESHOLD_DAYS", "3"))
+except (TypeError, ValueError):
+    _DATA_VACUUM_THRESHOLD_DAYS = 3
 
 
 def _fmt_trigger_level(value: object) -> str:
     """watch 触发位渲染：数值口径与入场/止损/目标价行一致（_fmt_price 的 :g），
     缺失/非法如实「未申报」——与建仓参数的「未提供」词形刻意区分
-    （add-watch-trigger-tracking：触发位是 watch/hold 的申报决策参数）。
+    （add-watch-trigger-tracking：触发位是 watch 决策专属的申报参数）。
     MUST NOT 从 reeval_triggers 文本解析回填。
     """
     rendered = _fmt_price(value)
@@ -780,10 +784,10 @@ def _format_trade_decision(
     watch/hold 语义上无建仓参数，不渲染硬价格行，渲染结构化「不行动原因」与
     「再评估触发条件」（缺失如实标注「未申报」，require-watch-hold-rationale）。
     update-decision-price-gate：报警仅进 trace，渲染链不接收 anomalies。
-    add-watch-trigger-tracking：watch/hold 增渲染双向触发位行（缺失如实「未申报」，
-    禁从 reeval_triggers 文本解析回填）；fund_approved 时渲染入池跟踪声明；
-    data_cutoff 与 report_date 间隔 >_DATA_VACUUM_THRESHOLD_DAYS 自然日时渲染数据
-    真空提示（全 action）。新参数仅关键字传参（旧单参调用兼容不变）。
+    add-watch-trigger-tracking：watch 增渲染双向触发位行（缺失如实「未申报」，
+    禁从 reeval_triggers 文本解析回填；buy/sell/hold 不渲染该两行）；fund_approved
+    时渲染入池跟踪声明；data_cutoff 与 report_date 间隔 >_DATA_VACUUM_THRESHOLD_DAYS
+    自然日时渲染数据真空提示（全 action）。新参数仅关键字传参（旧单参调用兼容不变）。
     """
     if isinstance(decision, TradeDecision):
         action = decision.action
@@ -844,9 +848,11 @@ def _format_trade_decision(
             lines.append(f"- **不行动原因**: {inaction}")
         else:
             lines.append("- **不行动原因**: 未申报")
-    # add-watch-trigger-tracking：watch/hold 双向触发位行——申报值按价位行口径渲染，
-    # 缺失如实「未申报」，MUST NOT 从 reeval_triggers 文本解析回填（未申报即未申报）
-    if action in ("watch", "hold"):
+    # add-watch-trigger-tracking：watch 双向触发位行——申报值按价位行口径渲染，
+    # 缺失如实「未申报」，MUST NOT 从 reeval_triggers 文本解析回填（未申报即未申报）；
+    # 触发位是 watch 决策专属申报参数，buy/sell/hold 不渲染该两行（hold 的重新介入
+    # 条件由 reeval_triggers 承载）
+    if action == "watch":
         lines.append(f"- **上破触发位**: {_fmt_trigger_level(trigger_high)}")
         lines.append(f"- **下破触发位**: {_fmt_trigger_level(trigger_low)}")
     # add-watch-trigger-tracking：入池跟踪声明——FM approve 后决策入池按固定窗口

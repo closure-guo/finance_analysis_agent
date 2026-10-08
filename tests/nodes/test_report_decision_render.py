@@ -7,9 +7,12 @@ Task 3：buy/sell 终稿再评估触发条件渲染（缺失「未申报」）�
 报警仅进 trace，渲染链不接收 anomalies。
 update-decision-price-gate T4 收口：gate 复核注（pass 形态）不泄「结构不完整」报告标注。
 add-watch-trigger-tracking Task 5：watch 触发位行（缺失如实「未申报」，禁文本回填）、
-入池跟踪声明行（FM approve 时）、数据真空提示行（报告日与行情截止日间隔 >3 自然日）。
+入池跟踪声明行（FM approve 时）、数据真空提示行（报告日与行情截止日间隔 >阈值，
+默认 3 自然日、REPORT_DATA_VACUUM_THRESHOLD_DAYS 可配）。
+Fix round 1：触发位两行收窄为 watch 专属（buy/sell/hold 不渲染）；真空阈值配置化。
 """
 
+import importlib
 import inspect
 from datetime import date
 from typing import Any
@@ -378,8 +381,9 @@ class TestWatchTriggerRendering:
     """add-watch-trigger-tracking：watch 触发位行/入池声明/数据真空提示。
 
     触发位缺失如实「未申报」（与建仓参数「未提供」词形刻意区分），MUST NOT 从
-    reeval_triggers 文本解析回填；入池声明仅 FM approve 渲染；真空提示作用于全部
-    action，间隔 >3 自然日才提示（=阈值不提示，截止晚于报告日不提示）。
+    reeval_triggers 文本解析回填；触发位两行 watch 专属（buy/sell/hold 不渲染）；
+    入池声明仅 FM approve 渲染；真空提示作用于全部 action，间隔 >阈值才提示
+    （默认阈值 3 自然日、env 可配；=阈值不提示，截止晚于报告日不提示）。
     """
 
     @staticmethod
@@ -424,8 +428,9 @@ class TestWatchTriggerRendering:
         assert "上破触发位" not in md
         assert "下破触发位" not in md
 
-    def test_hold_renders_trigger_rows(self):
-        """hold 与 watch 同为无建仓参数动作，触发位行同模板（现有分支按 watch/hold）。"""
+    def test_hold_does_not_render_trigger_rows(self):
+        """spec「watch 触发位与入池跟踪渲染」：buy/sell/hold 决策不渲染触发位两行——
+        触发位是 watch 决策专属申报参数，hold 的重新介入条件由 reeval_triggers 承载。"""
         decision = TradeDecision.model_validate(
             {
                 "action": "hold",
@@ -436,8 +441,8 @@ class TestWatchTriggerRendering:
             }
         )
         md = _format_trade_decision(decision)
-        assert "- **上破触发位**: 未申报" in md
-        assert "- **下破触发位**: 未申报" in md
+        assert "上破触发位" not in md
+        assert "下破触发位" not in md
 
     def test_pool_declaration_rendered_when_approved(self):
         md = _format_trade_decision(self._watch(trigger_high=24.6), fund_approved=True)
@@ -493,6 +498,25 @@ class TestWatchTriggerRendering:
             report_date=date(2026, 10, 8),
         )
         assert "跳空缺口" in md
+
+    def test_vacuum_threshold_is_configurable(self, monkeypatch):
+        """spec「间隔阈值 SHALL 为配置项」：env 置 1 时 2 自然日间隔（默认阈值下
+        不提示）即提示。常量为 import 时读取——reload 重读 env，finally 恢复默认，
+        不向后续测试泄漏阈值状态（test_agent_factory_testing_branch 同款 reload 先例）。"""
+        from finance_agent.nodes import report as report_mod
+
+        monkeypatch.setenv("REPORT_DATA_VACUUM_THRESHOLD_DAYS", "1")
+        importlib.reload(report_mod)
+        try:
+            md = report_mod._format_trade_decision(
+                self._watch(trigger_high=24.6),
+                data_cutoff=date(2026, 10, 6),
+                report_date=date(2026, 10, 8),  # 间隔 2 自然日 > 1
+            )
+            assert "跳空缺口" in md
+        finally:
+            monkeypatch.delenv("REPORT_DATA_VACUUM_THRESHOLD_DAYS", raising=False)
+            importlib.reload(report_mod)
 
     def test_generate_report_wires_cutoff_triggers_pool_and_vacuum(self):
         """生产路径接线：kline 截止日 → 真空提示；FM approve → 入池声明；触发位行
