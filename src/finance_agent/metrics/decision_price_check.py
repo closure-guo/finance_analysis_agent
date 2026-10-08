@@ -315,6 +315,12 @@ def _non_price_context(text: str, span: tuple[int, int]) -> bool:
         i -= 1
     if i >= 0 and text[i] in _NON_PRICE_PREFIX:
         return True
+    if i >= 0 and text[i].isascii() and text[i].isalpha():
+        # 数字紧贴（隔空格亦可）ASCII 字母属标识符形态：M2/M1 宏观指标、
+        # RSI14 参数、H1 周期——不是独立股价（601818 10-08 run 41 实证
+        # 「M2支撑扩表」的 2 被提为价位偏差 31.51% 阻断）。本语料中股价
+        # 恒跟随 CJK 方向词/量词，ASCII 字母前缀的裸数字无股价形态。
+        return True
     j = end
     while j < len(text) and text[j] == " ":
         j += 1
@@ -371,8 +377,14 @@ def _closest_indicator(table: dict[str, float], value: float) -> tuple[str, floa
     return best
 
 
-def _break_direction(text: str, num_start: int) -> str | None:
-    """数值前方近距方向词 → "up"/"down"；「已 X」为事实陈述不计。"""
+def _directions_in_window(text: str, num_start: int) -> set[str]:
+    """数值前方窗口内全部方向词的方向集合；「已 X」为事实陈述不计。
+
+    复合回踩豁免（fix-decision-price-check-false-positives）预扫专用：同值既有
+    down 又有 up 语境 → 空洞判定跳过。与 _break_direction 分离——最近词胜出后
+    单值只归一个方向，豁免判定需要窗口内的完整方向集（688072 案回归锚）。
+    """
+    out: set[str] = set()
     for words, direction in ((_BREAKOUT_WORDS, "up"), (_BREAKDOWN_WORDS, "down")):
         for word in words:
             pos = 0
@@ -381,8 +393,30 @@ def _break_direction(text: str, num_start: int) -> str | None:
                 if found > 0 and text[found - 1] == "已":
                     continue
                 if 0 <= num_start - (found + len(word)) <= _BREAK_WORD_WINDOW:
-                    return direction
-    return None
+                    out.add(direction)
+    return out
+
+
+def _break_direction(text: str, num_start: int) -> str | None:
+    """数值前方**最近**方向词的方向 → "up"/"down"；「已 X」为事实陈述不计。
+
+    最近词胜出（600845 10-08 run 41 实证）：旧实现先扫完上破类再扫下破类，
+    「突破20.58确认/跌破16.73证伪」的 16.73 距「跌破」2 字符、距「突破」
+    11 字符（窗口 12 内）→ up 抢占 → 跌破触发（16.73 < 收盘，有效前瞻门槛）
+    被误判「上破触发价不高于收盘」空洞形态阻断。
+    """
+    best: tuple[int, str] | None = None
+    for words, direction in ((_BREAKOUT_WORDS, "up"), (_BREAKDOWN_WORDS, "down")):
+        for word in words:
+            pos = 0
+            while (found := text.find(word, pos)) != -1:
+                pos = found + 1
+                if found > 0 and text[found - 1] == "已":
+                    continue
+                dist = num_start - (found + len(word))
+                if 0 <= dist <= _BREAK_WORD_WINDOW and (best is None or dist < best[0]):
+                    best = (dist, direction)
+    return best[1] if best else None
 
 
 def _excerpt(text: str, span: tuple[int, int], full: bool) -> str:
@@ -431,9 +465,9 @@ def _check_snippet(
         v = float(m.group())
         if 0 < v < 1:
             continue
-        d = _break_direction(text, s[0])
-        if d is not None:
-            _value_dirs.setdefault(v, set()).add(d)
+        # 预扫收集窗口内全部方向（_directions_in_window）：最近词胜出后
+        # _break_direction 单值只归一个方向，复合豁免需要完整方向集
+        _value_dirs.setdefault(v, set()).update(_directions_in_window(text, s[0]))
     for match in _NUM_RE.finditer(text):
         span = (match.start(), match.end())
         if _overlaps(span, exclusions):
