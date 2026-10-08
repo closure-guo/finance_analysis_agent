@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from finance_agent.nodes.report import _fm_incomplete_integrity_block
 from finance_agent.nodes.risk import (
     aggressive_debater,
     conservative_debater,
@@ -237,11 +238,14 @@ class TestFinalPriceIntegrity:
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_watch_no_price_requirement(self, mock_llm):
         # watch 无价位要求，但 require-watch-hold-rationale 要求理由字段齐备
-        # （否则理由回路会追加一次重试，call_count 变 2）
+        # （否则理由回路会追加一次重试，call_count 变 2）；触发位申报齐备，
+        # 隔离触发位申报打回回路（add-watch-trigger-tracking）
         mock_llm.return_value = self._resp(
             action="watch",
             inaction_reason="多因素均衡，等待信号",
             reeval_triggers=["关键指标显著变化"],
+            trigger_high=28.5,
+            trigger_low=24.0,
         )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
@@ -284,6 +288,9 @@ class TestFinalInactionRationale:
             action="watch",
             inaction_reason="估值分位偏高且缺催化剂",
             reeval_triggers=["价格回落至 1500 以下"],
+            # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）
+            trigger_high=28.5,
+            trigger_low=24.0,
         )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
@@ -297,6 +304,9 @@ class TestFinalInactionRationale:
                 action="watch",
                 inaction_reason="等待趋势确认",
                 reeval_triggers=["价格站稳 60 日均线"],
+                # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）
+                trigger_high=28.5,
+                trigger_low=24.0,
             ),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
@@ -307,7 +317,11 @@ class TestFinalInactionRationale:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_retry_exhausted_passes_with_note(self, mock_llm):
-        mock_llm.return_value = TestFinalPriceIntegrity._resp(action="watch")
+        # 理由持续缺失（本回路被测形态）；触发位申报齐备，隔离触发位申报打回回路
+        # （add-watch-trigger-tracking），call_count 停在理由回路的 2 次
+        mock_llm.return_value = TestFinalPriceIntegrity._resp(
+            action="watch", trigger_high=28.5, trigger_low=24.0
+        )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 2
         assert result["final_inaction_check"]["result"] == "pass"
@@ -358,6 +372,9 @@ class TestFinalInactionRationale:
                 action="watch",
                 inaction_reason="等待趋势确认",
                 reeval_triggers=["价格站稳 60 日均线"],
+                # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）
+                trigger_high=28.5,
+                trigger_low=24.0,
             ),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
@@ -379,6 +396,9 @@ class TestFinalInactionRationale:
                 action="watch",
                 inaction_reason="等待趋势确认",
                 reeval_triggers=["价格站稳 60 日均线"],
+                # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）
+                trigger_high=28.5,
+                trigger_low=24.0,
             ),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
@@ -405,6 +425,106 @@ class TestFinalInactionRationale:
         assert mock_llm.call_count == 3
         assert result["final_trade_decision"].action == "buy"
         assert "价位齐备" in result["final_price_check"]["note"]
+
+
+class TestFinalTriggerCheck:
+    """add-watch-trigger-tracking：watch 终稿双向触发位申报完整性回路。
+
+    触发位是 watch 唯一的可执行承诺，必须结构化可追踪：两个均缺失 → 打回恰一次；
+    打回后已申报放行（note「打回后已申报」），仍缺放行 + 如实标注
+    （note「已打回仍未申报触发位」，MUST NOT 虚构、MUST NOT 死循环）。
+    buy/sell/hold 不约束。mock 模式沿用本文件既有：patch call_llm_streaming。
+    """
+
+    @staticmethod
+    def _watch_resp(**fields: object) -> str:
+        """watch 完整理由申报（隔离理由回路，只测触发位申报回路）。"""
+        return TestFinalPriceIntegrity._resp(
+            action="watch",
+            inaction_reason="等待右侧信号",
+            reeval_triggers=["放量站上 20 日线"],
+            **fields,
+        )
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_watch_missing_triggers_bounces_once_then_passes_with_note(self, mock_llm):
+        """watch 终稿缺触发位：打回一次，补齐后放行（note=打回后已申报）。"""
+        mock_llm.side_effect = [
+            self._watch_resp(),  # 第一次：watch 理由齐备但双向触发位均缺失
+            self._watch_resp(trigger_high=28.5, trigger_low=24.0),  # 打回后补齐
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        # 打回反馈拼进重试（第二次）调用的 context，点名双向触发位申报要求
+        retry_context = mock_llm.call_args_list[1].args[0]
+        assert "触发位申报打回" in retry_context
+        assert "trigger_high" in retry_context
+        assert "trigger_low" in retry_context
+        decision = result["final_trade_decision"]
+        assert decision.action == "watch"
+        assert decision.trigger_high == 28.5
+        assert decision.trigger_low == 24.0
+        assert result["final_trigger_check"] == {"result": "pass", "note": "打回后已申报"}
+        # 重试响应理由/触发条件齐备 → 前序结论不受打回扰动
+        assert result["final_inaction_check"] == {"result": "pass", "note": ""}
+        assert result["final_price_check"] == {"result": "pass", "note": ""}
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_watch_missing_triggers_still_missing_after_retry_annotated(self, mock_llm):
+        """打回后仍缺：放行 + note「已打回仍未申报触发位」，不虚构。"""
+        mock_llm.return_value = self._watch_resp()
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        assert result["final_trade_decision"].action == "watch"
+        assert result["final_trade_decision"].trigger_high is None
+        assert result["final_trade_decision"].trigger_low is None
+        assert result["final_trigger_check"]["result"] == "pass"
+        assert result["final_trigger_check"]["note"] == "已打回仍未申报触发位"
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_retry_flip_to_non_watch_degrades_note_without_incomplete_marker(self, mock_llm):
+        """打回使终稿换代翻转动作（watch→buy）：note 如实降级，不渲染完整性标注。
+
+        final review Finding #1：翻转后触发位申报不再适用（buy/sell/hold 不约束
+        触发位），旧措辞「已打回仍未申报触发位」对非 watch 终稿是错话，且含
+        _FM_INCOMPLETE_MARKERS 标记词（仍未申报）→ 误渲染「审批对象结构不完整
+        标注」进 FM 上下文与报告。降级注须避开标记词表。
+        """
+        mock_llm.side_effect = [
+            self._watch_resp(),  # 第一次：watch 理由齐备但双向触发位均缺失
+            # 打回后终稿换代为 buy（价位/触发条件申报齐备，隔离价位与再评估回路）
+            TestFinalPriceIntegrity._resp(
+                entry_price=26.35,
+                stop_loss=25.3,
+                target_price=28.0,
+                reeval_triggers=["跌破止损位离场"],
+            ),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        decision = result["final_trade_decision"]
+        assert decision.action == "buy"
+        assert decision.trigger_high is None
+        assert decision.trigger_low is None
+        assert result["final_trigger_check"]["result"] == "pass"
+        assert result["final_trigger_check"]["note"] == (
+            "触发位重试后终稿改为非 watch 动作，触发位申报不再适用"
+        )
+        # 降级注不含完整性标记词（仍未申报/缺失）→ 不渲染「审批对象结构不完整标注」
+        assert _fm_incomplete_integrity_block(result) == ""
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_buy_decision_unaffected_by_trigger_check(self, mock_llm):
+        """buy/sell 终稿无触发位：final_trigger_check 不打回不标注。"""
+        mock_llm.return_value = TestFinalPriceIntegrity._resp(
+            entry_price=26.35,
+            stop_loss=25.3,
+            target_price=28.0,
+            reeval_triggers=["跌破止损位离场"],
+        )
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        mock_llm.assert_called_once()
+        assert result["final_trigger_check"] == {"result": "pass", "note": ""}
 
 
 def _sell_decision_json(triggers: list[str]) -> str:
@@ -563,6 +683,43 @@ class TestDecisionPriceGate:
         assert "未再次打回" in inaction_note
         assert "未再次打回" in result["final_reeval_check"]["note"]
 
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_gate_retry_to_watch_missing_triggers_annotated(self, mock_llm):
+        """add-watch-trigger-tracking 评审收口：门禁重试翻转型（sell→watch 缺触发位）。
+
+        门禁重试换代发生在 final_trigger_check 主块之后：翻转出的 watch 缺
+        trigger_high/trigger_low 时不得停留空注假阳性；打回预算已被门禁用掉，
+        只如实标注放行（MUST NOT 再打回/死循环）。理由与再评估触发条件齐备申报，
+        隔离兄弟回路（inaction/reeval 结论保持干净，锁定本注只属触发位）。
+        """
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            json.dumps(
+                {
+                    "action": "watch",
+                    "confidence": 0.6,
+                    "reasoning": "趋势不明，暂观望",
+                    "position_size": "light",
+                    "inaction_reason": "方向未明，等待触发信号",
+                    "reeval_triggers": ["趋势指标翻转后再评估"],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+        result = risk_judge(dict(_PRICE_GATE_STATE))
+        assert mock_llm.call_count == 2  # 预算已花在门禁打回：触发位不再打回
+        assert result["final_trade_decision"].action == "watch"
+        assert result["final_trade_decision"].trigger_high is None
+        assert result["final_trade_decision"].trigger_low is None
+        assert result["final_trigger_check"]["result"] == "pass"
+        note = result["final_trigger_check"]["note"]
+        assert "价位交叉校验重试" in note
+        assert "触发位" in note
+        assert "未再次打回" in note
+        # 隔离证明：翻转稿理由/触发条件齐备 → 兄弟结论不被本注污染
+        assert result["final_inaction_check"]["note"] == ""
+        assert result["final_reeval_check"]["note"] == ""
+
 
 class TestGateAdmissionLayering:
     """update-decision-price-gate-admission（incident 034 owner 终裁已批）：
@@ -686,7 +843,12 @@ class TestSellTypeDeclarationLoop:
 
 
 def _watch_from_exec_json(reasoning: str) -> str:
-    """均衡带降级重申形态：LLM 重申仍输出执行动作（供 side_effect 第二段）。"""
+    """均衡带降级重申形态：LLM 重申仍输出执行动作（供 side_effect 第二段）。
+
+    trigger_high/trigger_low 随重申决策申报：均衡带降级的 model_copy 不清洗
+    触发位字段（只清仓位/价位），降级后的 watch 终稿据此满足触发位申报契约
+    （add-watch-trigger-tracking），本测试不误入触发位申报打回回路。
+    """
     return json.dumps(
         {
             "action": "sell",
@@ -696,6 +858,8 @@ def _watch_from_exec_json(reasoning: str) -> str:
             "entry_price": 640.0,
             "stop_loss": 700.0,
             "target_price": 571.0,
+            "trigger_high": 700.0,
+            "trigger_low": 570.0,
             "reasoning": reasoning,
             "reeval_triggers": ["跌破 570 重估"],
         },

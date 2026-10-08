@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS predictions (
   settle_entry_price REAL,
   updated_at        TEXT NOT NULL,
   version_seq       INTEGER,
-  snapshot_hash     TEXT
+  snapshot_hash     TEXT,
+  session_id        TEXT,
+  trigger_high      REAL,
+  trigger_low       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_status ON predictions(status);
 CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
@@ -73,6 +76,10 @@ _FROZEN_FIELDS = (
     "created_at",
     "source_type",
     "symbol",
+    # add-watch-trigger-tracking：写入即冻结的快照字段（改 attempts → FrozenFieldError）
+    "session_id",
+    "trigger_high",
+    "trigger_low",
 )
 _MUTABLE_FIELDS = (
     "status",
@@ -204,6 +211,7 @@ def init_track_record_tables(db_path: str | Path | None = None) -> None:
         _migrate_stage_c_columns(conn)
         _migrate_settlement_contract_columns(conn)
         _migrate_metrics_beta_alpha_columns(conn)
+        _migrate_trigger_tracking_columns(conn)
         conn.commit()
     finally:
         conn.close()
@@ -247,6 +255,25 @@ _METRICS_BETA_ALPHA_COLUMNS = (
 def _migrate_metrics_beta_alpha_columns(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_metrics_daily)").fetchall()}
     for col, ddl in _METRICS_BETA_ALPHA_COLUMNS:
+        if col not in cols:
+            conn.execute(ddl)
+
+
+# ── add-watch-trigger-tracking：session_id 会话关联 + watch 双向触发位列（幂等迁移）──
+_TRIGGER_TRACKING_COLUMNS = (
+    ("session_id", "ALTER TABLE predictions ADD COLUMN session_id TEXT"),
+    ("trigger_high", "ALTER TABLE predictions ADD COLUMN trigger_high REAL"),
+    ("trigger_low", "ALTER TABLE predictions ADD COLUMN trigger_low REAL"),
+)
+
+
+def _migrate_trigger_tracking_columns(conn: sqlite3.Connection) -> None:
+    """补 session_id 关联列与 watch 触发位列（幂等：先查 PRAGMA table_info）。
+
+    三列写入即冻结（见 _FROZEN_FIELDS）；存量行 NULL 不追溯回填。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+    for col, ddl in _TRIGGER_TRACKING_COLUMNS:
         if col not in cols:
             conn.execute(ddl)
 
@@ -765,8 +792,9 @@ def insert_prediction(
                  prediction_id, source_type, symbol, symbol_name, direction,
                  entry_price, target_price, horizon_days, confidence, benchmark,
                  rationale_snapshot, langfuse_trace_id, status, created_at, updated_at,
-                 resolution_rule, version_seq, snapshot_hash
-               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 resolution_rule, version_seq, snapshot_hash,
+                 session_id, trigger_high, trigger_low
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 prediction_id,
                 record["source_type"],
@@ -786,6 +814,9 @@ def insert_prediction(
                 record.get("resolution_rule"),
                 version_seq,
                 snapshot_hash,
+                record.get("session_id"),
+                record.get("trigger_high"),
+                record.get("trigger_low"),
             ),
         )
         conn.commit()

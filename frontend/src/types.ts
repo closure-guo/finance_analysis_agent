@@ -198,7 +198,8 @@ export interface ChartData {
     }>
     earnings_dates: string[]
     ma?: { ma5: (number | null)[]; ma20: (number | null)[]; ma60: (number | null)[] }
-    decision_levels?: { entry_price?: number; stop_loss?: number; target_price?: number }
+    // trigger_high/trigger_low（add-watch-trigger-tracking）：watch 决策的触发价位，仅 watch 决策存在
+    decision_levels?: { entry_price?: number; stop_loss?: number; target_price?: number; trigger_high?: number; trigger_low?: number }
   }
   kpi: {
     current_price?: number
@@ -493,6 +494,9 @@ export interface PredictionRecord {
   status: PredictionStatus
   created_at: string
   resolved_at: string | null
+  // 结算入场价（hfq 归属日收盘，判定时派生；判定前 NULL）——
+  // update-track-record-settle-price-display：与 exit_price 同口径可比
+  settle_entry_price: number | null
   exit_price: number | null
   raw_return: number | null
   excess_return: number | null

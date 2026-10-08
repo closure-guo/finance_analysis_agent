@@ -1,7 +1,8 @@
 """TDD tests for update-decision-integrity-gates Task 4 — FM 审批可见性 + 置信度语义。
 
 Task 4.1：FM 上下文注入终稿完整性标注——final_price_check / final_inaction_check /
-final_reeval_check 的 note 非空时进上下文（spec agent-node-contracts「FM 审批对象
+final_reeval_check / final_trigger_check（add-watch-trigger-tracking 追加）的 note
+非空时进上下文（spec agent-node-contracts「FM 审批对象
 完整性可见性」Scenario「FM 上下文携带完整性标注」；仲裁权保留：标注不禁止 approve）。
 Task 4.2：报告「基金经理决策」节——先渲染「审批对象结构不完整标注」再渲染 FM 审批
 意见（Scenario「报告并排渲染不完整标注与 FM 论断」；完整方案零增量，无空标注行）；
@@ -38,12 +39,14 @@ def _checks(
     price: str = "",
     inaction: str = "",
     reeval: str = "",
+    trigger: str = "",
 ) -> dict:
     """终稿完整性检查 state 片段（note 默认空 = 全部通过无标注）。"""
     return {
         "final_price_check": {"result": "pass", "note": price},
         "final_inaction_check": {"result": "pass", "note": inaction},
         "final_reeval_check": {"result": "pass", "note": reeval},
+        "final_trigger_check": {"result": "pass", "note": trigger},
     }
 
 
@@ -104,6 +107,17 @@ class TestFMContextIntegrityNotes:
         ctx = _build_fund_manager_context(state)
         assert "终稿完整性标注" in ctx
         assert "已打回仍未申报：reeval_triggers" in ctx
+
+    def test_context_includes_trigger_check_note(self):
+        """add-watch-trigger-tracking：watch 终稿触发位打回后仍缺——标注进 FM 上下文。"""
+        state = {
+            "final_trade_decision": _decision(),
+            "return_count": 0,
+            **_checks(trigger="已打回仍未申报触发位"),
+        }
+        ctx = _build_fund_manager_context(state)
+        assert "终稿完整性标注" in ctx
+        assert "触发位申报——已打回仍未申报触发位" in ctx
 
     def test_context_lists_all_three_labels(self):
         """三个检查都有标注时逐项列出（标签 + note 原文）。"""
@@ -256,6 +270,16 @@ class TestReportIntegrityAnnotation:
         assert "价位——已打回仍未申报：entry_price" in md
         assert "再评估触发条件——已打回仍未申报再评估触发条件" in md
 
+    def test_trigger_note_rendered_with_label(self):
+        """add-watch-trigger-tracking：触发位不完整标注进报告（标签 + note 原文）。"""
+        state = _fm_report_state(
+            _decision(),
+            checks=_checks(trigger="已打回仍未申报触发位"),
+        )
+        md = _report_md(state)
+        assert "审批对象结构不完整标注" in md
+        assert "触发位申报——已打回仍未申报触发位" in md
+
     def test_complete_plan_zero_increment(self):
         """方案完整（无标注）→ 维持现状形态，无标注块、无空标注行。"""
         md = _report_md(_fm_report_state(_decision()))
@@ -266,7 +290,7 @@ class TestReportIntegrityAnnotation:
         """「打回后已申报」等复核性标注属完整方案——不渲染为「结构不完整」。"""
         state = _fm_report_state(
             _decision(),
-            checks=_checks(price="打回后已申报", reeval="打回后已申报"),
+            checks=_checks(price="打回后已申报", reeval="打回后已申报", trigger="打回后已申报"),
         )
         md = _report_md(state)
         assert "审批对象结构不完整标注" not in md

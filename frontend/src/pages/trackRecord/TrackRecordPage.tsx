@@ -11,7 +11,8 @@ import { DIRECTION_LABEL } from './predictionDisplay'
 import { IndexCompareCard } from './IndexCompareCard'
 
 // 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐；
-// sortable: false 为纯展示列（不渲染排序按钮）
+// sortable: false 为纯展示列（不渲染排序按钮）。
+// 价格三列口径标注：参考价=决策时点盘面口径，结算两列=hfq 后复权（update-track-record-settle-price-display）
 const COLUMNS: Array<{ key: string; label: string; numeric?: boolean; sortable?: boolean }> = [
   { key: 'created_at', label: '建立日期' },
   { key: 'symbol', label: '标的' },
@@ -19,8 +20,9 @@ const COLUMNS: Array<{ key: string; label: string; numeric?: boolean; sortable?:
   { key: 'status', label: '状态' },
   // update-track-record-display-clarity:窗口列——混合口径显式可见（T+20/T+252）；展示列不排序
   { key: 'horizon_days', label: '窗口', sortable: false },
-  { key: 'entry_price', label: '入场价', numeric: true },
-  { key: 'exit_price', label: '结算价', numeric: true },
+  { key: 'entry_price', label: '参考价（盘面）', numeric: true },
+  { key: 'settle_entry_price', label: '结算入场价（后复权）', numeric: true, sortable: false },
+  { key: 'exit_price', label: '结算价（后复权）', numeric: true },
   { key: 'raw_return', label: '区间收益', numeric: true },
   { key: 'excess_return', label: '基准超额', numeric: true },
 ]
@@ -269,6 +271,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
       </td>
       <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
       <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
+      <td className="px-4 py-3 text-right">{fmt(r.settle_entry_price)}</td>
       <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
       {(() => {
         // update-track-record-display-clarity:open 行展示最新盯市浮动
@@ -715,6 +718,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                             <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>—</td>
                             <td className="px-4 py-3"><span className={STATUS_CLS.duplicate_of_day}>同日重复 ×{d.rows.length}</span></td>
                             <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{first.horizon_days}</td>
+                            <td className="px-4 py-3 text-right">—</td>
                             <td className="px-4 py-3 text-right">—</td>
                             <td className="px-4 py-3 text-right">—</td>
                             <td className="px-4 py-3 text-right">—</td>

@@ -776,6 +776,17 @@ if TESTING:
                         }
                         if row.get("resolved_at"):
                             resolved["resolved_at"] = row["resolved_at"]
+                        # update-track-record-settle-price-display：结算字段透传
+                        # （走 update_prediction_status，与生产判定写入同一路径），
+                        # 供结算口径展示 E2E 造「同口径可比」的已结算行
+                        for _fld in (
+                            "settle_entry_price",
+                            "exit_price",
+                            "raw_return",
+                            "excess_return",
+                        ):
+                            if row.get(_fld) is not None:
+                                resolved[_fld] = row[_fld]
                         _seed_update_status(pid, resolved)
                     # update-track-record-display-clarity:行内 marks 子数组——浮动收益
                     # E2E 造数（prediction_id 服务端生成，顶层数组无法引用，按行携带）

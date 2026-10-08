@@ -107,6 +107,54 @@ def test_decision_levels_absent_when_no_prices():
     assert "decision_levels" not in chart["price"]
 
 
+def test_decision_levels_carry_trigger_levels():
+    """watch 决策 trigger_high/trigger_low 进 decision_levels（仅在场字段携带）。"""
+    state = _state_with_kline(20)
+    state["final_trade_decision"] = SimpleNamespace(
+        action="watch",
+        entry_price=None,
+        stop_loss=None,
+        target_price=None,
+        trigger_high=24.6,
+        trigger_low=22.91,
+    )
+    chart = collect_chart_data(state)
+    assert chart["price"]["decision_levels"] == {"trigger_high": 24.6, "trigger_low": 22.91}
+
+
+def test_decision_levels_buy_omits_trigger_keys():
+    """buy 决策不申报触发位 → decision_levels 不携带 trigger_* 键。"""
+    state = _state_with_kline(20)
+    state["final_trade_decision"] = {
+        "action": "buy",
+        "entry_price": 10.5,
+        "stop_loss": 9.8,
+        "target_price": 12.0,
+    }
+    chart = collect_chart_data(state)
+    assert "trigger_high" not in chart["price"]["decision_levels"]
+    assert "trigger_low" not in chart["price"]["decision_levels"]
+
+
+def test_decision_levels_watch_without_triggers_omits_keys():
+    """watch 决策未申报触发位 → trigger_* 键不携带，其余价位照常。"""
+    state = _state_with_kline(20)
+    state["final_trade_decision"] = SimpleNamespace(
+        action="watch",
+        entry_price=10.5,
+        stop_loss=9.8,
+        target_price=12.0,
+        trigger_high=None,
+        trigger_low=None,
+    )
+    chart = collect_chart_data(state)
+    assert chart["price"]["decision_levels"] == {
+        "entry_price": 10.5,
+        "stop_loss": 9.8,
+        "target_price": 12.0,
+    }
+
+
 def test_no_kline_degrades_silently():
     chart = collect_chart_data({"stock_code": "600519"})
     assert chart["price"]["daily"] == []
@@ -115,6 +163,9 @@ def test_no_kline_degrades_silently():
 
 
 # ── PNG 渲染（Task 2）──
+
+import matplotlib  # noqa: E402
+import matplotlib.axes  # noqa: E402
 
 from finance_agent.charts import generate_all_charts  # noqa: E402
 
@@ -179,3 +230,25 @@ def test_stock_price_png_doji_no_crash(tmp_path):
         d["open"] = d["close"]
     charts = generate_all_charts(data, str(tmp_path))
     assert "chart_stock_price" in charts
+
+
+def test_stock_price_png_draws_trigger_reference_lines(tmp_path, monkeypatch):
+    """触发位以点线（linestyle=:）+ 独立配色渲染，与决策价位虚线可区分。"""
+    data = _chart_data_with_ohlc()
+    closes = [d["close"] for d in data["price"]["daily"]]
+    data["price"]["decision_levels"]["trigger_high"] = closes[-1] + 0.2
+    data["price"]["decision_levels"]["trigger_low"] = closes[-1] - 0.2
+
+    axhline_calls: list[dict] = []
+    orig_axhline = matplotlib.axes.Axes.axhline
+
+    def _recording_axhline(self, *args, **kwargs):
+        axhline_calls.append(dict(kwargs))
+        return orig_axhline(self, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "axhline", _recording_axhline)
+    charts = generate_all_charts(data, str(tmp_path))
+
+    assert "chart_stock_price" in charts
+    dotted = [c for c in axhline_calls if c.get("linestyle") == ":"]
+    assert {c.get("color") for c in dotted} >= {"#E67E22", "#8E44AD"}

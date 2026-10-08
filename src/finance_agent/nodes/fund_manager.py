@@ -13,12 +13,16 @@ from finance_agent.prompts.loader import load_prompt_with_meta
 logger = logging.getLogger("finance_agent.fund_manager")
 
 # 终稿完整性检查的 state 键 → 中文标签（update-decision-integrity-gates Task 4；
-# decision_price_gate 为 update-decision-price-gate 追加）。
+# decision_price_gate 为 update-decision-price-gate 追加、final_trigger_check 为
+# add-watch-trigger-tracking 追加）。
 # report.py 渲染「审批对象结构不完整标注」复用同一收集器，键序/标签单源
 FINAL_CHECK_LABELS: tuple[tuple[str, str], ...] = (
     ("final_price_check", "价位"),
     ("final_inaction_check", "非执行动作理由"),
     ("final_reeval_check", "再评估触发条件"),
+    # watch 终稿触发位申报检查（「已打回仍未申报触发位」/「打回后已申报」/
+    # 门禁翻转注「…触发位缺失…」随完整性标注一并进 FM 上下文）
+    ("final_trigger_check", "触发位申报"),
     # 决策价位门禁复核注（「打回后已修正」/「已打回仍未通过：N 条残留」）随完整性
     # 标注一并进 FM 上下文（report 侧经 _FM_INCOMPLETE_MARKERS 过滤，不渲染）
     ("decision_price_gate", "决策价位校验"),
@@ -105,8 +109,9 @@ def _build_fund_manager_context(state: dict) -> str:
     if isinstance(decision, dict) and decision:
         sections.append(f"交易决策: {json.dumps(decision, ensure_ascii=False)}")
 
-    # 终稿完整性标注（update-decision-integrity-gates Task 4）：终稿三个完整性检查
-    # 的 note 非空时如实进上下文——FM 审批前能看到审批对象的结构完整性状态
+    # 终稿完整性标注（update-decision-integrity-gates Task 4；final_trigger_check 为
+    # add-watch-trigger-tracking 追加）：终稿完整性检查的 note 非空时如实进上下文——
+    # FM 审批前能看到审批对象的结构完整性状态
     # （spec「FM 上下文携带完整性标注」；仲裁权保留：标注不禁止 approve）
     integrity = final_integrity_notes(state)
     if integrity:

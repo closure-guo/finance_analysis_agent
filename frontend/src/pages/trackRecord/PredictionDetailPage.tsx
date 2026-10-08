@@ -89,9 +89,12 @@ export function PredictionDetailPage({ predictionId, onBack }: { predictionId: s
             <Field label="状态">{PREDICTION_STATUS_LABEL[p.status] ?? p.status}</Field>
             <Field label="方向"><span title={p.direction}>{DIRECTION_LABEL[p.direction] ?? p.direction}</span></Field>
             <Field label="置信度">{fmt(p.confidence, 2)}</Field>
-            <Field label="入场价">{fmt(p.entry_price)}</Field>
+            {/* 价格三格口径标注（update-track-record-settle-price-display）：
+                参考价=决策时点盘面口径；结算入场价/结算价=hfq 后复权，两者同口径可比 */}
+            <Field label="参考价（盘面）">{fmt(p.entry_price)}</Field>
             <Field label="目标价">{fmt(p.target_price)}</Field>
-            <Field label="结算价">{fmt(p.exit_price)}</Field>
+            <Field label="结算入场价（后复权）">{fmt(p.settle_entry_price)}</Field>
+            <Field label="结算价（后复权）">{fmt(p.exit_price)}</Field>
             <Field label="区间收益"><Delta value={p.raw_return} /></Field>
             <Field label="基准超额"><Delta value={p.excess_return} /></Field>
             <Field label="判定规则">{p.resolution_rule ? <span title={p.resolution_rule}>{RESOLUTION_RULE_LABEL[p.resolution_rule] ?? p.resolution_rule}</span> : '—'}</Field>
