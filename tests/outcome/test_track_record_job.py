@@ -12,15 +12,18 @@ import pandas as pd
 
 from finance_agent.outcome.track_record.job import settle_open_predictions
 from finance_agent.outcome.track_record.model import (
-    init_predictions,
+    init_track_record_tables,
     insert_prediction,
     list_predictions,
 )
 
 
 def _db(tmp_path):
+    # init_track_record_tables：predictions + daily_marks 等 stage-b/c 全表（api.py
+    # 启动即双 init；update-track-record-display-clarity 起 list_predictions 读
+    # open 行盯市，夹具须与生产 schema 对齐，否则读取批次报 no such table）
     db = tmp_path / "t.db"
-    init_predictions(db)
+    init_track_record_tables(db)
     return db
 
 
