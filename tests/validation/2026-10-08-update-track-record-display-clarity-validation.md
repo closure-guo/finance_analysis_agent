@@ -30,6 +30,19 @@ worktree 后端（8005，`SESSIONS_DB_PATH` 指向生产 `data/sessions.db`，�
 2. 验证环境注：5178 端口被上一轮验证的残留 vite 进程占用（TaskStop 未清净 Windows node 子进程），本轮改用 5179；该残留进程属 add-current-stance-view 工作区，未处置（避免误杀并发会话进程）。
 3. `.superpowers/sdd/` 草稿区发现其他会话的计划报告文件（task-migrate-*/task-5.5，12:18 写入），与本变更无关，未触碰。
 
+## 端到端验证补充（2026-10-08 下午，用户要求追加）
+
+**范围**：默认 stub E2E 套件（真实浏览器 + 真 LLM stub 全链路，此前按 incident 038 教训留给 CI 的部分）+ 深度管线→落库→展示的完整用户旅程。
+
+| 项 | 结果 | 归因证据 |
+|---|---|---|
+| 默认 stub 套件 | 24 passed / 9 failed / 2 skipped | 9 失败（search-banner @live×3、thinking-banner @live×3、deep-thinking-toolcall @live×1、eval-ops-console×2）在堆叠基线（无本分支改动）**原样复现**——@live 用例需真 LLM、eval-ops 需调度器环境，非本分支回归 |
+| track-record 专属套件 | 13/13（见上） | — |
+| 深度管线 spec（report-export，timeline 套件） | 初次在本分支连续 4 失败（管线以空 stock 元数据降级完成、无观点落库） | **判定为环境瞬态而非代码回归**：①失败全部集中在 15:31-15:44 时间窗（疑似行情源限流），其后 6 连过横跨所有代码组合（基线×2、双基线、双分支、混合、分支冷跑）；②git 二分（api.py/model.py 分别换回基线）无稳定归因；③离线复现 ingest 在分支代码上正常落库；④最终分支 HEAD 冷跑（删 cache.db+删库）**通过**。该 spec 的数据源依赖 flaky 属既有已知形态（参见 e2e 手动套件陈旧史），留观 |
+| **全链路旅程**（隔离库 e2e-journey/test-e2e-sessions，TESTING=1 stub LLM + 真实行情） | ✅ | UI 发起深度分析 → 5 层管线完成 → **观点落库实锤**（600519.SH neutral open T+20 入场 180.00）→ 战绩页「当前观点」区与观点日志同时呈现该新观点（截图存档）；窗口列/已结算措辞/切片空态/口径披露在新产数据上全部正确 |
+
+**结论补充**：端到端验证通过。运行环境已还原（backend/frontend 容器重启且 healthy；临时端口进程已清理；隔离测试库为 worktree 本地 scratch，不影响生产）。
+
 ## 结论
 
 - [x] 全部通过，可 archive（PR 合并后执行 sync + archive；本报告即 tasks 3.3 的人工验证产物）
