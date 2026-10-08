@@ -23,7 +23,8 @@ import { expect, test } from '@playwright/test'
  * selector 来源(非盲写):TrackRecordPage.tsx 真实结构——本任务为其表格容器
  * 补的 data-testid="prediction-log" 测试钩子、既有 prediction-tab-* tab 钩子、
  * 行内状态徽标文本(predictionStatus.ts 单一真源)、样本积累横幅
- * track-record-insufficient(已判定 N 条 = settled 读数)。
+ * track-record-insufficient(已结算 N 条 = settled 读数;update-track-record-
+ * display-clarity Task 2.5 术语「已判定」→「已结算」)。
  */
 test.describe('战绩页:同日重复观点徽标', () => {
   test('duplicate 行渲染「同日重复」徽标且无结算读数,总览不计已结算', async ({
@@ -51,9 +52,11 @@ test.describe('战绩页:同日重复观点徽标', () => {
     await page.goto('/track-record')
     await expect(page.getByTestId('prediction-log')).toBeVisible()
     // 总览统计口径:duplicate 行计入观点总数(total=2)、不进已结算分母
-    // (settled=win+loss=0 → 样本积累横幅「已判定 0 条」;若 duplicate 被误
-    // 计入已结算,该读数会变 1)
-    await expect(page.getByTestId('track-record-insufficient')).toHaveText(/已判定 0 条/)
+    // (settled=win+loss=0 → 样本积累横幅「已结算 0 条」;若 duplicate 被误
+    // 计入已结算,该读数会变 1。断言文本更新依据:update-track-record-display-
+    // clarity Task 2.5 术语统一「已判定」→「已结算」,delta spec 明文 SHALL NOT
+    // 出现「已判定 0 条」表述;断言守护的语义不变——dup 不得计入 settled)
+    await expect(page.getByTestId('track-record-insufficient')).toHaveText(/已结算 0 条/)
 
     const log = page.getByTestId('prediction-log')
     // 缺省「当前持有」tab 只含 open 行:duplicate 不漏进当前持有
