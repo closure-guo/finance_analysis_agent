@@ -131,9 +131,19 @@ test.describe('战绩页:展示治理(add-track-record-display-clarity)', () => 
     await expect(page.getByText('被新观点替代·提前结算')).toBeVisible()
   })
 
-  test('切片空态折叠:settled=0 不渲染分桶表格', async ({ page }) => {
+  test('切片区随 settled 分支:0 → 空态说明,>0 → 分桶表格', async ({ page, request }) => {
+    // 前提中性化（#256 settle-price spec 并入本套件后其种子使 settled 可能 >0）：
+    // 不再假设套件序带来的 settled=0，改为读 overview 实况断言对应 UI 分支
+    const overview = await request.get('/api/v1/track-record/overview')
+    expect(overview.ok()).toBeTruthy()
+    const settled = (await overview.json()).settled as number
     await page.goto('/track-record')
-    await expect(page.getByTestId('track-record-segments-empty')).toContainText('切片指标将在首批观点结算后可用')
-    await expect(page.getByTestId('track-record-segments')).toHaveCount(0)
+    if (settled === 0) {
+      await expect(page.getByTestId('track-record-segments-empty')).toContainText('切片指标将在首批观点结算后可用')
+      await expect(page.getByTestId('track-record-segments')).toHaveCount(0)
+    } else {
+      await expect(page.getByTestId('track-record-segments')).toBeVisible()
+      await expect(page.getByTestId('track-record-segments-empty')).toHaveCount(0)
+    }
   })
 })
