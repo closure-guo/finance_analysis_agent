@@ -297,6 +297,20 @@ class TestCjkEmbeddedAliasesAndTrailingEnumerators:
         anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
         assert anomalies == []
 
+    def test_slash_fraction_position_not_extracted(self):
+        """「1/3仓位」斜杠分数（600515 10-07 补跑实证，同股第三形态）不得当价位。
+
+        「/」不在量纲排除表：分子「1」后随斜杠、分母「3」前邻斜杠均被提取，
+        1 vs 止损参考带下沿 2.6171 偏差 61.79% 阻断。豁免代价：斜杠并列价位
+        （「19.99/20.10」）一并豁免——与连字区间同策，误杀由观测通道承担。
+        """
+        decision = _decision(
+            reeval_triggers=["放量跌破 17.90 确认技术破位"],
+            inaction_reason="激进方试多方案有纪律性（1/3仓位分批介入）",
+        )
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert anomalies == []
+
     def test_price_before_closing_paren_not_masked(self):
         """守卫不得反向掩蔽：紧邻右括号的真实价位「（止损 9.99）」仍须受校验。"""
         decision = _decision(reeval_triggers=["跌破（止损 9.99）则离场观望"])
