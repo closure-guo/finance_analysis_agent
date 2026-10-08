@@ -318,6 +318,44 @@ class TestCjkEmbeddedAliasesAndTrailingEnumerators:
         assert len(anomalies) == 1
         assert anomalies[0]["kind"] == "deviation"
 
+    def test_ascii_letter_glued_digit_not_extracted(self):
+        """「M2支撑扩表」的 2 不得当价位（601818 10-08 run 41 实证，偏差 31.51% 阻断）。
+
+        数字紧贴 ASCII 字母（前邻，隔空格亦可）属标识符形态（M2/M1/RSI14），
+        不是独立股价；股价在本语料中恒跟随 CJK 方向词/量词。
+        """
+        decision = _decision(
+            reeval_triggers=["放量跌破 17.90 确认技术破位"],
+            inaction_reason="宏观多空对冲（LPR压制息差 vs M2支撑扩表）、技术面仅企稳而非反转",
+        )
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert anomalies == []
+
+
+class TestBreakDirectionNearestWord:
+    """方向词判定：最近词胜出（600845 10-08 run 41 实证）。
+
+    旧实现先扫完上破类再扫下破类——「突破20.58确认/跌破16.73证伪」的 16.73
+    距「跌破」2 字符、距「突破」11 字符（窗口 12 内）→ up 抢占 → 跌破触发
+    （16.73 < 收盘，有效前瞻门槛）被误判「上破触发价不高于收盘」空洞形态阻断。
+    """
+
+    def test_breakdown_nearest_word_not_usurped_by_distant_breakout(self):
+        decision = _decision(
+            reeval_triggers=["多空共享风险框架（突破20.58确认/跌破16.73证伪）"],
+        )
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        assert all(a["kind"] != "empty_trigger" for a in anomalies)
+
+    def test_compound_pullback_exemption_still_fires(self):
+        """复合回踩豁免不回归（688072 案）：同值既有下破又有上破语境 → 空洞跳过。"""
+        decision = _decision(
+            reeval_triggers=["先回撤至 17.90，再放量站上 17.90 确认趋势反转"],
+        )
+        anomalies = check_decision_prices(decision, TI_600845, PL_600845, CLOSE_600845)
+        # 17.90 = stop_band_long 下沿（带内豁免偏差形态）+ 复合豁免空洞形态 → 全零
+        assert anomalies == []
+
 
 class TestFieldCoverage:
     """reeval_triggers 每条 + inaction_reason + reasoning 三字段全覆盖。"""
