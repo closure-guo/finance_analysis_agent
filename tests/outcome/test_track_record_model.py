@@ -11,6 +11,7 @@ from finance_agent.outcome.track_record.model import (
     get_prediction,
     init_predictions,
     insert_prediction,
+    list_current_predictions,
     list_predictions,
     migrate_decision_log,
     prediction_stats,
@@ -591,6 +592,57 @@ def test_duplicate_prediction_ids_filters_by_resolution_rule(db):
         db_path=db,
     )
     assert duplicate_prediction_ids(db_path=db) == {dup_id}
+
+
+# ── add-current-stance-view:每股最新一条 open 的立场视图 ──
+
+
+def test_list_current_latest_open_per_symbol(db):
+    """同股多条 open 只返回 created_at 最新一条;多股各自一行,倒序。"""
+    _insert(db, symbol="601058.SH", created_at="2026-10-05T10:00:00")
+    _insert(db, symbol="601058.SH", created_at="2026-10-06T10:00:00")
+    _insert(db, symbol="300033.SZ", created_at="2026-10-06T11:00:00")
+    rows = list_current_predictions(db_path=db)
+    assert [r["symbol"] for r in rows] == ["300033.SZ", "601058.SH"]
+    assert [r["created_at"] for r in rows] == ["2026-10-06T11:00:00", "2026-10-06T10:00:00"]
+
+
+def test_list_current_excludes_closed_and_dup(db):
+    """dup/已结算/unresolvable 行不进入;该标的取其最新一条 open;仅剩关闭行的标的整体不出现。"""
+    old = _insert(db, symbol="600519.SH", created_at="2026-10-01T10:00:00")
+    dup = _insert(db, symbol="600519.SH", created_at="2026-10-02T10:00:00")
+    update_prediction_status(
+        dup, {"status": "duplicate_of_day", "resolution_rule": "duplicate_of_day"}, db_path=db
+    )
+    update_prediction_status(
+        old,
+        {
+            "status": "resolved_neutral",
+            "resolution_rule": "superseded",
+            "resolved_at": "2026-10-03",
+        },
+        db_path=db,
+    )
+    keep = _insert(db, symbol="600519.SH", created_at="2026-10-04T10:00:00")
+    only_closed = _insert(db, symbol="600026.SH", created_at="2026-10-01T09:00:00")
+    update_prediction_status(
+        only_closed, {"status": "unresolvable", "resolution_rule": "stale_no_market"}, db_path=db
+    )
+    rows = list_current_predictions(db_path=db)
+    assert [r["prediction_id"] for r in rows] == [keep]
+
+
+def test_list_current_empty_db(db):
+    assert list_current_predictions(db_path=db) == []
+
+
+def test_list_current_source_filter(db):
+    """source 过滤;缺省行内携带 source_type 供区分。"""
+    _insert(db, symbol="600015.SH", source_type="live", created_at="2026-10-05T10:00:00")
+    _insert(db, symbol="600016.SH", source_type="backtest", created_at="2026-10-05T11:00:00")
+    assert [r["symbol"] for r in list_current_predictions("live", db_path=db)] == ["600015.SH"]
+    assert [r["symbol"] for r in list_current_predictions("backtest", db_path=db)] == ["600016.SH"]
+    assert len(list_current_predictions(db_path=db)) == 2
 
 
 # ── add-watch-trigger-tracking Task 6：session_id / trigger_high / trigger_low 列 ──

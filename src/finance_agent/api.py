@@ -171,6 +171,7 @@ from finance_agent.outcome.track_record.model import (  # noqa: E402
     latest_equity_date,
     list_agents,
     list_audit,
+    list_current_predictions,
     list_daily_marks,
     list_equity_curve,
     list_predictions,
@@ -2547,6 +2548,23 @@ async def track_record_predictions(
         "page": page,
         "page_size": limit,
         "total": total,
+        "as_of": _track_as_of(),
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+@app.get("/api/v1/track-record/current")
+async def track_record_current(source: str | None = None) -> dict[str, Any]:
+    """add-current-stance-view:当前立场视图——每股最新一条 open 观点。
+
+    纯展示收敛,不改变任何统计口径(分母仍按日主规则);dup/已结算/unresolvable
+    不代表当前立场,一律排除。行内携带 source_type 供回测/实盘区分,可选 source
+    参数过滤,不产出无法区分口径的合并视图。
+    """
+    rows = await asyncio.to_thread(list_current_predictions, source)
+    return {
+        "current": rows,
+        "total": len(rows),
         "as_of": _track_as_of(),
         "disclaimer": _DISCLAIMER,
     }

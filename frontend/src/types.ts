@@ -669,6 +669,15 @@ export interface PredictionsResponse {
   disclaimer: string
 }
 
+// 当前立场视图（GET /api/v1/track-record/current，add-current-stance-view）：
+// 每股最新一条 open 观点，行结构与观点日志一致
+export interface CurrentStanceResponse {
+  current: PredictionRecord[]
+  total: number
+  as_of: string
+  disclaimer: string
+}
+
 // ── 评估运维（delta add-eval-ops-console Task 6）──
 // 字段名逐字对齐 `src/finance_agent/ops_api.py` 的 /api/v1/ops/* 契约（不猜测）。
 

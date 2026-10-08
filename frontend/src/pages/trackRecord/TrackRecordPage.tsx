@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
-import type { EquityCurvePoint, PredictionRecord, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
+import type { CurrentStanceResponse, EquityCurvePoint, PredictionRecord, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
 import { Button } from '../../components/ui/button'
 import { navigate } from '../../route'
 import { cssVar } from '../../Charts'
@@ -92,6 +92,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [records, setRecords] = useState<PredictionRecord[] | null>(null)
   const [curve, setCurve] = useState<EquityCurvePoint[] | null>(null)
   const [segments, setSegments] = useState<SegmentDimension[] | null>(null)
+  const [currentStance, setCurrentStance] = useState<PredictionRecord[] | null>(null)
+  const [currentStanceError, setCurrentStanceError] = useState(false)
   const [version, setVersion] = useState<number | null>(null)
   const [error, setError] = useState(false)
   const [sortBy, setSortBy] = useState<string>('created_at')
@@ -123,6 +125,21 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
     } catch {
       setError(true)
       toast.error('战绩数据加载失败')
+    }
+
+    // 当前立场视图独立加载(add-current-stance-view):失败显示显式失败文案,
+    // 不静默降级为空态冒充「无观点」
+    try {
+      const csResp = await fetch('/api/v1/track-record/current')
+      if (!csResp.ok) throw new Error(String(csResp.status))
+      const cs = (await csResp.json()) as CurrentStanceResponse
+      // 200 但缺 current 数组 = 契约违约：按失败处理（显式失败文案），
+      // 不静默降级为空态冒充「无观点」（setCurrentStance(undefined) 还会炸渲染）
+      if (!Array.isArray(cs.current)) throw new Error('malformed current stance payload')
+      setCurrentStance(cs.current)
+      setCurrentStanceError(false)
+    } catch {
+      setCurrentStanceError(true)
     }
   }, [])
 
@@ -439,6 +456,61 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           {/* 跑赢指数对比（add-index-performance-compare）：组合区间收益 vs 主要指数同期收益；
               span 与净值图窗口同源（页面战绩展示偏好 prefs.timeSpan） */}
           <IndexCompareCard span={prefs.timeSpan} />
+
+          {/* 当前观点区（add-current-stance-view）：每股最新一条 open 的立场视图。
+              纯展示收敛：台账不受影响，统计口径零改动（delta spec 战绩页面 MODIFIED） */}
+          <div data-testid="current-stance" className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }}>
+            <div className="flex flex-wrap items-baseline justify-between gap-1 mb-2">
+              <div className="text-sm font-medium">当前观点</div>
+              <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                每股仅显示最新一条进行中观点;历史逐条记录见下方观点日志
+              </div>
+            </div>
+            {currentStanceError ? (
+              <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>当前观点加载失败</div>
+            ) : currentStance === null ? (
+              <div className="text-xs py-2" style={{ color: 'var(--text-tertiary)' }}>加载中…</div>
+            ) : currentStance.length === 0 ? (
+              <div className="text-xs py-2" data-testid="current-stance-empty" style={{ color: 'var(--text-tertiary)' }}>暂无进行中观点</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    <th className="px-2 py-2 font-normal">建立日期</th>
+                    <th className="px-2 py-2 font-normal">标的</th>
+                    <th className="px-2 py-2 font-normal">方向</th>
+                    <th className="px-2 py-2 font-normal text-right">入场价</th>
+                    <th className="px-2 py-2 font-normal">判定窗口</th>
+                    <th className="px-2 py-2 font-normal">状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentStance.map(r => (
+                    <tr
+                      key={r.prediction_id}
+                      data-testid={`current-stance-row-${r.prediction_id}`}
+                      className="border-t cursor-pointer hover:opacity-80"
+                      style={{ borderColor: 'var(--border-neutral-l1)' }}
+                      onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
+                    >
+                      <td className="px-2 py-3" style={{ color: 'var(--text-secondary)' }}>{r.created_at.slice(0, 10)}</td>
+                      <td className="px-2 py-3">
+                        <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
+                        <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
+                      </td>
+                      <td className="px-2 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
+                      <td className="px-2 py-3 text-right">{fmt(r.entry_price)}</td>
+                      <td className="px-2 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
+                      <td className="px-2 py-3">
+                        <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
+                        <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
 
           {/* 观点日志（update-prediction-log-tabs）：标题 + 状态 tab */}
           <div className="flex items-center justify-between mb-3" data-testid="prediction-log-header">

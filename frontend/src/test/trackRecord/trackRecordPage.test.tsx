@@ -66,7 +66,17 @@ const PREDICTIONS: Record<string, unknown>[] = [
   },
 ]
 
-function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown; indexCompare?: unknown } = {}) {
+const CURRENT = [
+  {
+    prediction_id: 'p2', source_type: 'live', symbol: '300308.SZ', symbol_name: '中际旭创',
+    direction: 'neutral', entry_price: 100, target_price: null, horizon_days: 20,
+    confidence: 0.5, benchmark: '000300.SH', langfuse_trace_id: null,
+    status: 'open', created_at: '2026-09-02T10:00:00', resolved_at: null,
+    exit_price: null, raw_return: null, excess_return: null, resolution_rule: null,
+  },
+]
+
+function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown; current?: unknown; indexCompare?: unknown } = {}) {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/api/v1/track-record/overview')) {
@@ -86,6 +96,12 @@ function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: u
     if (url.includes('/api/v1/track-record/segments')) {
       return Promise.resolve(new Response(JSON.stringify({
         dimensions: opts.segments ?? [], as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
+      }), { status: 200 }))
+    }
+    if (url.includes('/api/v1/track-record/current')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        current: opts.current ?? [], total: (opts.current as unknown[])?.length ?? 0,
+        as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
       }), { status: 200 }))
     }
     if (url.includes('/api/v1/track-record/index-compare')) {
@@ -857,5 +873,66 @@ describe('战绩页：β/α 指标位（add-portfolio-beta-alpha）', () => {
     await screen.findByText('β 市场敞口')
     expect(screen.getByTestId('portfolio-beta')).toHaveTextContent('—')
     expect(screen.getByTestId('portfolio-alpha')).toHaveTextContent('—')
+  })
+})
+
+// 当前观点区（add-current-stance-view）：GET /api/v1/track-record/current，
+// 每股最新一条 open 的立场视图；独立加载，失败显式文案不冒充空态
+describe('当前观点区（add-current-stance-view）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('当前观点区:每股最新一条 open,含判定窗口与状态', async () => {
+    mockFetch({ current: CURRENT, predictions: [] })
+    renderPage()
+    const stance = await screen.findByTestId('current-stance')
+    expect(stance).toBeInTheDocument()
+    expect(screen.getByText(/每股仅显示最新一条进行中观点/)).toBeInTheDocument()
+    // jest-dom v7 无 toContainText（简报笔误），等价 matcher：toHaveTextContent 默认子串匹配
+    expect(screen.getByTestId('current-stance-row-p2')).toHaveTextContent('中际旭创')
+    expect(screen.getByTestId('current-stance-row-p2')).toHaveTextContent('T+20')
+    expect(screen.getByTestId('current-stance-row-p2')).toHaveTextContent('进行中')
+  })
+
+  it('当前观点区空态:显示空态文案而非隐藏区块', async () => {
+    mockFetch({ current: [] })
+    renderPage()
+    expect(await screen.findByTestId('current-stance-empty')).toHaveTextContent('暂无进行中观点')
+  })
+
+  it('当前观点区加载失败:显式失败文案,不冒充空态', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/v1/track-record/current')) {
+        return Promise.resolve(new Response('', { status: 500 }))
+      }
+      if (url.includes('/api/v1/track-record/overview')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          total: 0, open: 0, settled: 0, win_rate: null, avg_excess: null,
+          status_counts: {}, source_type: null, insufficient_sample: true,
+          as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
+          portfolio: { available: false, annual_return: null, volatility: null,
+            sharpe: null, max_drawdown: null, risk_score: null, risk_label: null, as_of: null },
+        }), { status: 200 }))
+      }
+      if (url.includes('/api/v1/track-record/equity-curve')) {
+        return Promise.resolve(new Response(JSON.stringify({ points: [] }), { status: 200 }))
+      }
+      if (url.includes('/api/v1/track-record/segments')) {
+        return Promise.resolve(new Response(JSON.stringify({ dimensions: [] }), { status: 200 }))
+      }
+      if (url.includes('/api/v1/track-record/predictions')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          predictions: [], page: 1, page_size: 50, total: 0,
+        }), { status: 200 }))
+      }
+      if (url.includes('/api/v1/track-record/index-compare')) {
+        return Promise.resolve(new Response(JSON.stringify(INDEX_COMPARE), { status: 200 }))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    }))
+    renderPage()
+    expect(await screen.findByText('当前观点加载失败')).toBeInTheDocument()
+    expect(screen.queryByTestId('current-stance-empty')).not.toBeInTheDocument()
   })
 })

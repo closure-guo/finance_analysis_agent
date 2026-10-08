@@ -578,6 +578,37 @@ def test_seed_predictions_block(monkeypatch, tmp_path):
         importlib.reload(api_module)
 
 
+# ── add-current-stance-view Task 2：当前立场只读端点 ──
+
+
+def test_current_endpoint_latest_open_per_symbol(monkeypatch, tmp_path):
+    """立场视图:每股仅最新 open;dup/已结算不进入;as_of+disclaimer 必带。"""
+    db = _use_db(monkeypatch, tmp_path)
+    _insert(db, symbol="601058.SH", direction="neutral", created_at="2026-10-05T10:00:00")
+    _insert(db, symbol="601058.SH", direction="neutral", created_at="2026-10-06T10:00:00")
+    dup = _insert(db, symbol="300033.SZ", created_at="2026-10-06T11:00:00")
+    update_prediction_status(
+        dup, {"status": "duplicate_of_day", "resolution_rule": "duplicate_of_day"}, db_path=db
+    )
+    resp = TestClient(app).get("/api/v1/track-record/current")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["current"][0]["symbol"] == "601058.SH"
+    assert data["current"][0]["created_at"] == "2026-10-06T10:00:00"
+    assert data["current"][0]["source_type"] == "live"
+    assert data["as_of"] and data["disclaimer"]
+
+
+def test_current_endpoint_source_filter(monkeypatch, tmp_path):
+    db = _use_db(monkeypatch, tmp_path)
+    _insert(db, symbol="600015.SH", source_type="live", created_at="2026-10-05T10:00:00")
+    _insert(db, symbol="600016.SH", source_type="backtest", created_at="2026-10-05T11:00:00")
+    resp = TestClient(app).get("/api/v1/track-record/current?source=live")
+    assert resp.status_code == 200
+    assert [r["symbol"] for r in resp.json()["current"]] == ["600015.SH"]
+
+
 # ── update-track-record-settle-price-display Task 1：seed 终态行透传结算字段 ──
 
 
