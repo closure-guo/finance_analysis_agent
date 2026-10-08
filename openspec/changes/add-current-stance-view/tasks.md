@@ -14,4 +14,4 @@
 
 - [x] 3.1 E2E spec 覆盖核心交互场景（区块渲染、每股收敛、台账不受影响、行点击导航），scan.sh P0=0 + task-reviewer 深审通过；空态由 vitest 覆盖（串行共享持久库无法构造全空前提，豁免理由落盘 spec 头注释）（commit 162b3fc7，专属套件 9/9）
 - [x] 3.2 `uv run ruff check` 全绿；`uv run mypy src` 83 errors 与基线持平（零新增）；`uv run pytest` 4267 passed（2 个存量 @live 提供商失败已在基线复现，与本变更无关）；`cd frontend && npm test` 654/654；E2E 专属套件 `tests/e2e/playwright`（playwright.track-record.config.ts）9/9——默认 stub 套件与本变更无交集，且 incident 038 教训下不与生产容器共存跑默认端口，由 CI 兜底
-- [ ] 3.3 人工验证报告落 `tests/validation/`（真实数据抽查：每股一条、台账不变、行点击）
+- [x] 3.3 人工验证报告落 `tests/validation/`（真实数据抽查：每股一条、台账不变、行点击）（tests/validation/2026-10-08-add-current-stance-view-validation.md：13 标的 13 行、601066 收敛到 10-08、台账 73 行不变、行点击详情跳转、300750 T+252 如实披露、截图视觉核验通过）
