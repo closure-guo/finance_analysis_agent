@@ -150,21 +150,30 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 
 ### Requirement: track-record 只读 API
 
-系统 SHALL 提供统一前缀 `/api/v1/track-record` 的只读接口：总览（核心指标 + 样本量 + as_of）与观点日志列表（分页，默认时间倒序，包含全部状态）。写入接口仅服务端内部调用（Agent 编排层），SHALL 带鉴权，服务端生成权威 created_at。所有接口响应 SHALL 带 `as_of` 与 `disclaimer: "历史业绩不代表未来表现"`。
+系统 SHALL 提供统一前缀 `/api/v1/track-record` 的只读接口：总览（核心指标 + 样本量 + as_of + `legacy_open` 旧口径进行中计数）与观点日志列表（分页，默认时间倒序，包含全部状态）。写入接口仅服务端内部调用（Agent 编排层），SHALL 带鉴权，服务端生成权威 created_at。所有接口响应 SHALL 带 `as_of` 与 `disclaimer: "历史业绩不代表未来表现"`。总览响应 SHALL 新增 `legacy_open` 字段：`status='open'` 且 `horizon_days` 不等于当前头条口径（`caliber_horizon`）的观点计数——与 `legacy_settled`（旧口径已结算计数）分列，二者口径披露互补。
 
 观点日志列表 `GET /api/v1/track-record/predictions` SHALL 支持可选查询参数进行排序与过滤（缺省保持全部状态、`created_at DESC`，不传任何参数时行为不变）：
 
 - 排序：`sort_by`（可取值 `created_at`/`symbol`/`direction`/`status`/`entry_price`/`exit_price`/`raw_return`/`excess_return`）+ `sort_dir`（`asc`/`desc`，默认 `desc`）。
-- 关键字：`keyword`，大小写不敏感，匹配标的代码 `symbol`、标的名称 `symbol_name`，或方向中文标签（看多/看空/中性）与状态中文标签（进行中/命中/未中/中性/不可判定）。
+- 关键字：`keyword`，大小写不敏感，匹配标的代码 `symbol`、标的名称 `symbol_name`，或方向中文标签（看多/看空/中性）与状态中文标签（进行中/命中/未中/带内中性/回避/同日重复/不可判定）。
 - 时间段：`date_from` / `date_to`，按观点创建日期（`created_at` 的日期部分）过滤，含两端，最细粒度到日。
 
 列表接口 SHALL 校验非法排序字段，非法值 SHALL 回退默认排序；分页参数（`page`/`page_size`，上限 50）与 `total` 语义保持不变，`total` 反映过滤后的总条数。
+
+(Previously: 总览响应无 legacy_open；keyword 状态中文标签集合为「进行中/命中/未中/中性/不可判定」（无回避/同日重复，「中性」一词与方向标签撞词）。)
 
 #### Scenario: 总览响应含 as_of 与免责声明
 
 - **WHEN** 请求总览
 - **THEN** 响应 SHALL 含 as_of、sample_size、win_rate（或 null）、avg_excess（或 null）
 - **AND** SHALL 含 disclaimer 文案
+
+#### Scenario: 总览含旧口径双计数
+
+- **GIVEN** 库内存在 5 条 252 日口径已结算行与 7 条 252 日口径 open 行，头条口径为 T+20
+- **WHEN** 请求总览
+- **THEN** `legacy_settled` SHALL 为 5，`legacy_open` SHALL 为 7
+- **AND** 二者 SHALL 为独立字段，互不并入对方
 
 #### Scenario: 观点日志默认含全部状态
 
@@ -187,7 +196,7 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 
 - **WHEN** 请求携带 `keyword=平安` 或 `keyword=600000`
 - **THEN** 响应 SHALL 仅返回标的代码或名称匹配的记录
-- **AND** 请求携带方向/状态中文标签（如 `keyword=命中`）时 SHALL 仅返回对应方向或状态的记录
+- **AND** 请求携带状态中文标签（如 `keyword=带内中性` 或 `keyword=同日重复`）时 SHALL 仅返回对应状态的记录
 
 #### Scenario: 时间段过滤含两端
 
@@ -220,12 +229,56 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 - **WHEN** 请求 `?status=open` 或 `?status=resolved_win`
 - **THEN** 行为与既有精确匹配一致
 
+### Requirement: 当前观点只读接口
+
+系统 SHALL 提供只读接口 `GET /api/v1/track-record/current`：按标的返回其最新一条 `status='open'` 的观点（当前立场视图，每标的至多一行，按 `created_at` 倒序）。行结构 SHALL 与观点日志行一致（含 `source_type`/`symbol`/`symbol_name`/`direction`/`entry_price`/`horizon_days`/`status`/`created_at` 等）。`duplicate_of_day`、已结算（`resolved_*`/`avoidance`）与 `unresolvable` 行 SHALL NOT 出现在本接口响应中。接口 SHALL 支持可选 `source` 查询参数（按 `source_type` 过滤；缺省不过滤，但每行 SHALL 携带 `source_type` 供回测/实盘区分，SHALL NOT 产出无法区分口径的合并视图）。响应 SHALL 带 `as_of` 与 `disclaimer`。本接口为纯展示视图：SHALL NOT 改变任何统计口径（胜率/样本量/NAV/IC 分母仍按 `add-prediction-pool-integrity` 日主规则），SHALL NOT 执行任何写操作。
+
+#### Scenario: 每标的仅返回最新一条 open
+
+- **GIVEN** 同一标的存在多条 `status='open'` 的跨日观点（如 601058.SH 有 8 条 open）
+- **WHEN** 请求 `/api/v1/track-record/current`
+- **THEN** 该标的 SHALL 仅返回 `created_at` 最新的一条
+- **AND** 台账中该标的其余 open 行 SHALL NOT 出现在响应中
+
+#### Scenario: 无 open 观点的标的不出现
+
+- **GIVEN** 某标的全部观点均已结算或关闭
+- **WHEN** 请求 `/api/v1/track-record/current`
+- **THEN** 响应 SHALL NOT 含该标的任何行
+
+#### Scenario: 已关闭行不进入立场视图
+
+- **GIVEN** 某标的最新落库的一条观点为 `duplicate_of_day` 或已结算状态
+- **WHEN** 请求 `/api/v1/track-record/current`
+- **THEN** 该标的 SHALL 返回其最新一条 `status='open'` 的观点（若存在）
+- **AND** SHALL NOT 返回任何已关闭行
+
+#### Scenario: 回测实盘分离
+
+- **WHEN** 请求 `/api/v1/track-record/current` 不带 `source` 参数
+- **THEN** 每行 SHALL 携带 `source_type` 字段供区分
+- **AND** 请求携带 `source=live` 时 SHALL 仅返回 `source_type='live'` 的行
+
+#### Scenario: 响应带 as_of 与免责声明
+
+- **WHEN** 请求 `/api/v1/track-record/current`
+- **THEN** 响应 SHALL 含 `as_of` 与 `disclaimer` 字段
+
+
 ### Requirement: 战绩页面（总览 + 观点日志）
 
-系统 SHALL 在前端提供战绩页面：总览区（胜率、平均超额、样本量、as_of、**回避正确率（含样本数）、当前判定口径（caliber_horizon）、存量旧口径计数（legacy_settled）**）+ 观点日志列表。回避正确率 SHALL 与胜率同门槛（settled < 10 不展示，展示「样本积累中」而非 0 值）；口径与存量计数 SHALL 常驻展示（二者为口径披露，不受样本门槛限制）。页面 SHALL 固定展示风险提示「历史业绩不代表未来表现」，不可关闭；观点日志默认视图 SHALL 包含 loss 记录（不可隐藏）；进行中观点 SHALL 展示当前浮动收益并标注「未结算」；状态标签以颜色区分（命中=绿、未中=红、中性=灰、进行中=蓝、不可判定=灰斜杠、**回避=灰**——neutral 观点的回避终态 `status="avoidance"`，标签文本「回避」）。
+系统 SHALL 在前端提供战绩页面：总览区（胜率、平均超额、样本量、as_of、**回避正确率（含样本数）、当前判定口径（caliber_horizon）、存量旧口径计数（legacy_settled 与 legacy_open 分列）**）+ 当前观点区（每股最新一条 open 观点的立场视图，add-current-stance-view）+ 观点日志列表。总览区样本量术语 SHALL 使用「已结算」（win+loss 口径）——横幅「样本积累中（已结算 N 条，满 10 条解锁胜率）」、胜率卡「胜率（已结算）」、回避卡「回避正确率（中性观点已结算）」；SHALL NOT 再使用「已判定」表述 win+loss 口径（与观点日志 tab 名「已判定」= 非 open 全集消歧）。口径披露行 SHALL 同时披露两个旧口径计数：`legacy_settled`（「另有 n 条旧口径已结算」或 0 时「无存量」）与 `legacy_open`（n>0 时「另有 n 条旧口径进行中，不计入头条口径」；0 时不渲染该分句）。回避正确率 SHALL 与胜率同门槛（settled < 10 不展示，展示「样本积累中」而非 0 值）；口径与存量计数 SHALL 常驻展示（二者为口径披露，不受样本门槛限制）。页面 SHALL 固定展示风险提示「历史业绩不代表未来表现」，不可关闭；观点日志默认视图 SHALL 包含 loss 记录（不可隐藏）；进行中观点 SHALL 展示当前浮动收益并标注「未结算」；状态标签以颜色区分（命中=绿、未中=红、**带内中性=灰**（resolved_neutral，标签文本「带内中性」，与方向「中性」=观望消歧）、进行中=蓝、不可判定=灰斜杠、回避=灰、同日重复=三级灰）。
 
-观点日志表格 SHALL 新增「建立日期」列，展示观点创建日期，并作为可排序列之一。表格列头 SHALL 支持点击切换升/降序，可排序列 SHALL 包含建立日期/标的/方向/状态/入场价/结算价/区间收益/基准超额，当前排序 SHALL 有可见指示。表格上方 SHALL 提供过滤控件：关键字输入框（匹配代码/名称/方向/状态）与起止日期选择（按创建日，到日，含两端）；提交过滤后 SHALL 重新向后端拉取，并在服务端分页。表格 SHALL 提供分页控件以浏览过滤/排序后的完整结果。
-(Previously: 总览区未渲染回避正确率、当前判定口径与存量旧口径计数——后端 overview 已返回这三个字段但前端未读，口径披露在界面上不可见。)
+**切片指标空态折叠**：总览 `settled=0` 时，切片指标区（持有期/行业/市值/市场环境）SHALL 折叠为一行说明文案（如「切片指标将在首批观点结算后可用」），SHALL NOT 渲染全「—」的四维表格；`settled>0` 时渲染行为不变。
+
+观点日志表格 SHALL 新增「建立日期」列与「窗口」列（**展示该观点自带 `horizon_days`，如「T+20」「T+252」，混合口径显式可见**），并作为可排序列之一。表格列头 SHALL 支持点击切换升/降序，可排序列 SHALL 包含建立日期/标的/方向/状态/参考价（盘面）/结算价（后复权）/区间收益/基准超额；窗口列与结算入场价（后复权）列为展示列，不参与排序。表格上方 SHALL 提供过滤控件：关键字输入框（匹配代码/名称/方向/状态）与起止日期选择（按创建日，到日，含两端）；提交过滤后 SHALL 重新向后端拉取，并在服务端分页。表格 SHALL 提供分页控件以浏览过滤/排序后的完整结果。
+
+**进行中浮动收益**：观点日志中 `status='open'` 的行，区间收益列 SHALL 展示该观点最新每日盯市累计收益（`daily_marks.cum_return`）、基准超额列 SHALL 展示累计超额（`cum_excess`），并保留「未结算」标注；展示值 SHALL 附盯市日期提示（title/悬浮）。无盯市记录的 open 行两列 SHALL 显示「—」。已结算行展示口径不变（结算读数）。
+
+**同日重复折叠**：「已判定」与「全部」tab 中，连续的同 (symbol, 建立日期) `duplicate_of_day` 行 SHALL 默认折叠为一行汇总（展示标的、日期与「同日重复 ×n」），点击汇总行 SHALL 展开组内明细行；展开状态 SHALL 仅作用于当前页前端视图。折叠 SHALL NOT 改变服务端分页 `total`、append-only 台账语义与任何统计口径。「当前持有」tab 无 duplicate_of_day 行，不受影响。
+**结算价格展示 SHALL 同口径可比**：观点日志表格 SHALL 在入场价与结算价之间提供「结算入场价（后复权）」列——已结算行展示 `settle_entry_price`（hfq 归属日收盘），进行中行展示未结算占位；该列 SHALL NOT 参与排序（后端排序白名单不变）。价格列头 SHALL 标注口径：入场价列头为「参考价（盘面）」（决策时点参考价 `entry_price`），结算两列列头标注「后复权」；SHALL NOT 将结算价折算回盘面口径展示（复权因子随分红漂移，落库 hfq 值为冻结快照）。观点详情页价格区 SHALL 展示三格：参考价（盘面）/ 结算入场价（后复权）/ 结算价（后复权）。
+
+(Previously: 样本量术语用「已判定」（与 tab 名撞词）；口径披露行仅有 legacy_settled（「无存量」与全部 tab 内旧口径 open 行并存的观感矛盾）；表格无窗口列（252 行混入无从分辨）；open 行区间收益/基准超额恒「—」（盯市数据未接）；resolved_neutral 标签「中性」与方向「中性」同词；settled=0 时切片区渲染全「—」四维表格；同日重复行无折叠刷屏；价格两列未标注口径且未渲染 settle_entry_price（盘面参考价与 hfq 结算价并排产生跨口径误读）。当前观点区一段为 add-current-stance-view 引入，update-track-record-display-clarity 不改动其语义。)
 
 #### Scenario: 页面渲染总览与观点日志
 
@@ -240,12 +293,69 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 - **THEN** SHALL 同时展示 win 与 loss 记录
 - **AND** SHALL NOT 存在「只看好单」类预设筛选
 
+#### Scenario: 样本量术语消歧
+
+- **GIVEN** settled=0 而观点日志「已判定」tab 有 70 行（dup/带内中性/不可判定）
+- **WHEN** 渲染总览
+- **THEN** 横幅 SHALL 显示「样本积累中（已结算 0 条…）」
+- **AND** SHALL NOT 出现「已判定 0 条」表述
+
+#### Scenario: 口径披露行双计数
+
+- **GIVEN** legacy_settled=5、legacy_open=7
+- **WHEN** 渲染口径披露行
+- **THEN** SHALL 同时展示「另有 5 条旧口径已结算」与「另有 7 条旧口径进行中，不计入头条口径」
+- **AND** legacy_open=0 时该分句 SHALL 不渲染（legacy_settled=0 时仍明示「无存量」）
+
+#### Scenario: 窗口列渲染
+
+- **GIVEN** 观点日志同时存在 horizon_days=20 与 252 的行
+- **WHEN** 用户查看观点日志
+- **THEN** 窗口列 SHALL 分别显示「T+20」与「T+252」
+- **AND** 「当前持有」tab 中的旧口径行 SHALL 可通过窗口列识别
+
+#### Scenario: 进行中浮动收益展示
+
+- **GIVEN** 某 open 观点存在盯市记录（最新 mark：cum_return=-1.2%、cum_excess=-0.8%，mark_date=2026-10-08）
+- **WHEN** 渲染观点日志该行
+- **THEN** 区间收益列 SHALL 显示 -1.20%、基准超额列 SHALL 显示 -0.80%，状态列保留「未结算」标注
+- **AND** 展示值 SHALL 附盯市日期提示
+
+#### Scenario: 无盯市 open 行
+
+- **GIVEN** 某 open 观点无任何盯市记录
+- **WHEN** 渲染该行
+- **THEN** 区间收益与基准超额列 SHALL 显示「—」（SHALL NOT 显示 0 值冒充）
+
+#### Scenario: 同日重复折叠与展开
+
+- **GIVEN** 「全部」tab 存在某标的某日连续 6 条 duplicate_of_day 行
+- **WHEN** 渲染
+- **THEN** SHALL 默认显示 1 行汇总（含「同日重复 ×6」），6 条明细行隐藏
+- **WHEN** 用户点击汇总行
+- **THEN** 6 条明细行展开可见；再次点击收起
+- **AND** 分页 total SHALL 保持含全部 6 条的计数值不变
+
+#### Scenario: 切片空态折叠
+
+- **GIVEN** 总览 settled=0
+- **WHEN** 渲染切片指标区
+- **THEN** SHALL 仅显示一行说明（如「切片指标将在首批观点结算后可用」）
+- **AND** SHALL NOT 渲染四维分桶表格
+
 #### Scenario: 回避终态标签渲染
 
 - **GIVEN** 存在 `status="avoidance"` 的 neutral 终态观点
 - **WHEN** 战绩页观点日志渲染该行
 - **THEN** 状态标签 SHALL 显示「回避」文本（由前端 `predictionStatus.ts` 的单一状态映射产出）
 - **AND** SHALL NOT 渲染为空白标签
+
+#### Scenario: 带内中性标签渲染
+
+- **GIVEN** 某看空观点判定为 resolved_neutral（超额落 ±2% 带）
+- **WHEN** 渲染该行
+- **THEN** 状态列 SHALL 显示「带内中性」（SHALL NOT 与方向「中性」同词）
+- **AND** keyword=带内中性 SHALL 能过滤出该行
 
 #### Scenario: 展示建立日期列
 
@@ -296,6 +406,44 @@ TBD - created by archiving change add-track-record. Update Purpose after archive
 #### Scenario: 口径与存量计数披露
 
 - **WHEN** 渲染总览
-- **THEN** SHALL 展示当前判定口径（如「T+20 交易日」）与存量旧口径计数（如「另有 n 条 252 日口径历史未计入」）
+- **THEN** SHALL 展示当前判定口径（如「T+20 交易日」）与存量旧口径计数
 - **AND** 存量计数为 0 时 SHALL 明示「无存量」而非隐藏该披露
+
+#### Scenario: 当前观点区每股一行
+
+- **GIVEN** 同一标的存在多条 open 观点（跨日）
+- **WHEN** 用户进入战绩页
+- **THEN** 当前观点区该标的 SHALL 仅展示最新一条 open 观点
+- **AND** 区块 SHALL 注明口径说明（每股仅显示最新一条进行中观点）
+
+#### Scenario: 当前观点区空态
+
+- **WHEN** 无任何标的持有 open 观点
+- **THEN** 当前观点区 SHALL 展示空态文案（如「暂无进行中观点」）
+- **AND** SHALL NOT 隐藏区块结构或以 0 值冒充数据
+
+#### Scenario: 当前观点行点击进详情
+
+- **WHEN** 用户点击当前观点区某行
+- **THEN** SHALL 导航至该观点的详情页（与观点日志行一致）
+
+#### Scenario: 台账不受立场视图影响
+
+- **WHEN** 用户查看观点日志
+- **THEN** 台账 SHALL 仍逐条展示全部状态记录（含同股跨日多条 open）
+- **AND** SHALL NOT 因当前观点区存在而收敛、过滤或隐藏台账行
+
+#### Scenario: 已结算行展示同口径可比价格
+
+- **GIVEN** 存在已结算观点，`settle_entry_price=6.39`、`exit_price=6.50`（同为后复权口径）
+- **WHEN** 观点日志渲染该行
+- **THEN** 行内 SHALL 同时展示结算入场价 6.39 与结算价 6.50（两数同口径可直接对比）
+- **AND** 参考价列展示 `entry_price`（盘面口径）且列头标注「盘面」
+- **AND** 结算两列列头 SHALL 标注「后复权」
+
+#### Scenario: 进行中行结算价格列占位
+
+- **GIVEN** 存在进行中观点（`settle_entry_price` 为 NULL）
+- **WHEN** 观点日志渲染该行
+- **THEN** 结算入场价单元格 SHALL 展示未结算占位（与结算价列占位一致）
 
