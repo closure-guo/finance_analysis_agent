@@ -85,6 +85,9 @@ class TestFinalReevalCheck:
             target_price=None,
             inaction_reason="等待右侧信号",
             reeval_triggers=["放量站上 20 日线"],
+            # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）
+            trigger_high=28.5,
+            trigger_low=24.0,
         )
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 1
@@ -114,7 +117,16 @@ class TestFinalReevalCheck:
         """再评估重试换代为 watch 且理由缺失 → 复核理由结论：如实改注（不再次打回）。"""
         mock_llm.side_effect = [
             _resp(),  # buy 价位齐备、触发条件缺失
-            _resp(action="watch", entry_price=None, stop_loss=None, target_price=None),
+            _resp(
+                action="watch",
+                entry_price=None,
+                stop_loss=None,
+                target_price=None,
+                # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）；
+                # 理由保持缺失（本测试被测形态）
+                trigger_high=28.5,
+                trigger_low=24.0,
+            ),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
         assert mock_llm.call_count == 2
@@ -135,6 +147,9 @@ class TestFinalReevalCheck:
                 target_price=None,
                 inaction_reason="估值分位偏高",
                 reeval_triggers=["放量站上 20 日线"],
+                # 触发位申报齐备，隔离触发位申报打回回路（add-watch-trigger-tracking）
+                trigger_high=28.5,
+                trigger_low=24.0,
             ),
         ]
         result = risk_judge({"trader_plan": {}, "risk_debate_history": []})

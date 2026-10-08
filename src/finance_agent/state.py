@@ -200,6 +200,9 @@ class AnalysisState(TypedDict, total=False):
     # 终稿执行动作再评估触发条件必填化（update-decision-integrity-gates Task 3）：
     # {result, note}——打回后申报/「已打回仍未申报」如实标注
     final_reeval_check: dict
+    # watch 终稿双向触发位申报完整性（add-watch-trigger-tracking）：{result, note}——
+    # 打回后申报/「已打回仍未申报触发位」如实标注（未声明会被图合并静默丢弃）
+    final_trigger_check: dict
     # 决策文本价位交叉校验残留 anomaly（update-decision-integrity-gates Task 1 →
     # update-decision-price-gate 收窄）：保存 risk_judge **最终终稿**的残留 anomaly
     # （打回修正后为空列表），仅经 state/Langfuse trace 可观测，MUST NOT 渲染进报告

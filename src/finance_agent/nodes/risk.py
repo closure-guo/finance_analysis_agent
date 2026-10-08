@@ -417,6 +417,52 @@ def risk_judge(state: dict) -> dict:
                 "再评估重试后终稿改为非执行动作且理由缺失："
                 f"{'、'.join(_missing_inaction_after)}（未再次打回，如实标注）"
             )
+    # add-watch-trigger-tracking：watch 终稿双向触发位申报检查（同 final_reeval_check
+    # 一次打回语义）。触发位是 watch 唯一的可执行承诺，必须结构化可追踪；两个均缺失
+    # 打回一次，仍缺放行 + 如实标注（MUST NOT 死循环/虚构）。buy/sell/hold 不约束。
+    final_trigger_check: dict = {"result": "pass", "note": ""}
+    if str(getattr(decision, "action", "")) == "watch" and (
+        getattr(decision, "trigger_high", None) is None
+        and getattr(decision, "trigger_low", None) is None
+    ):
+        retry_context = (
+            f"{context}\n\n【触发位申报打回】watch 终稿必须结构化申报双向触发位"
+            "（trigger_high=上破触发价，须严格高于最新收盘价；trigger_low=下破触发价，"
+            "须严格低于最新收盘价），当前两者均缺失。"
+            "可从风险辩论与再评估触发条件中的价位线索申报（如「站上 X 重估」→ trigger_high=X）。"
+            "请重新输出补全 trigger_high/trigger_low 的完整决策 JSON。"
+        )
+        data = call_llm_for_json(
+            retry_context,
+            system=system,
+            api_key=api_key,
+            node_name="risk_judge",
+            llm_config=state.get("llm_config"),
+            stock_code=state.get("stock_code"),
+            prompt_name=_pinfo.prompt_name,
+            prompt_version=_pinfo.prompt_version,
+        )
+        decision = TradeDecision.model_validate(data)
+        if (
+            getattr(decision, "trigger_high", None) is None
+            and getattr(decision, "trigger_low", None) is None
+        ):
+            final_trigger_check["note"] = "已打回仍未申报触发位"
+        else:
+            final_trigger_check["note"] = "打回后已申报"
+        # 重试使终稿换代，复核前序结论（不再触发新一轮打回，MUST NOT 死循环）
+        _recheck_price_note_after_retry(decision, final_price_check, "触发位重试")
+        _missing_inaction_after = inaction_rationale_missing(decision)
+        if _missing_inaction_after:
+            final_inaction_check["note"] = (
+                "触发位重试后终稿理由缺失："
+                f"{'、'.join(_missing_inaction_after)}（未再次打回，如实标注）"
+            )
+        if not decision.reeval_triggers:
+            final_reeval_check["note"] = (
+                final_reeval_check["note"]
+                or "触发位重试后 reeval_triggers 为空（未再次打回，如实标注）"
+            )
     # 赔率自检（任务 6 + extend-payout-self-check-coverage）：终稿 reasoning 自报赔率
     # vs 自身价位代码计算——冲突原位修正；转述窗口跳过（计数上报）
     _reasoning, _payout_fixed, _payout_skipped = _apply_payout_self_check(
@@ -551,6 +597,7 @@ def risk_judge(state: dict) -> dict:
         "final_price_check": final_price_check,
         "final_inaction_check": final_inaction_check,
         "final_reeval_check": final_reeval_check,
+        "final_trigger_check": final_trigger_check,
         "decision_price_anomalies": decision_price_anomalies,
         "decision_price_gate": decision_price_gate,
         "decision_hysteresis": decision_hysteresis,
