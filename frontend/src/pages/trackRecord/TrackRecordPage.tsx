@@ -234,7 +234,10 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           group.push(rows[i])
           i += 1
         }
-        displayRows.push({ kind: 'dup-group', key: `${r.symbol}|${date}`, rows: group })
+        // key 加首行 prediction_id：同股同日可能有多段 consecutive dup 区（段间被日主行
+        // 隔开，created_at DESC 下不连续；生产 688072 2026-10-02 实证两段）。仅 symbol|date
+        // 会撞 key——两段共享 expandedDups 条目与 testid，点一组两组同开同收
+        displayRows.push({ kind: 'dup-group', key: `${r.symbol}|${date}|${r.prediction_id}`, rows: group })
       } else {
         displayRows.push({ kind: 'single', row: r })
         i += 1
@@ -689,8 +692,10 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                       const first = d.rows[0]
                       return (
                         <Fragment key={d.key}>
+                          {/* testid 全局替换 | → -：key 现含两个 |，字符串单次 replace 只换
+                              第一个，会残留 `日期|pid` 破坏 testid 三段格式 */}
                           <tr
-                            data-testid={`dup-group-${d.key.replace('|', '-')}`}
+                            data-testid={`dup-group-${d.key.replace(/\|/g, '-')}`}
                             className="border-t cursor-pointer hover:opacity-80"
                             style={{ borderColor: 'var(--border-neutral-l1)' }}
                             onClick={() =>

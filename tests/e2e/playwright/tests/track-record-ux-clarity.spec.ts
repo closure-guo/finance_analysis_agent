@@ -29,6 +29,10 @@ import { expect, test } from '@playwright/test'
  *   双 td 注入),计数断言同时消除位置取首个匹配的选择器写法(P1 #10a);
  * - 分页 total 不变断言由一次性取 innerText 后比对 → 捕获「共 N 条」span
  *   后 toHaveText 自动重试断言(P0 #4c-4e)。
+ *
+ * dup-group testid 用正则匹配:key 含首行服务端 prediction_id(种子时服务端生成,
+ * 不可预知),防同股同日多段 consecutive dup 区撞 key 的串扰(生产 688072
+ * 2026-10-02 实证);本套件种子仅一段连续 dup,正则唯一命中。
  */
 test.describe('战绩页:展示治理(add-track-record-display-clarity)', () => {
   let seeded = false
@@ -104,7 +108,8 @@ test.describe('战绩页:展示治理(add-track-record-display-clarity)', () => 
     await page.goto('/track-record')
     await page.getByTestId('prediction-tab-all').click()
     const log = page.getByTestId('prediction-log')
-    const group = page.getByTestId('dup-group-000858.SH-2026-10-05')
+    // key 含首行服务端 prediction_id(不可预知)→ 正则;种子仅一段连续 dup,唯一命中
+    const group = page.getByTestId(/^dup-group-000858\.SH-2026-10-05-/)
     await expect(group).toContainText('同日重复 ×3')
     // total 不变:「共 N 条」span 全文捕获,展开后 toHaveText 自动重试比对
     const pagBefore = await page.getByTestId('track-record-pagination').getByText(/共 \d+ 条/).innerText()

@@ -972,15 +972,58 @@ describe('观点日志同日重复行折叠（update-track-record-display-clarit
     mockFetch({ current: [], predictions: dupRows, predictionsTotal: 7 })
     renderPage()
     // 默认折叠:1 行汇总,3 条明细不渲染
+    // testid 含首行 prediction_id（key = symbol|date|首行 pid，防同股同日多段重复撞 key）
     // jest-dom v7 无 toContainText（简报笔误），等价 matcher：toHaveTextContent 默认子串匹配
-    expect(await screen.findByTestId('dup-group-000858.SH-2026-10-05')).toHaveTextContent('同日重复 ×3')
+    expect(await screen.findByTestId('dup-group-000858.SH-2026-10-05-d1')).toHaveTextContent('同日重复 ×3')
     expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
     // 分页 total 不受折叠影响
     expect(screen.getByText(/共 7 条/)).toBeInTheDocument()
     // 点击展开
-    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05'))
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d1'))
     expect(screen.getByTestId('prediction-row-d1')).toBeInTheDocument()
     expect(screen.getByTestId('prediction-row-d3')).toBeInTheDocument()
+  })
+
+  // 防回归（生产 688072 2026-10-02 实证）：created_at DESC 下同股同日 dup 可能被日主行
+  // 切成多段 consecutive 区。旧实现 key=symbol|date → 两段共享 key/testid：DOM 出现重复
+  // testid（getByTestId 直接抛多元素错误）且 expandedDups 串扰——点一组两组同开同收。
+  // 修复：key 加首行 prediction_id，两段各自独立 toggle。
+  it('同股同日两段重复被 open 行隔开:两个汇总行 key 唯一,展开互不联动', async () => {
+    const dupBase = {
+      ...PREDICTIONS[0], symbol: '000858.SH', symbol_name: '五粮液',
+      status: 'duplicate_of_day' as const, resolution_rule: 'duplicate_of_day',
+      exit_price: null, raw_return: null, excess_return: null,
+    }
+    const openBreaker = {
+      ...PREDICTIONS[0], symbol: '000858.SH', symbol_name: '五粮液',
+      status: 'open' as const, resolved_at: null, resolution_rule: null,
+      exit_price: null, raw_return: null, excess_return: null,
+    }
+    const rows = [
+      { ...dupBase, prediction_id: 'd1', created_at: '2026-10-05T11:00:00' },
+      { ...dupBase, prediction_id: 'd2', created_at: '2026-10-05T12:00:00' },
+      { ...dupBase, prediction_id: 'd3', created_at: '2026-10-05T13:00:00' },
+      { ...openBreaker, prediction_id: 'o1', created_at: '2026-10-05T14:00:00' },
+      { ...dupBase, prediction_id: 'd4', created_at: '2026-10-05T15:00:00' },
+      { ...dupBase, prediction_id: 'd5', created_at: '2026-10-05T16:00:00' },
+    ]
+    mockFetch({ current: [], predictions: rows, predictionsTotal: 6 })
+    renderPage()
+    // 两个不同 testid 的汇总行（旧实现两 testid 相同,getByTestId 抛「found multiple」）
+    const g1 = await screen.findByTestId('dup-group-000858.SH-2026-10-05-d1')
+    expect(g1).toHaveTextContent('同日重复 ×3')
+    expect(screen.getByTestId('dup-group-000858.SH-2026-10-05-d4')).toHaveTextContent('同日重复 ×2')
+    // 点第一组只展开第一组:第二组明细不出现
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d1'))
+    expect(screen.getByTestId('prediction-row-d1')).toBeInTheDocument()
+    expect(screen.queryByTestId('prediction-row-d4')).not.toBeInTheDocument()
+    // 收起第一组;展开第二组只出第二组明细,第一组不受影响
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d1'))
+    expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d4'))
+    expect(screen.getByTestId('prediction-row-d4')).toBeInTheDocument()
+    expect(screen.getByTestId('prediction-row-d5')).toBeInTheDocument()
+    expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
   })
 })
 
