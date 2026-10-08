@@ -95,6 +95,11 @@ def persist_prediction_from_accumulated(
                     },
                 },
                 "langfuse_trace_id": accumulated.get("langfuse_trace_id"),
+                # add-watch-trigger-tracking：会话关联 + watch 双向触发位（写入即冻结）。
+                # 触发位仅取终稿决策结构化字段；不解析 reeval_triggers 自由文本。
+                "session_id": session_id,
+                "trigger_high": decision.get("trigger_high"),
+                "trigger_low": decision.get("trigger_low"),
                 "timestamp": _now_iso(),
                 "resolution_rule": resolution_rule,
             },

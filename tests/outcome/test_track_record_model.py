@@ -8,6 +8,7 @@ from finance_agent.outcome.track_record.model import (
     avoidance_stats,
     count_predictions,
     duplicate_prediction_ids,
+    get_prediction,
     init_predictions,
     insert_prediction,
     list_predictions,
@@ -590,3 +591,96 @@ def test_duplicate_prediction_ids_filters_by_resolution_rule(db):
         db_path=db,
     )
     assert duplicate_prediction_ids(db_path=db) == {dup_id}
+
+
+# ── add-watch-trigger-tracking Task 6：session_id / trigger_high / trigger_low 列 ──
+
+_TRIGGER_TRACKING_COLS = {"session_id", "trigger_high", "trigger_low"}
+
+
+def test_trigger_tracking_columns_migrated(tmp_path):
+    """老库（无三列）→ 幂等 ALTER 补列；存量语义 NULL 不回填。"""
+    import sqlite3
+
+    from finance_agent.outcome.track_record.model import _migrate_trigger_tracking_columns
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    # 夹具含 stage-a 全列（约束见 _LEGACY_PREDICTIONS_DDL 注释：缺列在建索引处报错）
+    conn.executescript(_LEGACY_PREDICTIONS_DDL)
+    conn.execute(
+        """INSERT INTO predictions (prediction_id, source_type, symbol, direction, horizon_days,
+             rationale_snapshot, status, created_at, updated_at)
+           VALUES ('p_legacy', 'live', '600519.SH', 'long', 20, '{}', 'open',
+                   '2026-10-01T10:00:00', '2026-10-01T10:00:00')"""
+    )
+    conn.commit()
+    pre_cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+    conn.close()
+    # 自证「老库」：三列在迁移前均不存在
+    assert not _TRIGGER_TRACKING_COLS & pre_cols
+
+    conn = sqlite3.connect(db)
+    try:
+        _migrate_trigger_tracking_columns(conn)
+        _migrate_trigger_tracking_columns(conn)  # 幂等：重跑不抛异常、不加重复列
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+        assert cols >= _TRIGGER_TRACKING_COLS
+        legacy = conn.execute(
+            "SELECT session_id, trigger_high, trigger_low FROM predictions"
+            " WHERE prediction_id='p_legacy'"
+        ).fetchone()
+        assert legacy == (None, None, None)  # 存量行不追溯回填
+    finally:
+        conn.close()
+
+
+def test_fresh_db_ddl_includes_trigger_tracking_columns(tmp_path):
+    """新库 CREATE TABLE 直建三列（不依赖迁移路径）。"""
+    import sqlite3
+
+    from finance_agent.outcome.track_record.model import init_track_record_tables
+
+    db = tmp_path / "fresh.db"
+    init_track_record_tables(db)
+    conn = sqlite3.connect(db)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+    finally:
+        conn.close()
+    assert cols >= _TRIGGER_TRACKING_COLS
+
+
+def test_insert_prediction_accepts_trigger_tracking_keys(db):
+    """insert_prediction 接受新 record 键并原样落库。"""
+    pid = _insert(
+        db,
+        session_id="sess_watch_1",
+        trigger_high=24.6,
+        trigger_low=22.91,
+        direction="neutral",
+    )
+    row = get_prediction(pid, db_path=db)
+    assert row["session_id"] == "sess_watch_1"
+    assert row["trigger_high"] == 24.6
+    assert row["trigger_low"] == 22.91
+
+
+def test_insert_prediction_without_trigger_keys_leaves_null(db):
+    """未提供新键（旧调用方）→ 列为 NULL，不缺省、不报错。"""
+    pid = _insert(db)
+    row = get_prediction(pid, db_path=db)
+    assert row["session_id"] is None
+    assert row["trigger_high"] is None
+    assert row["trigger_low"] is None
+
+
+def test_trigger_tracking_fields_are_write_frozen(db):
+    """三列写入即冻结：update_prediction_status 尝试修改 SHALL 失败（FrozenFieldError）。"""
+    from finance_agent.outcome.track_record.model import _FROZEN_FIELDS, _MUTABLE_FIELDS
+
+    assert set(_FROZEN_FIELDS) >= _TRIGGER_TRACKING_COLS
+    assert not _TRIGGER_TRACKING_COLS & set(_MUTABLE_FIELDS)
+    pid = _insert(db, session_id="sess_watch_1")
+    with pytest.raises(FrozenFieldError):
+        update_prediction_status(pid, {"session_id": "sess_hack"}, db_path=db)

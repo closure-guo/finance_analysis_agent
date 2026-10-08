@@ -137,3 +137,95 @@ def test_pydantic_trade_decision_recorded(monkeypatch, tmp_path):
         "stop_loss": 90.0,
         "target_price": 120.0,
     }
+
+
+# ── add-watch-trigger-tracking Task 6：session_id + watch 触发位落库 ──
+
+
+def _trigger_row(db):
+    rows = list_predictions(db_path=db)
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_ingest_persists_session_id_and_watch_triggers(monkeypatch, tmp_path):
+    """watch 决策携带结构化触发位 → 三者原样落库（session_id 关联 + 触发位数值）。"""
+    db = _db(monkeypatch, tmp_path)
+    persist_prediction_from_accumulated(
+        _reat_accumulated(
+            final_trade_decision={
+                "action": "watch",
+                "confidence": 0.6,
+                "trigger_high": 24.6,
+                "trigger_low": 22.91,
+                "reeval_triggers": "上破 24.6 / 下破 22.91 时再评估",
+            },
+            fund_manager_decision="watch",
+        ),
+        "sess_watch_1",
+        "600519",
+        "贵州茅台",
+    )
+    row = _trigger_row(db)
+    assert row["session_id"] == "sess_watch_1"
+    assert row["trigger_high"] == 24.6
+    assert row["trigger_low"] == 22.91
+    assert row["direction"] == "neutral"  # watch → neutral 映射不回归
+
+
+def test_ingest_watch_without_structured_triggers_stays_null(monkeypatch, tmp_path):
+    """watch 决策只报 reeval_triggers 文本 → 触发位列 NULL。
+
+    结构化列 MUST NOT 从自由文本解析价位（取值仅限决策结构化字段）。
+    """
+    db = _db(monkeypatch, tmp_path)
+    persist_prediction_from_accumulated(
+        _reat_accumulated(
+            final_trade_decision={
+                "action": "watch",
+                "confidence": 0.6,
+                "reeval_triggers": "24.6 上破 / 22.91 下破",
+            },
+        ),
+        "sess_watch_2",
+        "600519",
+        "贵州茅台",
+    )
+    row = _trigger_row(db)
+    assert row["session_id"] == "sess_watch_2"
+    assert row["trigger_high"] is None
+    assert row["trigger_low"] is None
+
+
+def test_ingest_buy_decision_triggers_null_session_id_written(monkeypatch, tmp_path):
+    """buy 决策无触发位约束 → 触发位列 NULL；session_id 照常落库。"""
+    db = _db(monkeypatch, tmp_path)
+    persist_prediction_from_accumulated(_reat_accumulated(), "sess_buy_1", "600519", "贵州茅台")
+    row = _trigger_row(db)
+    assert row["session_id"] == "sess_buy_1"
+    assert row["trigger_high"] is None
+    assert row["trigger_low"] is None
+
+
+def test_ingest_pydantic_watch_decision_triggers_persisted(monkeypatch, tmp_path):
+    """pydantic TradeDecision 路径（真实管线 state）：model_dump 后触发位照常落库。"""
+    from finance_agent.models import TradeDecision
+
+    db = _db(monkeypatch, tmp_path)
+    model_decision = TradeDecision(
+        action="watch",
+        confidence=0.6,
+        reasoning="x",
+        trigger_high=24.6,
+        trigger_low=22.91,
+    )
+    persist_prediction_from_accumulated(
+        _reat_accumulated(final_trade_decision=model_decision),
+        "sess_watch_py",
+        "600519",
+        "贵州茅台",
+    )
+    row = _trigger_row(db)
+    assert row["session_id"] == "sess_watch_py"
+    assert row["trigger_high"] == 24.6
+    assert row["trigger_low"] == 22.91
