@@ -773,6 +773,17 @@ if TESTING:
                         }
                         if row.get("resolved_at"):
                             resolved["resolved_at"] = row["resolved_at"]
+                        # update-track-record-settle-price-display：结算字段透传
+                        # （走 update_prediction_status，与生产判定写入同一路径），
+                        # 供结算口径展示 E2E 造「同口径可比」的已结算行
+                        for _fld in (
+                            "settle_entry_price",
+                            "exit_price",
+                            "raw_return",
+                            "excess_return",
+                        ):
+                            if row.get(_fld) is not None:
+                                resolved[_fld] = row[_fld]
                         _seed_update_status(pid, resolved)
         # track_record-only（含 {} 空 dict）造数后即返回占位响应，不落会话
         if "chat_history" not in req:

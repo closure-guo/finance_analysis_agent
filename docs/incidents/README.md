@@ -13,6 +13,7 @@
 | [035](035-llm-config-state-key-dropped-20261004.md) | 2026-10-04 | AnalysisState 未声明 llm_config——LangGraph 静默过滤入口键，请求级模型配置在管线整条哑火回退 env（027 同族，门禁盲区=入口键） | 已修复（声明通道 + TestEntryChannels 入口键门禁） |
 | [036](036-glm53-thinking-leak-delivery-contract-20261004.md) | 2026-10-04 | 换 glm-5.3 后「研究聚焦」泄露模型英文独白进交付物（max_tokens=400 被推理吃满截断 + verbatim 嵌入零校验 + raw_reasoning 回退坑）——纯文本交付物不在 llm-output-contract 覆盖内 | 已修复（#221 合并+部署+拓荆真实验证收口） |
 | [037](037-event-backlog-sqlite-transient-terminal-loss-20261004.md) | 2026-10-04 | 6 万 thinking_token 积压（15 分钟滞后）× SQLite 瞬断落在积压排空窗口——管线已完成但 UI 冻结、run_deep_analysis 返回空、聊天谎称无报告，R2+ 节点事件永久丢失（021 同族复发） | 已修复（#224 合并+部署+ReAct 真实验证收口；含 20:39 同型误判超时第二实例） |
+| [038](038-e2e-default-suite-hits-production-vite-proxy-20261007.md) | 2026-10-07 | E2E 默认套件整套路由经 vite 代理（默认 8000）打穿到生产容器：reuseExistingServer 只探活性复用生产后端，真实 LLM 建会话/触发深度分析，10-03 已有同型先例；predictions 零污染、33 垃圾会话已清 | 已处置（当晚清污+worktree config 补 VITE_API_TARGET；预防项待 issue：默认 config 显式代理+health 模式核验） |
 | 002  | 2026-05-26 | [报告准确性复盘：茅台 FA 分析偏差](002-report-accuracy-20260526.md) | 部分修复 |
 | 003  | 2026-06-03 | [股票名称获取失败 + NaN 处理缺陷](003-stock-name-and-na-handling-20260603.md) | 已修复   |
 | 004  | 2026-06-04 | [数据准确性系统性问题 — efficiency 年份错位 + ROE 口径 + LLM 自算](004-data-accuracy-20260604.md) | 已修复 |
@@ -83,6 +84,7 @@
 - [014](014-refresh-clears-session-list-20260716.md) 刷新页面清空历史会话——事件循环被高频同步 SQLite 写冻结
 - [021](021-deep-analysis-session-stuck.md) 深研管线「假卡死」— 事件落库限速终态迟到 + 管线超时空转
 - [037](037-event-backlog-sqlite-transient-terminal-loss-20261004.md) thinking_token 积压（15 分钟滞后）× SQLite 瞬断落在积压排空窗口——管线已完成但三界面三种说法，R2+ 节点事件永久丢失；终态事件不允许与批量 token 队列竞争
+- [038](038-e2e-default-suite-hits-production-vite-proxy-20261007.md) E2E 默认套件经 vite 代理（默认 8000）+ reuseExistingServer 打穿到生产后端——本机生产常驻时本地跑门禁必然命中；前端代理目标必须显式、复用前必须核验 TESTING 模式（031「默认不安全」主题的 E2E 侧变体）
 
 ### 测试体系与开发流程
 

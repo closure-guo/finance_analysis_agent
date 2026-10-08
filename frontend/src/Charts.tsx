@@ -259,6 +259,14 @@ export function StockPriceChart({ data }: { data: ChartData }) {
   if (levels?.target_price != null) {
     markLineData.push({ yAxis: levels.target_price, label: { formatter: '目标', position: 'insideEndTop', color: theme.coral }, lineStyle: { color: theme.coral, type: 'dashed' } })
   }
+  // 触发位参考线（add-watch-trigger-tracking）：仅 watch 决策携带；点线 + 独立配色，
+  // 与入场/止损/目标虚线可区分（对齐后端 PNG：上破 #E67E22 / 下破 #8E44AD）
+  if (levels?.trigger_high != null) {
+    markLineData.push({ yAxis: levels.trigger_high, label: { formatter: '上破触发', position: 'insideEndTop', color: '#E67E22' }, lineStyle: { color: '#E67E22', type: 'dotted' } })
+  }
+  if (levels?.trigger_low != null) {
+    markLineData.push({ yAxis: levels.trigger_low, label: { formatter: '下破触发', position: 'insideEndBottom', color: '#8E44AD' }, lineStyle: { color: '#8E44AD', type: 'dotted' } })
+  }
   const maLine = (key: 'ma5' | 'ma20' | 'ma60', color: string) => ({
     name: key.toUpperCase(),
     type: 'line',
@@ -351,7 +359,7 @@ export function StockPriceChart({ data }: { data: ChartData }) {
   }
 
   return (
-    <ChartCard title="股价 K 线（MA5/20/60；虚线为入场/止损/目标价）" testId="chart-stock-price">
+    <ChartCard title="股价 K 线（MA5/20/60；虚线为入场/止损/目标价，点线为触发位）" testId="chart-stock-price">
       <ReactECharts option={option} style={{ height: '380px' }} />
     </ChartCard>
   )

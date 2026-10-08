@@ -9,7 +9,9 @@ MUST NOT 仅因数值出现在决策文本即视为可信。两种 anomaly 形�
   （``_DEVIATION_THRESHOLD``），且不落在 ``price_levels`` 参考带内；
 - **空洞形态**（empty_trigger）：上破类触发（站上/突破/收复/站稳 X）中 X 不高于
   最新收盘价，或下破类触发（跌破/回落至/失守 X）中 X 不低于最新收盘价——触发
-  条件在当前时点已满足，不构成有效再评估门槛。
+  条件在当前时点已满足，不构成有效再评估门槛。空洞形态同样覆盖结构化触发位
+  （add-watch-trigger-tracking：``trigger_high``/``trigger_low`` 字段，与文本
+  来源同构、同门禁）。
 
 归属规则：文本点名指标名（MA60/布林上轨/止损参考带上沿等）→ 直接取对应已验证值；
 未点名 → 在全部已验证指标中取相对偏差最小者。非价格量纲（带 % 的降幅阈值、
@@ -315,6 +317,12 @@ def _non_price_context(text: str, span: tuple[int, int]) -> bool:
         i -= 1
     if i >= 0 and text[i] in _NON_PRICE_PREFIX:
         return True
+    if i >= 0 and text[i].isascii() and text[i].isalpha():
+        # 数字紧贴（隔空格亦可）ASCII 字母属标识符形态：M2/M1 宏观指标、
+        # RSI14 参数、H1 周期——不是独立股价（601818 10-08 run 41 实证
+        # 「M2支撑扩表」的 2 被提为价位偏差 31.51% 阻断）。本语料中股价
+        # 恒跟随 CJK 方向词/量词，ASCII 字母前缀的裸数字无股价形态。
+        return True
     j = end
     while j < len(text) and text[j] == " ":
         j += 1
@@ -371,8 +379,14 @@ def _closest_indicator(table: dict[str, float], value: float) -> tuple[str, floa
     return best
 
 
-def _break_direction(text: str, num_start: int) -> str | None:
-    """数值前方近距方向词 → "up"/"down"；「已 X」为事实陈述不计。"""
+def _directions_in_window(text: str, num_start: int) -> set[str]:
+    """数值前方窗口内全部方向词的方向集合；「已 X」为事实陈述不计。
+
+    复合回踩豁免（fix-decision-price-check-false-positives）预扫专用：同值既有
+    down 又有 up 语境 → 空洞判定跳过。与 _break_direction 分离——最近词胜出后
+    单值只归一个方向，豁免判定需要窗口内的完整方向集（688072 案回归锚）。
+    """
+    out: set[str] = set()
     for words, direction in ((_BREAKOUT_WORDS, "up"), (_BREAKDOWN_WORDS, "down")):
         for word in words:
             pos = 0
@@ -381,8 +395,30 @@ def _break_direction(text: str, num_start: int) -> str | None:
                 if found > 0 and text[found - 1] == "已":
                     continue
                 if 0 <= num_start - (found + len(word)) <= _BREAK_WORD_WINDOW:
-                    return direction
-    return None
+                    out.add(direction)
+    return out
+
+
+def _break_direction(text: str, num_start: int) -> str | None:
+    """数值前方**最近**方向词的方向 → "up"/"down"；「已 X」为事实陈述不计。
+
+    最近词胜出（600845 10-08 run 41 实证）：旧实现先扫完上破类再扫下破类，
+    「突破20.58确认/跌破16.73证伪」的 16.73 距「跌破」2 字符、距「突破」
+    11 字符（窗口 12 内）→ up 抢占 → 跌破触发（16.73 < 收盘，有效前瞻门槛）
+    被误判「上破触发价不高于收盘」空洞形态阻断。
+    """
+    best: tuple[int, str] | None = None
+    for words, direction in ((_BREAKOUT_WORDS, "up"), (_BREAKDOWN_WORDS, "down")):
+        for word in words:
+            pos = 0
+            while (found := text.find(word, pos)) != -1:
+                pos = found + 1
+                if found > 0 and text[found - 1] == "已":
+                    continue
+                dist = num_start - (found + len(word))
+                if 0 <= dist <= _BREAK_WORD_WINDOW and (best is None or dist < best[0]):
+                    best = (dist, direction)
+    return best[1] if best else None
 
 
 def _excerpt(text: str, span: tuple[int, int], full: bool) -> str:
@@ -431,9 +467,9 @@ def _check_snippet(
         v = float(m.group())
         if 0 < v < 1:
             continue
-        d = _break_direction(text, s[0])
-        if d is not None:
-            _value_dirs.setdefault(v, set()).add(d)
+        # 预扫收集窗口内全部方向（_directions_in_window）：最近词胜出后
+        # _break_direction 单值只归一个方向，复合豁免需要完整方向集
+        _value_dirs.setdefault(v, set()).update(_directions_in_window(text, s[0]))
     for match in _NUM_RE.finditer(text):
         span = (match.start(), match.end())
         if _overlaps(span, exclusions):
@@ -504,6 +540,45 @@ def _check_snippet(
     return anomalies
 
 
+def _check_structured_trigger_levels(
+    decision: TradeDecision, latest_close: float | None
+) -> list[dict]:
+    """结构化触发位方向校验（add-watch-trigger-tracking）。
+
+    ``trigger_high``/``trigger_low`` 与文本触发条目同语义：上破门槛须严格高于
+    最新收盘、下破门槛须严格低于最新收盘；违反即空洞形态 anomaly——dict 键与
+    ``_check_snippet`` 的 empty_trigger 构造完全同构（含 indicator/verified_value/
+    deviation_pct），risk.py 门禁零改动共用打回预算与 source_text 集合运算。
+    不依赖文本解析；无可用收盘价直通。
+    """
+    close = _as_positive_finite(latest_close)
+    if close is None:
+        return []
+    anomalies: list[dict] = []
+    for field, direction in (("trigger_high", "上破"), ("trigger_low", "下破")):
+        value = _as_positive_finite(getattr(decision, field, None))
+        if value is None:
+            continue  # 未申报（Task 1 宽松清洗已归 None）不构成空洞
+        violated = value <= close if field == "trigger_high" else value >= close
+        if violated:
+            relation = "高于" if field == "trigger_high" else "低于"
+            anomalies.append(
+                {
+                    "kind": "empty_trigger",
+                    "source_text": f"结构化触发位 {field}={_fmt(value)}",
+                    "indicator": "最新收盘价",
+                    "verified_value": close,
+                    "deviation_pct": None,
+                    "message": (
+                        f"结构化{direction}触发位（{field}）{_fmt(value)} 未{relation}"
+                        f"最新收盘价 {_fmt(close)}，触发条件在当前时点已满足，"
+                        "不构成有效再评估门槛"
+                    ),
+                }
+            )
+    return anomalies
+
+
 def check_decision_prices(
     decision: TradeDecision,
     technical_indicators: dict,
@@ -515,7 +590,8 @@ def check_decision_prices(
     Parameters
     ----------
     decision : TradeDecision
-        待校验决策（读取 reeval_triggers / inaction_reason / reasoning 文本）。
+        待校验决策（读取 reeval_triggers / inaction_reason / reasoning 文本，及
+        trigger_high / trigger_low 结构化触发位）。
     technical_indicators : dict
         calc_technical() 输出形态：{"MA": {"5": [...], ...}, "BOLL": {...}}，
         序列与 K 线等长、末值为最新值（预热段 None 视为不可用）。
@@ -553,4 +629,7 @@ def check_decision_prices(
             anomalies.extend(
                 _check_snippet(text, source_full, table, bands, float(scale), latest_close)
             )
+    # 结构化触发位并入同一 anomaly 列表（add-watch-trigger-tracking）：latest_close
+    # 可用时本函数不可能在上面提前返回（最新收盘价必在已验证值表中），合并点安全
+    anomalies.extend(_check_structured_trigger_levels(decision, latest_close))
     return anomalies
