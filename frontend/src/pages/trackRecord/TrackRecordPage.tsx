@@ -613,8 +613,22 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                         <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
                         <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
                         <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
-                        <td className="px-4 py-3 text-right"><Delta value={r.raw_return} /></td>
-                        <td className="px-4 py-3 text-right"><Delta value={r.excess_return} /></td>
+                        {(() => {
+                          // update-track-record-display-clarity:open 行展示最新盯市浮动
+                          // (latest_mark),已结算行展示结算读数;title 区分语义
+                          const floating = r.status === 'open' ? r.latest_mark : undefined
+                          const markTitle = floating ? `盯市 ${floating.mark_date}（未结算浮动）` : undefined
+                          return (
+                            <>
+                              <td className="px-4 py-3 text-right" title={markTitle}>
+                                <Delta value={floating ? floating.cum_return : r.raw_return} />
+                              </td>
+                              <td className="px-4 py-3 text-right" title={markTitle}>
+                                <Delta value={floating ? floating.cum_excess : r.excess_return} />
+                              </td>
+                            </>
+                          )
+                        })()}
                       </tr>
                     ))}
                   </tbody>

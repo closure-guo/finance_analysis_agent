@@ -843,6 +843,32 @@ describe('观点日志窗口列与副标题（update-track-record-display-clarit
   })
 })
 
+// 观点日志 open 行浮动收益（update-track-record-display-clarity）：区间收益/基准超额列
+// 消费 latest_mark（最新盯市），附盯市日期 title；无盯市 open 行如实占位「—」
+describe('观点日志 open 行浮动收益（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('open 行浮动收益:有盯市显示浮动车并带盯市日期 title,无盯市显示 —', async () => {
+    const withMark = {
+      ...PREDICTIONS[1],
+      prediction_id: 'p3', symbol: '600016.SH', symbol_name: '民生银行',
+      latest_mark: { mark_date: '2026-10-08', cum_return: -0.012, cum_excess: -0.008 },
+    }
+    mockFetch({ current: [], predictions: [PREDICTIONS[0], PREDICTIONS[1], withMark] })
+    renderPage()
+    const p3row = await screen.findByTestId('prediction-row-p3')
+    expect(p3row).toHaveTextContent('-1.20%')
+    expect(p3row).toHaveTextContent('-0.80%')
+    // findByTestId 返回 Element，其上无查询方法（简报片段 API 缺陷，同 Task 4 修正）：within(row) 模式
+    const markCell = within(p3row).getAllByTitle('盯市 2026-10-08（未结算浮动）')
+    expect(markCell.length).toBeGreaterThanOrEqual(1)
+    const p2row = screen.getByTestId('prediction-row-p2')
+    expect(p2row).toHaveTextContent('—')
+    expect(within(p2row).queryByTitle(/盯市/)).toBeNull()
+  })
+})
+
 // 当前观点区（add-current-stance-view）：GET /api/v1/track-record/current，
 // 每股最新一条 open 的立场视图；独立加载，失败显式文案不冒充空态
 describe('当前观点区（add-current-stance-view）', () => {
