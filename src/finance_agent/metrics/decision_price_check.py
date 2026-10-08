@@ -9,7 +9,9 @@ MUST NOT 仅因数值出现在决策文本即视为可信。两种 anomaly 形�
   （``_DEVIATION_THRESHOLD``），且不落在 ``price_levels`` 参考带内；
 - **空洞形态**（empty_trigger）：上破类触发（站上/突破/收复/站稳 X）中 X 不高于
   最新收盘价，或下破类触发（跌破/回落至/失守 X）中 X 不低于最新收盘价——触发
-  条件在当前时点已满足，不构成有效再评估门槛。
+  条件在当前时点已满足，不构成有效再评估门槛。空洞形态同样覆盖结构化触发位
+  （add-watch-trigger-tracking：``trigger_high``/``trigger_low`` 字段，与文本
+  来源同构、同门禁）。
 
 归属规则：文本点名指标名（MA60/布林上轨/止损参考带上沿等）→ 直接取对应已验证值；
 未点名 → 在全部已验证指标中取相对偏差最小者。非价格量纲（带 % 的降幅阈值、
@@ -538,6 +540,45 @@ def _check_snippet(
     return anomalies
 
 
+def _check_structured_trigger_levels(
+    decision: TradeDecision, latest_close: float | None
+) -> list[dict]:
+    """结构化触发位方向校验（add-watch-trigger-tracking）。
+
+    ``trigger_high``/``trigger_low`` 与文本触发条目同语义：上破门槛须严格高于
+    最新收盘、下破门槛须严格低于最新收盘；违反即空洞形态 anomaly——dict 键与
+    ``_check_snippet`` 的 empty_trigger 构造完全同构（含 indicator/verified_value/
+    deviation_pct），risk.py 门禁零改动共用打回预算与 source_text 集合运算。
+    不依赖文本解析；无可用收盘价直通。
+    """
+    close = _as_positive_finite(latest_close)
+    if close is None:
+        return []
+    anomalies: list[dict] = []
+    for field, direction in (("trigger_high", "上破"), ("trigger_low", "下破")):
+        value = _as_positive_finite(getattr(decision, field, None))
+        if value is None:
+            continue  # 未申报（Task 1 宽松清洗已归 None）不构成空洞
+        violated = value <= close if field == "trigger_high" else value >= close
+        if violated:
+            relation = "高于" if field == "trigger_high" else "低于"
+            anomalies.append(
+                {
+                    "kind": "empty_trigger",
+                    "source_text": f"结构化触发位 {field}={_fmt(value)}",
+                    "indicator": "最新收盘价",
+                    "verified_value": close,
+                    "deviation_pct": None,
+                    "message": (
+                        f"结构化{direction}触发位（{field}）{_fmt(value)} 未{relation}"
+                        f"最新收盘价 {_fmt(close)}，触发条件在当前时点已满足，"
+                        "不构成有效再评估门槛"
+                    ),
+                }
+            )
+    return anomalies
+
+
 def check_decision_prices(
     decision: TradeDecision,
     technical_indicators: dict,
@@ -549,7 +590,8 @@ def check_decision_prices(
     Parameters
     ----------
     decision : TradeDecision
-        待校验决策（读取 reeval_triggers / inaction_reason / reasoning 文本）。
+        待校验决策（读取 reeval_triggers / inaction_reason / reasoning 文本，及
+        trigger_high / trigger_low 结构化触发位）。
     technical_indicators : dict
         calc_technical() 输出形态：{"MA": {"5": [...], ...}, "BOLL": {...}}，
         序列与 K 线等长、末值为最新值（预热段 None 视为不可用）。
@@ -587,4 +629,7 @@ def check_decision_prices(
             anomalies.extend(
                 _check_snippet(text, source_full, table, bands, float(scale), latest_close)
             )
+    # 结构化触发位并入同一 anomaly 列表（add-watch-trigger-tracking）：latest_close
+    # 可用时本函数不可能在上面提前返回（最新收盘价必在已验证值表中），合并点安全
+    anomalies.extend(_check_structured_trigger_levels(decision, latest_close))
     return anomalies

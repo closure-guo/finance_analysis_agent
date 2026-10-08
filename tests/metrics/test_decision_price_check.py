@@ -746,3 +746,57 @@ class TestEnumeratorFalsePositives:
         assert len(anomalies) == 1
         assert anomalies[0]["kind"] == "deviation"
         assert anomalies[0]["indicator"] == "近期低点"
+
+
+class TestStructuredTriggerLevels:
+    """add-watch-trigger-tracking：结构化触发位（trigger_high/trigger_low）空洞校验。
+
+    上破门槛须严格高于最新收盘、下破门槛须严格低于最新收盘；违反即空洞形态
+    anomaly，与文本 empty_trigger 同构、同门禁（risk.py 零改动共用打回预算）。
+    """
+
+    def test_trigger_high_not_above_close_is_empty(self):
+        decision = _decision(action="watch", trigger_high=22.61, trigger_low=22.0)
+        anomalies = check_decision_prices(decision, {}, {}, latest_close=23.03)
+        assert any("trigger_high" in a["source_text"] for a in anomalies)
+        assert all(a["kind"] == "empty_trigger" for a in anomalies)
+
+    def test_trigger_low_not_below_close_is_empty(self):
+        decision = _decision(action="watch", trigger_high=25.0, trigger_low=24.6)
+        anomalies = check_decision_prices(decision, {}, {}, latest_close=23.03)
+        assert any("trigger_low" in a["source_text"] for a in anomalies)
+
+    def test_valid_band_passes(self):
+        decision = _decision(action="watch", trigger_high=24.6, trigger_low=22.91)
+        assert check_decision_prices(decision, {}, {}, latest_close=23.03) == []
+
+    def test_missing_triggers_pass(self):
+        decision = _decision(action="watch", trigger_high=None, trigger_low=None)
+        assert check_decision_prices(decision, {}, {}, latest_close=23.03) == []
+
+    def test_no_latest_close_passes(self):
+        decision = _decision(action="watch", trigger_high=24.6, trigger_low=22.91)
+        assert check_decision_prices(decision, {}, {}, latest_close=None) == []
+
+    def test_anomaly_shape_mirrors_text_empty_trigger(self):
+        """结构化来源 anomaly 与文本 empty_trigger 键完全同构：risk.py 门禁对两类
+        来源共用打回预算与 source_text 集合运算，不得因来源不同而异形。"""
+        decision = _decision(action="watch", trigger_high=22.61, trigger_low=None)
+        anomalies = check_decision_prices(decision, {}, {}, latest_close=23.03)
+        assert len(anomalies) == 1
+        a = anomalies[0]
+        assert set(a) == {
+            "kind",
+            "source_text",
+            "indicator",
+            "verified_value",
+            "deviation_pct",
+            "message",
+        }
+        assert a["kind"] == "empty_trigger"
+        assert a["indicator"] == "最新收盘价"
+        assert a["verified_value"] == pytest.approx(23.03)
+        assert a["deviation_pct"] is None
+        assert "22.61" in a["message"]
+        assert "23.03" in a["message"]
+        assert "已满足" in a["message"]
