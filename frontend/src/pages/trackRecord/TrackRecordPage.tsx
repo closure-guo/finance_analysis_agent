@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
 import type { CurrentStanceResponse, EquityCurvePoint, PredictionRecord, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
@@ -106,6 +106,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | ''>('open')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  // update-track-record-display-clarity:同日重复折叠——展开组 key 集合(当前页前端作用域)
+  const [expandedDups, setExpandedDups] = useState<Set<string>>(new Set())
 
   const load = useCallback(async (ver: number | null) => {
     setError(false)
@@ -207,6 +209,88 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
 
   const disclaimer = overview?.disclaimer ?? '历史业绩不代表未来表现'
   const rows = records ?? []
+
+  // update-track-record-display-clarity:同日重复折叠——渲染前把 rows 组装为显示序列。
+  // 当前页内 consecutive (symbol, 建立日期) 的 duplicate_of_day 行合并为一个 dup-group
+  // 汇总行（前端展示作用域，分页 total 与服务端数据零改动）；无 dup 行时退化为全 single
+  type DisplayRow =
+    | { kind: 'single'; row: PredictionRecord }
+    | { kind: 'dup-group'; key: string; rows: PredictionRecord[] }
+  const displayRows: DisplayRow[] = []
+  {
+    let i = 0
+    while (i < rows.length) {
+      const r = rows[i]
+      const date = r.created_at.slice(0, 10)
+      if (
+        r.status === 'duplicate_of_day' &&
+        i + 1 < rows.length &&
+        rows[i + 1].status === 'duplicate_of_day' &&
+        rows[i + 1].symbol === r.symbol &&
+        rows[i + 1].created_at.slice(0, 10) === date
+      ) {
+        const group: PredictionRecord[] = []
+        while (
+          i < rows.length &&
+          rows[i].status === 'duplicate_of_day' &&
+          rows[i].symbol === r.symbol &&
+          rows[i].created_at.slice(0, 10) === date
+        ) {
+          group.push(rows[i])
+          i += 1
+        }
+        displayRows.push({ kind: 'dup-group', key: `${r.symbol}|${date}`, rows: group })
+      } else {
+        displayRows.push({ kind: 'single', row: r })
+        i += 1
+      }
+    }
+  }
+
+  // 观点日志单行 JSX（update-track-record-display-clarity:同日重复折叠抽出自 tbody，
+  // single 行与 dup-group 展开明细行共用；onClick 导航逻辑不变）
+  const renderPredictionRow = (r: PredictionRecord) => (
+    <tr
+      key={r.prediction_id}
+      className="border-t cursor-pointer hover:opacity-80"
+      style={{ borderColor: 'var(--border-neutral-l1)' }}
+      onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
+      data-testid={`prediction-row-${r.prediction_id}`}
+    >
+      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{r.created_at.slice(0, 10)}</td>
+      <td className="px-4 py-3">
+        <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
+        <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
+      </td>
+      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
+      <td className="px-4 py-3">
+        <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
+        {r.status === 'open' && (
+          <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
+        )}
+      </td>
+      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
+      <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
+      <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
+      {(() => {
+        // update-track-record-display-clarity:open 行展示最新盯市浮动
+        // (latest_mark),已结算行展示结算读数;title 区分语义
+        const floating = r.status === 'open' ? r.latest_mark : undefined
+        const markTitle = floating ? `盯市 ${floating.mark_date}（未结算浮动）` : undefined
+        return (
+          <>
+            <td className="px-4 py-3 text-right" title={markTitle}>
+              <Delta value={floating ? floating.cum_return : r.raw_return} />
+            </td>
+            <td className="px-4 py-3 text-right" title={markTitle}>
+              <Delta value={floating ? floating.cum_excess : r.excess_return} />
+            </td>
+          </>
+        )
+      })()}
+    </tr>
+  )
+
   const showWinRate = overview !== null && !overview.insufficient_sample && overview.win_rate !== null
   const portfolio = overview?.portfolio
   const showCurve = curve !== null && curve.length >= 2
@@ -590,47 +674,42 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map(r => (
-                      <tr
-                        key={r.prediction_id}
-                        className="border-t cursor-pointer hover:opacity-80"
-                        style={{ borderColor: 'var(--border-neutral-l1)' }}
-                        onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
-                        data-testid={`prediction-row-${r.prediction_id}`}
-                      >
-                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{r.created_at.slice(0, 10)}</td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
-                          <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
-                        </td>
-                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
-                        <td className="px-4 py-3">
-                          <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
-                          {r.status === 'open' && (
-                            <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
-                        <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
-                        <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
-                        {(() => {
-                          // update-track-record-display-clarity:open 行展示最新盯市浮动
-                          // (latest_mark),已结算行展示结算读数;title 区分语义
-                          const floating = r.status === 'open' ? r.latest_mark : undefined
-                          const markTitle = floating ? `盯市 ${floating.mark_date}（未结算浮动）` : undefined
-                          return (
-                            <>
-                              <td className="px-4 py-3 text-right" title={markTitle}>
-                                <Delta value={floating ? floating.cum_return : r.raw_return} />
-                              </td>
-                              <td className="px-4 py-3 text-right" title={markTitle}>
-                                <Delta value={floating ? floating.cum_excess : r.excess_return} />
-                              </td>
-                            </>
-                          )
-                        })()}
-                      </tr>
-                    ))}
+                    {displayRows.map(d => {
+                      if (d.kind === 'single') return renderPredictionRow(d.row)
+                      const expanded = expandedDups.has(d.key)
+                      const first = d.rows[0]
+                      return (
+                        <Fragment key={d.key}>
+                          <tr
+                            data-testid={`dup-group-${d.key.replace('|', '-')}`}
+                            className="border-t cursor-pointer hover:opacity-80"
+                            style={{ borderColor: 'var(--border-neutral-l1)' }}
+                            onClick={() =>
+                              setExpandedDups(prev => {
+                                const next = new Set(prev)
+                                if (next.has(d.key)) next.delete(d.key)
+                                else next.add(d.key)
+                                return next
+                              })
+                            }
+                          >
+                            <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{first.created_at.slice(0, 10)}</td>
+                            <td className="px-4 py-3">
+                              <div className="font-medium" style={{ color: 'var(--text-default)' }}>{first.symbol_name ?? first.symbol}</div>
+                              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{first.symbol}</div>
+                            </td>
+                            <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>—</td>
+                            <td className="px-4 py-3"><span className={STATUS_CLS.duplicate_of_day}>同日重复 ×{d.rows.length}</span></td>
+                            <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{first.horizon_days}</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                          </tr>
+                          {expanded && d.rows.map(r => renderPredictionRow(r))}
+                        </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

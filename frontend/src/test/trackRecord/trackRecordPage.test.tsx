@@ -74,7 +74,7 @@ const CURRENT = [
   },
 ]
 
-function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown; current?: unknown; indexCompare?: unknown } = {}) {
+function mockFetch(opts: { overview?: unknown; predictions?: unknown; predictionsTotal?: number; equity?: unknown; segments?: unknown; current?: unknown; indexCompare?: unknown } = {}) {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/api/v1/track-record/overview')) {
@@ -107,7 +107,7 @@ function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: u
     }
     if (url.includes('/api/v1/track-record/predictions')) {
       return Promise.resolve(new Response(JSON.stringify({
-        predictions: opts.predictions ?? [], page: 1, page_size: 50, total: 0,
+        predictions: opts.predictions ?? [], page: 1, page_size: 50, total: opts.predictionsTotal ?? 0,
         as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
       }), { status: 200 }))
     }
@@ -927,5 +927,38 @@ describe('当前观点区（add-current-stance-view）', () => {
     renderPage()
     expect(await screen.findByText('当前观点加载失败')).toBeInTheDocument()
     expect(screen.queryByTestId('current-stance-empty')).not.toBeInTheDocument()
+  })
+})
+
+// 观点日志同日重复行折叠（update-track-record-display-clarity）：当前页内 consecutive
+// (symbol, 建立日期) 的 duplicate_of_day 行默认合并为「同日重复 ×n」汇总行，点击展开/收起；
+// 折叠仅影响展示行数，分页 total 不变
+describe('观点日志同日重复行折叠（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('同日重复行默认折叠为汇总,点击展开明细,分页 total 不变', async () => {
+    const dupBase = {
+      ...PREDICTIONS[0], symbol: '000858.SH', symbol_name: '五粮液',
+      status: 'duplicate_of_day' as const, resolution_rule: 'duplicate_of_day',
+      exit_price: null, raw_return: null, excess_return: null,
+    }
+    const dupRows = [
+      { ...dupBase, prediction_id: 'd1', created_at: '2026-10-05T11:00:00' },
+      { ...dupBase, prediction_id: 'd2', created_at: '2026-10-05T12:00:00' },
+      { ...dupBase, prediction_id: 'd3', created_at: '2026-10-05T13:00:00' },
+    ]
+    mockFetch({ current: [], predictions: dupRows, predictionsTotal: 7 })
+    renderPage()
+    // 默认折叠:1 行汇总,3 条明细不渲染
+    // jest-dom v7 无 toContainText（简报笔误），等价 matcher：toHaveTextContent 默认子串匹配
+    expect(await screen.findByTestId('dup-group-000858.SH-2026-10-05')).toHaveTextContent('同日重复 ×3')
+    expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
+    // 分页 total 不受折叠影响
+    expect(screen.getByText(/共 7 条/)).toBeInTheDocument()
+    // 点击展开
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05'))
+    expect(screen.getByTestId('prediction-row-d1')).toBeInTheDocument()
+    expect(screen.getByTestId('prediction-row-d3')).toBeInTheDocument()
   })
 })
