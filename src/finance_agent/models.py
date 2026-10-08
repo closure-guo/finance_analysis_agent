@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -208,6 +209,39 @@ class TradeDecision(BaseModel):
     # 校验层打回申报，仍缺默认按 short 处理（保守，与现行模板语义一致）
     sell_type: Literal["exit", "short"] | None = None
     exit_schedule: str | None = None
+
+    # add-watch-trigger-tracking：watch 双向触发位（上破/下破门槛）。宽松清洗同
+    # _scrub_evidence_refs 哲学——噪声归 None 不炸管线；必填约束由 risk_judge
+    # 终稿完整性检查承担（同 inaction_reason 先例），schema 保持宽松。
+    trigger_high: float | None = None
+    trigger_low: float | None = None
+
+    @staticmethod
+    def _coerce_trigger_level(value: object) -> float | None:
+        """可解析数值字符串→float；None/bool/负值/0/非有限值/不可解析→None（未申报）。"""
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, str):
+            try:
+                value = float(value.strip())
+            except ValueError:
+                return None
+        if not isinstance(value, (int, float)):
+            return None
+        coerced = float(value)
+        if not math.isfinite(coerced) or coerced <= 0:
+            return None
+        return coerced
+
+    @field_validator("trigger_high", mode="before")
+    @classmethod
+    def _normalize_trigger_high(cls, value: object) -> object:
+        return cls._coerce_trigger_level(value)
+
+    @field_validator("trigger_low", mode="before")
+    @classmethod
+    def _normalize_trigger_low(cls, value: object) -> object:
+        return cls._coerce_trigger_level(value)
 
     @field_validator("sell_type", mode="before")
     @classmethod
