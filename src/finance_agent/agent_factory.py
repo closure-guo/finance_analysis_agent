@@ -46,6 +46,10 @@ EVENT_PUT_TIMEOUT_SECONDS = 30.0
 # 连续 undeliverable 熔断阈值：达到后非终态事件降级为丢弃+计数（issue #227.6），
 # 避免消费端长期僵死时边界事件逐个等满 30s（~40 边界事件最坏 15-20 分钟收尾）
 UNDELIVERABLE_BREAKER_THRESHOLD = 3
+# 图完成后剩余积压的压缩保留上限（incident 039）：graph_done 置位且 chunk_queue
+# 剩余条数 ≥ 此值时，final_report 之前的 thinking 积压立即压缩（仅留 ≤ 上限的
+# 有界尾部走慢路径）。对齐 pipeline_runner.PENDING_TOKEN_MAX 的量级。
+TAIL_KEEP_MAX = 512
 
 
 class BoundedEventSink:
@@ -662,8 +666,8 @@ def _make_run_deep_analysis(
                 # 先置位图完成信号再投哨兵：保证消费者看到 graph_done 后哨兵
                 # 必然到达（排空 get() 无需超时的正确性前提）。注意 graph_done
                 # 只证明生产者发完流——chunk_queue 中可能仍缓冲未消费 chunk
-                # （含报告前的合法 thinking），消费者侧不得仅凭 graph_done 压缩
-                # thinking，须以 report_seen（final_report updates chunk）为准。
+                # （含报告前的合法 thinking），消费者侧压缩以 report_seen 或
+                # 剩余积压超界（≥ TAIL_KEEP_MAX，incident 039）为准。
                 graph_done.set()
                 asyncio.run_coroutine_threadsafe(chunk_queue.put(None), loop)
 
@@ -685,9 +689,15 @@ def _make_run_deep_analysis(
             # thinking 明细丢弃累计（droppable 背压）：由 sink 内部计数与节流
             # 报告产出标记：updates 分支见到含 final_report 键的 update dict
             # （真实图最后一个 updates chunk 的标记）即置位。tail_thinking 压缩
-            # 以「报告已产出」为准而非 graph_done——后者只证明生产者发完流，
-            # chunk_queue 中可能仍缓冲着报告前的合法 thinking（消费滞后场景）。
+            # 门槛（incident 039）：graph_done 且（report_seen 或剩余积压
+            # ≥ TAIL_KEEP_MAX）——仅 report_seen 时前置积压场景永不压缩。
             report_seen = False
+            # incident 039：graph_done 首次观测时的一次性积压快照。-1=未观测；
+            # 观测后 = max(0, 当时积压 - TAIL_KEEP_MAX) = 可压缩的 thinking 预算。
+            # 只能快照一次：压缩路径无 await，泵一压缩就追平生产者使 qsize 回落，
+            # 运行时反复读 qsize 会振荡（永远到不了阈值），而观测时刻生产者已停，
+            # qsize 即精确剩余积压，此后不再增长。
+            tail_compress_budget = -1
             # 有界入队 + 熔断降级逻辑收敛到 BoundedEventSink（可单测），
             # 闭包薄委托保持既有调用点形态
             sink = BoundedEventSink(event_queue, session_id or "", registry.record_drop)
@@ -733,16 +743,30 @@ def _make_run_deep_analysis(
                         if isinstance(chunk, dict):
                             ctype = chunk.get("type")
                             if ctype == "thinking":
-                                if report_seen and graph_done.is_set():
-                                    # spec「图完成后工具消费端压缩缓冲明细」：仅压缩
-                                    # 报告产出（final_report updates chunk）之后缓冲的
-                                    # 思考明细——graph_done 只证明生产者发完流，
-                                    # chunk_queue 中可能仍有报告前的合法缓冲，不得
-                                    # 错杀（消费滞后时报告产出前的 thinking 是合法
-                                    # timeline 内容）。压缩丢弃（不做 timeline 累积、
-                                    # 不入 event_queue）使终态 TOOL_RESULT 有界送达
-                                    registry.record_drop(session_id or "", "tail_thinking")
-                                    continue
+                                if graph_done.is_set():
+                                    if tail_compress_budget < 0:
+                                        tail_compress_budget = max(
+                                            0, chunk_queue.qsize() - TAIL_KEEP_MAX
+                                        )
+                                    if report_seen or tail_compress_budget > 0:
+                                        # spec「图完成后工具消费端压缩缓冲明细」：
+                                        # 压缩丢弃（不做 timeline 累积、不入
+                                        # event_queue）使终态 TOOL_RESULT 有界送达。
+                                        # incident 039（2026-10-08 茅台）：真实语序下
+                                        # thinking 洪峰在 final_report 之前——仅以
+                                        # report_seen 为门槛时，消费者要先排完数万条
+                                        # 积压才置位，压缩在本场景永不生效，终态被
+                                        # 推迟数十分钟-数小时（会话滞留 running 直到
+                                        # 重启被 reconcile 补打 interrupted）。故
+                                        # graph_done 即按一次性积压预算压缩，仅保留
+                                        # ≤ TAIL_KEEP_MAX 的有界尾部（最靠近报告
+                                        # chunk 的合法 timeline 内容）走慢路径；
+                                        # report_seen 后（报告已产出）的尾部明细
+                                        # 无条件压缩。
+                                        registry.record_drop(session_id or "", "tail_thinking")
+                                        if tail_compress_budget > 0:
+                                            tail_compress_budget -= 1
+                                        continue
                                 # 透传管线节点名（此前丢弃 chunk["node"]，导致前端所有管线思考
                                 # 归入 nodeTimelines['']，按 agent 分组不可达——真实 bug 修复）
                                 node = chunk.get("node", "")

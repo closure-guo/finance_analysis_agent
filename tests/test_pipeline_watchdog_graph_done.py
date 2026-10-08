@@ -232,6 +232,92 @@ async def test_scenario_c_queue_full_drops_thinking_but_keeps_boundary_events(
 
 
 @pytest.mark.asyncio
+async def test_scenario_e_prereport_backlog_compressed_after_graph_done(tmp_path, monkeypatch):
+    """场景 E：图完成后、final_report chunk **之前**的大规模 thinking 积压 SHALL 压缩。
+
+    incident 039（2026-10-08 茅台两会话）：生产者发完流（graph_done 置位）时，
+    chunk_queue 中仍缓冲着 final_report 之前的数万条 thinking（风控辩论/裁决/
+    FM 的思考在流序上全部先于报告 chunk）。现实现的压缩门槛是 report_seen——
+    消费者排到 final_report chunk 才置位——在本场景永不生效：泵对积压全速走
+    慢路径（timeline 累积 + 入队/丢弃），终态 TOOL_RESULT 被推迟数十分钟到数小时，
+    会话滞留 running 直到重启被 reconcile 补打 interrupted。
+
+    修复语义：graph_done 置位时一次性快照剩余积压，超出 TAIL_KEEP_MAX 的部分
+    即刻压缩，仅保留有界尾部走慢路径，保证「图完成 → 终态」有界。
+
+    测试动力学：生产环境靠 timeline 写放大天然形成积压；测试环境全链路内存
+    速度、泵与生产者 1:1 交错使 qsize 永不累积，故在 sink 入队处加闸门人为
+    制造「消费慢于生产」（闸门关闭期间生产者灌完全部流 + graph_done 置位 +
+    积压成形），开闸后断言压缩行为。闸门不改变被测逻辑，仅注入时序。
+    """
+    from finance_agent.agent_factory import BoundedEventSink
+
+    sid = _setup(tmp_path, monkeypatch, "60")
+    backlog = 3000  # > TAIL_KEEP_MAX(512)，代表事故中的数万级积压
+
+    # 闸门：首个 droppable thinking 的入队挂起，直至生产者灌完流
+    gate = asyncio.Event()
+    real_put = BoundedEventSink.put
+
+    async def _gated_put(self, evt, *, droppable=False):
+        if droppable and not gate.is_set():
+            await gate.wait()
+        return await real_put(self, evt, droppable=droppable)
+
+    monkeypatch.setattr(BoundedEventSink, "put", _gated_put)
+
+    tail_drops = 0
+    real_record_drop = registry.record_drop
+
+    def _spy_record_drop(session_id: str, kind: str) -> None:
+        nonlocal tail_drops
+        if session_id == sid and kind == "tail_thinking":
+            tail_drops += 1
+        real_record_drop(session_id, kind)
+
+    monkeypatch.setattr(registry, "record_drop", _spy_record_drop)
+
+    def _stream(initial_state, config=None, session_id=None):
+        # 真实语序：thinking 洪峰在 final_report 之前（非场景 D 的报告在前）
+        for i in range(backlog):
+            yield ("custom", {"type": "thinking", "node": "trader", "token": f"flood{i}"})
+        yield _final_updates_chunk()
+        for i in range(100):
+            yield ("custom", {"type": "thinking", "node": "trader", "token": f"tail{i}"})
+
+    monkeypatch.setattr("finance_agent.agent_factory._stream_graph", _stream)
+
+    tool = _make_run_deep_analysis(api_key="fake", session_id=sid)
+    t0 = time.perf_counter()
+    events: list = []
+
+    async def _drain() -> None:
+        async for ev in tool("688072", "拓荆科技"):
+            events.append(ev)
+
+    # 消费整体挂成 task：泵挂起在闸门上（首事件不会产出），必须先让生产者
+    # 灌完流再开闸——若先 await 首事件再开闸会循环等待死锁
+    drain_task = asyncio.create_task(_drain())
+    await asyncio.sleep(0.3)  # 生产者灌完 3100 条 + graph_done 置位 + 积压成形
+    gate.set()  # 开闸：泵以 graph_done 后的积压快照继续
+    await asyncio.wait_for(drain_task, timeout=15)
+    elapsed = time.perf_counter() - t0
+
+    assert events, "事件流不应为空"
+    final = events[-1]
+    assert final.event_type == ActionType.TOOL_RESULT
+    assert final.tool_result is not None
+    assert final.tool_result.output.startswith("深度分析完成"), (
+        "pre-report 积压场景应走正常完成路径（非超时/失败）"
+    )
+    assert elapsed < 15, f"终态 TOOL_RESULT 应在有界时间内产出: {elapsed:.2f}s"
+    assert tail_drops >= backlog - 512, (
+        f"graph_done 后 final_report 前的大规模积压 SHALL 压缩丢弃"
+        f"（保留 ≤TAIL_KEEP_MAX 有界尾部），实际 tail_thinking 计数 {tail_drops}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_scenario_d_tail_thinking_compressed_after_graph_done(tmp_path, monkeypatch):
     """场景 D：图完成后 thinking 明细压缩。
 
