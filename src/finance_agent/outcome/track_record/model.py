@@ -894,7 +894,9 @@ _STATUS_LABELS = {
     "进行中": "open",
     "命中": "resolved_win",
     "未中": "resolved_loss",
-    "中性": "resolved_neutral",
+    # update-track-record-display-clarity:「中性」→「带内中性」——与方向「中性」(观望)消歧，
+    # keyword=中性 现在只匹配 direction=neutral（_DIRECTION_LABELS）
+    "带内中性": "resolved_neutral",
     "回避": "avoidance",
     "不可判定": "unresolvable",
     "同日重复": "duplicate_of_day",
@@ -948,6 +950,42 @@ def _prediction_filters(
     return clauses, params
 
 
+def _latest_marks_for(
+    prediction_ids: list[str], db_path: str | Path | None = None
+) -> dict[str, dict[str, Any]]:
+    """每观点最新一条盯市（update-track-record-display-clarity：open 行浮动收益展示用）。
+
+    窗口函数取 mark_date 最大行；调用方保证 ids 非空切片。字段三元组与前端
+    PredictionRecord.latest_mark 契约一致。
+    """
+    if not prediction_ids:
+        return {}
+    conn = _connect(db_path)
+    try:
+        placeholders = ",".join("?" for _ in prediction_ids)
+        rows = conn.execute(
+            f"""
+            SELECT prediction_id, mark_date, cum_return, cum_excess FROM (
+                SELECT prediction_id, mark_date, cum_return, cum_excess,
+                       ROW_NUMBER() OVER (PARTITION BY prediction_id ORDER BY mark_date DESC) AS rn
+                FROM daily_marks WHERE prediction_id IN ({placeholders})
+            )
+            WHERE rn = 1
+            """,  # noqa: S608 — 占位符数量由 ids 长度生成，值全参数化
+            prediction_ids,
+        ).fetchall()
+        return {
+            r["prediction_id"]: {
+                "mark_date": r["mark_date"],
+                "cum_return": r["cum_return"],
+                "cum_excess": r["cum_excess"],
+            }
+            for r in rows
+        }
+    finally:
+        conn.close()
+
+
 def list_predictions(
     ticker: str | None = None,
     status: str | None = None,
@@ -978,7 +1016,14 @@ def list_predictions(
         sql += f" ORDER BY {col} {direction} LIMIT ? OFFSET ?"
         params += [limit, offset]
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        # update-track-record-display-clarity:open 行注入最新盯市（浮动收益展示）；
+        # 非 open 行恒 None——结算读数由 raw_return/excess_return 承载，语义不混
+        open_ids = [d["prediction_id"] for d in result if d.get("status") == "open"]
+        marks = _latest_marks_for(open_ids, db_path)
+        for d in result:
+            d["latest_mark"] = marks.get(d["prediction_id"]) if d.get("status") == "open" else None
+        return result
     finally:
         conn.close()
 

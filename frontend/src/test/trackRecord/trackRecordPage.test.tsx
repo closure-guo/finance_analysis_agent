@@ -76,7 +76,7 @@ const CURRENT = [
   },
 ]
 
-function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: unknown; segments?: unknown; current?: unknown; indexCompare?: unknown } = {}) {
+function mockFetch(opts: { overview?: unknown; predictions?: unknown; predictionsTotal?: number; equity?: unknown; segments?: unknown; current?: unknown; indexCompare?: unknown } = {}) {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/api/v1/track-record/overview')) {
@@ -109,7 +109,7 @@ function mockFetch(opts: { overview?: unknown; predictions?: unknown; equity?: u
     }
     if (url.includes('/api/v1/track-record/predictions')) {
       return Promise.resolve(new Response(JSON.stringify({
-        predictions: opts.predictions ?? [], page: 1, page_size: 50, total: 0,
+        predictions: opts.predictions ?? [], page: 1, page_size: 50, total: opts.predictionsTotal ?? 0,
         as_of: '2026-09-03', disclaimer: '历史业绩不代表未来表现',
       }), { status: 200 }))
     }
@@ -772,7 +772,8 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     await screen.findByText('贵州茅台')
     const card = screen.getByTestId('track-record-avoidance')
     expect(card).toHaveTextContent('样本积累中')
-    expect(card).toHaveTextContent('已判定 3 条')
+    // update-track-record-display-clarity:术语「已判定」→「已结算」
+    expect(card).toHaveTextContent('已结算 3 条')
     expect(card.textContent ?? '').not.toContain('0%')
   })
 
@@ -796,13 +797,33 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('无存量')
   })
 
-  it('存量旧口径 >0 时展示条数与未计入声明', async () => {
-    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 7 }), predictions: PREDICTIONS })
+  it('存量旧口径 >0 时展示「另有 n 条旧口径已结算」（术语对齐 delta spec）', async () => {
+    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 7, legacy_open: 0 }), predictions: PREDICTIONS })
     renderPage()
     await screen.findByText('贵州茅台')
     const legacy = screen.getByTestId('track-record-legacy')
-    expect(legacy).toHaveTextContent('7')
-    expect(legacy).toHaveTextContent('未计入')
+    expect(legacy).toHaveTextContent('另有 7 条旧口径已结算')
+  })
+
+  // 口径披露行双计数（update-track-record-display-clarity delta spec「口径披露行双计数」Scenario）：
+  // legacy_settled（已结算）与 legacy_open（进行中，不计入头条口径）分列披露
+  it('口径披露行双计数:legacy_settled 与 legacy_open 两分句同时渲染', async () => {
+    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 5, legacy_open: 7 }), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const open = screen.getByTestId('track-record-legacy-open')
+    expect(open).toBeVisible()
+    expect(open).toHaveTextContent('另有 7 条旧口径进行中，不计入头条口径')
+    expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('另有 5 条旧口径已结算')
+  })
+
+  it('legacy_open=0 或缺省时不渲染进行中分句;legacy_settled=0 仍明示「无存量」', async () => {
+    // overviewWith 基线 legacy_settled: 0 且无 legacy_open 键（容忍旧后端）
+    mockFetch({ overview: overviewWith({}), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    expect(screen.queryByTestId('track-record-legacy-open')).not.toBeInTheDocument()
+    expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('无存量')
   })
 
   it('回避读数缺失（老会话/缺字段）时不展示 0%，如实占位', async () => {
@@ -876,6 +897,51 @@ describe('战绩页：β/α 指标位（add-portfolio-beta-alpha）', () => {
   })
 })
 
+// 观点日志窗口列 + 副标题（update-track-record-display-clarity）：T+N 逐行展示、
+// 窗口为展示列不参与排序（无 sort-horizon_days）；副标题去 20 日硬编码
+describe('观点日志窗口列与副标题（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('观点日志窗口列:T+N 逐行展示,表头无排序按钮', async () => {
+    mockFetch({ current: [], predictions: PREDICTIONS })
+    renderPage()
+    const log = await screen.findByTestId('prediction-log')
+    // p2 (open, h=252) 显示 T+252;p1 (resolved_win, h=252) 同
+    const p2row = within(log).getByTestId('prediction-row-p2')
+    expect(p2row).toHaveTextContent('T+252')
+    // 窗口表头不可排序:无 sort-horizon_days 按钮
+    expect(screen.queryByTestId('sort-horizon_days')).not.toBeInTheDocument()
+    expect(screen.getByText('窗口')).toBeInTheDocument()
+  })
+})
+
+// 观点日志 open 行浮动收益（update-track-record-display-clarity）：区间收益/基准超额列
+// 消费 latest_mark（最新盯市），附盯市日期 title；无盯市 open 行如实占位「—」
+describe('观点日志 open 行浮动收益（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('open 行浮动收益:有盯市显示浮动车并带盯市日期 title,无盯市显示 —', async () => {
+    const withMark = {
+      ...PREDICTIONS[1],
+      prediction_id: 'p3', symbol: '600016.SH', symbol_name: '民生银行',
+      latest_mark: { mark_date: '2026-10-08', cum_return: -0.012, cum_excess: -0.008 },
+    }
+    mockFetch({ current: [], predictions: [PREDICTIONS[0], PREDICTIONS[1], withMark] })
+    renderPage()
+    const p3row = await screen.findByTestId('prediction-row-p3')
+    expect(p3row).toHaveTextContent('-1.20%')
+    expect(p3row).toHaveTextContent('-0.80%')
+    // findByTestId 返回 Element，其上无查询方法（简报片段 API 缺陷，同 Task 4 修正）：within(row) 模式
+    const markCell = within(p3row).getAllByTitle('盯市 2026-10-08（未结算浮动）')
+    expect(markCell.length).toBeGreaterThanOrEqual(1)
+    const p2row = screen.getByTestId('prediction-row-p2')
+    expect(p2row).toHaveTextContent('—')
+    expect(within(p2row).queryByTitle(/盯市/)).toBeNull()
+  })
+})
+
 // 当前观点区（add-current-stance-view）：GET /api/v1/track-record/current，
 // 每股最新一条 open 的立场视图；独立加载，失败显式文案不冒充空态
 describe('当前观点区（add-current-stance-view）', () => {
@@ -934,5 +1000,108 @@ describe('当前观点区（add-current-stance-view）', () => {
     renderPage()
     expect(await screen.findByText('当前观点加载失败')).toBeInTheDocument()
     expect(screen.queryByTestId('current-stance-empty')).not.toBeInTheDocument()
+  })
+})
+
+// 观点日志同日重复行折叠（update-track-record-display-clarity）：当前页内 consecutive
+// (symbol, 建立日期) 的 duplicate_of_day 行默认合并为「同日重复 ×n」汇总行，点击展开/收起；
+// 折叠仅影响展示行数，分页 total 不变
+describe('观点日志同日重复行折叠（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('同日重复行默认折叠为汇总,点击展开明细,分页 total 不变', async () => {
+    const dupBase = {
+      ...PREDICTIONS[0], symbol: '000858.SH', symbol_name: '五粮液',
+      status: 'duplicate_of_day' as const, resolution_rule: 'duplicate_of_day',
+      exit_price: null, raw_return: null, excess_return: null,
+    }
+    const dupRows = [
+      { ...dupBase, prediction_id: 'd1', created_at: '2026-10-05T11:00:00' },
+      { ...dupBase, prediction_id: 'd2', created_at: '2026-10-05T12:00:00' },
+      { ...dupBase, prediction_id: 'd3', created_at: '2026-10-05T13:00:00' },
+    ]
+    mockFetch({ current: [], predictions: dupRows, predictionsTotal: 7 })
+    renderPage()
+    // 默认折叠:1 行汇总,3 条明细不渲染
+    // testid 含首行 prediction_id（key = symbol|date|首行 pid，防同股同日多段重复撞 key）
+    // jest-dom v7 无 toContainText（简报笔误），等价 matcher：toHaveTextContent 默认子串匹配
+    expect(await screen.findByTestId('dup-group-000858.SH-2026-10-05-d1')).toHaveTextContent('同日重复 ×3')
+    expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
+    // 分页 total 不受折叠影响
+    expect(screen.getByText(/共 7 条/)).toBeInTheDocument()
+    // 点击展开
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d1'))
+    expect(screen.getByTestId('prediction-row-d1')).toBeInTheDocument()
+    expect(screen.getByTestId('prediction-row-d3')).toBeInTheDocument()
+  })
+
+  // 防回归（生产 688072 2026-10-02 实证）：created_at DESC 下同股同日 dup 可能被日主行
+  // 切成多段 consecutive 区。旧实现 key=symbol|date → 两段共享 key/testid：DOM 出现重复
+  // testid（getByTestId 直接抛多元素错误）且 expandedDups 串扰——点一组两组同开同收。
+  // 修复：key 加首行 prediction_id，两段各自独立 toggle。
+  it('同股同日两段重复被 open 行隔开:两个汇总行 key 唯一,展开互不联动', async () => {
+    const dupBase = {
+      ...PREDICTIONS[0], symbol: '000858.SH', symbol_name: '五粮液',
+      status: 'duplicate_of_day' as const, resolution_rule: 'duplicate_of_day',
+      exit_price: null, raw_return: null, excess_return: null,
+    }
+    const openBreaker = {
+      ...PREDICTIONS[0], symbol: '000858.SH', symbol_name: '五粮液',
+      status: 'open' as const, resolved_at: null, resolution_rule: null,
+      exit_price: null, raw_return: null, excess_return: null,
+    }
+    const rows = [
+      { ...dupBase, prediction_id: 'd1', created_at: '2026-10-05T11:00:00' },
+      { ...dupBase, prediction_id: 'd2', created_at: '2026-10-05T12:00:00' },
+      { ...dupBase, prediction_id: 'd3', created_at: '2026-10-05T13:00:00' },
+      { ...openBreaker, prediction_id: 'o1', created_at: '2026-10-05T14:00:00' },
+      { ...dupBase, prediction_id: 'd4', created_at: '2026-10-05T15:00:00' },
+      { ...dupBase, prediction_id: 'd5', created_at: '2026-10-05T16:00:00' },
+    ]
+    mockFetch({ current: [], predictions: rows, predictionsTotal: 6 })
+    renderPage()
+    // 两个不同 testid 的汇总行（旧实现两 testid 相同,getByTestId 抛「found multiple」）
+    const g1 = await screen.findByTestId('dup-group-000858.SH-2026-10-05-d1')
+    expect(g1).toHaveTextContent('同日重复 ×3')
+    expect(screen.getByTestId('dup-group-000858.SH-2026-10-05-d4')).toHaveTextContent('同日重复 ×2')
+    // 点第一组只展开第一组:第二组明细不出现
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d1'))
+    expect(screen.getByTestId('prediction-row-d1')).toBeInTheDocument()
+    expect(screen.queryByTestId('prediction-row-d4')).not.toBeInTheDocument()
+    // 收起第一组;展开第二组只出第二组明细,第一组不受影响
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d1'))
+    expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05-d4'))
+    expect(screen.getByTestId('prediction-row-d4')).toBeInTheDocument()
+    expect(screen.getByTestId('prediction-row-d5')).toBeInTheDocument()
+    expect(screen.queryByTestId('prediction-row-d1')).not.toBeInTheDocument()
+  })
+})
+
+// 切片空态折叠 + 术语消歧（update-track-record-display-clarity）：settled=0 时切片区
+// 折叠为一行说明；横幅「已判定」→「已结算」；resolved_neutral 状态标签「中性」→「带内中性」
+// （与方向「中性」消歧，后端 _STATUS_LABELS 已同步）
+describe('切片空态折叠与术语消歧（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('切片空态:settled=0 时折叠为一行说明,不渲染分桶表格', async () => {
+    mockFetch({ current: [], predictions: [] })
+    renderPage()
+    expect(await screen.findByTestId('track-record-segments-empty')).toHaveTextContent('切片指标将在首批观点结算后可用')
+    expect(screen.queryByTestId('track-record-segments')).not.toBeInTheDocument()
+  })
+
+  it('术语消歧:横幅用已结算,带内中性标签替换中性', async () => {
+    mockFetch({ current: [], predictions: [
+      { ...PREDICTIONS[0], status: 'resolved_neutral', resolution_rule: 'superseded' },
+    ] })
+    renderPage()
+    // 横幅:已结算(原「已判定 0 条」)
+    expect(await screen.findByTestId('track-record-insufficient')).toHaveTextContent('已结算 0 条')
+    expect(screen.getByTestId('track-record-insufficient').textContent).not.toContain('已判定 0 条')
+    // 状态标签:带内中性
+    expect(screen.getByTestId('prediction-log')).toHaveTextContent('带内中性')
   })
 })

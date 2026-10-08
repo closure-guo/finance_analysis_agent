@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import ReactECharts from 'echarts-for-react'
 import type { CurrentStanceResponse, EquityCurvePoint, PredictionRecord, PredictionsResponse, SegmentDimension, TrackRecordOverview } from '../../types'
@@ -7,22 +7,19 @@ import { navigate } from '../../route'
 import { cssVar } from '../../Charts'
 import { loadTrackPrefs, type TrackTimeSpan } from '../../lib/trackPrefs'
 import { PREDICTION_STATUS_CLS as STATUS_CLS, PREDICTION_STATUS_LABEL as STATUS_LABEL } from './predictionStatus'
+import { DIRECTION_LABEL } from './predictionDisplay'
 import { IndexCompareCard } from './IndexCompareCard'
 
-const DIRECTION_LABEL: Record<string, string> = {
-  long: '看多',
-  short: '看空',
-  neutral: '中性',
-}
-
-// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐。
-// settle_entry_price 为纯展示列（后端白名单不含该键，sortable:false 不渲染排序按钮）；
+// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐；
+// sortable: false 为纯展示列（不渲染排序按钮）。
 // 价格三列口径标注：参考价=决策时点盘面口径，结算两列=hfq 后复权（update-track-record-settle-price-display）
 const COLUMNS: Array<{ key: string; label: string; numeric?: boolean; sortable?: boolean }> = [
   { key: 'created_at', label: '建立日期' },
   { key: 'symbol', label: '标的' },
   { key: 'direction', label: '方向' },
   { key: 'status', label: '状态' },
+  // update-track-record-display-clarity:窗口列——混合口径显式可见（T+20/T+252）；展示列不排序
+  { key: 'horizon_days', label: '窗口', sortable: false },
   { key: 'entry_price', label: '参考价（盘面）', numeric: true },
   { key: 'settle_entry_price', label: '结算入场价（后复权）', numeric: true, sortable: false },
   { key: 'exit_price', label: '结算价（后复权）', numeric: true },
@@ -106,6 +103,8 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | ''>('open')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  // update-track-record-display-clarity:同日重复折叠——展开组 key 集合(当前页前端作用域)
+  const [expandedDups, setExpandedDups] = useState<Set<string>>(new Set())
 
   const load = useCallback(async (ver: number | null) => {
     setError(false)
@@ -207,6 +206,92 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
 
   const disclaimer = overview?.disclaimer ?? '历史业绩不代表未来表现'
   const rows = records ?? []
+
+  // update-track-record-display-clarity:同日重复折叠——渲染前把 rows 组装为显示序列。
+  // 当前页内 consecutive (symbol, 建立日期) 的 duplicate_of_day 行合并为一个 dup-group
+  // 汇总行（前端展示作用域，分页 total 与服务端数据零改动）；无 dup 行时退化为全 single
+  type DisplayRow =
+    | { kind: 'single'; row: PredictionRecord }
+    | { kind: 'dup-group'; key: string; rows: PredictionRecord[] }
+  const displayRows: DisplayRow[] = []
+  {
+    let i = 0
+    while (i < rows.length) {
+      const r = rows[i]
+      const date = r.created_at.slice(0, 10)
+      if (
+        r.status === 'duplicate_of_day' &&
+        i + 1 < rows.length &&
+        rows[i + 1].status === 'duplicate_of_day' &&
+        rows[i + 1].symbol === r.symbol &&
+        rows[i + 1].created_at.slice(0, 10) === date
+      ) {
+        const group: PredictionRecord[] = []
+        while (
+          i < rows.length &&
+          rows[i].status === 'duplicate_of_day' &&
+          rows[i].symbol === r.symbol &&
+          rows[i].created_at.slice(0, 10) === date
+        ) {
+          group.push(rows[i])
+          i += 1
+        }
+        // key 加首行 prediction_id：同股同日可能有多段 consecutive dup 区（段间被日主行
+        // 隔开，created_at DESC 下不连续；生产 688072 2026-10-02 实证两段）。仅 symbol|date
+        // 会撞 key——两段共享 expandedDups 条目与 testid，点一组两组同开同收
+        displayRows.push({ kind: 'dup-group', key: `${r.symbol}|${date}|${r.prediction_id}`, rows: group })
+      } else {
+        displayRows.push({ kind: 'single', row: r })
+        i += 1
+      }
+    }
+  }
+
+  // 观点日志单行 JSX（update-track-record-display-clarity:同日重复折叠抽出自 tbody，
+  // single 行与 dup-group 展开明细行共用；onClick 导航逻辑不变）
+  const renderPredictionRow = (r: PredictionRecord) => (
+    <tr
+      key={r.prediction_id}
+      className="border-t cursor-pointer hover:opacity-80"
+      style={{ borderColor: 'var(--border-neutral-l1)' }}
+      onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
+      data-testid={`prediction-row-${r.prediction_id}`}
+    >
+      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{r.created_at.slice(0, 10)}</td>
+      <td className="px-4 py-3">
+        <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
+        <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
+      </td>
+      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
+      <td className="px-4 py-3">
+        <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
+        {r.status === 'open' && (
+          <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
+        )}
+      </td>
+      <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
+      <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
+      <td className="px-4 py-3 text-right">{fmt(r.settle_entry_price)}</td>
+      <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
+      {(() => {
+        // update-track-record-display-clarity:open 行展示最新盯市浮动
+        // (latest_mark),已结算行展示结算读数;title 区分语义
+        const floating = r.status === 'open' ? r.latest_mark : undefined
+        const markTitle = floating ? `盯市 ${floating.mark_date}（未结算浮动）` : undefined
+        return (
+          <>
+            <td className="px-4 py-3 text-right" title={markTitle}>
+              <Delta value={floating ? floating.cum_return : r.raw_return} />
+            </td>
+            <td className="px-4 py-3 text-right" title={markTitle}>
+              <Delta value={floating ? floating.cum_excess : r.excess_return} />
+            </td>
+          </>
+        )
+      })()}
+    </tr>
+  )
+
   const showWinRate = overview !== null && !overview.insufficient_sample && overview.win_rate !== null
   const portfolio = overview?.portfolio
   const showCurve = curve !== null && curve.length >= 2
@@ -291,7 +376,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
               <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>{overview.total}</div>
             </div>
             <div className="rounded-xl p-4" style={{ background: 'var(--bg-overlay-l1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>胜率（已判定）</div>
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>胜率（已结算）</div>
               <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>
                 {showWinRate ? `${(overview.win_rate! * 100).toFixed(1)}%` : '—'}
               </div>
@@ -301,12 +386,12 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 src/finance_agent/api.py 的 avoidance_rate 组装），前端只认 null，
                 不再复制「10」这个阈值。null → 「样本积累中」，绝不折算 0% */}
             <div className="rounded-xl p-4" data-testid="track-record-avoidance" style={{ background: 'var(--bg-overlay-l1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>回避正确率（neutral 已判定）</div>
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>回避正确率（中性观点已结算）</div>
               {overview.avoidance === undefined ? (
                 <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>—</div>
               ) : overview.avoidance.avoidance_rate === null ? (
                 <div className="text-sm font-medium mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  样本积累中（已判定 {overview.avoidance.settled} 条，满 10 条解锁）
+                  样本积累中（已结算 {overview.avoidance.settled} 条，满 10 条解锁）
                 </div>
               ) : (
                 <>
@@ -329,7 +414,9 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             </div>
           </div>
 
-          {/* 口径披露（Δ2）：判定口径与存量旧口径计数常驻，不受样本门槛限制；存量 0 明示「无存量」 */}
+          {/* 口径披露（Δ2）：判定口径与存量旧口径计数常驻，不受样本门槛限制；存量 0 明示「无存量」。
+              update-track-record-display-clarity：双计数——legacy_settled（已结算）与
+              legacy_open（进行中，不计入头条口径）分列；legacy_open=0 或缺省不渲染该分句 */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 text-xs"
             style={{ color: 'var(--text-tertiary)' }} data-testid="track-record-caliber-row">
             <span data-testid="track-record-caliber">
@@ -340,14 +427,19 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 ? '存量旧口径：（未提供）'
                 : overview.legacy_settled === 0
                   ? '存量旧口径：无存量'
-                  : `另有 ${overview.legacy_settled} 条旧口径（252 日）历史未计入头条口径`}
+                  : `另有 ${overview.legacy_settled} 条旧口径已结算`}
             </span>
+            {overview.legacy_open !== undefined && overview.legacy_open > 0 && (
+              <span data-testid="track-record-legacy-open">
+                另有 {overview.legacy_open} 条旧口径进行中，不计入头条口径
+              </span>
+            )}
           </div>
 
           {/* 样本积累提示 */}
           {overview.insufficient_sample && (
             <div className="mb-4 rounded-lg px-4 py-3 text-xs" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-secondary)' }} data-testid="track-record-insufficient">
-              样本积累中（已判定 {overview.settled} 条，满 10 条解锁胜率）
+              样本积累中（已结算 {overview.settled} 条，满 10 条解锁胜率）
             </div>
           )}
 
@@ -406,8 +498,15 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
-          {/* 切片指标（stage-c：持有期/行业/市值/市场环境，n<10 标样本不足） */}
-          {segments !== null && segments.length > 0 && (
+          {/* 切片指标（stage-c：持有期/行业/市值/市场环境，n<10 标样本不足）。
+              update-track-record-display-clarity:settled=0 时折叠为一行说明——
+              首批观点结算前分桶表全是空桶，展示空表徒增噪音；settled>0 时
+              沿用原区块（segments 加载守卫保留，避免 overview 先到时 map 空指针） */}
+          {overview.settled === 0 ? (
+            <div className="rounded-xl p-4 mb-6" data-testid="track-record-segments-empty" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-tertiary)' }}>
+              切片指标将在首批观点结算后可用
+            </div>
+          ) : segments !== null && segments.length > 0 ? (
             <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-segments">
               <div className="text-xs mb-3" style={{ color: 'var(--text-tertiary)' }}>切片指标（n&lt;10 标注「样本不足」）</div>
               <div className="grid md:grid-cols-2 gap-4">
@@ -441,7 +540,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
 
           {/* 净值曲线（stage-b：agent vs 沪深300，起点归一 1.0；数据缺口断点不插值） */}
           {showCurve && (
@@ -517,7 +616,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             <div>
               <div className="text-sm font-medium">观点日志</div>
               <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                每条 = 一次分析结论;当前持有 = 仍在 20 日判定窗口内
+                每条 = 一次分析结论;当前持有 = 仍在判定窗口内(长短见「窗口」列)
               </div>
             </div>
             <div className="flex gap-1" role="tablist" data-testid="prediction-log-tabs">
@@ -590,33 +689,45 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map(r => (
-                      <tr
-                        key={r.prediction_id}
-                        className="border-t cursor-pointer hover:opacity-80"
-                        style={{ borderColor: 'var(--border-neutral-l1)' }}
-                        onClick={() => navigate(`/track-record/predictions/${r.prediction_id}`)}
-                        data-testid={`prediction-row-${r.prediction_id}`}
-                      >
-                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{r.created_at.slice(0, 10)}</td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium" style={{ color: 'var(--text-default)' }}>{r.symbol_name ?? r.symbol}</div>
-                          <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.symbol}</div>
-                        </td>
-                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{DIRECTION_LABEL[r.direction]}</td>
-                        <td className="px-4 py-3">
-                          <span className={STATUS_CLS[r.status]}>{STATUS_LABEL[r.status]}</span>
-                          {r.status === 'open' && (
-                            <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
-                        <td className="px-4 py-3 text-right">{fmt(r.settle_entry_price)}</td>
-                        <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
-                        <td className="px-4 py-3 text-right"><Delta value={r.raw_return} /></td>
-                        <td className="px-4 py-3 text-right"><Delta value={r.excess_return} /></td>
-                      </tr>
-                    ))}
+                    {displayRows.map(d => {
+                      if (d.kind === 'single') return renderPredictionRow(d.row)
+                      const expanded = expandedDups.has(d.key)
+                      const first = d.rows[0]
+                      return (
+                        <Fragment key={d.key}>
+                          {/* testid 全局替换 | → -：key 现含两个 |，字符串单次 replace 只换
+                              第一个，会残留 `日期|pid` 破坏 testid 三段格式 */}
+                          <tr
+                            data-testid={`dup-group-${d.key.replace(/\|/g, '-')}`}
+                            className="border-t cursor-pointer hover:opacity-80"
+                            style={{ borderColor: 'var(--border-neutral-l1)' }}
+                            onClick={() =>
+                              setExpandedDups(prev => {
+                                const next = new Set(prev)
+                                if (next.has(d.key)) next.delete(d.key)
+                                else next.add(d.key)
+                                return next
+                              })
+                            }
+                          >
+                            <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{first.created_at.slice(0, 10)}</td>
+                            <td className="px-4 py-3">
+                              <div className="font-medium" style={{ color: 'var(--text-default)' }}>{first.symbol_name ?? first.symbol}</div>
+                              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{first.symbol}</div>
+                            </td>
+                            <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>—</td>
+                            <td className="px-4 py-3"><span className={STATUS_CLS.duplicate_of_day}>同日重复 ×{d.rows.length}</span></td>
+                            <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{first.horizon_days}</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                            <td className="px-4 py-3 text-right">—</td>
+                          </tr>
+                          {expanded && d.rows.map(r => renderPredictionRow(r))}
+                        </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

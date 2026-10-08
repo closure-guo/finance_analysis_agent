@@ -6,12 +6,15 @@ predictions 恒为 0。本测试模拟该路径的 accumulated(含 stock_quote +
 """
 
 from finance_agent.outcome.track_record.ingest import persist_prediction_from_accumulated
-from finance_agent.outcome.track_record.model import init_predictions, list_predictions
+from finance_agent.outcome.track_record.model import init_track_record_tables, list_predictions
 
 
+# init_track_record_tables：与生产 schema 对齐（api.py 启动双 init）；
+# update-track-record-display-clarity 起 list_predictions 读 open 行盯市，
+# 夹具缺 daily_marks 会让读取直接 OperationalError
 def _db(monkeypatch, tmp_path):
     db = tmp_path / "t.db"
-    init_predictions(db)
+    init_track_record_tables(db)
     monkeypatch.setattr("finance_agent.outcome.track_record.model._default_db_path", lambda: db)
     return db
 

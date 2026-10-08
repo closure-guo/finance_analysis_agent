@@ -9,7 +9,8 @@ from finance_agent.outcome.track_record.model import (
     count_predictions,
     duplicate_prediction_ids,
     get_prediction,
-    init_predictions,
+    init_track_record_tables,
+    insert_daily_mark,
     insert_prediction,
     list_current_predictions,
     list_predictions,
@@ -34,8 +35,10 @@ BASE = {
 
 @pytest.fixture
 def db(tmp_path):
+    # init_track_record_tables：predictions + daily_marks 等 stage-b/c 全表（超集，
+    # update-track-record-display-clarity 起盯市用例需要 daily_marks 存在）
     path = tmp_path / "track.db"
-    init_predictions(path)
+    init_track_record_tables(path)
     return path
 
 
@@ -643,6 +646,51 @@ def test_list_current_source_filter(db):
     assert [r["symbol"] for r in list_current_predictions("live", db_path=db)] == ["600015.SH"]
     assert [r["symbol"] for r in list_current_predictions("backtest", db_path=db)] == ["600016.SH"]
     assert len(list_current_predictions(db_path=db)) == 2
+
+
+# ── update-track-record-display-clarity:open 行最新盯市注入 ──
+
+
+def test_list_predictions_injects_latest_mark_for_open(db):
+    """open 行取 mark_date 最新的盯市；字段三元组完整。"""
+    pid = _insert(db, symbol="600015.SH", created_at="2026-10-01T10:00:00")
+    insert_daily_mark(pid, "2026-10-02", cum_return=0.01, cum_excess=0.005, db_path=db)
+    insert_daily_mark(pid, "2026-10-03", cum_return=-0.012, cum_excess=-0.008, db_path=db)
+    rows = list_predictions(status="open", db_path=db)
+    row = next(r for r in rows if r["prediction_id"] == pid)
+    assert row["latest_mark"] == {
+        "mark_date": "2026-10-03",
+        "cum_return": -0.012,
+        "cum_excess": -0.008,
+    }
+
+
+def test_list_predictions_latest_mark_null_for_closed_and_unmarked(db):
+    """非 open 行恒 None（即使有历史 marks）；无 marks 的 open 行也 None。"""
+    unmarked = _insert(db, symbol="600016.SH", created_at="2026-10-01T11:00:00")
+    closed = _insert(db, symbol="600017.SH", created_at="2026-10-01T12:00:00")
+    insert_daily_mark(closed, "2026-10-02", cum_return=0.02, db_path=db)
+    update_prediction_status(
+        closed, {"status": "unresolvable", "resolution_rule": "stale_no_market"}, db_path=db
+    )
+    rows = {r["prediction_id"]: r for r in list_predictions(db_path=db)}
+    assert rows[unmarked]["latest_mark"] is None
+    assert rows[closed]["latest_mark"] is None
+
+
+def test_keyword_band_neutral_label_matches_status_only(db):
+    """「带内中性」匹配 resolved_neutral；「中性」只剩方向 neutral 语义（消歧）。"""
+    neutral_dir = _insert(
+        db, symbol="600015.SH", direction="neutral", created_at="2026-10-01T10:00:00"
+    )
+    band = _insert(db, symbol="600016.SH", direction="short", created_at="2026-10-01T11:00:00")
+    update_prediction_status(
+        band, {"status": "resolved_neutral", "resolution_rule": "superseded"}, db_path=db
+    )
+    band_rows = list_predictions(keyword="带内中性", db_path=db)
+    assert [r["prediction_id"] for r in band_rows] == [band]
+    dir_rows = list_predictions(keyword="中性", db_path=db)
+    assert {r["prediction_id"] for r in dir_rows} == {neutral_dir}
 
 
 # ── add-watch-trigger-tracking Task 6：session_id / trigger_high / trigger_low 列 ──
