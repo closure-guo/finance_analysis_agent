@@ -494,6 +494,9 @@ export interface PredictionRecord {
   status: PredictionStatus
   created_at: string
   resolved_at: string | null
+  // 结算入场价（hfq 归属日收盘，判定时派生；判定前 NULL）——
+  // update-track-record-settle-price-display：与 exit_price 同口径可比
+  settle_entry_price: number | null
   exit_price: number | null
   raw_return: number | null
   excess_return: number | null

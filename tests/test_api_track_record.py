@@ -576,3 +576,67 @@ def test_seed_predictions_block(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("TESTING", raising=False)
         importlib.reload(api_module)
+
+
+# ── update-track-record-settle-price-display Task 1：seed 终态行透传结算字段 ──
+
+
+def test_seed_predictions_settle_fields_passthrough(monkeypatch, tmp_path):
+    """seed 终态行带 settle_entry_price/exit_price/raw_return/excess_return 时透传落库。
+
+    结算口径展示 E2E（track-record-settle-price-display.spec.ts）的造数前提：
+    已结算行须带 hfq 口径的结算入场价与结算价，才可断言「同口径可比」展示。
+    透传走 update_prediction_status（_MUTABLE_FIELDS 含四字段）——与生产判定
+    写入同一条路径。
+    """
+    _use_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("TESTING", "1")
+    import importlib
+
+    import finance_agent.api as api_module
+    import finance_agent.session_store as session_store_module
+
+    monkeypatch.setattr(session_store_module, "_DB_PATH", tmp_path / "sessions.db")
+    session_store_module.init_db()
+
+    importlib.reload(api_module)
+    try:
+        client = TestClient(api_module.app)
+        resp = client.post(
+            "/api/test/seed",
+            json={
+                "track_record": {
+                    "predictions": [
+                        {
+                            "symbol": "601818.SH",
+                            "direction": "short",
+                            "created_at": "2026-10-09T18:00:00",
+                            "status": "resolved_loss",
+                            "resolution_rule": "horizon",
+                            "settle_entry_price": 6.39,
+                            "exit_price": 6.5,
+                            "raw_return": -0.0172,
+                            "excess_return": -0.0201,
+                        },
+                    ]
+                }
+            },
+        )
+        assert resp.status_code == 200
+        from finance_agent.outcome.track_record.model import list_predictions
+
+        rows = list_predictions(sort_by="created_at", sort_dir="asc")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["status"] == "resolved_loss"
+        assert row["settle_entry_price"] == 6.39
+        assert row["exit_price"] == 6.5
+        assert row["raw_return"] == pytest.approx(-0.0172)
+        assert row["excess_return"] == pytest.approx(-0.0201)
+        # 列表 API 原样透出（前端渲染数据源）
+        api_rows = client.get("/api/v1/track-record/predictions").json()["predictions"]
+        assert api_rows[0]["settle_entry_price"] == 6.39
+        assert api_rows[0]["exit_price"] == 6.5
+    finally:
+        monkeypatch.delenv("TESTING", raising=False)
+        importlib.reload(api_module)
