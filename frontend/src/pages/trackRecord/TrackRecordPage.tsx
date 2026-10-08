@@ -15,12 +15,15 @@ const DIRECTION_LABEL: Record<string, string> = {
   neutral: '中性',
 }
 
-// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐
-const COLUMNS: Array<{ key: string; label: string; numeric?: boolean }> = [
+// 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐；
+// sortable: false 为纯展示列（不渲染排序按钮）
+const COLUMNS: Array<{ key: string; label: string; numeric?: boolean; sortable?: boolean }> = [
   { key: 'created_at', label: '建立日期' },
   { key: 'symbol', label: '标的' },
   { key: 'direction', label: '方向' },
   { key: 'status', label: '状态' },
+  // update-track-record-display-clarity:窗口列——混合口径显式可见（T+20/T+252）；展示列不排序
+  { key: 'horizon_days', label: '窗口', sortable: false },
   { key: 'entry_price', label: '入场价', numeric: true },
   { key: 'exit_price', label: '结算价', numeric: true },
   { key: 'raw_return', label: '区间收益', numeric: true },
@@ -514,7 +517,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             <div>
               <div className="text-sm font-medium">观点日志</div>
               <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                每条 = 一次分析结论;当前持有 = 仍在 20 日判定窗口内
+                每条 = 一次分析结论;当前持有 = 仍在判定窗口内(长短见「窗口」列)
               </div>
             </div>
             <div className="flex gap-1" role="tablist" data-testid="prediction-log-tabs">
@@ -569,15 +572,19 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                     <tr className="text-left text-xs" style={{ color: 'var(--text-tertiary)' }}>
                       {COLUMNS.map(c => (
                         <th key={c.key} className={`px-4 py-2 font-normal ${c.numeric ? 'text-right' : ''}`}>
-                          <button
-                            type="button"
-                            data-testid={`sort-${c.key}`}
-                            onClick={() => onSort(c.key)}
-                            className="inline-flex items-center gap-0.5 hover:opacity-80"
-                            style={{ color: 'var(--text-tertiary)' }}
-                          >
-                            {c.label}{arrow(c.key)}
-                          </button>
+                          {c.sortable === false ? (
+                            c.label
+                          ) : (
+                            <button
+                              type="button"
+                              data-testid={`sort-${c.key}`}
+                              onClick={() => onSort(c.key)}
+                              className="inline-flex items-center gap-0.5 hover:opacity-80"
+                              style={{ color: 'var(--text-tertiary)' }}
+                            >
+                              {c.label}{arrow(c.key)}
+                            </button>
+                          )}
                         </th>
                       ))}
                     </tr>
@@ -603,6 +610,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                             <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>未结算</span>
                           )}
                         </td>
+                        <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>T+{r.horizon_days}</td>
                         <td className="px-4 py-3 text-right">{fmt(r.entry_price)}</td>
                         <td className="px-4 py-3 text-right">{fmt(r.exit_price)}</td>
                         <td className="px-4 py-3 text-right"><Delta value={r.raw_return} /></td>

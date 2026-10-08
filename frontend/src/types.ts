@@ -497,6 +497,8 @@ export interface PredictionRecord {
   raw_return: number | null
   excess_return: number | null
   resolution_rule: string | null
+  // update-track-record-display-clarity:open 行最新盯市（浮动收益展示）；非 open 行为 null
+  latest_mark?: { mark_date: string; cum_return: number | null; cum_excess: number | null } | null
   rationale_snapshot?: unknown
 }
 

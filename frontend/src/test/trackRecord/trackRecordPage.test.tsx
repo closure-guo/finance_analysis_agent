@@ -824,6 +824,25 @@ describe('战绩页：β/α 指标位（add-portfolio-beta-alpha）', () => {
   })
 })
 
+// 观点日志窗口列 + 副标题（update-track-record-display-clarity）：T+N 逐行展示、
+// 窗口为展示列不参与排序（无 sort-horizon_days）；副标题去 20 日硬编码
+describe('观点日志窗口列与副标题（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('观点日志窗口列:T+N 逐行展示,表头无排序按钮', async () => {
+    mockFetch({ current: [], predictions: PREDICTIONS })
+    renderPage()
+    const log = await screen.findByTestId('prediction-log')
+    // p2 (open, h=252) 显示 T+252;p1 (resolved_win, h=252) 同
+    const p2row = within(log).getByTestId('prediction-row-p2')
+    expect(p2row).toHaveTextContent('T+252')
+    // 窗口表头不可排序:无 sort-horizon_days 按钮
+    expect(screen.queryByTestId('sort-horizon_days')).not.toBeInTheDocument()
+    expect(screen.getByText('窗口')).toBeInTheDocument()
+  })
+})
+
 // 当前观点区（add-current-stance-view）：GET /api/v1/track-record/current，
 // 每股最新一条 open 的立场视图；独立加载，失败显式文案不冒充空态
 describe('当前观点区（add-current-stance-view）', () => {
