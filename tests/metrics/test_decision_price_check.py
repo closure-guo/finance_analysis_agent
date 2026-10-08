@@ -498,8 +498,13 @@ class TestRiskJudgeIntegration:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_risk_judge_returns_decision_price_anomalies(self, mock_llm):
-        """watch 决策含空洞触发价 → 打回一次，stub 仍同输出（同源残留）→
-        未恶化放行 + note 待终裁、残留照落 state（update-decision-price-gate-admission）。"""
+        """watch 决策缺结构化触发位 + 含空洞触发价 → 两道 per-design 打回，stub 仍同输出。
+
+        回路序：初始(1) → 触发位申报打回(2)（add-watch-trigger-tracking，同
+        final_reeval_check 一次打回先例）→ 仍缺放行 + 标注 → 价位门禁检出空洞触发价
+        → 门禁打回(3)（archive/2026-10-02-update-decision-price-gate）→ stub 同源残留
+        未恶化 → 放行 + note 待终裁、残留照落 state
+        （update-decision-price-gate-admission）。"""
         mock_llm.return_value = json.dumps(
             {
                 "action": "watch",
@@ -518,7 +523,11 @@ class TestRiskJudgeIntegration:
             "kline": self._kline_601066(),
         }
         result = risk_judge(state)
-        assert mock_llm.call_count == 2  # anomaly 打回重试恰一次（门禁回路）
+        # 两次打回均 per-design：watch 缺结构化触发位先触发位申报打回一次
+        # （add-watch-trigger-tracking，agent-node-contracts「同 final_reeval_check
+        # 一次打回先例」）；随后价位门禁打回一次（archive/2026-10-02-update-decision-
+        # price-gate 门禁回路）。stub 同源输出 → 残留未恶化放行。
+        assert mock_llm.call_count == 3
         decision = result["final_trade_decision"]
         assert decision.action == "watch"  # risk_judge 层照常产出决策（阻断在 after_risk_judge）
         gate = result["decision_price_gate"]

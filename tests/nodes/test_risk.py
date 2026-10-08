@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from finance_agent.nodes.report import _fm_incomplete_integrity_block
 from finance_agent.nodes.risk import (
     aggressive_debater,
     conservative_debater,
@@ -479,6 +480,38 @@ class TestFinalTriggerCheck:
         assert result["final_trade_decision"].trigger_low is None
         assert result["final_trigger_check"]["result"] == "pass"
         assert result["final_trigger_check"]["note"] == "已打回仍未申报触发位"
+
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_retry_flip_to_non_watch_degrades_note_without_incomplete_marker(self, mock_llm):
+        """打回使终稿换代翻转动作（watch→buy）：note 如实降级，不渲染完整性标注。
+
+        final review Finding #1：翻转后触发位申报不再适用（buy/sell/hold 不约束
+        触发位），旧措辞「已打回仍未申报触发位」对非 watch 终稿是错话，且含
+        _FM_INCOMPLETE_MARKERS 标记词（仍未申报）→ 误渲染「审批对象结构不完整
+        标注」进 FM 上下文与报告。降级注须避开标记词表。
+        """
+        mock_llm.side_effect = [
+            self._watch_resp(),  # 第一次：watch 理由齐备但双向触发位均缺失
+            # 打回后终稿换代为 buy（价位/触发条件申报齐备，隔离价位与再评估回路）
+            TestFinalPriceIntegrity._resp(
+                entry_price=26.35,
+                stop_loss=25.3,
+                target_price=28.0,
+                reeval_triggers=["跌破止损位离场"],
+            ),
+        ]
+        result = risk_judge({"trader_plan": {}, "risk_debate_history": []})
+        assert mock_llm.call_count == 2
+        decision = result["final_trade_decision"]
+        assert decision.action == "buy"
+        assert decision.trigger_high is None
+        assert decision.trigger_low is None
+        assert result["final_trigger_check"]["result"] == "pass"
+        assert result["final_trigger_check"]["note"] == (
+            "触发位重试后终稿改为非 watch 动作，触发位申报不再适用"
+        )
+        # 降级注不含完整性标记词（仍未申报/缺失）→ 不渲染「审批对象结构不完整标注」
+        assert _fm_incomplete_integrity_block(result) == ""
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_buy_decision_unaffected_by_trigger_check(self, mock_llm):

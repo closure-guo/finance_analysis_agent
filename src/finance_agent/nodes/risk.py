@@ -443,7 +443,13 @@ def risk_judge(state: dict) -> dict:
             prompt_version=_pinfo.prompt_version,
         )
         decision = TradeDecision.model_validate(data)
-        if (
+        if str(getattr(decision, "action", "")) != "watch":
+            # 打回使终稿换代翻转了动作（如 watch→buy）：触发位申报对非 watch 终稿
+            # 不再适用（buy/sell/hold 不约束触发位），「已打回仍未申报触发位」即
+            # 错话且含完整性标记词（仍未申报）会误渲染「审批对象结构不完整标注」。
+            # 如实降级备注——措辞避开 _FM_INCOMPLETE_MARKERS（report.py 仍未申报/缺失）。
+            final_trigger_check["note"] = "触发位重试后终稿改为非 watch 动作，触发位申报不再适用"
+        elif (
             getattr(decision, "trigger_high", None) is None
             and getattr(decision, "trigger_low", None) is None
         ):
