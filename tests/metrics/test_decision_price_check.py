@@ -498,8 +498,13 @@ class TestRiskJudgeIntegration:
 
     @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
     def test_risk_judge_returns_decision_price_anomalies(self, mock_llm):
-        """watch 决策含空洞触发价 → 打回一次，stub 仍同输出（同源残留）→
-        未恶化放行 + note 待终裁、残留照落 state（update-decision-price-gate-admission）。"""
+        """watch 决策缺结构化触发位 + 含空洞触发价 → 两道 per-design 打回，stub 仍同输出。
+
+        回路序：初始(1) → 触发位申报打回(2)（add-watch-trigger-tracking，同
+        final_reeval_check 一次打回先例）→ 仍缺放行 + 标注 → 价位门禁检出空洞触发价
+        → 门禁打回(3)（archive/2026-10-02-update-decision-price-gate）→ stub 同源残留
+        未恶化 → 放行 + note 待终裁、残留照落 state
+        （update-decision-price-gate-admission）。"""
         mock_llm.return_value = json.dumps(
             {
                 "action": "watch",
@@ -518,7 +523,11 @@ class TestRiskJudgeIntegration:
             "kline": self._kline_601066(),
         }
         result = risk_judge(state)
-        assert mock_llm.call_count == 2  # anomaly 打回重试恰一次（门禁回路）
+        # 两次打回均 per-design：watch 缺结构化触发位先触发位申报打回一次
+        # （add-watch-trigger-tracking，agent-node-contracts「同 final_reeval_check
+        # 一次打回先例」）；随后价位门禁打回一次（archive/2026-10-02-update-decision-
+        # price-gate 门禁回路）。stub 同源输出 → 残留未恶化放行。
+        assert mock_llm.call_count == 3
         decision = result["final_trade_decision"]
         assert decision.action == "watch"  # risk_judge 层照常产出决策（阻断在 after_risk_judge）
         gate = result["decision_price_gate"]
@@ -746,3 +755,57 @@ class TestEnumeratorFalsePositives:
         assert len(anomalies) == 1
         assert anomalies[0]["kind"] == "deviation"
         assert anomalies[0]["indicator"] == "近期低点"
+
+
+class TestStructuredTriggerLevels:
+    """add-watch-trigger-tracking：结构化触发位（trigger_high/trigger_low）空洞校验。
+
+    上破门槛须严格高于最新收盘、下破门槛须严格低于最新收盘；违反即空洞形态
+    anomaly，与文本 empty_trigger 同构、同门禁（risk.py 零改动共用打回预算）。
+    """
+
+    def test_trigger_high_not_above_close_is_empty(self):
+        decision = _decision(action="watch", trigger_high=22.61, trigger_low=22.0)
+        anomalies = check_decision_prices(decision, {}, {}, latest_close=23.03)
+        assert any("trigger_high" in a["source_text"] for a in anomalies)
+        assert all(a["kind"] == "empty_trigger" for a in anomalies)
+
+    def test_trigger_low_not_below_close_is_empty(self):
+        decision = _decision(action="watch", trigger_high=25.0, trigger_low=24.6)
+        anomalies = check_decision_prices(decision, {}, {}, latest_close=23.03)
+        assert any("trigger_low" in a["source_text"] for a in anomalies)
+
+    def test_valid_band_passes(self):
+        decision = _decision(action="watch", trigger_high=24.6, trigger_low=22.91)
+        assert check_decision_prices(decision, {}, {}, latest_close=23.03) == []
+
+    def test_missing_triggers_pass(self):
+        decision = _decision(action="watch", trigger_high=None, trigger_low=None)
+        assert check_decision_prices(decision, {}, {}, latest_close=23.03) == []
+
+    def test_no_latest_close_passes(self):
+        decision = _decision(action="watch", trigger_high=24.6, trigger_low=22.91)
+        assert check_decision_prices(decision, {}, {}, latest_close=None) == []
+
+    def test_anomaly_shape_mirrors_text_empty_trigger(self):
+        """结构化来源 anomaly 与文本 empty_trigger 键完全同构：risk.py 门禁对两类
+        来源共用打回预算与 source_text 集合运算，不得因来源不同而异形。"""
+        decision = _decision(action="watch", trigger_high=22.61, trigger_low=None)
+        anomalies = check_decision_prices(decision, {}, {}, latest_close=23.03)
+        assert len(anomalies) == 1
+        a = anomalies[0]
+        assert set(a) == {
+            "kind",
+            "source_text",
+            "indicator",
+            "verified_value",
+            "deviation_pct",
+            "message",
+        }
+        assert a["kind"] == "empty_trigger"
+        assert a["indicator"] == "最新收盘价"
+        assert a["verified_value"] == pytest.approx(23.03)
+        assert a["deviation_pct"] is None
+        assert "22.61" in a["message"]
+        assert "23.03" in a["message"]
+        assert "已满足" in a["message"]

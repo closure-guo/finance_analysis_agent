@@ -527,3 +527,48 @@ class TestSellTypeTyping:
         d = TradeDecision.model_validate(self._sell())
         assert d.sell_type is None
         assert d.exit_schedule is None
+
+
+class TestTradeDecisionTriggerLevels:
+    """add-watch-trigger-tracking：watch 双向触发位宽松清洗。"""
+
+    def _make(self, **kwargs):
+        base = {
+            "action": "watch",
+            "confidence": 0.55,
+            "reasoning": "测试",
+            "inaction_reason": "观望",
+            "reeval_triggers": ["站上 24.6 重估"],
+        }
+        base.update(kwargs)
+        return TradeDecision(**base)
+
+    def test_valid_triggers_preserved(self):
+        d = self._make(trigger_high=24.6, trigger_low=22.91)
+        assert d.trigger_high == 24.6
+        assert d.trigger_low == 22.91
+
+    def test_numeric_string_coerced(self):
+        d = self._make(trigger_high="24.6", trigger_low=" 22.91 ")
+        assert d.trigger_high == 24.6
+        assert d.trigger_low == 22.91
+
+    def test_noise_normalized_to_none(self):
+        d = self._make(trigger_high=None, trigger_low="abc")
+        assert d.trigger_high is None
+        assert d.trigger_low is None
+
+    def test_invalid_values_normalized_to_none(self):
+        d = self._make(trigger_high=-1, trigger_low=0)
+        assert d.trigger_high is None  # 负值
+        assert d.trigger_low is None  # 0
+
+    def test_bool_and_nan_rejected(self):
+        d = self._make(trigger_high=True, trigger_low=float("nan"))
+        assert d.trigger_high is None
+        assert d.trigger_low is None
+
+    def test_absent_fields_default_none(self):
+        d = self._make()
+        assert d.trigger_high is None
+        assert d.trigger_low is None

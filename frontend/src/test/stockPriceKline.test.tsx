@@ -105,6 +105,38 @@ describe('StockPriceChart K 线分支', () => {
     expect(yItems.length).toBe(1)
     expect(yItems[0].yAxis).toBe(11.2)
   })
+
+  // add-watch-trigger-tracking：watch 决策触发位（trigger_high/trigger_low）→
+  // 「上破触发」「下破触发」点线 markLine（与入场/止损/目标虚线可区分，配色对齐后端 PNG）。
+  it('watch 触发位渲染为上破/下破触发点线 markLine', () => {
+    const d = baseData(true)
+    d.price.decision_levels = { ...baseData(true).price.decision_levels!, trigger_high: 11.8, trigger_low: 9.5 }
+    render(<StockPriceChart data={d} />)
+    const opt: any = captured[captured.length - 1]
+    const candle = seriesOf(opt).find((s) => s?.type === 'candlestick')
+    const triggers: any[] = candle.markLine.data.filter((i: any) =>
+      ['上破触发', '下破触发'].includes(i?.label?.formatter),
+    )
+    expect(triggers).toHaveLength(2)
+    const high = triggers.find((t) => t.label.formatter === '上破触发')
+    const low = triggers.find((t) => t.label.formatter === '下破触发')
+    expect(high.yAxis).toBe(11.8)
+    expect(low.yAxis).toBe(9.5)
+    // 与入场/止损/目标参考线可区分：点线（对齐后端 PNG 渲染）
+    for (const t of triggers) expect(t.lineStyle?.type).toBe('dotted')
+    expect(high.lineStyle?.color).toBe('#E67E22')
+    expect(low.lineStyle?.color).toBe('#8E44AD')
+  })
+
+  it('无触发位字段时不渲染触发 markLine', () => {
+    render(<StockPriceChart data={baseData(true)} />)
+    const opt: any = captured[captured.length - 1]
+    const candle = seriesOf(opt).find((s) => s?.type === 'candlestick')
+    const triggers: any[] = candle.markLine.data.filter((i: any) =>
+      ['上破触发', '下破触发'].includes(i?.label?.formatter),
+    )
+    expect(triggers).toHaveLength(0)
+  })
 })
 
 describe('K 线 tooltip formatter（开高低收/涨跌幅/成交量/MA）', () => {

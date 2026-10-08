@@ -198,7 +198,8 @@ export interface ChartData {
     }>
     earnings_dates: string[]
     ma?: { ma5: (number | null)[]; ma20: (number | null)[]; ma60: (number | null)[] }
-    decision_levels?: { entry_price?: number; stop_loss?: number; target_price?: number }
+    // trigger_high/trigger_low（add-watch-trigger-tracking）：watch 决策的触发价位，仅 watch 决策存在
+    decision_levels?: { entry_price?: number; stop_loss?: number; target_price?: number; trigger_high?: number; trigger_low?: number }
   }
   kpi: {
     current_price?: number

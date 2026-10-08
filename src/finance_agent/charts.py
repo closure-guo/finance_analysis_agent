@@ -117,7 +117,8 @@ def _placeholder_text(ax, text: str) -> None:
     )
 
 
-_DECISION_LEVEL_KEYS = ("entry_price", "stop_loss", "target_price")
+# add-watch-trigger-tracking：watch 双向触发位随决策价位同路采集（缺省不携带）
+_DECISION_LEVEL_KEYS = ("entry_price", "stop_loss", "target_price", "trigger_high", "trigger_low")
 
 
 def _moving_average(values: list[float | None], window: int) -> list[float | None]:
@@ -498,6 +499,11 @@ _DECISION_LEVEL_SPECS = (
     ("stop_loss", "止损", _C_GREEN),
     ("target_price", "目标", _C_RED),
 )
+# add-watch-trigger-tracking：触发位参考线（点线 + 独立配色，与入场/止损/目标虚线可区分）
+_TRIGGER_LEVEL_SPECS = (
+    ("trigger_high", "上破触发", "#E67E22"),
+    ("trigger_low", "下破触发", "#8E44AD"),
+)
 
 
 def _mark_earnings(ax, daily: list[dict], closes: list, earnings_dates: list[str]) -> None:
@@ -601,6 +607,20 @@ def _chart_stock_price(data: dict, out: str) -> str | None:
     for key, label, color in _DECISION_LEVEL_SPECS:
         if key in levels:
             ax.axhline(y=levels[key], color=color, linewidth=1.0, linestyle="--", alpha=0.85)
+            ax.annotate(
+                label,
+                xy=(1.0, levels[key]),
+                xycoords=("axes fraction", "data"),
+                xytext=(3, 0),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+                va="center",
+            )
+
+    for key, label, color in _TRIGGER_LEVEL_SPECS:
+        if key in levels:
+            ax.axhline(y=levels[key], color=color, linewidth=1.0, linestyle=":", alpha=0.9)
             ax.annotate(
                 label,
                 xy=(1.0, levels[key]),
