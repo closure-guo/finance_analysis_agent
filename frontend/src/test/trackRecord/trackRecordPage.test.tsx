@@ -745,13 +745,33 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('无存量')
   })
 
-  it('存量旧口径 >0 时展示条数与未计入声明', async () => {
-    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 7 }), predictions: PREDICTIONS })
+  it('存量旧口径 >0 时展示「另有 n 条旧口径已结算」（术语对齐 delta spec）', async () => {
+    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 7, legacy_open: 0 }), predictions: PREDICTIONS })
     renderPage()
     await screen.findByText('贵州茅台')
     const legacy = screen.getByTestId('track-record-legacy')
-    expect(legacy).toHaveTextContent('7')
-    expect(legacy).toHaveTextContent('未计入')
+    expect(legacy).toHaveTextContent('另有 7 条旧口径已结算')
+  })
+
+  // 口径披露行双计数（update-track-record-display-clarity delta spec「口径披露行双计数」Scenario）：
+  // legacy_settled（已结算）与 legacy_open（进行中，不计入头条口径）分列披露
+  it('口径披露行双计数:legacy_settled 与 legacy_open 两分句同时渲染', async () => {
+    mockFetch({ overview: overviewWith({ caliber_horizon: 20, legacy_settled: 5, legacy_open: 7 }), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    const open = screen.getByTestId('track-record-legacy-open')
+    expect(open).toBeVisible()
+    expect(open).toHaveTextContent('另有 7 条旧口径进行中，不计入头条口径')
+    expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('另有 5 条旧口径已结算')
+  })
+
+  it('legacy_open=0 或缺省时不渲染进行中分句;legacy_settled=0 仍明示「无存量」', async () => {
+    // overviewWith 基线 legacy_settled: 0 且无 legacy_open 键（容忍旧后端）
+    mockFetch({ overview: overviewWith({}), predictions: PREDICTIONS })
+    renderPage()
+    await screen.findByText('贵州茅台')
+    expect(screen.queryByTestId('track-record-legacy-open')).not.toBeInTheDocument()
+    expect(screen.getByTestId('track-record-legacy')).toHaveTextContent('无存量')
   })
 
   it('回避读数缺失（老会话/缺字段）时不展示 0%，如实占位', async () => {

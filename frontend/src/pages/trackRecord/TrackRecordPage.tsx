@@ -408,7 +408,9 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             </div>
           </div>
 
-          {/* 口径披露（Δ2）：判定口径与存量旧口径计数常驻，不受样本门槛限制；存量 0 明示「无存量」 */}
+          {/* 口径披露（Δ2）：判定口径与存量旧口径计数常驻，不受样本门槛限制；存量 0 明示「无存量」。
+              update-track-record-display-clarity：双计数——legacy_settled（已结算）与
+              legacy_open（进行中，不计入头条口径）分列；legacy_open=0 或缺省不渲染该分句 */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 text-xs"
             style={{ color: 'var(--text-tertiary)' }} data-testid="track-record-caliber-row">
             <span data-testid="track-record-caliber">
@@ -419,8 +421,13 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 ? '存量旧口径：（未提供）'
                 : overview.legacy_settled === 0
                   ? '存量旧口径：无存量'
-                  : `另有 ${overview.legacy_settled} 条旧口径（252 日）历史未计入头条口径`}
+                  : `另有 ${overview.legacy_settled} 条旧口径已结算`}
             </span>
+            {overview.legacy_open !== undefined && overview.legacy_open > 0 && (
+              <span data-testid="track-record-legacy-open">
+                另有 {overview.legacy_open} 条旧口径进行中，不计入头条口径
+              </span>
+            )}
           </div>
 
           {/* 样本积累提示 */}

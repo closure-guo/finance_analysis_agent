@@ -545,6 +545,9 @@ export interface TrackRecordOverview {
   avoidance?: TrackRecordAvoidance
   caliber_horizon?: number
   legacy_settled?: number
+  // update-track-record-display-clarity：旧口径进行中计数（与 legacy_settled 双计数分列；
+  // 可选以容忍旧后端，0 或缺省时前端不渲染该分句）
+  legacy_open?: number
 }
 
 // 净值曲线点（add-track-record-stage-b）

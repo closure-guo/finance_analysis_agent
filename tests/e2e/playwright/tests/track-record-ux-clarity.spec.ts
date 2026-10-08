@@ -88,9 +88,14 @@ test.describe('战绩页:展示治理(add-track-record-display-clarity)', () => 
     // 两个收益格(区间收益/基准超额)同携盯市 title——以计数断言锁定,不用位置选择器
     await expect(peace.getByTitle('盯市 2026-10-08（未结算浮动）')).toHaveCount(2)
     // 601318 neutral open(无盯市,T+252):收益格 —
+    // (行级宽松断言:行内其他占位格也可能含 —,稀释已知限制;严格列级定位见 vitest 单测)
     const peaceNeutral = log.getByRole('row').filter({ hasText: '中国平安' }).filter({ hasText: '中性' })
     await expect(peaceNeutral).toHaveCount(1)
     await expect(peaceNeutral).toContainText('T+252')
+    await expect(peaceNeutral).toContainText('—')
+    // 口径披露行双计数:本套件种子中旧口径 open 行仅 601318 neutral h=252 一条
+    // (前位 spec 种子 horizon 均缺省 20)→ legacy_open=1
+    await expect(page.getByTestId('track-record-legacy-open')).toContainText('另有 1 条旧口径进行中')
     // 副标题不再含「20 日」
     await expect(page.getByTestId('prediction-log-header')).not.toContainText('20 日')
   })
