@@ -650,6 +650,43 @@ class TestDecisionPriceGate:
         assert "未再次打回" in inaction_note
         assert "未再次打回" in result["final_reeval_check"]["note"]
 
+    @patch("finance_agent.nodes._llm_utils.call_llm_streaming")
+    def test_price_gate_retry_to_watch_missing_triggers_annotated(self, mock_llm):
+        """add-watch-trigger-tracking 评审收口：门禁重试翻转型（sell→watch 缺触发位）。
+
+        门禁重试换代发生在 final_trigger_check 主块之后：翻转出的 watch 缺
+        trigger_high/trigger_low 时不得停留空注假阳性；打回预算已被门禁用掉，
+        只如实标注放行（MUST NOT 再打回/死循环）。理由与再评估触发条件齐备申报，
+        隔离兄弟回路（inaction/reeval 结论保持干净，锁定本注只属触发位）。
+        """
+        mock_llm.side_effect = [
+            _sell_decision_json(_BAD_TRIGGER),
+            json.dumps(
+                {
+                    "action": "watch",
+                    "confidence": 0.6,
+                    "reasoning": "趋势不明，暂观望",
+                    "position_size": "light",
+                    "inaction_reason": "方向未明，等待触发信号",
+                    "reeval_triggers": ["趋势指标翻转后再评估"],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+        result = risk_judge(dict(_PRICE_GATE_STATE))
+        assert mock_llm.call_count == 2  # 预算已花在门禁打回：触发位不再打回
+        assert result["final_trade_decision"].action == "watch"
+        assert result["final_trade_decision"].trigger_high is None
+        assert result["final_trade_decision"].trigger_low is None
+        assert result["final_trigger_check"]["result"] == "pass"
+        note = result["final_trigger_check"]["note"]
+        assert "价位交叉校验重试" in note
+        assert "触发位" in note
+        assert "未再次打回" in note
+        # 隔离证明：翻转稿理由/触发条件齐备 → 兄弟结论不被本注污染
+        assert result["final_inaction_check"]["note"] == ""
+        assert result["final_reeval_check"]["note"] == ""
+
 
 class TestGateAdmissionLayering:
     """update-decision-price-gate-admission（incident 034 owner 终裁已批）：

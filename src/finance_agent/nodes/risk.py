@@ -560,6 +560,17 @@ def risk_judge(state: dict) -> dict:
             final_reeval_check["note"] = (
                 "价位交叉校验重试后终稿未申报再评估触发条件（未再次打回，如实标注）"
             )
+        # 重试换代复核触发位结论（add-watch-trigger-tracking 评审收口）：门禁重试可把
+        # 终稿翻成 watch 而双向触发位缺失——主块此时已过，空注 pass 是假阳性。打回
+        # 预算已被门禁用掉，不再打回（MUST NOT 死循环），如实标注放行
+        if (
+            str(getattr(decision, "action", "")) == "watch"
+            and getattr(decision, "trigger_high", None) is None
+            and getattr(decision, "trigger_low", None) is None
+        ):
+            final_trigger_check["note"] = (
+                "价位交叉校验重试后终稿改为 watch 且触发位缺失（未再次打回，如实标注）"
+            )
         decision_price_anomalies = _run_price_check(decision)
         if decision_price_anomalies:
             # 门禁准入恶化判据分层（update-decision-price-gate-admission，owner 终裁

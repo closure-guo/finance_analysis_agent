@@ -127,8 +127,9 @@ _FM_INCOMPLETE_MARKERS: tuple[str, ...] = ("仍未申报", "缺失")
 def _fm_incomplete_integrity_block(state: dict) -> str:
     """审批对象结构不完整标注块（update-decision-integrity-gates Task 4）。
 
-    从终稿四个完整性检查键（final_price_check/final_inaction_check/final_reeval_check
-    与 decision_price_gate 复核注，经 fund_manager.final_integrity_notes 单源收集）中
+    从终稿五个完整性检查键（final_price_check/final_inaction_check/final_reeval_check/
+    final_trigger_check 与 decision_price_gate 复核注，经 fund_manager.final_integrity_notes
+    单源收集）中
     挑出标记「不完整」（_FM_INCOMPLETE_MARKERS 命中）的 note 原文逐项列出；
     无不完整标注返回空串（零增量，无空标注行——pass 复核注如「打回后已修正」不渲染）。
     """

@@ -283,6 +283,7 @@ class TestGateRecheckNoteNeverLeaksReport:
             "final_price_check": {"result": "pass", "note": "打回后已申报"},
             "final_inaction_check": {"result": "pass", "note": "打回后已申报"},
             "final_reeval_check": {"result": "pass", "note": "打回后已申报"},
+            "final_trigger_check": {"result": "pass", "note": "打回后已申报"},
             "decision_price_gate": {"result": "pass", "note": "打回后已修正"},
             # 报告产出前提：gate pass 后管线走完 FM 审批（标注渲染挂 FM 分支）
             "fund_manager_decision": "approve",
