@@ -2334,6 +2334,9 @@ async def track_record_overview(
         },
         "caliber_horizon": DEFAULT_HORIZON_DAYS,
         "legacy_settled": legacy_all["settled"] - stats["settled"],
+        # update-track-record-display-clarity：旧口径 open 计数（差值法，与 legacy_settled 对称；
+        # 披露行双计数治「无存量」与全部 tab 内旧口径行的观感矛盾）
+        "legacy_open": max(0, legacy_all["open"] - stats["open"]),
     }
 
 

@@ -607,3 +607,16 @@ def test_current_endpoint_source_filter(monkeypatch, tmp_path):
     resp = TestClient(app).get("/api/v1/track-record/current?source=live")
     assert resp.status_code == 200
     assert [r["symbol"] for r in resp.json()["current"]] == ["600015.SH"]
+
+
+def test_overview_legacy_open_counts_non_headline_open(monkeypatch, tmp_path):
+    """legacy_open=不在头条口径内的 open 计数（与 legacy_settled 对称的差值法）。"""
+    db = _use_db(monkeypatch, tmp_path)
+    _insert(db, symbol="600015.SH", created_at="2026-10-01T10:00:00")  # T+20 open（头条）
+    _insert(db, symbol="600016.SH", horizon_days=252, created_at="2026-08-01T10:00:00")
+    _insert(db, symbol="600017.SH", horizon_days=252, created_at="2026-08-02T10:00:00")
+    resp = TestClient(app).get("/api/v1/track-record/overview")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["legacy_open"] == 2
+    assert data["legacy_settled"] == 0
