@@ -7,13 +7,8 @@ import { navigate } from '../../route'
 import { cssVar } from '../../Charts'
 import { loadTrackPrefs, type TrackTimeSpan } from '../../lib/trackPrefs'
 import { PREDICTION_STATUS_CLS as STATUS_CLS, PREDICTION_STATUS_LABEL as STATUS_LABEL } from './predictionStatus'
+import { DIRECTION_LABEL } from './predictionDisplay'
 import { IndexCompareCard } from './IndexCompareCard'
-
-const DIRECTION_LABEL: Record<string, string> = {
-  long: '看多',
-  short: '看空',
-  neutral: '中性',
-}
 
 // 可排序列（add-track-record-sort-filter）：与后端 _SORT_WHITELIST 对齐；
 // sortable: false 为纯展示列（不渲染排序按钮）
@@ -375,7 +370,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
               <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>{overview.total}</div>
             </div>
             <div className="rounded-xl p-4" style={{ background: 'var(--bg-overlay-l1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>胜率（已判定）</div>
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>胜率（已结算）</div>
               <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>
                 {showWinRate ? `${(overview.win_rate! * 100).toFixed(1)}%` : '—'}
               </div>
@@ -385,12 +380,12 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 src/finance_agent/api.py 的 avoidance_rate 组装），前端只认 null，
                 不再复制「10」这个阈值。null → 「样本积累中」，绝不折算 0% */}
             <div className="rounded-xl p-4" data-testid="track-record-avoidance" style={{ background: 'var(--bg-overlay-l1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>回避正确率（neutral 已判定）</div>
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>回避正确率（中性观点已结算）</div>
               {overview.avoidance === undefined ? (
                 <div className="text-2xl font-semibold" style={{ color: 'var(--text-default)' }}>—</div>
               ) : overview.avoidance.avoidance_rate === null ? (
                 <div className="text-sm font-medium mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  样本积累中（已判定 {overview.avoidance.settled} 条，满 10 条解锁）
+                  样本积累中（已结算 {overview.avoidance.settled} 条，满 10 条解锁）
                 </div>
               ) : (
                 <>
@@ -431,7 +426,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
           {/* 样本积累提示 */}
           {overview.insufficient_sample && (
             <div className="mb-4 rounded-lg px-4 py-3 text-xs" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-secondary)' }} data-testid="track-record-insufficient">
-              样本积累中（已判定 {overview.settled} 条，满 10 条解锁胜率）
+              样本积累中（已结算 {overview.settled} 条，满 10 条解锁胜率）
             </div>
           )}
 
@@ -490,8 +485,15 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
-          {/* 切片指标（stage-c：持有期/行业/市值/市场环境，n<10 标样本不足） */}
-          {segments !== null && segments.length > 0 && (
+          {/* 切片指标（stage-c：持有期/行业/市值/市场环境，n<10 标样本不足）。
+              update-track-record-display-clarity:settled=0 时折叠为一行说明——
+              首批观点结算前分桶表全是空桶，展示空表徒增噪音；settled>0 时
+              沿用原区块（segments 加载守卫保留，避免 overview 先到时 map 空指针） */}
+          {overview.settled === 0 ? (
+            <div className="rounded-xl p-4 mb-6" data-testid="track-record-segments-empty" style={{ background: 'var(--bg-overlay-l1)', color: 'var(--text-tertiary)' }}>
+              切片指标将在首批观点结算后可用
+            </div>
+          ) : segments !== null && segments.length > 0 ? (
             <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="track-record-segments">
               <div className="text-xs mb-3" style={{ color: 'var(--text-tertiary)' }}>切片指标（n&lt;10 标注「样本不足」）</div>
               <div className="grid md:grid-cols-2 gap-4">
@@ -525,7 +527,7 @@ export function TrackRecordPage({ onBack }: { onBack: () => void }) {
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
 
           {/* 净值曲线（stage-b：agent vs 沪深300，起点归一 1.0；数据缺口断点不插值） */}
           {showCurve && (

@@ -5,11 +5,13 @@ import type { PredictionStatus } from '../../types'
 // avoidance = neutral 观点回避判定终态，标签「回避」；细粒度回避结果（avoidance_win/loss/neutral）
 // 在 avoidance_status 列，本页不做数值展示（留待后续增量）。
 // duplicate_of_day = 同日重复观点关闭终态（add-prediction-pool-integrity），标签「同日重复」。
+// update-track-record-display-clarity:resolved_neutral 标签「中性」→「带内中性」——
+// 与方向「中性」（观望）消歧；后端 _STATUS_LABELS 已同步（keyword=中性 现只匹配 direction）。
 export const PREDICTION_STATUS_LABEL: Record<PredictionStatus, string> = {
   open: '进行中',
   resolved_win: '命中',
   resolved_loss: '未中',
-  resolved_neutral: '中性',
+  resolved_neutral: '带内中性',
   avoidance: '回避',
   unresolvable: '不可判定',
   duplicate_of_day: '同日重复',

@@ -720,7 +720,8 @@ describe('总览三披露：回避正确率 / 判定口径 / 存量旧口径（a
     await screen.findByText('贵州茅台')
     const card = screen.getByTestId('track-record-avoidance')
     expect(card).toHaveTextContent('样本积累中')
-    expect(card).toHaveTextContent('已判定 3 条')
+    // update-track-record-display-clarity:术语「已判定」→「已结算」
+    expect(card).toHaveTextContent('已结算 3 条')
     expect(card.textContent ?? '').not.toContain('0%')
   })
 
@@ -960,5 +961,32 @@ describe('观点日志同日重复行折叠（update-track-record-display-clarit
     fireEvent.click(screen.getByTestId('dup-group-000858.SH-2026-10-05'))
     expect(screen.getByTestId('prediction-row-d1')).toBeInTheDocument()
     expect(screen.getByTestId('prediction-row-d3')).toBeInTheDocument()
+  })
+})
+
+// 切片空态折叠 + 术语消歧（update-track-record-display-clarity）：settled=0 时切片区
+// 折叠为一行说明；横幅「已判定」→「已结算」；resolved_neutral 状态标签「中性」→「带内中性」
+// （与方向「中性」消歧，后端 _STATUS_LABELS 已同步）
+describe('切片空态折叠与术语消歧（update-track-record-display-clarity）', () => {
+  beforeEach(() => vi.spyOn(window, 'scrollTo').mockImplementation(() => {}))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('切片空态:settled=0 时折叠为一行说明,不渲染分桶表格', async () => {
+    mockFetch({ current: [], predictions: [] })
+    renderPage()
+    expect(await screen.findByTestId('track-record-segments-empty')).toHaveTextContent('切片指标将在首批观点结算后可用')
+    expect(screen.queryByTestId('track-record-segments')).not.toBeInTheDocument()
+  })
+
+  it('术语消歧:横幅用已结算,带内中性标签替换中性', async () => {
+    mockFetch({ current: [], predictions: [
+      { ...PREDICTIONS[0], status: 'resolved_neutral', resolution_rule: 'superseded' },
+    ] })
+    renderPage()
+    // 横幅:已结算(原「已判定 0 条」)
+    expect(await screen.findByTestId('track-record-insufficient')).toHaveTextContent('已结算 0 条')
+    expect(screen.getByTestId('track-record-insufficient').textContent).not.toContain('已判定 0 条')
+    // 状态标签:带内中性
+    expect(screen.getByTestId('prediction-log')).toHaveTextContent('带内中性')
   })
 })

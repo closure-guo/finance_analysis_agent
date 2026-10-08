@@ -5,6 +5,7 @@ import type { PredictionDetail } from '../../types'
 import { Button } from '../../components/ui/button'
 import { cssVar } from '../../Charts'
 import { PREDICTION_STATUS_LABEL } from './predictionStatus'
+import { DIRECTION_LABEL, RESOLUTION_RULE_LABEL } from './predictionDisplay'
 
 function fmt(v: number | null, digits = 2) {
   return v === null ? '—' : v.toFixed(digits)
@@ -86,14 +87,14 @@ export function PredictionDetailPage({ predictionId, onBack }: { predictionId: s
           <div className="rounded-xl p-4 mb-6" style={{ background: 'var(--bg-overlay-l1)' }} data-testid="prediction-decision">
             <div className="text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>判定信息</div>
             <Field label="状态">{PREDICTION_STATUS_LABEL[p.status] ?? p.status}</Field>
-            <Field label="方向">{p.direction}</Field>
+            <Field label="方向"><span title={p.direction}>{DIRECTION_LABEL[p.direction] ?? p.direction}</span></Field>
             <Field label="置信度">{fmt(p.confidence, 2)}</Field>
             <Field label="入场价">{fmt(p.entry_price)}</Field>
             <Field label="目标价">{fmt(p.target_price)}</Field>
             <Field label="结算价">{fmt(p.exit_price)}</Field>
             <Field label="区间收益"><Delta value={p.raw_return} /></Field>
             <Field label="基准超额"><Delta value={p.excess_return} /></Field>
-            <Field label="判定规则">{p.resolution_rule ?? '—'}</Field>
+            <Field label="判定规则">{p.resolution_rule ? <span title={p.resolution_rule}>{RESOLUTION_RULE_LABEL[p.resolution_rule] ?? p.resolution_rule}</span> : '—'}</Field>
             <Field label="创建时间">{p.created_at?.slice(0, 19).replace('T', ' ') ?? '—'}</Field>
             <Field label="判定时间">{p.resolved_at ?? '—'}</Field>
           </div>
