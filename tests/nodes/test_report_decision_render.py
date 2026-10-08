@@ -6,10 +6,15 @@ MODIFIED：档位词表 light/moderate/heavy 大小写不敏感，非法字面�
 Task 3：buy/sell 终稿再评估触发条件渲染（缺失「未申报」）；update-decision-price-gate：
 报警仅进 trace，渲染链不接收 anomalies。
 update-decision-price-gate T4 收口：gate 复核注（pass 形态）不泄「结构不完整」报告标注。
+add-watch-trigger-tracking Task 5：watch 触发位行（缺失如实「未申报」，禁文本回填）、
+入池跟踪声明行（FM approve 时）、数据真空提示行（报告日与行情截止日间隔 >3 自然日）。
 """
 
 import inspect
+from datetime import date
+from typing import Any
 
+import pandas as pd
 import pytest
 
 from finance_agent.models import TradeDecision
@@ -209,9 +214,12 @@ class TestPriceAlarmNeverRendered:
     def test_rendering_chain_no_longer_accepts_anomalies(self):
         assert "anomalies" not in inspect.signature(_format_trade_decision).parameters
         assert "anomalies" not in inspect.signature(_fmt_reeval_triggers).parameters
-        # anomalies 实参必须被拒绝（签名收窄后 TypeError）
+        # anomalies 实参必须被拒绝（签名收窄后 TypeError）。add-watch-trigger-tracking
+        # Task 5：新参数（data_cutoff/fund_approved/report_date）均为 keyword-only——
+        # positional 第二实参仍被运行时 TypeError 拒绝，mypy 错误码由 call-arg 变为
+        # misc（位置超限）+ arg-type（误绑 data_cutoff），护栏语义不变
         with pytest.raises(TypeError):
-            _format_trade_decision(
+            _format_trade_decision(  # type: ignore[misc]
                 TradeDecision.model_validate(
                     {
                         "action": "watch",
@@ -221,7 +229,7 @@ class TestPriceAlarmNeverRendered:
                         "reeval_triggers": ["价格回落至 1500 以下", "跌破 1400 元离场"],
                     }
                 ),
-                [self.ANOMALY],  # type: ignore[call-arg]
+                [self.ANOMALY],  # type: ignore[arg-type]
             )
 
     def test_trigger_entry_rendered_without_annotation(self):
@@ -364,3 +372,150 @@ class TestSellTypeSplitRendering:
         )
         md = _format_trade_decision(decision)
         assert "入场价" in md  # None → short 模板（历史兼容）
+
+
+class TestWatchTriggerRendering:
+    """add-watch-trigger-tracking：watch 触发位行/入池声明/数据真空提示。
+
+    触发位缺失如实「未申报」（与建仓参数「未提供」词形刻意区分），MUST NOT 从
+    reeval_triggers 文本解析回填；入池声明仅 FM approve 渲染；真空提示作用于全部
+    action，间隔 >3 自然日才提示（=阈值不提示，截止晚于报告日不提示）。
+    """
+
+    @staticmethod
+    def _watch(**kw: Any) -> TradeDecision:
+        base: dict[str, Any] = {
+            "action": "watch",
+            "confidence": 0.55,
+            "reasoning": "r",
+            "inaction_reason": "观望",
+            "reeval_triggers": ["站上 24.6 重估"],
+        }
+        base.update(kw)
+        return TradeDecision.model_validate(base)
+
+    @staticmethod
+    def _buy() -> TradeDecision:
+        return TradeDecision.model_validate(
+            {
+                "action": "buy",
+                "confidence": 0.6,
+                "reasoning": "r",
+                "entry_price": 10.0,
+                "stop_loss": 9.0,
+                "target_price": 12.0,
+            }
+        )
+
+    def test_watch_renders_trigger_rows(self):
+        md = _format_trade_decision(self._watch(trigger_high=24.6, trigger_low=22.91))
+        assert "- **上破触发位**: 24.6" in md
+        assert "- **下破触发位**: 22.91" in md
+
+    def test_watch_missing_triggers_annotated_not_parsed(self):
+        md = _format_trade_decision(self._watch())
+        assert "- **上破触发位**: 未申报" in md
+        assert "- **下破触发位**: 未申报" in md
+        # MUST NOT 从 reeval_triggers 文本解析回填（「站上 24.6 重估」只属再评估行）
+        assert "24.6" not in md.split("上破触发位")[1].split("下破触发位")[0]
+
+    def test_buy_does_not_render_trigger_rows(self):
+        md = _format_trade_decision(self._buy())
+        assert "上破触发位" not in md
+        assert "下破触发位" not in md
+
+    def test_hold_renders_trigger_rows(self):
+        """hold 与 watch 同为无建仓参数动作，触发位行同模板（现有分支按 watch/hold）。"""
+        decision = TradeDecision.model_validate(
+            {
+                "action": "hold",
+                "confidence": 0.5,
+                "reasoning": "r",
+                "inaction_reason": "持有观察",
+                "reeval_triggers": ["跌破 22 重估"],
+            }
+        )
+        md = _format_trade_decision(decision)
+        assert "- **上破触发位**: 未申报" in md
+        assert "- **下破触发位**: 未申报" in md
+
+    def test_pool_declaration_rendered_when_approved(self):
+        md = _format_trade_decision(self._watch(trigger_high=24.6), fund_approved=True)
+        assert "- **跟踪**:" in md
+        assert "已入池跟踪" in md and "交易日窗口结算" in md
+
+    def test_pool_declaration_absent_when_not_approved(self):
+        md = _format_trade_decision(self._watch(trigger_high=24.6), fund_approved=False)
+        assert "已入池跟踪" not in md
+
+    def test_data_vacuum_notice_rendered(self):
+        md = _format_trade_decision(
+            self._watch(trigger_high=24.6),
+            data_cutoff=date(2026, 9, 30),
+            report_date=date(2026, 10, 8),
+        )
+        assert "数据真空" in md and "跳空缺口" in md
+        assert "2026-09-30" in md
+
+    def test_no_vacuum_notice_when_fresh(self):
+        md = _format_trade_decision(
+            self._watch(trigger_high=24.6),
+            data_cutoff=date(2026, 10, 8),
+            report_date=date(2026, 10, 8),
+        )
+        assert "跳空缺口" not in md
+        assert "数据真空" not in md
+
+    def test_vacuum_notice_at_threshold_boundary_absent(self):
+        """间隔恰为阈值（3 自然日，如节前最后交易日 + 假期 3 天）不提示——spec 为
+        「间隔 >3 自然日」。"""
+        md = _format_trade_decision(
+            self._watch(trigger_high=24.6),
+            data_cutoff=date(2026, 10, 5),
+            report_date=date(2026, 10, 8),
+        )
+        assert "跳空缺口" not in md
+
+    def test_vacuum_notice_absent_when_cutoff_after_report_date(self):
+        """截止晚于报告日的异常态（间隔 <=0）不提示，不渲染负数天数。"""
+        md = _format_trade_decision(
+            self._watch(trigger_high=24.6),
+            data_cutoff=date(2026, 10, 9),
+            report_date=date(2026, 10, 8),
+        )
+        assert "跳空缺口" not in md
+
+    def test_vacuum_notice_renders_for_buy_too(self):
+        """真空提示作用于全部 action——buy/sell 价位行同样锚定行情截止日收盘价。"""
+        md = _format_trade_decision(
+            self._buy(),
+            data_cutoff=date(2026, 9, 30),
+            report_date=date(2026, 10, 8),
+        )
+        assert "跳空缺口" in md
+
+    def test_generate_report_wires_cutoff_triggers_pool_and_vacuum(self):
+        """生产路径接线：kline 截止日 → 真空提示；FM approve → 入池声明；触发位行
+        进交易决策节（头部行情截止行既有行为不回归）。"""
+        kline = pd.DataFrame({"日期": ["2026-09-29", "2026-09-30"], "收盘": [100.0, 101.0]})
+        state = {
+            "stock_code": "688072",
+            "kline": kline,
+            "final_trade_decision": {
+                "action": "watch",
+                "confidence": 0.55,
+                "reasoning": "r",
+                "inaction_reason": "观望",
+                "reeval_triggers": ["站上 24.6 重估"],
+                "trigger_high": 24.6,
+                "trigger_low": 22.91,
+            },
+            "fund_manager_decision": "approve",
+        }
+        md = generate_report(state)["final_report"]
+        assert "行情数据截止: 2026-09-30" in md
+        assert "- **上破触发位**: 24.6" in md
+        assert "- **下破触发位**: 22.91" in md
+        assert "已入池跟踪" in md
+        # 2026-09-30 距实际报告生成日恒 >3 自然日（今日 2026-10-08 起）→ 提示在场
+        assert "数据真空" in md

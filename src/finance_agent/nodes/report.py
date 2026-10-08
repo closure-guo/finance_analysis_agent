@@ -12,7 +12,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from finance_agent.charts import collect_chart_data, generate_all_charts
@@ -21,6 +21,7 @@ from finance_agent.llm.output_guard import validate_deliverable_text
 from finance_agent.metric_vocab import render_date
 from finance_agent.models import AnalystReport, DebateMessage, TradeDecision
 from finance_agent.nodes.fund_manager import final_integrity_notes
+from finance_agent.outcome.track_record.judgment import DEFAULT_HORIZON_DAYS
 
 # ── focus -> 结构化标签（规则驱动，可测试） ──
 
@@ -403,7 +404,7 @@ def generate_report(state: dict) -> dict:
     """
     stock_name = state.get("stock_name", "N/A")
     stock_code = state.get("stock_code", "N/A")
-    date = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().date()  # add-watch-trigger-tracking：报告日（真空提示锚点）
     focus = (state.get("focus") or "").strip()
     focus_tags = parse_focus_tags(focus)
     has_focus = bool(focus_tags)
@@ -434,15 +435,19 @@ def generate_report(state: dict) -> dict:
 
     sections: list[str] = [
         f"# {stock_name}({stock_code}) 投资分析报告",
-        f"\n*报告日期: {date}" + (f" · 研究聚焦: {focus}*\n" if has_focus else "*\n"),
+        f"\n*报告日期: {today.isoformat()}" + (f" · 研究聚焦: {focus}*\n" if has_focus else "*\n"),
     ]
 
     # 数据新鲜度披露（update-report-data-disclosure）：头部标注行情最后交易日，
     # 读者可从成稿判断数据新鲜度（假期生成报告用的是节前数据）；kline 缺失时
     # 省略而非回退到报告生成日期（不伪造新鲜度）
     kline_df = state.get("kline")
+    # add-watch-trigger-tracking：行情截止日（date 形态）随 kline 解析，供交易决策节
+    # 数据真空提示使用；kline 缺失/解析失败时 None（与头部截止行同取值，不伪造新鲜度）
+    data_cutoff: date | None = None
     if kline_df is not None and not kline_df.empty and "日期" in kline_df.columns:
         cutoff = render_date(kline_df["日期"].iloc[-1])
+        data_cutoff = _parse_cutoff_date(cutoff)
         sections[1] = sections[1].replace("*\n", f" · 行情数据截止: {cutoff}*\n", 1)
 
     seq = 0  # 章节序号计数器，统一管理编号，避免硬编码错位
@@ -539,7 +544,15 @@ def generate_report(state: dict) -> dict:
     decision = state.get("final_trade_decision") or state.get("trader_plan")
     if decision:
         # update-decision-price-gate：报警仅进 trace，渲染链不接收 anomalies
-        sections.append(f"{next_title('交易决策')}\n{_format_trade_decision(decision)}\n")
+        # add-watch-trigger-tracking：行情截止日/入池声明（FM approve）/报告日进渲染
+        # ——数据真空提示与入池跟踪声明的数据源
+        decision_md = _format_trade_decision(
+            decision,
+            data_cutoff=data_cutoff,
+            fund_approved=state.get("fund_manager_decision") == "approve",
+            report_date=today,
+        )
+        sections.append(f"{next_title('交易决策')}\n{decision_md}\n")
 
     risk_history = state.get("risk_debate_history") or []
     if risk_history:
@@ -666,6 +679,29 @@ def _fmt_price(value: object) -> str:
     return f"{v:g}"
 
 
+# add-watch-trigger-tracking：行情截止与报告日最大可接受间隔（自然日），超出即提示
+# 数据真空（跳空缺口可能使触发条件失真）
+_DATA_VACUUM_THRESHOLD_DAYS = 3
+
+
+def _fmt_trigger_level(value: object) -> str:
+    """watch 触发位渲染：数值口径与入场/止损/目标价行一致（_fmt_price 的 :g），
+    缺失/非法如实「未申报」——与建仓参数的「未提供」词形刻意区分
+    （add-watch-trigger-tracking：触发位是 watch/hold 的申报决策参数）。
+    MUST NOT 从 reeval_triggers 文本解析回填。
+    """
+    rendered = _fmt_price(value)
+    return "未申报" if rendered == "未提供" else rendered
+
+
+def _parse_cutoff_date(value: str) -> date | None:
+    """行情截止串（render_date 产物 YYYY-MM-DD）→ date；解析失败返回 None（不炸渲染）。"""
+    try:
+        return date.fromisoformat(value.strip())
+    except (AttributeError, ValueError):
+        return None
+
+
 def _fmt_derived_metrics(action: str, entry: object, stop: object, target: object) -> str:
     """派生指标行（buy/sell）：止损距离与赔率由代码按参数原值计算。
 
@@ -729,7 +765,13 @@ def _fmt_reeval_triggers(triggers: object) -> str:
     return "；".join(parts)
 
 
-def _format_trade_decision(decision: TradeDecision | dict) -> str:
+def _format_trade_decision(
+    decision: TradeDecision | dict,
+    *,
+    data_cutoff: date | None = None,
+    fund_approved: bool = False,
+    report_date: date | None = None,
+) -> str:
     """格式化交易决策（report-render-operational-params：渲染完整操作参数）。
 
     buy/sell 渲染仓位+入场/止损/目标价（0/缺失「未提供」）与「再评估触发条件」行
@@ -738,6 +780,10 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
     watch/hold 语义上无建仓参数，不渲染硬价格行，渲染结构化「不行动原因」与
     「再评估触发条件」（缺失如实标注「未申报」，require-watch-hold-rationale）。
     update-decision-price-gate：报警仅进 trace，渲染链不接收 anomalies。
+    add-watch-trigger-tracking：watch/hold 增渲染双向触发位行（缺失如实「未申报」，
+    禁从 reeval_triggers 文本解析回填）；fund_approved 时渲染入池跟踪声明；
+    data_cutoff 与 report_date 间隔 >_DATA_VACUUM_THRESHOLD_DAYS 自然日时渲染数据
+    真空提示（全 action）。新参数仅关键字传参（旧单参调用兼容不变）。
     """
     if isinstance(decision, TradeDecision):
         action = decision.action
@@ -753,6 +799,8 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         triggers = getattr(decision, "reeval_triggers", []) or []
         sell_type = getattr(decision, "sell_type", None)
         exit_schedule = getattr(decision, "exit_schedule", None)
+        trigger_high = getattr(decision, "trigger_high", None)
+        trigger_low = getattr(decision, "trigger_low", None)
     else:
         action = decision.get("action", "N/A")
         confidence = decision.get("confidence", 0)
@@ -767,6 +815,8 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
         triggers = decision.get("reeval_triggers") or []
         sell_type = decision.get("sell_type")
         exit_schedule = decision.get("exit_schedule")
+        trigger_high = decision.get("trigger_high")
+        trigger_low = decision.get("trigger_low")
 
     lines = [f"- **方向**: {action}", f"- **置信度**: {confidence:.0%}"]
     # spec report-decision-rendering：仓位档位为必含字段——缺失/非法字面量如实
@@ -794,6 +844,28 @@ def _format_trade_decision(decision: TradeDecision | dict) -> str:
             lines.append(f"- **不行动原因**: {inaction}")
         else:
             lines.append("- **不行动原因**: 未申报")
+    # add-watch-trigger-tracking：watch/hold 双向触发位行——申报值按价位行口径渲染，
+    # 缺失如实「未申报」，MUST NOT 从 reeval_triggers 文本解析回填（未申报即未申报）
+    if action in ("watch", "hold"):
+        lines.append(f"- **上破触发位**: {_fmt_trigger_level(trigger_high)}")
+        lines.append(f"- **下破触发位**: {_fmt_trigger_level(trigger_low)}")
+    # add-watch-trigger-tracking：入池跟踪声明——FM approve 后决策入池按固定窗口
+    # 结算，声明让读者可在战绩页对账
+    if fund_approved:
+        lines.append(
+            f"- **跟踪**: 本决策已入池跟踪，按 {DEFAULT_HORIZON_DAYS} 交易日窗口结算，"
+            "结算结果见战绩页"
+        )
+    # add-watch-trigger-tracking：数据真空提示（全 action）——报告日与行情截止日间隔
+    # 超阈值时跳空缺口可能使价位触发条件失真；间隔 <=0（截止晚于报告日的异常态）
+    # 不提示
+    if data_cutoff is not None and report_date is not None:
+        vacuum_days = (report_date - data_cutoff).days
+        if vacuum_days > _DATA_VACUUM_THRESHOLD_DAYS:
+            lines.append(
+                f"- ⚠ 数据真空提示：触发价位锚定 {data_cutoff.isoformat()} 收盘价，"
+                f"期间 {vacuum_days} 个自然日无行情，跳空缺口可能使触发条件失真"
+            )
     # Task 3：reeval_triggers 为全部 action 的必渲染对象——buy/sell 清洗后为空时
     # 「未申报」行保留（601818 形态），MUST NOT 整行省略或编造条目
     lines.append(f"- **再评估触发条件**: {_fmt_reeval_triggers(triggers)}")
