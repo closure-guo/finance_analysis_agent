@@ -21,7 +21,7 @@
 
 ## Decisions
 
-**D1 独立端点而非列表参数。** `GET /api/v1/track-record/current` 作为独立资源，而不是给 `/predictions` 加 `latest_per_symbol=true`：语义不同（立场视图 vs 台账），列表端点参数面已经很大；独立端点可直接单测 SQL 语义。响应结构 `{current: PredictionRecord[], total, as_of, disclaimer}`，行结构复用 `list_predictions` 的行（同一 `row_to_prediction` 映射）。
+**D1 独立端点而非列表参数。** `GET /api/v1/track-record/current` 作为独立资源，而不是给 `/predictions` 加 `latest_per_symbol=true`：语义不同（立场视图 vs 台账），列表端点参数面已经很大；独立端点可直接单测 SQL 语义。响应结构 `{current: PredictionRecord[], total, as_of, disclaimer}`，行结构复用 `list_predictions` 的行映射方式（同为 `SELECT *` → `dict(row)`，与台账行同构）。
 
 **D2 「最新一条 open」的定义。** 立场 = 该标的 `status='open'` 中 `created_at` 最大者。不用「最新非 dup 行」：若最新行是 dup（日批关闭）或 superseded（被更新观点结算），它已不代表当前立场；`status='open'` 是唯一可靠的「仍在窗口内的活跃主张」判据。SQL 用 join 子查询（`GROUP BY symbol` 取 `MAX(created_at)`），`prediction_id` 作同秒并列的确定性 tiebreak。日主机制保证同股同日至多一条 open，跨日多条由 MAX 自然收敛。
 
