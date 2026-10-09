@@ -101,6 +101,15 @@ class TestRunDeepAnalysisPeerCodes:
             "600000",
         ]
 
+    def test_resolve_tolerates_comma_joined_string(self):
+        """schema string 类型容错：LLM 可能传逗号串，须切分而非逐字符校验。
+
+        build_schema_from_function 对 list[str] | None 注解 fallback 为 JSON
+        "string"，LLM 端实际可能发 "000858,600519" 这类逗号串。
+        """
+        assert _resolve_peer_codes("000858,600519", None, exclude="600519") == ["000858"]
+        assert _resolve_peer_codes("000858， 601318", None) == ["000858", "601318"]
+
     def test_llm_schema_exposes_peer_codes(self):
         """工具 schema 对 LLM 可见 peer_codes（build_schema_from_function 从签名内省）。"""
         agent = build_agent(mode="deep", api_key="test-key")

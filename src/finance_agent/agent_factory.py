@@ -530,10 +530,17 @@ def _resolve_peer_codes(
 ) -> list[str] | None:
     """对标股代码归一化（add-peer-comparison）。
 
-    LLM 显式传参优先于请求级闭包注入；归一化=strip/剔非 6 位数字/去重/
-    剔除主标的自身/上限 3 只。全无效返回 None（不阻断主标的分析）。
+    LLM 显式传参优先于请求级闭包注入；归一化=字符串容错（schema string
+    fallback 下 LLM 可能传逗号串，按中英文逗号/顿号/空白切分）/strip/
+    剔非 6 位数字/去重/剔除主标的自身/上限 3 只。全无效返回 None
+    （不阻断主标的分析）。
     """
     raw = llm_codes if llm_codes else closure_codes
+    # 字符串容错：harness build_schema_from_function 对 list[str] | None 注解
+    # fallback 为 JSON "string"（llm_client.py 类型内省只认裸类型名），LLM 端
+    # 实际可能发 "000858,600519" 逗号串——直接迭代会逐字符校验、静默丢光。
+    if isinstance(raw, str):
+        raw = raw.replace("，", ",").replace("、", ",").replace(",", " ").split()
     if not raw:
         return None
     seen: list[str] = []
