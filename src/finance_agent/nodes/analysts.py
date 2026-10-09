@@ -689,9 +689,8 @@ def _build_fundamental_context(state: dict) -> str:
     # 同业对比
     peer = state.get("peer_comparison")
     if peer:
-        sections.append(
-            f"同业对比（state 键 peer_comparison）:\n{json.dumps(peer, ensure_ascii=False, default=str)}"
-        )
+        text = peer if isinstance(peer, str) else json.dumps(peer, ensure_ascii=False, default=str)
+        sections.append(f"同业对比（state 键 peer_comparison）:\n{text}")
 
     # 相对估值
     rval = state.get("relative_valuation")

@@ -683,3 +683,26 @@ class TestCoverageSourcesContext:
         ctx = _build_sentiment_context(state)
         assert "解禁" in ctx and "2026-10-09" in ctx
         assert "大宗" in ctx and "1270" in ctx
+
+
+class TestFundamentalPeerComparisonInjection:
+    def test_peer_comparison_string_injected_verbatim(self):
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        state = {"peer_comparison": "同业对比（主标的首行）：\n| 名称 | ..."}
+        ctx = _build_fundamental_context(state)
+        assert "同业对比（state 键 peer_comparison）" in ctx
+        assert "同业对比（主标的首行）：" in ctx  # 字符串直通，不再 json.dumps
+
+    def test_legacy_dict_still_rendered(self):
+        """防御：存量标志位 dict 形态不炸（向后兼容）。"""
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        ctx = _build_fundamental_context({"peer_comparison": {"available": True}})
+        assert "peer_comparison" in ctx
+
+    def test_no_peer_comparison_no_section(self):
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        ctx = _build_fundamental_context({})
+        assert "peer_comparison" not in ctx

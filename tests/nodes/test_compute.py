@@ -3,6 +3,8 @@
 import pandas as pd
 import pytest
 
+from finance_agent.nodes.compute import format_peer_comparison
+
 
 @pytest.fixture
 def sample_state(balance_sheet, income_statement, cash_flow, indicators):
@@ -163,3 +165,118 @@ class TestComputeMetrics:
         result = compute_metrics(sample_state)
         assert "technical_indicators" not in result
         assert "risk_metrics" not in result
+
+
+def _peer_df(rows):
+    cols = [
+        "name",
+        "code",
+        "PE",
+        "PB",
+        "total_mv",
+        "revenue_yoy",
+        "netprofit_yoy",
+        "gross_margin",
+        "report_period",
+    ]
+    return pd.DataFrame(rows, columns=cols)
+
+
+class TestFormatPeerComparison:
+    def test_full_table_target_first_row(self):
+        state = {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "peer_financials": _peer_df(
+                [
+                    {
+                        "name": "五粮液",
+                        "code": "000858",
+                        "PE": 15.0,
+                        "PB": 3.2,
+                        "total_mv": 5000.0,
+                        "revenue_yoy": 7.1,
+                        "netprofit_yoy": 8.2,
+                        "gross_margin": 76.5,
+                        "report_period": "2026-06-30",
+                    }
+                ]
+            ),
+            "latest_period_snapshot": {
+                "营收同比(%)": 9.1,
+                "归母净利同比(%)": 10.2,
+                "毛利率(%)": 91.3,
+                "报告日": "2026-06-30",
+            },
+        }
+        vs = {"PE": 22.0, "PE_ttm": None, "PB": 8.0, "market_cap": 18000.0}
+        text = format_peer_comparison(state, vs)
+        assert text is not None
+        lines = text.splitlines()
+        assert "总市值(亿)" in lines[1] and "毛利率(%)" in lines[1]
+        target_row = next(line for line in lines if "600519" in line)
+        peer_row = next(line for line in lines if "000858" in line)
+        assert "贵州茅台" in target_row and "22.0" in target_row and "91.3" in target_row
+        assert "五粮液" in peer_row and "15.0" in peer_row and "76.5" in peer_row
+        # 主标的必须在首行（对标股之前）
+        assert lines.index(target_row) < lines.index(peer_row)
+
+    def test_financial_group_missing_rendered_as_dash(self):
+        state = {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "peer_financials": _peer_df(
+                [
+                    {
+                        "name": "五粮液",
+                        "code": "000858",
+                        "PE": 15.0,
+                        "PB": 3.2,
+                        "total_mv": 5000.0,
+                        "revenue_yoy": None,
+                        "netprofit_yoy": None,
+                        "gross_margin": None,
+                        "report_period": None,
+                    }
+                ]
+            ),
+            "latest_period_snapshot": {},
+        }
+        vs = {"PE": 22.0, "PE_ttm": None, "PB": 8.0, "market_cap": 18000.0}
+        text = format_peer_comparison(state, vs)
+        assert text is not None
+        peer_row = next(line for line in text.splitlines() if "000858" in line)
+        assert "—" in peer_row  # 缺失标记，列不消失
+        assert "毛利率" in text  # 表头仍在
+
+    def test_no_peer_data_returns_none(self):
+        assert format_peer_comparison({"stock_code": "600519"}, {"PE": 22.0}) is None
+
+    def test_pe_ttm_fallback_caliber_note(self):
+        """主标的静态 PE 缺失回落 PE_ttm 时，附跨口径提示（与 relative_valuation 口径标注同族）。"""
+        state = {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "peer_financials": _peer_df(
+                [
+                    {
+                        "name": "五粮液",
+                        "code": "000858",
+                        "PE": 15.0,
+                        "PB": 3.2,
+                        "total_mv": 5000.0,
+                        "revenue_yoy": 7.1,
+                        "netprofit_yoy": 8.2,
+                        "gross_margin": 76.5,
+                        "report_period": "2026-06-30",
+                    }
+                ]
+            ),
+            "latest_period_snapshot": {},
+        }
+        vs = {"PE": None, "PE_ttm": 21.5, "PB": 8.0, "market_cap": 18000.0}
+        text = format_peer_comparison(state, vs)
+        assert text is not None
+        assert "TTM" in text and "跨口径" in text
+        target_row = next(line for line in text.splitlines() if "600519" in line)
+        assert "21.5" in target_row
