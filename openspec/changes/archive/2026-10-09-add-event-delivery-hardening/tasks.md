@@ -11,4 +11,4 @@
 - [x] incident 形状专测：重连「明细丢失+终态在」即见终态不挂起
 - [x] `record_drop` docstring 措辞修正（事件循环内精确、线程内尽力）
 - [x] stub E2E 套件回归通过（SSE 流式链路无健康路径回归；23 passed / 3 @live skipped）
-- [ ] 人工验证报告落 tests/validation/（真实管线 + 慢消费者场景抽查）
+- [x] 人工验证报告落 tests/validation/（2026-10-09：测试层 25/25 + ops 活体探针 + 真实管线两样本，慢消费者场景按先例由测试层承担）

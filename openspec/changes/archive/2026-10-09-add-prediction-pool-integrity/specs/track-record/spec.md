@@ -71,9 +71,8 @@
 
 ### Requirement: 基础统计（胜率 + 平均超额 + 显著性门槛）
 
-系统 SHALL 计算并返回胜率与平均超额收益。胜率 = resolved_win / (resolved_win + resolved_loss)，neutral 与 unresolvable 不进分母；**胜率与平均超额 SHALL 仅统计 long/short 方向观点**。neutral 观点的回避判定结果 SHALL 单独统计为**回避正确率** = avoidance_win / (avoidance_win + avoidance_loss)（avoidance_neutral 与 unresolvable 不进分母），作为独立辅助指标以单独字段返回，SHALL NOT 混入胜率；回避正确率展示门槛与胜率一致（样本 <10 不展示）。显著性门槛 SHALL 约束展示：样本量 < 10 不展示胜率与评级（仅展示样本数与「样本积累中」）；样本量 10–29 展示胜率并标注「样本较少」；样本量 ≥ 30 完整展示。**上述胜率/平均超额/回避正确率/样本量的分母 SHALL 仅计日主观点：duplicate_of_day 关闭行 SHALL NOT 计入任何分母与样本量（总数与 UI 列表展示不受限）。**「全观点 → 日主观点」分母切换 SHALL 按 `track-record-versioning`「战绩分段不混算」机制登记口径切点，切点前后已结算行 SHALL NOT 混入同一读数。**默认判定窗口 252→20 为口径切点**：切点 SHALL 按 `track-record-versioning`「战绩分段不混算」机制登记，切点前后已结算行 SHALL NOT 混入同一胜率读数。评级（0–5 星）属后续增量（阶段 A 不做）。
-
-(Previously: 分母为全观点（含同股同日重复行）；无日主观点口径切点。)
+系统 SHALL 计算并返回胜率与平均超额收益。胜率 = resolved_win / (resolved_win + resolved_loss)，neutral 与 unresolvable 不进分母；**胜率与平均超额 SHALL 仅统计 long/short 方向观点**。neutral 观点的回避判定结果 SHALL 单独统计为**回避正确率** = avoidance_win / (avoidance_win + avoidance_loss)（avoidance_neutral 与 unresolvable 不进分母），作为独立辅助指标以单独字段返回，SHALL NOT 混入胜率；回避正确率展示门槛与胜率一致（样本 <10 不展示）。显著性门槛 SHALL 约束展示：样本量 < 10 不展示胜率与评级（仅展示样本数与「样本积累中」）；样本量 10–29 展示胜率并标注「样本较少」；样本量 ≥ 30 完整展示。**上述胜率/平均超额/回避正确率/样本量的分母 SHALL 仅计日主观点：duplicate_of_day 关闭行 SHALL NOT 计入任何分母与样本量（总数与 UI 列表展示不受限）。**「全观点 → 日主观点」分母切换与「默认判定窗口 252→20」SHALL 均按 `track-record-versioning`「战绩分段不混算」机制登记口径切点，切点前后已结算行 SHALL NOT 混入同一读数。评级（0–5 星）属后续增量（阶段 A 不做）。
+(Previously: 分母为全观点（含同股同日重复行）；无日主观点口径切点；无默认窗口口径切点分段约束。)
 
 #### Scenario: 胜率口径
 
@@ -113,3 +112,16 @@
 - **WHEN** 「全观点 → 日主观点」分母切换实施
 - **THEN** SHALL 按 track-record-versioning 机制登记切点
 - **AND** 切点前按全观点口径结算的读数 SHALL NOT 与切点后日主口径读数混算
+
+#### Scenario: 口径切点分段
+
+- **GIVEN** 库内同时存在 252 窗口与 20 窗口结算的观点
+- **WHEN** 计算对外展示的胜率
+- **THEN** SHALL 按 `track-record-versioning` 分段机制区分口径，SHALL NOT 混算单一读数
+
+#### Scenario: 空库
+
+- **GIVEN** 无观点记录
+- **WHEN** 请求统计
+- **THEN** SHALL 返回空统计与「样本积累中」标注，SHALL NOT 伪造读数
+

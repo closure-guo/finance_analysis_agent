@@ -43,13 +43,22 @@ TBD - created by archiving change add-track-record-stage-b. Update Purpose after
 
 ### Requirement: 组合净值曲线
 
-系统 SHALL 基于 open+resolved 观点维护 `equity_curve`：等权 1/N 日再平衡、空仓日记 0 收益，同步记录基准净值供叠加对比。观点在组合内的首盯市日贡献 0 收益（现金口径），入场参考价 SHALL NOT 参与净值与指标计算——组合日收益仅由相邻盯市日 `cum_return` 差分构成，对坏参考价免疫。净值序列 SHALL 以基准指数交易日历为骨架，覆盖首个盯市日以来的全部交易日：有盯市的日期按等权均值计，无盯市的交易日（空仓/整体缺数据）agent 日收益记 0；基准净值 SHALL 按同一交易日历逐日推进（基准收盘取自基准日 K，而非仅 marks 内记录价）。基准行情不可得时 SHALL 降级为现行 marks-only 口径并记 WARN。
-(Previously: 首盯市日日收益 = 当日 cum_return（相对入场参考价），入场→首盯市日的整段漂移被记为单日组合收益；无盯市的交易日不产生净值点（n 偏小）；基准净值仅取自 marks 内记录的 benchmark_price。)
+系统 SHALL 基于**日主观点池**（open+resolved 观点中每 (symbol, 决策归属日) 的 created_at 最晚者；同日重复观点 SHALL NOT 进入组合）维护 `equity_curve`：等权 1/N 日再平衡、空仓日记 0 收益，同步记录基准净值供叠加对比。观点在组合内的首盯市日贡献 0 收益（现金口径），入场参考价 SHALL NOT 参与净值与指标计算——组合日收益仅由相邻盯市日 `cum_return` 差分构成，对坏参考价免疫。盯市日批计算时点 SHALL 消费「截至该批次的日主视图」——决策归属日规则（收盘后产出归属次日）保证当日归属观点集合在盘后批次时点已封闭，日主判定确定性成立。净值序列 SHALL 以基准指数交易日历为骨架，覆盖首个盯市日以来的全部交易日：有盯市的日期按等权均值计，无盯市的交易日（空仓/整体缺数据）agent 日收益记 0；基准净值 SHALL 按同一交易日历逐日推进（基准收盘取自基准日 K，而非仅 marks 内记录价）。基准行情不可得时 SHALL 降级为现行 marks-only 口径并记 WARN。
+
+(Previously: 组合分母为全观点（open+resolved 等权）——同股同日重复观点按行数重复计入，组合权重成为重跑次数的函数（76 open / 13 标的中单股最高占 24% 权重）。)
 
 #### Scenario: 净值计算
 
 - **WHEN** 日批任务运行
 - **THEN** equity_curve 追加当日 agent 净值与基准净值，空仓日 agent 日收益为 0
+- **AND** 组合等权分母 SHALL 仅含日主观点
+
+#### Scenario: 同日重复不进组合
+
+- **GIVEN** 某标的同一交易日产出 7 条观点（1 日主 + 6 同日重复）
+- **WHEN** 盯市日批构建组合
+- **THEN** 该标的当日 SHALL 在组合中计 1 份（日主观点）
+- **AND** 6 条同日重复观点 SHALL NOT 进入分母与盯市贡献
 
 #### Scenario: 首盯市日不放大入场漂移
 

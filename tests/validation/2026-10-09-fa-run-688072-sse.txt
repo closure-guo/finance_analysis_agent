@@ -1,0 +1,660 @@
+[    0.0s] POST /api/analyze stock_code=688072
+[    0.3s] session_id=8bc9b9a9-a66
+[    0.3s] None: {"type": "session_created", "session_id": "8bc9b9a9-a66", "display_name": "深度分析拓荆科技(688072)", "timestamp": "2026-10-09 13:50", "seq": 1}
+[    0.3s] None: {"type": "analysis_start", "analysis_id": "1337fd5f", "session_id": "8bc9b9a9-a66", "stock_code": "688072", "stock_name": "拓荆科技", "timestamp": "2026-10-09 13:50", "seq": 2}
+[    0.5s] None: {"type": "node_start", "node_id": "check_cache", "layer": "PREP", "desc": "数据准备", "icon": "database", "timestamp": "2026-10-09 13:50", "seq": 3}
+[    0.5s] None: {"type": "node_complete", "node_id": "check_cache", "layer": "PREP", "desc": "数据准备", "completed": ["check_cache"], "progress": 0.04, "output": {"summary": "缓存命中，复用已持久化数据"}, "timestamp": "2026-10-09 13
+[    0.7s] None: {"type": "node_start", "node_id": "validate_financials", "layer": "PREP", "desc": "勾稽校验", "icon": "check-double", "timestamp": "2026-10-09 13:50", "seq": 5}
+[    0.8s] None: {"type": "node_complete", "node_id": "validate_financials", "layer": "PREP", "desc": "勾稽校验", "completed": ["check_cache", "fetch_data", "validate_financials"], "progress": 0.12, "output": {"summary": 
+[    1.0s] None: {"type": "node_start", "node_id": "compute_metrics", "layer": "PREP", "desc": "指标计算", "icon": "calculator", "timestamp": "2026-10-09 13:50", "seq": 7}
+[    1.0s] None: {"type": "node_complete", "node_id": "compute_metrics", "layer": "PREP", "desc": "指标计算", "completed": ["check_cache", "compute_metrics", "fetch_data", "validate_financials"], "progress": 0.16, "output
+[    4.9s] None: {"type": "thinking_token", "token": "Key", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 9}
+[    4.9s] None: {"type": "thinking_token", "token": ":", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 10}
+[    4.9s] None: {"type": "thinking_token", "token": " latest", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 11}
+[    4.9s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 12}
+[    4.9s] None: {"type": "thinking_token", "token": "5", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 13}
+[    4.9s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 14}
+[    4.9s] None: {"type": "thinking_token", "token": "65", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 15}
+[    4.9s] None: {"type": "thinking_token", "token": "3", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 16}
+[    4.9s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 17}
+[    4.9s] None: {"type": "thinking_token", "token": "49", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 18}
+[    4.9s] None: {"type": "thinking_token", "token": " <", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 19}
+[    4.9s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 20}
+[    4.9s] None: {"type": "thinking_token", "token": "10", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 21}
+[    4.9s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 22}
+[    4.9s] None: {"type": "thinking_token", "token": "68", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 23}
+[    4.9s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 24}
+[    4.9s] None: {"type": "thinking_token", "token": " <", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 25}
+[    4.9s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 26}
+[    4.9s] None: {"type": "thinking_token", "token": "20", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 27}
+[    4.9s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 28}
+[    4.9s] None: {"type": "thinking_token", "token": "66", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 29}
+[    4.9s] None: {"type": "thinking_token", "token": "1", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 30}
+[    4.9s] None: {"type": "thinking_token", "token": " <", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 31}
+[    4.9s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 32}
+[    4.9s] None: {"type": "thinking_token", "token": "60", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 33}
+[    4.9s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 34}
+[    4.9s] None: {"type": "thinking_token", "token": "69", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 35}
+[    4.9s] None: {"type": "thinking_token", "token": "3", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 36}
+[    4.9s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 37}
+[    4.9s] None: {"type": "thinking_token", "token": "5", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 38}
+[    4.9s] None: {"type": "thinking_token", "token": "?", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 39}
+[    4.9s] None: {"type": "thinking_token", "token": " Wait", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 40}
+[    5.0s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 41}
+[    5.0s] None: {"type": "thinking_token", "token": "20", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 42}
+[    5.0s] None: {"type": "thinking_token", "token": "=", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 43}
+[    5.0s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 44}
+[    5.0s] None: {"type": "thinking_token", "token": "60", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 45}
+[    5.0s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 46}
+[    5.0s] None: {"type": "thinking_token", "token": "98", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 47}
+[    5.0s] None: {"type": "thinking_token", "token": ",", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 48}
+[    5.0s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 49}
+[    5.0s] None: {"type": "thinking_token", "token": "5", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 50}
+[    5.0s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 51}
+[    5.0s] None: {"type": "thinking_token", "token": "65", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 52}
+[    5.0s] None: {"type": "thinking_token", "token": "3", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 53}
+[    5.0s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 54}
+[    5.0s] None: {"type": "thinking_token", "token": "49", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 55}
+[    5.0s] None: {"type": "thinking_token", "token": ",", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 56}
+[    5.0s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 57}
+[    5.0s] None: {"type": "thinking_token", "token": "10", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 58}
+[    5.0s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 59}
+[    5.0s] None: {"type": "thinking_token", "token": "68", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 60}
+[    5.0s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 61}
+[    5.0s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 62}
+[    5.0s] None: {"type": "thinking_token", "token": "0", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 63}
+[    5.0s] None: {"type": "thinking_token", "token": ",", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 64}
+[    5.0s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 65}
+[    5.0s] None: {"type": "thinking_token", "token": "60", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 66}
+[    5.0s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 67}
+[    5.0s] None: {"type": "thinking_token", "token": "69", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 68}
+[    5.0s] None: {"type": "thinking_token", "token": "3", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 69}
+[    5.0s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 70}
+[    5.0s] None: {"type": "thinking_token", "token": "51", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 71}
+[    5.0s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 72}
+[    5.5s] None: {"type": "thinking_token", "token": " So", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 73}
+[    5.5s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 74}
+[    5.5s] None: {"type": "thinking_token", "token": "5", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 75}
+[    5.5s] None: {"type": "thinking_token", "token": "<MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 76}
+[    5.5s] None: {"type": "thinking_token", "token": "20", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 77}
+[    5.5s] None: {"type": "thinking_token", "token": "<MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 78}
+[    5.5s] None: {"type": "thinking_token", "token": "10", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 79}
+[    5.5s] None: {"type": "thinking_token", "token": "<MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 80}
+[    5.5s] None: {"type": "thinking_token", "token": "60", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 81}
+[    5.5s] None: {"type": "thinking_token", "token": " —", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 82}
+[    5.5s] None: {"type": "thinking_token", "token": " bear", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 83}
+[    5.5s] None: {"type": "thinking_token", "token": "ish", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 84}
+[    5.5s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 85}
+[    5.5s] None: {"type": "thinking_token", "token": " Close", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 86}
+[    5.5s] None: {"type": "thinking_token", "token": " below", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 87}
+[    5.5s] None: {"type": "thinking_token", "token": " MA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 88}
+[    5.5s] None: {"type": "thinking_token", "token": "20", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 89}
+[    5.5s] None: {"type": "thinking_token", "token": " by", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 90}
+[    5.5s] None: {"type": "thinking_token", "token": " -", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 91}
+[    5.5s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 92}
+[    5.5s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 93}
+[    5.5s] None: {"type": "thinking_token", "token": "79", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 94}
+[    5.5s] None: {"type": "thinking_token", "token": "%.", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 95}
+[    5.5s] None: {"type": "thinking_token", "token": " MAC", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 96}
+[    5.5s] None: {"type": "thinking_token", "token": "D", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 97}
+[    5.5s] None: {"type": "thinking_token", "token": " D", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 98}
+[    5.5s] None: {"type": "thinking_token", "token": "IF", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 99}
+[    5.5s] None: {"type": "thinking_token", "token": " -", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 100}
+[    5.5s] None: {"type": "thinking_token", "token": "4", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 101}
+[    5.5s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 102}
+[    5.5s] None: {"type": "thinking_token", "token": "12", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 103}
+[    5.5s] None: {"type": "thinking_token", "token": " crossing", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 104}
+[    6.7s] None: {"type": "thinking_token", "token": " below", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 105}
+[    6.7s] None: {"type": "thinking_token", "token": " DEA", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 106}
+[    6.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 107}
+[    6.7s] None: {"type": "thinking_token", "token": "0", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 108}
+[    6.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 109}
+[    6.7s] None: {"type": "thinking_token", "token": "57", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 110}
+[    6.7s] None: {"type": "thinking_token", "token": " —", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 111}
+[    6.7s] None: {"type": "thinking_token", "token": " fresh", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 112}
+[    6.7s] None: {"type": "thinking_token", "token": " death", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 113}
+[    6.7s] None: {"type": "thinking_token", "token": " cross", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 114}
+[    6.7s] None: {"type": "thinking_token", "token": " below", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 115}
+[    6.7s] None: {"type": "thinking_token", "token": " zero", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 116}
+[    6.7s] None: {"type": "thinking_token", "token": " axis", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 117}
+[    6.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 118}
+[    6.7s] None: {"type": "thinking_token", "token": " R", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 119}
+[    6.7s] None: {"type": "thinking_token", "token": "SI", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 120}
+[    6.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 121}
+[    6.7s] None: {"type": "thinking_token", "token": "39", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 122}
+[    6.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 123}
+[    6.7s] None: {"type": "thinking_token", "token": "7", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 124}
+[    6.7s] None: {"type": "thinking_token", "token": " weak", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 125}
+[    6.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 126}
+[    6.7s] None: {"type": "thinking_token", "token": " K", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 127}
+[    6.7s] None: {"type": "thinking_token", "token": "DJ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 128}
+[    6.7s] None: {"type": "thinking_token", "token": " K", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 129}
+[    6.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 130}
+[    6.7s] None: {"type": "thinking_token", "token": "24", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 131}
+[    6.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 132}
+[    6.7s] None: {"type": "thinking_token", "token": "7", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 133}
+[    6.7s] None: {"type": "thinking_token", "token": " <", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 134}
+[    6.7s] None: {"type": "thinking_token", "token": " D", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 135}
+[    6.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 136}
+[    7.6s] None: {"type": "thinking_token", "token": "45", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 137}
+[    7.6s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 138}
+[    7.6s] None: {"type": "thinking_token", "token": "3", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 139}
+[    7.6s] None: {"type": "thinking_token", "token": ",", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 140}
+[    7.6s] None: {"type": "thinking_token", "token": " J", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 141}
+[    7.6s] None: {"type": "thinking_token", "token": " -", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 142}
+[    7.6s] None: {"type": "thinking_token", "token": "16", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 143}
+[    7.6s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 144}
+[    7.6s] None: {"type": "thinking_token", "token": "3", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 145}
+[    7.6s] None: {"type": "thinking_token", "token": " overs", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 146}
+[    7.6s] None: {"type": "thinking_token", "token": "old", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 147}
+[    7.6s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 148}
+[    7.6s] None: {"type": "thinking_token", "token": " ch", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 149}
+[    7.6s] None: {"type": "thinking_token", "token": "g", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 150}
+[    7.6s] None: {"type": "thinking_token", "token": "_", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 151}
+[    7.6s] None: {"type": "thinking_token", "token": "5", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 152}
+[    7.6s] None: {"type": "thinking_token", "token": "d", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 153}
+[    7.6s] None: {"type": "thinking_token", "token": " -", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 154}
+[    7.6s] None: {"type": "thinking_token", "token": "15", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 155}
+[    7.6s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 156}
+[    7.6s] None: {"type": "thinking_token", "token": "64", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 157}
+[    7.6s] None: {"type": "thinking_token", "token": "%.", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 158}
+[    7.6s] None: {"type": "thinking_token", "token": " B", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 159}
+[    7.6s] None: {"type": "thinking_token", "token": "oll", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 160}
+[    7.6s] None: {"type": "thinking_token", "token": "inger", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 161}
+[    7.6s] None: {"type": "thinking_token", "token": ":", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 162}
+[    7.6s] None: {"type": "thinking_token", "token": " close", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 163}
+[    7.6s] None: {"type": "thinking_token", "token": " below", "node": "technical_analyst", "timestamp": "2026-10-09 13:50", "seq": 164}
+[    7.6s] None: {"type": "thinking_token", "token": " lower", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 165}
+[    7.6s] None: {"type": "thinking_token", "token": " band", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 166}
+[    7.6s] None: {"type": "thinking_token", "token": "?", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 167}
+[    7.6s] None: {"type": "thinking_token", "token": " Lower", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 168}
+[    8.2s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 169}
+[    8.2s] None: {"type": "thinking_token", "token": "57", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 170}
+[    8.2s] None: {"type": "thinking_token", "token": "9", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 171}
+[    8.2s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 172}
+[    8.2s] None: {"type": "thinking_token", "token": "13", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 173}
+[    8.2s] None: {"type": "thinking_token", "token": "...", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 174}
+[    8.2s] None: {"type": "thinking_token", "token": " close", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 175}
+[    8.2s] None: {"type": "thinking_token", "token": " must", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 176}
+[    8.2s] None: {"type": "thinking_token", "token": " be", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 177}
+[    8.2s] None: {"type": "thinking_token", "token": " ~", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 178}
+[    8.2s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 179}
+[    8.2s] None: {"type": "thinking_token", "token": "16", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 180}
+[    8.2s] None: {"type": "thinking_token", "token": "?", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 181}
+[    8.2s] None: {"type": "thinking_token", "token": " close", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 182}
+[    8.2s] None: {"type": "thinking_token", "token": "_vs", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 183}
+[    8.2s] None: {"type": "thinking_token", "token": "_ma", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 184}
+[    8.2s] None: {"type": "thinking_token", "token": "20", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 185}
+[    8.2s] None: {"type": "thinking_token", "token": " -", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 186}
+[    8.2s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 187}
+[    8.2s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 188}
+[    8.2s] None: {"type": "thinking_token", "token": "79", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 189}
+[    8.2s] None: {"type": "thinking_token", "token": "%", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 190}
+[    8.2s] None: {"type": "thinking_token", "token": " →", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 191}
+[    8.2s] None: {"type": "thinking_token", "token": " close", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 192}
+[    8.2s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 193}
+[    8.2s] None: {"type": "thinking_token", "token": "≈", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 194}
+[    8.2s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 195}
+[    8.2s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 196}
+[    8.2s] None: {"type": "thinking_token", "token": "60", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 197}
+[    8.2s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 198}
+[    8.2s] None: {"type": "thinking_token", "token": "98", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 199}
+[    8.2s] None: {"type": "thinking_token", "token": "*", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 200}
+[    8.7s] None: {"type": "thinking_token", "token": "0", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 201}
+[    8.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 202}
+[    8.7s] None: {"type": "thinking_token", "token": "9", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 203}
+[    8.7s] None: {"type": "thinking_token", "token": "32", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 204}
+[    8.7s] None: {"type": "thinking_token", "token": "1", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 205}
+[    8.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 206}
+[    8.7s] None: {"type": "thinking_token", "token": "≈", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 207}
+[    8.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 208}
+[    8.7s] None: {"type": "thinking_token", "token": "6", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 209}
+[    8.7s] None: {"type": "thinking_token", "token": "16", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 210}
+[    8.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 211}
+[    8.7s] None: {"type": "thinking_token", "token": "1", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 212}
+[    8.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 213}
+[    8.7s] None: {"type": "thinking_token", "token": " Lower", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 214}
+[    8.7s] None: {"type": "thinking_token", "token": " band", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 215}
+[    8.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 216}
+[    8.7s] None: {"type": "thinking_token", "token": "57", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 217}
+[    8.7s] None: {"type": "thinking_token", "token": "9", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 218}
+[    8.7s] None: {"type": "thinking_token", "token": ",", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 219}
+[    8.7s] None: {"type": "thinking_token", "token": " upper", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 220}
+[    8.7s] None: {"type": "thinking_token", "token": " ", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 221}
+[    8.7s] None: {"type": "thinking_token", "token": "7", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 222}
+[    8.7s] None: {"type": "thinking_token", "token": "42", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 223}
+[    8.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 224}
+[    8.7s] None: {"type": "thinking_token", "token": "8", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 225}
+[    8.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 226}
+[    8.7s] None: {"type": "thinking_token", "token": " So", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 227}
+[    8.7s] None: {"type": "thinking_token", "token": " price", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 228}
+[    8.7s] None: {"type": "thinking_token", "token": " in", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 229}
+[    8.7s] None: {"type": "thinking_token", "token": " lower", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 230}
+[    8.7s] None: {"type": "thinking_token", "token": " half", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 231}
+[    8.7s] None: {"type": "thinking_token", "token": ".", "node": "technical_analyst", "timestamp": "2026-10-09 13:51", "seq": 232}
+[   10.4s] None: {"type": "thinking_token", "token": "Pro", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 233}
+[   10.4s] None: {"type": "thinking_token", "token": "duce", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 234}
+[   10.4s] None: {"type": "thinking_token", "token": " JSON", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 235}
+[   10.4s] None: {"type": "thinking_token", "token": " report", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 236}
+[   10.4s] None: {"type": "thinking_token", "token": " with", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 237}
+[   10.4s] None: {"type": "thinking_token", "token": " claims", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 238}
+[   10.4s] None: {"type": "thinking_token", "token": " and", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 239}
+[   10.4s] None: {"type": "thinking_token", "token": " markdown", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 240}
+[   10.4s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 241}
+[   10.4s] None: {"type": "thinking_token", "token": " Keep", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 242}
+[   10.4s] None: {"type": "thinking_token", "token": " concise", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 243}
+[   10.4s] None: {"type": "thinking_token", "token": " but", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 244}
+[   10.4s] None: {"type": "thinking_token", "token": " cover", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 245}
+[   10.4s] None: {"type": "thinking_token", "token": " key", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 246}
+[   10.4s] None: {"type": "thinking_token", "token": " numbers", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 247}
+[   10.4s] None: {"type": "thinking_token", "token": ".\n\n", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 248}
+[   10.4s] None: {"type": "thinking_token", "token": "Key", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 249}
+[   10.4s] None: {"type": "thinking_token", "token": " data", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 250}
+[   10.4s] None: {"type": "thinking_token", "token": ":", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 251}
+[   10.4s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 252}
+[   10.4s] None: {"type": "thinking_token", "token": "202", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 253}
+[   10.4s] None: {"type": "thinking_token", "token": "5", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 254}
+[   10.4s] None: {"type": "thinking_token", "token": " revenue", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 255}
+[   10.4s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 256}
+[   10.4s] None: {"type": "thinking_token", "token": "65", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 257}
+[   10.4s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 258}
+[   10.4s] None: {"type": "thinking_token", "token": "19", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 259}
+[   10.4s] None: {"type": "thinking_token", "token": "亿", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 260}
+[   10.4s] None: {"type": "thinking_token", "token": " (+", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 261}
+[   10.4s] None: {"type": "thinking_token", "token": "58", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 262}
+[   10.4s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 263}
+[   10.4s] None: {"type": "thinking_token", "token": "87", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 264}
+[   10.7s] None: {"type": "thinking_token", "token": "%),", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 265}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 266}
+[   10.7s] None: {"type": "thinking_token", "token": "归", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 267}
+[   10.7s] None: {"type": "thinking_token", "token": "母", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 268}
+[   10.7s] None: {"type": "thinking_token", "token": "净", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 269}
+[   10.7s] None: {"type": "thinking_token", "token": "利", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 270}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 271}
+[   10.7s] None: {"type": "thinking_token", "token": "9", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 272}
+[   10.7s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 273}
+[   10.7s] None: {"type": "thinking_token", "token": "27", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 274}
+[   10.7s] None: {"type": "thinking_token", "token": "亿", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 275}
+[   10.7s] None: {"type": "thinking_token", "token": " (+", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 276}
+[   10.7s] None: {"type": "thinking_token", "token": "34", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 277}
+[   10.7s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 278}
+[   10.7s] None: {"type": "thinking_token", "token": "67", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 279}
+[   10.7s] None: {"type": "thinking_token", "token": "%).", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 280}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 281}
+[   10.7s] None: {"type": "thinking_token", "token": "毛", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 282}
+[   10.7s] None: {"type": "thinking_token", "token": "利率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 283}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 284}
+[   10.7s] None: {"type": "thinking_token", "token": "202", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 285}
+[   10.7s] None: {"type": "thinking_token", "token": "5", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 286}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 287}
+[   10.7s] None: {"type": "thinking_token", "token": "34", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 288}
+[   10.7s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 289}
+[   10.7s] None: {"type": "thinking_token", "token": "95", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 290}
+[   10.7s] None: {"type": "thinking_token", "token": "%", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 291}
+[   10.7s] None: {"type": "thinking_token", "token": " vs", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 292}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 293}
+[   10.7s] None: {"type": "thinking_token", "token": "202", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 294}
+[   10.7s] None: {"type": "thinking_token", "token": "4", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 295}
+[   10.7s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 296}
+[   11.2s] None: {"type": "thinking_token", "token": "41", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 297}
+[   11.2s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 298}
+[   11.2s] None: {"type": "thinking_token", "token": "69", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 299}
+[   11.2s] None: {"type": "thinking_token", "token": "%", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 300}
+[   11.2s] None: {"type": "thinking_token", "token": " (", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 301}
+[   11.2s] None: {"type": "thinking_token", "token": "下滑", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 302}
+[   11.2s] None: {"type": "thinking_token", "token": ").", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 303}
+[   11.2s] None: {"type": "thinking_token", "token": " RO", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 304}
+[   11.2s] None: {"type": "thinking_token", "token": "E", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 305}
+[   11.2s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 306}
+[   11.2s] None: {"type": "thinking_token", "token": "15", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 307}
+[   11.2s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 308}
+[   11.2s] None: {"type": "thinking_token", "token": "77", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 309}
+[   11.2s] None: {"type": "thinking_token", "token": "%.", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 310}
+[   11.2s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 311}
+[   11.2s] None: {"type": "thinking_token", "token": "资", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 312}
+[   11.2s] None: {"type": "thinking_token", "token": "产", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 313}
+[   11.2s] None: {"type": "thinking_token", "token": "负债", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 314}
+[   11.2s] None: {"type": "thinking_token", "token": "率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 315}
+[   11.2s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 316}
+[   11.2s] None: {"type": "thinking_token", "token": "64", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 317}
+[   11.2s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 318}
+[   11.2s] None: {"type": "thinking_token", "token": "11", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 319}
+[   11.2s] None: {"type": "thinking_token", "token": "%.", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 320}
+[   11.2s] None: {"type": "thinking_token", "token": " 流", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 321}
+[   11.2s] None: {"type": "thinking_token", "token": "动", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 322}
+[   11.2s] None: {"type": "thinking_token", "token": "比率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 323}
+[   11.2s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 324}
+[   11.2s] None: {"type": "thinking_token", "token": "1", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 325}
+[   11.2s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 326}
+[   11.2s] None: {"type": "thinking_token", "token": "43", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 327}
+[   11.2s] None: {"type": "thinking_token", "token": ",", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 328}
+[   11.5s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 329}
+[   11.5s] None: {"type": "thinking_token", "token": "速", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 330}
+[   11.5s] None: {"type": "thinking_token", "token": "动", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 331}
+[   11.5s] None: {"type": "thinking_token", "token": "比率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 332}
+[   11.5s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 333}
+[   11.5s] None: {"type": "thinking_token", "token": "0", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 334}
+[   11.5s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 335}
+[   11.5s] None: {"type": "thinking_token", "token": "74", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 336}
+[   11.5s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 337}
+[   11.5s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 338}
+[   11.5s] None: {"type": "thinking_token", "token": "存", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 339}
+[   11.5s] None: {"type": "thinking_token", "token": "货", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 340}
+[   11.5s] None: {"type": "thinking_token", "token": "周转", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 341}
+[   11.5s] None: {"type": "thinking_token", "token": "率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 342}
+[   11.5s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 343}
+[   11.5s] None: {"type": "thinking_token", "token": "0", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 344}
+[   11.5s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 345}
+[   11.5s] None: {"type": "thinking_token", "token": "56", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 346}
+[   11.5s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 347}
+[   11.5s] None: {"type": "thinking_token", "token": " 经营", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 348}
+[   11.5s] None: {"type": "thinking_token", "token": "现金流", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 349}
+[   11.5s] None: {"type": "thinking_token", "token": "/", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 350}
+[   11.5s] None: {"type": "thinking_token", "token": "净利润", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 351}
+[   11.5s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 352}
+[   11.5s] None: {"type": "thinking_token", "token": "3", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 353}
+[   11.5s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 354}
+[   11.5s] None: {"type": "thinking_token", "token": "92", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 355}
+[   11.5s] None: {"type": "thinking_token", "token": ",", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 356}
+[   11.5s] None: {"type": "thinking_token", "token": " F", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 357}
+[   11.5s] None: {"type": "thinking_token", "token": "CF", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 358}
+[   11.5s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 359}
+[   11.5s] None: {"type": "thinking_token", "token": "30", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 360}
+[   11.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 361}
+[   11.8s] None: {"type": "thinking_token", "token": "58", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 362}
+[   11.8s] None: {"type": "thinking_token", "token": "亿", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 363}
+[   11.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 364}
+[   11.8s] None: {"type": "thinking_token", "token": " PE", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 365}
+[   11.8s] None: {"type": "thinking_token", "token": "_t", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 366}
+[   11.8s] None: {"type": "thinking_token", "token": "tm", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 367}
+[   11.8s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 368}
+[   11.8s] None: {"type": "thinking_token", "token": "81", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 369}
+[   11.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 370}
+[   11.8s] None: {"type": "thinking_token", "token": "05", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 371}
+[   11.8s] None: {"type": "thinking_token", "token": ",", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 372}
+[   11.8s] None: {"type": "thinking_token", "token": " PB", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 373}
+[   11.8s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 374}
+[   11.8s] None: {"type": "thinking_token", "token": "13", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 375}
+[   11.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 376}
+[   11.8s] None: {"type": "thinking_token", "token": "72", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 377}
+[   11.8s] None: {"type": "thinking_token", "token": ",", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 378}
+[   11.8s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 379}
+[   11.8s] None: {"type": "thinking_token", "token": "市", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 380}
+[   11.8s] None: {"type": "thinking_token", "token": "值", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 381}
+[   11.8s] None: {"type": "thinking_token", "token": "176", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 382}
+[   11.8s] None: {"type": "thinking_token", "token": "3", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 383}
+[   11.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 384}
+[   11.8s] None: {"type": "thinking_token", "token": "35", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 385}
+[   11.8s] None: {"type": "thinking_token", "token": "亿", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 386}
+[   11.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 387}
+[   11.8s] None: {"type": "thinking_token", "token": " 最新", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 388}
+[   11.8s] None: {"type": "thinking_token", "token": "中", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 389}
+[   11.8s] None: {"type": "thinking_token", "token": "报", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 390}
+[   11.8s] None: {"type": "thinking_token", "token": "202", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 391}
+[   11.8s] None: {"type": "thinking_token", "token": "6", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 392}
+[   12.0s] None: {"type": "thinking_token", "token": "H", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 393}
+[   12.0s] None: {"type": "thinking_token", "token": "1", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 394}
+[   12.0s] None: {"type": "thinking_token", "token": ":", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 395}
+[   12.0s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 396}
+[   12.0s] None: {"type": "thinking_token", "token": "营", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 397}
+[   12.0s] None: {"type": "thinking_token", "token": "收", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 398}
+[   12.0s] None: {"type": "thinking_token", "token": "29", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 399}
+[   12.0s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 400}
+[   12.0s] None: {"type": "thinking_token", "token": "13", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 401}
+[   12.0s] None: {"type": "thinking_token", "token": "亿", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 402}
+[   12.0s] None: {"type": "thinking_token", "token": " +", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 403}
+[   12.0s] None: {"type": "thinking_token", "token": "49", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 404}
+[   12.0s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 405}
+[   12.0s] None: {"type": "thinking_token", "token": "06", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 406}
+[   12.0s] None: {"type": "thinking_token", "token": "%,", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 407}
+[   12.0s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 408}
+[   12.0s] None: {"type": "thinking_token", "token": "归", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 409}
+[   12.0s] None: {"type": "thinking_token", "token": "母", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 410}
+[   12.0s] None: {"type": "thinking_token", "token": "净", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 411}
+[   12.0s] None: {"type": "thinking_token", "token": "利", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 412}
+[   12.0s] None: {"type": "thinking_token", "token": "13", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 413}
+[   12.0s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 414}
+[   12.0s] None: {"type": "thinking_token", "token": "43", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 415}
+[   12.0s] None: {"type": "thinking_token", "token": "亿", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 416}
+[   12.0s] None: {"type": "thinking_token", "token": " +", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 417}
+[   12.0s] None: {"type": "thinking_token", "token": "132", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 418}
+[   12.0s] None: {"type": "thinking_token", "token": "4", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 419}
+[   12.0s] None: {"type": "thinking_token", "token": "%,", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 420}
+[   12.0s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 421}
+[   12.0s] None: {"type": "thinking_token", "token": "毛", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 422}
+[   12.0s] None: {"type": "thinking_token", "token": "利率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 423}
+[   12.0s] None: {"type": "thinking_token", "token": "41", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 424}
+[   23.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 425}
+[   23.8s] None: {"type": "thinking_token", "token": "0", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 426}
+[   23.8s] None: {"type": "thinking_token", "token": "%", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 427}
+[   23.8s] None: {"type": "thinking_token", "token": "回升", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 428}
+[   23.8s] None: {"type": "thinking_token", "token": ",", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 429}
+[   23.8s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 430}
+[   23.8s] None: {"type": "thinking_token", "token": "负", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 431}
+[   23.8s] None: {"type": "thinking_token", "token": "债", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 432}
+[   23.8s] None: {"type": "thinking_token", "token": "率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 433}
+[   23.8s] None: {"type": "thinking_token", "token": "47", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 434}
+[   23.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 435}
+[   23.8s] None: {"type": "thinking_token", "token": "85", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 436}
+[   23.8s] None: {"type": "thinking_token", "token": "%.", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 437}
+[   23.8s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 438}
+[   23.8s] None: {"type": "thinking_token", "token": "202", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 439}
+[   23.8s] None: {"type": "thinking_token", "token": "6", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 440}
+[   23.8s] None: {"type": "thinking_token", "token": "Q", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 441}
+[   23.8s] None: {"type": "thinking_token", "token": "2", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 442}
+[   23.8s] None: {"type": "thinking_token", "token": "毛利率", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 443}
+[   23.8s] None: {"type": "thinking_token", "token": "40", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 444}
+[   23.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 445}
+[   23.8s] None: {"type": "thinking_token", "token": "58", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 446}
+[   23.8s] None: {"type": "thinking_token", "token": "%.", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 447}
+[   23.8s] None: {"type": "thinking_token", "token": " ", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 448}
+[   23.8s] None: {"type": "thinking_token", "token": "健", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 449}
+[   23.8s] None: {"type": "thinking_token", "token": "康", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 450}
+[   23.8s] None: {"type": "thinking_token", "token": "度", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 451}
+[   23.8s] None: {"type": "thinking_token", "token": "40", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 452}
+[   23.8s] None: {"type": "thinking_token", "token": " warning", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 453}
+[   23.8s] None: {"type": "thinking_token", "token": ".", "node": "fundamental_analyst", "timestamp": "2026-10-09 13:51", "seq": 454}
+[   23.9s] None: {"type": "node_start", "node_id": "macro_analyst", "layer": "Layer I", "desc": "宏观分析", "icon": "globe", "timestamp": "2026-10-09 13:51", "seq": 455}
+[   24.0s] None: {"type": "node_complete", "node_id": "macro_analyst", "layer": "Layer I", "desc": "宏观分析", "completed": ["check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macro_analyst", "technic
+[   25.4s] None: {"type": "node_start", "node_id": "sentiment_analyst", "layer": "Layer I", "desc": "舆情分析", "icon": "comments", "timestamp": "2026-10-09 13:51", "seq": 457}
+[   25.5s] None: {"type": "node_complete", "node_id": "sentiment_analyst", "layer": "Layer I", "desc": "舆情分析", "completed": ["check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macro_analyst", "sen
+[   37.8s] None: {"type": "node_start", "node_id": "technical_analyst", "layer": "Layer I", "desc": "技术面分析", "icon": "chart-line", "timestamp": "2026-10-09 13:51", "seq": 459}
+[   37.8s] None: {"type": "node_complete", "node_id": "technical_analyst", "layer": "Layer I", "desc": "技术面分析", "completed": ["check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macro_analyst", "se
+[   61.8s] None: {"type": "node_start", "node_id": "fundamental_analyst", "layer": "Layer I", "desc": "基本面分析", "icon": "chart-line", "timestamp": "2026-10-09 13:51", "seq": 461}
+[   61.9s] None: {"type": "node_complete", "node_id": "fundamental_analyst", "layer": "Layer I", "desc": "基本面分析", "completed": ["check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macro_analyst", "
+[   62.5s] None: {"type": "node_start", "node_id": "verify_citations", "layer": "校验", "desc": "引用校验", "icon": "shield-alt", "timestamp": "2026-10-09 13:51", "seq": 463}
+[   62.6s] None: {"type": "node_complete", "node_id": "verify_citations", "layer": "校验", "desc": "引用校验", "completed": ["check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macro_analyst", "sentiment
+[   75.9s] None: {"type": "thinking_token", "token": "Bear", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 465}
+[   75.9s] None: {"type": "thinking_token", "token": " round", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 466}
+[   75.9s] None: {"type": "thinking_token", "token": " ", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 467}
+[   75.9s] None: {"type": "thinking_token", "token": "1", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 468}
+[   75.9s] None: {"type": "thinking_token", "token": ",", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 469}
+[   75.9s] None: {"type": "thinking_token", "token": " no", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 470}
+[   75.9s] None: {"type": "thinking_token", "token": " rebut", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 471}
+[   75.9s] None: {"type": "thinking_token", "token": "tal", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 472}
+[   75.9s] None: {"type": "thinking_token", "token": ".", "node": "bear_debater", "timestamp": "2026-10-09 13:51", "seq": 473}
+[   75.9s] None: {"type": "node_start", "node_id": "bear_r1", "layer": "Layer II", "desc": "看空辩论 R1", "icon": "arrow-down", "timestamp": "2026-10-09 13:52", "seq": 474}
+[   76.0s] None: {"type": "node_complete", "node_id": "bear_r1", "layer": "Layer II", "desc": "看空辩论 R1", "completed": ["bear_r1", "bull_r1", "check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macr
+[   76.1s] None: {"type": "node_start", "node_id": "bull_r1", "layer": "Layer II", "desc": "看多辩论 R1", "icon": "arrow-up", "timestamp": "2026-10-09 13:52", "seq": 476}
+[   76.2s] None: {"type": "node_complete", "node_id": "bull_r1", "layer": "Layer II", "desc": "看多辩论 R1", "completed": ["bear_r1", "bull_r1", "check_cache", "compute_metrics", "fetch_data", "fundamental_analyst", "macr
+[   80.3s] None: {"type": "thinking_token", "token": "Round", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 478}
+[   80.3s] None: {"type": "thinking_token", "token": " ", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 479}
+[   80.3s] None: {"type": "thinking_token", "token": "2", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 480}
+[   80.3s] None: {"type": "thinking_token", "token": " bear", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 481}
+[   80.3s] None: {"type": "thinking_token", "token": ",", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 482}
+[   80.3s] None: {"type": "thinking_token", "token": " rebut", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 483}
+[   80.3s] None: {"type": "thinking_token", "token": " bull", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 484}
+[   80.3s] None: {"type": "thinking_token", "token": " R", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 485}
+[   80.3s] None: {"type": "thinking_token", "token": "1", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 486}
+[   80.3s] None: {"type": "thinking_token", "token": " points", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 487}
+[   80.3s] None: {"type": "thinking_token", "token": ".", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 488}
+[   80.3s] None: {"type": "thinking_token", "token": " JSON", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 489}
+[   80.3s] None: {"type": "thinking_token", "token": " with", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 490}
+[   80.3s] None: {"type": "thinking_token", "token": " anchors", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 491}
+[   80.3s] None: {"type": "thinking_token", "token": " to", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 492}
+[   80.3s] None: {"type": "thinking_token", "token": " available", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 493}
+[   80.3s] None: {"type": "thinking_token", "token": " field", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 494}
+[   80.3s] None: {"type": "thinking_token", "token": " paths", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 495}
+[   80.3s] None: {"type": "thinking_token", "token": " (", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 496}
+[   80.3s] None: {"type": "thinking_token", "token": "gu", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 497}
+[   80.3s] None: {"type": "thinking_token", "token": "essed", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 498}
+[   80.3s] None: {"type": "thinking_token", "token": " keys", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 499}
+[   80.3s] None: {"type": "thinking_token", "token": ":", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 500}
+[   80.3s] None: {"type": "thinking_token", "token": " technical", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 501}
+[   80.3s] None: {"type": "thinking_token", "token": "_ind", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 502}
+[   80.3s] None: {"type": "thinking_token", "token": "icators", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 503}
+[   80.3s] None: {"type": "thinking_token", "token": ".M", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 504}
+[   80.3s] None: {"type": "thinking_token", "token": "A", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 505}
+[   80.3s] None: {"type": "thinking_token", "token": ".", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 506}
+[   80.3s] None: {"type": "thinking_token", "token": "5", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 507}
+[   80.3s] None: {"type": "thinking_token", "token": " etc", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 508}
+[   80.3s] None: {"type": "thinking_token", "token": ".).", "node": "bear_debater", "timestamp": "2026-10-09 13:52", "seq": 509}
+[   91.0s] None: {"type": "node_start", "node_id": "bull_r2", "layer": "Layer II", "desc": "看多辩论 R2", "icon": "arrow-up", "timestamp": "2026-10-09 13:52", "seq": 510}
+[   91.2s] None: {"type": "node_complete", "node_id": "bull_r2", "layer": "Layer II", "desc": "看多辩论 R2", "completed": ["bear_r1", "bull_r1", "bull_r2", "check_cache", "compute_metrics", "fetch_data", "fundamental_anal
+[   92.8s] None: {"type": "node_start", "node_id": "bear_r2", "layer": "Layer II", "desc": "看空辩论 R2", "icon": "arrow-down", "timestamp": "2026-10-09 13:52", "seq": 512}
+[   92.9s] None: {"type": "node_complete", "node_id": "bear_r2", "layer": "Layer II", "desc": "看空辩论 R2", "completed": ["bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute_metrics", "fetch_data", "funda
+[  104.2s] None: {"type": "node_start", "node_id": "research_manager", "layer": "Layer II", "desc": "研究结论", "icon": "flag", "timestamp": "2026-10-09 13:52", "seq": 514}
+[  104.3s] None: {"type": "node_complete", "node_id": "research_manager", "layer": "Layer II", "desc": "研究结论", "completed": ["bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute_metrics", "fetch_data", 
+[  116.1s] None: {"type": "thinking_token", "token": "Neutral", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 516}
+[  116.1s] None: {"type": "thinking_token", "token": ",", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 517}
+[  116.1s] None: {"type": "thinking_token", "token": " cautious", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 518}
+[  116.1s] None: {"type": "thinking_token", "token": ".", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 519}
+[  116.1s] None: {"type": "thinking_token", "token": " Watch", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 520}
+[  116.1s] None: {"type": "thinking_token", "token": " decision", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 521}
+[  116.1s] None: {"type": "thinking_token", "token": ".", "node": "trader", "timestamp": "2026-10-09 13:52", "seq": 522}
+[  116.1s] None: {"type": "node_start", "node_id": "trader", "layer": "Layer III", "desc": "交易决策", "icon": "hand-holding-usd", "timestamp": "2026-10-09 13:52", "seq": 523}
+[  116.3s] None: {"type": "node_complete", "node_id": "trader", "layer": "Layer III", "desc": "交易决策", "completed": ["bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute_metrics", "fetch_data", "fundamen
+[  130.6s] None: {"type": "thinking_token", "token": "Ag", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 525}
+[  130.6s] None: {"type": "thinking_token", "token": "gressive", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 526}
+[  130.6s] None: {"type": "thinking_token", "token": " stance", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 527}
+[  130.6s] None: {"type": "thinking_token", "token": ":", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 528}
+[  130.6s] None: {"type": "thinking_token", "token": " argue", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 529}
+[  130.6s] None: {"type": "thinking_token", "token": " for", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 530}
+[  130.6s] None: {"type": "thinking_token", "token": " the", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 531}
+[  130.6s] None: {"type": "thinking_token", "token": " upside", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 532}
+[  130.6s] None: {"type": "thinking_token", "token": " opportunity", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 533}
+[  130.6s] None: {"type": "thinking_token", "token": ",", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 534}
+[  130.6s] None: {"type": "thinking_token", "token": " critique", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 535}
+[  130.6s] None: {"type": "thinking_token", "token": " the", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 536}
+[  130.6s] None: {"type": "thinking_token", "token": " cautious", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 537}
+[  130.6s] None: {"type": "thinking_token", "token": " watch", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 538}
+[  130.6s] None: {"type": "thinking_token", "token": ".", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 539}
+[  130.6s] None: {"type": "thinking_token", "token": " No", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 540}
+[  130.6s] None: {"type": "thinking_token", "token": " prior", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 541}
+[  130.6s] None: {"type": "thinking_token", "token": " debate", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 542}
+[  130.6s] None: {"type": "thinking_token", "token": " rounds", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 543}
+[  130.6s] None: {"type": "thinking_token", "token": ",", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 544}
+[  130.6s] None: {"type": "thinking_token", "token": " so", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 545}
+[  130.6s] None: {"type": "thinking_token", "token": " state", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 546}
+[  130.6s] None: {"type": "thinking_token", "token": " position", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 547}
+[  130.6s] None: {"type": "thinking_token", "token": " based", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 548}
+[  130.6s] None: {"type": "thinking_token", "token": " on", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 549}
+[  130.6s] None: {"type": "thinking_token", "token": " data", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 550}
+[  130.6s] None: {"type": "thinking_token", "token": ".", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 551}
+[  130.6s] None: {"type": "thinking_token", "token": " Provide", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 552}
+[  130.6s] None: {"type": "thinking_token", "token": " JSON", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 553}
+[  130.6s] None: {"type": "thinking_token", "token": ".", "node": "aggressive_debater", "timestamp": "2026-10-09 13:52", "seq": 554}
+[  130.6s] None: {"type": "node_start", "node_id": "neutral_r1", "layer": "Layer IV", "desc": "中性风控 R1", "icon": "balance-scale", "timestamp": "2026-10-09 13:53", "seq": 555}
+[  130.8s] None: {"type": "node_complete", "node_id": "neutral_r1", "layer": "Layer IV", "desc": "中性风控 R1", "completed": ["aggressive_r1", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute_metrics", 
+[  132.7s] None: {"type": "node_start", "node_id": "aggressive_r1", "layer": "Layer IV", "desc": "激进风控 R1", "icon": "fire", "timestamp": "2026-10-09 13:53", "seq": 557}
+[  132.9s] None: {"type": "node_complete", "node_id": "aggressive_r1", "layer": "Layer IV", "desc": "激进风控 R1", "completed": ["aggressive_r1", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute_metrics
+[  133.3s] None: {"type": "node_start", "node_id": "conservative_r1", "layer": "Layer IV", "desc": "保守风控 R1", "icon": "shield-alt", "timestamp": "2026-10-09 13:53", "seq": 559}
+[  133.5s] None: {"type": "node_complete", "node_id": "conservative_r1", "layer": "Layer IV", "desc": "保守风控 R1", "completed": ["aggressive_r1", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute_metri
+[  136.4s] None: {"type": "thinking_token", "token": "Pro", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 561}
+[  136.4s] None: {"type": "thinking_token", "token": "Round", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 562}
+[  136.4s] None: {"type": "thinking_token", "token": "duce", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 563}
+[  136.4s] None: {"type": "thinking_token", "token": " ", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 564}
+[  136.4s] None: {"type": "thinking_token", "token": " round", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 565}
+[  136.4s] None: {"type": "thinking_token", "token": " ", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 566}
+[  136.4s] None: {"type": "thinking_token", "token": "2", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 567}
+[  136.4s] None: {"type": "thinking_token", "token": " neutral", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 568}
+[  136.4s] None: {"type": "thinking_token", "token": "2", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 569}
+[  136.4s] None: {"type": "thinking_token", "token": " conservative", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 570}
+[  136.4s] None: {"type": "thinking_token", "token": " response", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 571}
+[  136.4s] None: {"type": "thinking_token", "token": ",", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 572}
+[  136.4s] None: {"type": "thinking_token", "token": ",", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 573}
+[  136.4s] None: {"type": "thinking_token", "token": " rep", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 574}
+[  136.4s] None: {"type": "thinking_token", "token": " respond", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 575}
+[  136.4s] None: {"type": "thinking_token", "token": " to", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 576}
+[  136.4s] None: {"type": "thinking_token", "token": " aggressive", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 577}
+[  136.4s] None: {"type": "thinking_token", "token": " and", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 578}
+[  136.4s] None: {"type": "thinking_token", "token": "lying", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 579}
+[  136.4s] None: {"type": "thinking_token", "token": " to", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 580}
+[  136.4s] None: {"type": "thinking_token", "token": " aggressive", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 581}
+[  136.4s] None: {"type": "thinking_token", "token": " and", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 582}
+[  136.4s] None: {"type": "thinking_token", "token": " neutral", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 583}
+[  136.4s] None: {"type": "thinking_token", "token": ".", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 584}
+[  136.4s] None: {"type": "thinking_token", "token": " Output", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 585}
+[  136.4s] None: {"type": "thinking_token", "token": " JSON", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 586}
+[  136.4s] None: {"type": "thinking_token", "token": ".", "node": "conservative_debater", "timestamp": "2026-10-09 13:53", "seq": 587}
+[  136.4s] None: {"type": "thinking_token", "token": " conservative", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 588}
+[  136.4s] None: {"type": "thinking_token", "token": ".", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 589}
+[  136.4s] None: {"type": "thinking_token", "token": " JSON", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 590}
+[  136.4s] None: {"type": "thinking_token", "token": " with", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 591}
+[  136.4s] None: {"type": "thinking_token", "token": " anchors", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 592}
+[  149.5s] None: {"type": "thinking_token", "token": ".", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 593}
+[  149.5s] None: {"type": "thinking_token", "token": " Field", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 594}
+[  149.5s] None: {"type": "thinking_token", "token": " refs", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 595}
+[  149.5s] None: {"type": "thinking_token", "token": ":", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 596}
+[  149.5s] None: {"type": "thinking_token", "token": " risk", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 597}
+[  149.5s] None: {"type": "thinking_token", "token": "_metrics", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 598}
+[  149.5s] None: {"type": "thinking_token", "token": ".max", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 599}
+[  149.5s] None: {"type": "thinking_token", "token": "_draw", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 600}
+[  149.5s] None: {"type": "thinking_token", "token": "down", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 601}
+[  149.5s] None: {"type": "thinking_token", "token": ",", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 602}
+[  149.5s] None: {"type": "thinking_token", "token": " volatility", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 603}
+[  149.5s] None: {"type": "thinking_token", "token": ",", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 604}
+[  149.5s] None: {"type": "thinking_token", "token": " var", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 605}
+[  149.5s] None: {"type": "thinking_token", "token": "_", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 606}
+[  149.5s] None: {"type": "thinking_token", "token": "95", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 607}
+[  149.5s] None: {"type": "thinking_token", "token": ",", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 608}
+[  149.5s] None: {"type": "thinking_token", "token": " beta", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 609}
+[  149.5s] None: {"type": "thinking_token", "token": ";", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 610}
+[  149.5s] None: {"type": "thinking_token", "token": " trade", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 611}
+[  149.5s] None: {"type": "thinking_token", "token": " plan", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 612}
+[  149.5s] None: {"type": "thinking_token", "token": " fields", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 613}
+[  149.5s] None: {"type": "thinking_token", "token": ".", "node": "neutral_debater", "timestamp": "2026-10-09 13:53", "seq": 614}
+[  149.5s] None: {"type": "node_start", "node_id": "aggressive_r2", "layer": "Layer IV", "desc": "激进风控 R2", "icon": "fire", "timestamp": "2026-10-09 13:53", "seq": 615}
+[  149.7s] None: {"type": "node_complete", "node_id": "aggressive_r2", "layer": "Layer IV", "desc": "激进风控 R2", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache",
+[  150.0s] None: {"type": "node_start", "node_id": "conservative_r2", "layer": "Layer IV", "desc": "保守风控 R2", "icon": "shield-alt", "timestamp": "2026-10-09 13:53", "seq": 617}
+[  150.2s] None: {"type": "node_complete", "node_id": "conservative_r2", "layer": "Layer IV", "desc": "保守风控 R2", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache
+[  151.1s] None: {"type": "node_start", "node_id": "neutral_r2", "layer": "Layer IV", "desc": "中性风控 R2", "icon": "balance-scale", "timestamp": "2026-10-09 13:53", "seq": 619}
+[  151.3s] None: {"type": "node_complete", "node_id": "neutral_r2", "layer": "Layer IV", "desc": "中性风控 R2", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "c
+[  164.7s] None: {"type": "node_start", "node_id": "risk_judge", "layer": "Layer IV", "desc": "风控裁决", "icon": "gavel", "timestamp": "2026-10-09 13:53", "seq": 621}
+[  164.9s] None: {"type": "node_complete", "node_id": "risk_judge", "layer": "Layer IV", "desc": "风控裁决", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "comp
+[  171.0s] None: {"type": "node_start", "node_id": "fund_manager", "layer": "Layer V", "desc": "基金经理审批", "icon": "user-tie", "timestamp": "2026-10-09 13:53", "seq": 623}
+[  171.1s] None: {"type": "node_complete", "node_id": "fund_manager", "layer": "Layer V", "desc": "基金经理审批", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "c
+[  185.7s] None: {"type": "node_start", "node_id": "generate_report", "layer": "报告", "desc": "报告生成", "icon": "file-alt", "timestamp": "2026-10-09 13:53", "seq": 625}
+[  185.9s] None: {"type": "node_complete", "node_id": "generate_report", "layer": "报告", "desc": "报告生成", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compu
+[  186.1s] None: {"type": "report_chunk", "chunk_index": 0, "total_chunks": 24, "text": "# 拓荆科技(688072) 投资分析报告\n\n*报告日期: 2026-10-09 · 行情数据截止: 2026-10-08*\n\n## 研究聚焦\n\n拓荆科技当前多空证据交织，综合评级中性略偏谨慎（置信度0.55），维持观望。基本面已兑现的支撑在于
+[  186.1s] None: {"type": "report_chunk", "chunk_index": 1, "total_chunks": 24, "text": "\n## 一、核心财务指标图表\n\n### 营业收入与归母净利润\n\n![营业收入与归母净利润](/tmp/finance_charts/688072/chart_revenue_profit.png)\n\n### 同比增速\n\n![同比增速](/
+[  186.2s] None: {"type": "report_chunk", "chunk_index": 2, "total_chunks": 24, "text": "\n### ROE 变化趋势\n\n![ROE 变化趋势](/tmp/finance_charts/688072/chart_roe.png)\n\n### 经营现金流净额\n\n![经营现金流净额](/tmp/finance_charts/688072/
+[  186.2s] None: {"type": "report_chunk", "chunk_index": 3, "total_chunks": 24, "text": "\n### 财务增速 vs 股价涨幅\n\n![财务增速 vs 股价涨幅](/tmp/finance_charts/688072/chart_growth_vs_price.png)\n\n### 总资产与归母权益\n\n![总资产与归母权益](/tmp/
+[  186.3s] None: {"type": "report_chunk", "chunk_index": 4, "total_chunks": 24, "text": "\n### 资产负债率趋势\n\n![资产负债率趋势](/tmp/finance_charts/688072/chart_debt_ratio.png)\n\n### 财报发布窗口期股价变化\n\n![财报发布窗口期股价变化](/tmp/finance_c
+[  186.3s] None: {"type": "report_chunk", "chunk_index": 5, "total_chunks": 24, "text": "\n### 全球市场份额\n\n![全球市场份额](/tmp/finance_charts/688072/chart_market_share.png)\n\n---\n\n## 二、分析师团队报告\n\n### 技术面分析师\n\n拓荆科技技术面全面走弱
+[  186.4s] None: {"type": "report_chunk", "chunk_index": 6, "total_chunks": 24, "text": "- MACD DIF(-4.12) 于最新一期跌破 DEA(0.57)，在零轴附近形成死叉，红柱转绿柱，动能由多转空\n- KDJ 深度超卖（K=24.74、D=45.26、J=-16.30），短线存在超卖反弹可能但K/D仍向下发散\n- 近5日跌幅达-1
+[  186.4s] None: {"type": "report_chunk", "chunk_index": 7, "total_chunks": 24, "text": "\n**关键发现：**\n\n- CPI同比涨幅仅0.8%，处于低通胀区间，无通胀压力也无明显通缩，货币政策宽松空间充足\n- 制造业PMI从7月49.2回升至9月50.1，刚站上荣枯线，制造业景气弱复苏\n- M2同比增速7.5%且持续高于M1增速4.1
+[  186.5s] None: {"type": "report_chunk", "chunk_index": 8, "total_chunks": 24, "text": "\n拓荆科技营收高增长、现金流大幅转正，但毛利率连续下滑、负债率偏高、存货周转极慢，PE_ttm约81倍估值偏贵，健康度评分仅40分（warning）。\n\n**关键发现：**\n\n- 2025年营收65.19亿元，同比+58.87%；归母净利润9.2
+[  186.5s] None: {"type": "report_chunk", "chunk_index": 9, "total_chunks": 24, "text": "- 2025年经营现金流/净利润达3.92、FCF转正至30.58亿元，扭转2023-2024连续为负的局面\n- 偿债压力上升：2025年资产负债率64.11%、速动比率0.74（红灯）\n- 存货周转率仅0.56次（红灯），存货规模78.26亿元高企\
+[  186.6s] None: {"type": "report_chunk", "chunk_index": 10, "total_chunks": 24, "text": "- 2026Q2单季净利润7.72亿元，同比+220%；2026H1归母净利13.43亿元，同比+1324.1%\n\n### 舆情分析师\n\n舆情面整体偏正面：公司中报业绩大增为核心利好，但板块层面资金呈净流出、市场情绪偏弱形成一定对冲；事件、解禁与
+[  186.6s] None: {"type": "report_chunk", "chunk_index": 11, "total_chunks": 24, "text": "- 板块口径风险信号：10月8日国家大基金持股概念下跌4.17%、主力资金净流出；两融余额连续下降显示杠杆资金退潮\n- 事件、限售解禁、大宗交易数据均暂不可用，无法评估事件性抛压与大资金态度\n- 最新新闻日期为2026-10-08，公司层面新闻已近2
+[  186.7s] None: {"type": "report_chunk", "chunk_index": 12, "total_chunks": 24, "text": "\n- 最新报告期快照：2026-06-30（中报，利润表累计口径）— 毛利率 41.0%、资产负债率 47.85%、存货 88.33 亿、合同负债 51.31 亿，营收同比 49.06%、归母净利同比 1324.1%\n- 估值快照：市值 1763.3
+[  186.7s] None: {"type": "report_chunk", "chunk_index": 13, "total_chunks": 24, "text": "\n\n## 四、多空辩论结论\n\n评级: 中性（置信度 0.55）\n多空双方争论聚焦四点：①技术面——空方强调均线空头排列、MACD零轴下方死叉指向弱势延续，多方反驳这些是滞后指标，KDJ深度超卖意味着抛压释放、赔率改善；②基本面——双方均认可营收
+[  186.8s] None: {"type": "report_chunk", "chunk_index": 14, "total_chunks": 24, "text": "\n## 五、交易决策\n\n- **方向**: watch\n- **置信度**: 58%\n- **仓位**: 未提供\n- **不行动原因**: 证据均衡带内无新报告期披露、重大公告或破位确认增量；波动率0.719与VaR_95 6.6%使任何左侧
+[  186.8s] None: {"type": "report_chunk", "chunk_index": 15, "total_chunks": 24, "text": "- **下破触发位**: 570\n- **跟踪**: 本决策已入池跟踪，按 20 交易日窗口结算，结算结果见战绩页\n- **再评估触发条件**: ① 放量突破688.5并站稳确认（收盘突破且次日不回落）后重估建仓，仓位从轻起步；② 收盘跌破570确认
+[  186.9s] None: {"type": "report_chunk", "chunk_index": 16, "total_chunks": 24, "text": "\n## 六、风控辩论\n\n**激进风控**: 激进收益方立场：观望方案过于保守，错过了赔率优势明显的机会。第一，最大回撤30.37%是在未含本轮估值出清的历史窗口统计的，而当前KDJ深度超卖叠加价格逼近近期低点570，意味着悲观预期已大幅计价，此时不
+[  186.9s] None: {"type": "report_chunk", "chunk_index": 17, "total_chunks": 24, "text": "\n**保守风控**: 从保守风控立场看，我支持本次观望决策，且认为该方案在风控维度上仍是偏宽松的——当前风险指标组合已接近不可建仓阈值，即便触发688.5突破也应保持低仓位试探而非直接建仓。逐项分析：1）波动率71.89%、最大回撤30.37%，意味着
+[  186.9s] None: {"type": "report_chunk", "chunk_index": 18, "total_chunks": 24, "text": "\n**中性风控**: 从中性平衡角度看，本方案选择观望而非建仓/做空，与风险数据基本匹配，但需指出几个平衡点：其一，波动率高达0.719、最大回撤0.304，说明即便观望策略也面临双向触发风险——trigger_high 688.5与trigger_l
+[  187.0s] None: {"type": "report_chunk", "chunk_index": 19, "total_chunks": 24, "text": "\n**激进风控**: 回应保守方：您称『任意建仓都会被止损成本侵蚀』，但VaR_95单日6.6%的损失下沿恰恰证明我方分批左侧方案的合理性——正因为在570-600区间分批而非一次性建仓，单日6.6%的极端波动只会击穿其中一批的成本，仓位结构的抗冲击能
+[  187.0s] None: {"type": "report_chunk", "chunk_index": 20, "total_chunks": 24, "text": "\n**保守风控**: 回应激进方：①『超卖即计价充分』不成立——KDJ超卖是震荡指标，在71.89%年化波动率下，超卖可以持续钝化且价格继续下行，历史最大回撤30.37%本身说明超卖状态下的『底部』不可依赖；②『高增长以分母消化PE』是条件推断而非可验
+[  187.0s] None: {"type": "report_chunk", "chunk_index": 21, "total_chunks": 24, "text": "\n**中性风控**: 本方在第二轮逐条回应激进方与保守方，并维持中性略偏谨慎立场。一、回应激进方『左侧分批建仓570-600、止损540』：该建议忽略了两点硬数据约束——年化波动率0.719意味着止损540到入场600的距离约10%，而VaR_95单日
+[  187.0s] None: {"type": "report_chunk", "chunk_index": 22, "total_chunks": 24, "text": "\n## 七、基金经理决策\n\n\n**审批通过**（操作定性 watch，置信度 0.6） · 裁决: watch\n\n批准观望方案。风控结论一致性：风险辩论对激进方左侧方案的否决依据充分——波动率0.719、VaR_95单日6.6%背景下，600
+[  187.1s] None: {"type": "report_chunk", "chunk_index": 23, "total_chunks": 24, "text": "\n", "timestamp": "2026-10-09 13:53", "seq": 650}
+[  187.3s] None: {"type": "report_ready", "analysis_id": "1337fd5f", "session_id": "8bc9b9a9-a66", "report_markdown": "# 拓荆科技(688072) 投资分析报告\n\n*报告日期: 2026-10-09 · 行情数据截止: 2026-10-08*\n\n## 研究聚焦\n\n拓荆科技当前多空证据交织，综合评级中性
+[  195.7s] None: {"type": "node_start", "node_id": "generate_file", "layer": "报告", "desc": "文件导出", "icon": "file-export", "timestamp": "2026-10-09 13:54", "seq": 652}
+[  196.0s] None: {"type": "node_complete", "node_id": "generate_file", "layer": "报告", "desc": "文件导出", "completed": ["aggressive_r1", "aggressive_r2", "bear_r1", "bear_r2", "bull_r1", "bull_r2", "check_cache", "compute
+[  196.5s] None: {"type": "done", "session_id": "8bc9b9a9-a66", "seq": 654, "analysis_id": "1337fd5f", "duration_ms": 196477, "timestamp": "2026-10-09 13:54"}
+[  196.5s] stream ended, session_id=8bc9b9a9-a66
+[  207.8s] final status=completed
+[  207.8s] END
+[+1791525260] chain END
