@@ -27,13 +27,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROMPTS_DIR = REPO_ROOT / "src" / "finance_agent" / "prompts"
 
+# 双模导入：pytest 经 rootdir 走 scripts.* 包路径；`python scripts/x.py` 直跑时
+# sys.path 含 scripts/ 自身，走同名裸模块（2026-10-09 冒烟实测直跑 ModuleNotFoundError）
+try:
+    from scripts.prompt_history import match_historical_content
+except ModuleNotFoundError:  # pragma: no cover - 直跑模式
+    from prompt_history import match_historical_content
+
 
 @dataclass
 class Action:
     """单个 prompt 的收编判定。
 
-    status: collect(需收编) / conflict(本地脏,人工裁决) / ok(一致)
-            / local_only(production 无此 prompt) / remote_error(拉取失败)
+    status: collect(需收编) / rollback(Langfuse 回退到历史版本,拒收编) /
+            ok(一致) / local_only(production 无此 prompt) / remote_error(拉取失败)
     """
 
     name: str
@@ -75,8 +82,17 @@ def _has_uncommitted(path: Path, repo_root: Path) -> bool:
     return bool(out.strip())
 
 
-def plan_actions(prompts_dir: Path, client) -> list[Action]:  # noqa: ANN001 - langfuse client
-    """扫描 prompts/*.md,比对 production,产出收编动作清单(不做任何写操作)。"""
+def plan_actions(
+    prompts_dir: Path,
+    client,  # noqa: ANN001 - langfuse client
+    repo_root: Path,
+) -> list[Action]:
+    """扫描 prompts/*.md,比对 production,产出收编动作清单(不做任何写操作)。
+
+    方向判别(issue #228):local≠remote 时先查 git 历史——remote 命中任一
+    已提交版本 = Langfuse 回退/落后(纯陈旧,无 UI 独有内容) → status=rollback
+    (拒收编);不命中才是 UI 独有编辑 → collect(收编)。
+    """
     actions: list[Action] = []
     for f in sorted(prompts_dir.glob("*.md")):
         name = f.stem
@@ -97,6 +113,11 @@ def plan_actions(prompts_dir: Path, client) -> list[Action]:  # noqa: ANN001 - l
             continue
         if local == remote:
             actions.append(Action(name, f, "ok"))
+            continue
+        rel = f.relative_to(repo_root).as_posix()
+        matched = match_historical_content(repo_root, rel, remote)
+        if matched is not None:
+            actions.append(Action(name, f, "rollback", remote_text=remote, version=version))
         else:
             actions.append(Action(name, f, "collect", remote_text=remote, version=version))
     return actions
@@ -107,14 +128,23 @@ def apply_actions(
     repo_root: Path,
     dry_run: bool = False,
     git=_git,
-) -> tuple[int, list[str]]:
-    """执行收编:写回 + 限定暂存的提交。返回 (exit_code, conflicts)。
+) -> tuple[int, list[str], list[str]]:
+    """执行收编:写回 + 限定暂存的提交。返回 (exit_code, conflicts, rollbacks)。
 
     冲突保护:目标文件 git status 非空(本地未提交改动)时不覆盖,列入 conflicts,
-    exit_code=1。dry_run 只报告不落盘。
+    exit_code=1。回退保护(issue #228):rollback 项不写回不提交,列入 rollbacks,
+    exit_code=1,提示改用 deploy_prompts 发布覆盖。dry_run 只报告不落盘。
     """
     conflicts: list[str] = []
+    rollbacks: list[str] = []
     for a in actions:
+        if a.status == "rollback":
+            print(
+                f"  [ROLLBACK] {a.name}  Langfuse 命中历史版本(回退/落后),不收编;"
+                "请用 uv run python scripts/deploy_prompts.py 发布覆盖"
+            )
+            rollbacks.append(a.name)
+            continue
         if a.status != "collect":
             continue
         if _has_uncommitted(a.path, repo_root):
@@ -140,7 +170,7 @@ def apply_actions(
     for a in actions:
         if a.status == "remote_error":
             print(f"  [WARN] {a.name} Langfuse 拉取失败,本次跳过")
-    return (1 if conflicts else 0), conflicts
+    return (1 if (conflicts or rollbacks) else 0), conflicts, rollbacks
 
 
 def _build_client():
@@ -177,19 +207,21 @@ def main() -> int:
         return 1
 
     if not args.watch:
-        actions = plan_actions(PROMPTS_DIR, client)
-        code, conflicts = apply_actions(actions, REPO_ROOT, dry_run=args.dry_run)
+        actions = plan_actions(PROMPTS_DIR, client, REPO_ROOT)
+        code, conflicts, rollbacks = apply_actions(actions, REPO_ROOT, dry_run=args.dry_run)
         n_collect = sum(1 for a in actions if a.status == "collect")
-        print(f"\n完成: 待收编 {n_collect}, 冲突 {len(conflicts)}")
+        print(f"\n完成: 待收编 {n_collect}, 冲突 {len(conflicts)}, 回退拒收 {len(rollbacks)}")
         return code
 
     print(f"[watch] 守护启动,间隔 {args.interval}s(Ctrl+C 退出)")
     try:
         while True:
-            actions = plan_actions(PROMPTS_DIR, client)
-            _, conflicts = apply_actions(actions, REPO_ROOT)
+            actions = plan_actions(PROMPTS_DIR, client, REPO_ROOT)
+            _, conflicts, rollbacks = apply_actions(actions, REPO_ROOT)
             if conflicts:
                 print(f"[watch] {len(conflicts)} 个冲突待人工裁决: {conflicts}")
+            if rollbacks:
+                print(f"[watch] {len(rollbacks)} 个回退拒收编(走 deploy 覆盖): {rollbacks}")
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[watch] 退出")

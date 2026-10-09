@@ -29,6 +29,13 @@ PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src" / "finance_agent" / "p
 
 DEFAULT_EXCLUDE: set[str] = set()
 
+# 双模导入：pytest 经 rootdir 走 scripts.* 包路径；`python scripts/x.py` 直跑时
+# sys.path 含 scripts/ 自身，走同名裸模块（2026-10-09 冒烟实测直跑 ModuleNotFoundError）
+try:
+    from scripts.prompt_history import match_historical_content
+except ModuleNotFoundError:  # pragma: no cover - 直跑模式
+    from prompt_history import match_historical_content
+
 
 def _normalize(text: str) -> str:
     """CRLF/LF 归一(口径同 evals.run._verify_prompt_sync / sync_prompts)。"""
@@ -70,21 +77,25 @@ def precheck(
     files: list[Path],
     exclude: set[str],
     head_contents: dict[str, str] | None = None,
-) -> tuple[list[str], list[str]]:
+    history_matcher=None,  # noqa: ANN001 - (name, normalized_remote) -> bool
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """发布预检(add-prompt-hot-reload):Langfuse 领先(UI 编辑未收编)则拒绝盲推。
 
-    判别式(以 git HEAD 为基准区分领先方向):
+    判别式(以 git HEAD + 历史版本为基准区分方向,issue #228):
     - remote == local → 一致,放行（并上报 identical,主循环跳过同内容重发布,
       #140 版本噪声:无差别新建版本使 12 个未改动 prompt 各多一个同内容版本）
     - remote == HEAD  → Langfuse 仍在上次提交状态,本地已改(正常待发布),放行
-    - remote != HEAD 且 remote != local → Langfuse 有未收编变更(UI 编辑),拒绝
-    - HEAD 内容未知(未跟踪/无 git) → 保守:任何差异都拒绝
-    返回 (mismatched, unreachable, identical)。prompt 在 Langfuse 不存在(404)
-    视为首部属不拦;拉取失败(网络/凭证)保守归 unreachable。CRLF 归一后逐字比对。
+    - remote != HEAD 且 != local,但命中该文件 git 历史任一已提交版本
+      → Langfuse 回退/落后(纯陈旧,无 UI 独有内容),放行并列入 stale
+    - remote 不命中任何历史版本 → Langfuse 有 UI 独有编辑,拒绝
+    - HEAD 内容未知(未跟踪/无 git) → 保守:历史集为空,任何差异都拒绝
+    返回 (mismatched, unreachable, identical, stale)。prompt 在 Langfuse 不存在
+    (404) 视为首部属不拦;拉取失败(网络/凭证)保守归 unreachable。CRLF 归一比对。
     """
     mismatched: list[str] = []
     unreachable: list[str] = []
     identical: list[str] = []
+    stale: list[str] = []
     for f in files:
         name = f.stem
         if name in exclude:
@@ -105,8 +116,16 @@ def precheck(
         head = head_contents.get(name) if head_contents is not None else None
         if head is not None and remote == head:
             continue  # 本地领先(正常待发布)
+        if history_matcher is not None and history_matcher(name, remote):
+            stale.append(name)  # Langfuse 回退/落后:发布将覆盖,见 issue #228
+            continue
         mismatched.append(name)
-    return mismatched, unreachable, identical
+    return mismatched, unreachable, identical, stale
+
+
+def _blocked_by_precheck(mismatched: list[str], unreachable: list[str], *, force: bool) -> bool:
+    """预检是否拦截发布(issue #228-④):--force 绕过 UI 编辑拦截,不绕不可达。"""
+    return bool(unreachable) or (bool(mismatched) and not force)
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,8 +136,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--force",
         action="store_true",
-        help="内容与 Langfuse production 一致时仍强制新建版本（默认跳过防版本噪声；"
-        "仅改标签不改内容的场景用）",
+        help="内容与 Langfuse production 一致时仍强制新建版本（默认跳过防版本噪声）；"
+        "同时显式绕过预检的 UI 编辑拦截（逐项打印覆盖警告；拉取失败仍拒绝）",
     )
     return p.parse_args()
 
@@ -169,13 +188,30 @@ def main() -> int:
     # 预检(add-prompt-hot-reload):Langfuse 领先/不可达时拒绝整批发布,
     # 防止本地盲推创建新版本抢走 production 标签覆盖 UI 编辑。
     # 以 git HEAD 为基准区分「本地领先(正常待发布,放行)」与「Langfuse 领先(拒绝)」。
-    mismatched, unreachable, identical = precheck(
+    repo_root = Path(__file__).resolve().parents[1]
+
+    def _history_matcher(name: str, remote: str) -> bool:
+        # 惰性逐文件查历史(仅 remote≠local 且 ≠HEAD 时才调用):命中任一已提交
+        # 版本即判「Langfuse 回退/落后」(issue #228)
+        rel = (PROMPTS_DIR / f"{name}.md").relative_to(repo_root).as_posix()
+        return match_historical_content(repo_root, rel, remote) is not None
+
+    mismatched, unreachable, identical, stale = precheck(
         client,
         files,
         exclude,
-        head_contents=_head_contents(Path(__file__).resolve().parents[1], files),
+        head_contents=_head_contents(repo_root, files),
+        history_matcher=_history_matcher,
     )
-    if mismatched or unreachable:
+    for name in stale:
+        print(f"  [注意] {name}  Langfuse 落后/回退到历史版本,发布将覆盖", file=sys.stderr)
+    if mismatched and args.force:
+        for name in mismatched:
+            print(
+                f"  [--force 覆盖] {name}  Langfuse production 含 UI 独有内容,将被覆盖",
+                file=sys.stderr,
+            )
+    if _blocked_by_precheck(mismatched, unreachable, force=args.force):
         for name in mismatched:
             print(
                 f"  [预检拦截] {name}  Langfuse production 与本地不一致(UI 编辑未收编?)",
@@ -185,7 +221,8 @@ def main() -> int:
             print(f"  [预检拦截] {name}  Langfuse 拉取失败(保守拒绝)", file=sys.stderr)
         print(
             "\n[ERROR] 预检未通过,已拒绝发布。Langfuse 侧有变更时先执行: "
-            "uv run python scripts/sync_prompts.py --once 收编后再发布",
+            "uv run python scripts/sync_prompts.py --once 收编后再发布;"
+            "确认覆盖 UI 编辑可用 --force",
             file=sys.stderr,
         )
         return 1

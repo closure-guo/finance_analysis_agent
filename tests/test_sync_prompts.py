@@ -60,7 +60,7 @@ class TestCollect:
         root, prompts = repo
         client = _fake_client({"alpha": "alpha v2\n", "beta": "beta v1\n"}, {"alpha": 2})
         before = _count_commits(root)
-        code, conflicts = apply_actions(plan_actions(prompts, client), root)
+        code, conflicts, _ = apply_actions(plan_actions(prompts, client, repo_root=root), root)
         assert code == 0 and conflicts == []
         assert (prompts / "alpha.md").read_text(encoding="utf-8") == "alpha v2\n"
         assert (prompts / "beta.md").read_text(encoding="utf-8") == "beta v1\n"  # 未动
@@ -77,7 +77,7 @@ class TestCollect:
         _git(["add", "-A"], root)
         _git(["commit", "-m", "crlf"], root)
         client = _fake_client({"alpha": "alpha v1\nsecond\n", "beta": "beta v1\n"})
-        actions = plan_actions(prompts, client)
+        actions = plan_actions(prompts, client, repo_root=root)
         assert all(a.status == "ok" for a in actions)
 
 
@@ -86,7 +86,7 @@ class TestConflictProtection:
         root, prompts = repo
         (prompts / "alpha.md").write_text("alpha 本地未提交\n", encoding="utf-8")
         client = _fake_client({"alpha": "alpha v2\n", "beta": "beta v1\n"})
-        code, conflicts = apply_actions(plan_actions(prompts, client), root)
+        code, conflicts, _ = apply_actions(plan_actions(prompts, client, repo_root=root), root)
         assert code == 1
         assert conflicts == ["alpha"]
         assert (prompts / "alpha.md").read_text(encoding="utf-8") == "alpha 本地未提交\n"
@@ -97,7 +97,7 @@ class TestNoop:
         root, prompts = repo
         before = _count_commits(root)
         client = _fake_client({"alpha": "alpha v1\n", "beta": "beta v1\n"})
-        code, conflicts = apply_actions(plan_actions(prompts, client), root)
+        code, conflicts, _ = apply_actions(plan_actions(prompts, client, repo_root=root), root)
         assert code == 0 and conflicts == []
         assert _count_commits(root) == before
 
@@ -114,11 +114,11 @@ class TestNoop:
                 return _fake_client({"beta": "beta v1\n"}).get_prompt(name)
 
         broken = _Broken()
-        actions = plan_actions(prompts, client)
+        actions = plan_actions(prompts, client, repo_root=root)
         statuses = {a.name: a.status for a in actions}
         # gamma 在 mapping 无 → local_only
         assert statuses["gamma"] == "local_only"
-        actions2 = plan_actions(prompts, broken)
+        actions2 = plan_actions(prompts, broken, repo_root=root)
         assert {a.name: a.status for a in actions2}["alpha"] == "remote_error"
 
 
@@ -127,10 +127,75 @@ class TestDryRun:
         root, prompts = repo
         before = _count_commits(root)
         client = _fake_client({"alpha": "alpha v2\n", "beta": "beta v1\n"})
-        actions = plan_actions(prompts, client)
-        code, conflicts = apply_actions(actions, root, dry_run=True)
+        actions = plan_actions(prompts, client, repo_root=root)
+        code, conflicts, _ = apply_actions(actions, root, dry_run=True)
         assert code == 0 and conflicts == []
         assert (prompts / "alpha.md").read_text(encoding="utf-8") == "alpha v1\n"  # 未写
+        assert _count_commits(root) == before
+
+
+class TestRollbackGuard:
+    """issue #228：Langfuse 回退到历史版本时 sync 不得收编（防回退权威源）。
+
+    判别：remote 命中该文件 git 历史任一已提交版本 = 纯陈旧/回退（无 UI 独有
+    内容）→ status=rollback，不写回不提交，exit 1，提示走 deploy_prompts。
+    """
+
+    @pytest.fixture
+    def repo_two_versions(self, tmp_path):
+        """alpha 两版本历史：v1（旧）→ v2（HEAD）。"""
+        prompts = tmp_path / "src" / "finance_agent" / "prompts"
+        prompts.mkdir(parents=True)
+        f = prompts / "alpha.md"
+        f.write_text("alpha v1\n", encoding="utf-8")
+        _git(["init"], tmp_path)
+        _git(["config", "user.email", "t@t"], tmp_path)
+        _git(["config", "user.name", "t"], tmp_path)
+        _git(["add", "-A"], tmp_path)
+        _git(["commit", "-m", "v1"], tmp_path)
+        f.write_text("alpha v2\n", encoding="utf-8")
+        _git(["add", "-A"], tmp_path)
+        _git(["commit", "-m", "v2"], tmp_path)
+        return tmp_path, prompts
+
+    def test_rollback_detected_not_collected(self, repo_two_versions):
+        root, prompts = repo_two_versions
+        # Langfuse 回退到 v1（历史版本），本地 HEAD 为 v2
+        client = _fake_client({"alpha": "alpha v1\n"}, {"alpha": 1})
+        actions = plan_actions(prompts, client, repo_root=root)
+        assert {a.name: a.status for a in actions}["alpha"] == "rollback"
+
+    def test_ui_unique_still_collected(self, repo_two_versions):
+        root, prompts = repo_two_versions
+        # UI 独有内容（不命中任何历史版本）→ 维持收编
+        client = _fake_client({"alpha": "alpha v3 UI 独有\n"}, {"alpha": 3})
+        actions = plan_actions(prompts, client, repo_root=root)
+        assert {a.name: a.status for a in actions}["alpha"] == "collect"
+
+    def test_rollback_no_write_no_commit_exit1(self, repo_two_versions, capsys):
+        root, prompts = repo_two_versions
+        before = _count_commits(root)
+        client = _fake_client({"alpha": "alpha v1\n"}, {"alpha": 1})
+        code, conflicts, rollbacks = apply_actions(
+            plan_actions(prompts, client, repo_root=root), root
+        )
+        assert code == 1
+        assert rollbacks == ["alpha"]
+        assert conflicts == []
+        assert (prompts / "alpha.md").read_text(encoding="utf-8") == "alpha v2\n"
+        assert _count_commits(root) == before
+        out = capsys.readouterr().out
+        assert "deploy_prompts" in out
+
+    def test_rollback_dry_run_also_no_write(self, repo_two_versions):
+        root, prompts = repo_two_versions
+        before = _count_commits(root)
+        client = _fake_client({"alpha": "alpha v1\n"}, {"alpha": 1})
+        code, _, rollbacks = apply_actions(
+            plan_actions(prompts, client, repo_root=root), root, dry_run=True
+        )
+        assert code == 1 and rollbacks == ["alpha"]
+        assert (prompts / "alpha.md").read_text(encoding="utf-8") == "alpha v2\n"
         assert _count_commits(root) == before
 
 
