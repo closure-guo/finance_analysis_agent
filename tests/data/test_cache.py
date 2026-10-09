@@ -176,14 +176,26 @@ class TestSharedCacheSingleton:
     加倍并发冲突面且语义分裂。统一后跨模块读写经同一实例（有锁保护）。
     """
 
-    def test_nodes_modules_share_singleton(self):
-        from finance_agent.data.cache import get_shared_cache
+    def test_nodes_modules_share_singleton(self, monkeypatch, tmp_path):
+        """三入口同指一个实例。
+
+        #248 教训：无参 _get_cache()/get_shared_cache() 会以相对路径
+        "cache.db" 在 cwd（仓库/worktree 根）落盘进程单例，毒化管线 E2E
+        后端缓存。本测试 monkeypatch 到 tmp_path 作用域单例，禁止相对落盘。
+        """
+        import finance_agent.data.cache as cache_pkg
         from finance_agent.nodes import cache as cache_mod
         from finance_agent.nodes import fetch as fetch_mod
 
+        scoped = cache_pkg.DataCache(str(tmp_path / "shared_cache.db"))
+        # nodes/cache 是模块级 import（本地绑定），data/cache 与 nodes/fetch 是
+        # 调用点延迟 import——三处都要 patch 才能不触真实进程单例
+        monkeypatch.setattr(cache_pkg, "get_shared_cache", lambda: scoped)
+        monkeypatch.setattr(cache_mod, "get_shared_cache", lambda: scoped)
+
         c1 = cache_mod._get_cache()
         c2 = fetch_mod._get_cache()
-        c3 = get_shared_cache()
+        c3 = cache_pkg.get_shared_cache()
         assert c1 is c2, "nodes/cache 与 nodes/fetch 单例分裂"
         assert c1 is c3, "未统一到 get_shared_cache"
 

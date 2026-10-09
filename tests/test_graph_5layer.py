@@ -173,9 +173,10 @@ class TestStubRealKeysetParity:
     两键集相等，堵住「注释约定」的失效模式。
     """
 
-    def test_stub_keys_equal_real_fetch_keys(self, monkeypatch):
+    def test_stub_keys_equal_real_fetch_keys(self, monkeypatch, tmp_path):
         import pandas as pd
 
+        from finance_agent.data.cache import DataCache
         from finance_agent.nodes.fetch import _stub_fetch_data, fetch_data
 
         monkeypatch.delenv("TESTING", raising=False)
@@ -257,12 +258,23 @@ class TestStubRealKeysetParity:
                 return {"报告日": "2025-12-31", "期类型": "年报", "missing": []}
 
         real_keys = set(
-            fetch_data({"stock_code": "600519"}, cache=None, client=_AllSuccessClient()).keys()
+            fetch_data(
+                {"stock_code": "600519"},
+                cache=DataCache(str(tmp_path / "cache.db")),
+                client=_AllSuccessClient(),
+            ).keys()
         )
         stub_keys = set(_stub_fetch_data({"stock_code": "600519"}).keys())
         assert real_keys == stub_keys, (
             f"stub 与真实 fetch_data 键集漂移：仅真实有 {sorted(real_keys - stub_keys)}，"
             f"仅 stub 有 {sorted(stub_keys - real_keys)}"
+        )
+        # 回归锚（#248）：验证注入的隔离缓存确被使用（tmp 内出现主库文件），
+        # 防止本测试回退到 get_shared_cache() 相对路径 "cache.db" 落盘 cwd
+        # 毒化管线 E2E 后端。注：不做 cwd 级断言——其他测试的泄漏线程会延迟
+        # 写 cwd，跨测试归因不可靠（本轮实测），cwd 卫生由各污染源测试自管。
+        assert (tmp_path / "cache.db").exists(), (
+            "fetch_data 未使用注入的隔离缓存——真实路径回落共享单例即为本 issue 复发"
         )
 
 

@@ -5,11 +5,33 @@
 未带 confirm=true 必须 400。
 """
 
+import sys
+
+import pytest
 from fastapi.testclient import TestClient
 
 from finance_agent import session_store
 from finance_agent.api import app
 from finance_agent.data.cache import get_shared_cache
+
+
+@pytest.fixture(autouse=True)
+def _scope_shared_cache_to_tmp(monkeypatch, tmp_path):
+    """#248：共享缓存一律 tmp 作用域。
+
+    无参 get_shared_cache() 以相对路径 "cache.db" 落盘 cwd（仓库/worktree 根，
+    30 天 TTL），毒化同 cwd 管线 E2E 后端缓存。本文件直接调用与经 /api/cache/*
+    端点间接调用共三处引用（本模块 / finance_agent.api / data.cache），
+    全部 patch 到同一 tmp 实例，保证「测试内互相可见、进程外零落盘」。
+    """
+    import finance_agent.api as api_mod
+    import finance_agent.data.cache as cache_pkg
+
+    scoped = cache_pkg.DataCache(str(tmp_path / "shared_cache.db"))
+    replacement = lambda: scoped  # noqa: E731
+    monkeypatch.setattr(cache_pkg, "get_shared_cache", replacement)
+    monkeypatch.setattr(api_mod, "get_shared_cache", replacement)
+    monkeypatch.setattr(sys.modules[__name__], "get_shared_cache", replacement)
 
 
 def test_cache_stats_and_clear_all_requires_confirm():

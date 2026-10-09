@@ -362,10 +362,21 @@ class TestRunGraphStreamingRootOutput:
     ——langfuse-trace-agent-attribution 4.5/4.6「不再 output=null」；线上复现：
     deep_analysis 根 span output 为 null）。"""
 
-    def test_root_span_update_carries_output_summary(self):
+    def test_root_span_update_carries_output_summary(self, monkeypatch, tmp_path):
         from unittest.mock import MagicMock, patch
 
+        import finance_agent.data.cache as cache_pkg
+        import finance_agent.nodes.cache as nodes_cache_mod
         from finance_agent import api
+
+        # #248：本测试实际跑真图（patch finance_agent.graph.build_5layer_graph
+        # 对 api 模块级 graph 实例无效——既有 test bug，另行处理），图节点
+        # check_cache/fetch_data 经 nodes/cache 模块级绑定与 data/cache 包
+        # 绑定触碰共享缓存，无隔离时以相对路径 cache.db 落盘 cwd 毒化管线
+        # E2E 后端。两处绑定都 patch 到同一 tmp 实例。
+        scoped = cache_pkg.DataCache(str(tmp_path / "shared_cache.db"))
+        monkeypatch.setattr(cache_pkg, "get_shared_cache", lambda: scoped)
+        monkeypatch.setattr(nodes_cache_mod, "get_shared_cache", lambda: scoped)
 
         mock_lf = MagicMock()
         mock_root = MagicMock()
