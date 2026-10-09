@@ -300,3 +300,32 @@ class TestNarrativeFreshnessContract:
         assert "最新披露期次" in src
         assert "并列呈现" in src
         assert "单边" in src
+
+
+class TestDeepModePeerComparison:
+    def test_has_peer_comparison_branch(self):
+        text = _load("deep_mode.md")
+        assert "类型 D" in text
+        assert "peer_codes" in text
+
+    def test_single_pipeline_constraint_preserved(self):
+        """对比=单次管线：禁止多跑的纪律仍在。"""
+        text = _load("deep_mode.md")
+        assert "单次" in text
+        assert "禁止为多标的分别发起多次完整分析" in text
+
+    def test_ambiguous_primary_disclosure(self):
+        text = _load("deep_mode.md")
+        assert "已以" in text and "主视角" in text
+
+
+class TestFundamentalPeerConsumption:
+    def test_has_peer_consumption_rule(self):
+        text = _load("fundamental_analyst.md")
+        assert "同业对比材料消费" in text
+        assert "peer_comparison" in text
+
+    def test_missing_marker_and_caliber(self):
+        text = _load("fundamental_analyst.md")
+        assert "—" in text  # 缺失标记不得虚构补齐
+        assert "口径" in text
