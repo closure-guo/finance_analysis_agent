@@ -46,6 +46,62 @@ class TestGenerateReport:
         assert "基本面强劲" in report
         assert "技术面偏多" in report
 
+    def test_report_renders_peer_comparison_section(self):
+        """add-peer-comparison R4：报告确定性渲染同业对照表——分析师 markdown 正文
+        不进报告（摘要式渲染是既有设计），对照段必须由代码直出，不依赖 LLM 转述。"""
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "peer_codes": ["000858"],
+            "peer_comparison": (
+                "同业对比（主标的首行；估值为行情快照口径，财务组为最新报告期累计同比口径）：\n"
+                "| 名称 | 代码 | PE | PB | 总市值(亿) | 营收同比(%) | 归母净利同比(%) | 毛利率(%) | 报告期 |\n"
+                "|---|---|---|---|---|---|---|---|---|\n"
+                "| 贵州茅台 | 600519 | 19.39 | 6.28 | 15788.53 | 1.30 | -1.95 | 89.73 | 2026-06-30 |\n"
+                "| 五粮液 | 000858 | — | 2.31 | 2738.86 | 20.87 | 89.30 | 80.29 | 2026-06-30 |"
+            ),
+            "relative_valuation": {
+                "PE": {
+                    "target": 19.39,
+                    "peer_avg": None,
+                    "peer_min": None,
+                    "peer_max": None,
+                    "conclusion": "N/A",
+                },
+                "PB": {
+                    "target": 6.28,
+                    "peer_avg": 2.31,
+                    "peer_min": 2.31,
+                    "peer_max": 2.31,
+                    "conclusion": "overvalued",
+                },
+            },
+        }
+        result = generate_report(state)
+        report = result["final_report"]
+        assert "同业对比" in report
+        assert "五粮液" in report and "2.31" in report and "2738.86" in report
+        assert "口径" in report  # 材料自带口径标注随表渲染
+        assert "相对同业偏高" in report  # 相对估值结论（PE N/A 不渲染）
+        assert "相对估值（PE）" not in report
+
+    def test_report_renders_peer_missing_declaration(self):
+        """对比请求成立但同业数据不可得 → 报告渲染缺失声明（R4 场景「peer 缺失如实声明」）。"""
+        state = {
+            "stock_name": "贵州茅台",
+            "stock_code": "600519",
+            "peer_codes": ["000858"],
+            "peer_comparison": "同业数据不可用（抓取失败或未执行），无法提供同业对比；不作对比结论。",
+        }
+        result = generate_report(state)
+        assert "同业数据不可用" in result["final_report"]
+
+    def test_report_no_peer_section_without_peer_request(self):
+        """未携带 peer_codes 且无 peer_comparison → 报告不含同业对比章节（回归）。"""
+        state = {"stock_name": "贵州茅台", "stock_code": "600519"}
+        result = generate_report(state)
+        assert "同业对比" not in result["final_report"]
+
     def test_report_contains_trade_decision(self):
         """报告包含交易决策。"""
         state = {
