@@ -472,8 +472,12 @@ _PEER_TABLE_COLUMNS = [
 
 
 def _peer_fmt(v) -> str:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return "—"
+    try:
+        if v is None or pd.isna(v):
+            return "—"
+    except (TypeError, ValueError):
+        # pd.isna 对 list 等长度歧义对象 raise ValueError——按非缺失处理
+        pass
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
