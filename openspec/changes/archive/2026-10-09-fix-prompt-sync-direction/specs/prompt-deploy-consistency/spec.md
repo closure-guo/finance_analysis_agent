@@ -26,7 +26,7 @@ prompt 发布脚本 MUST 存在于正式脚本目录 `scripts/`（而非 tests/�
 - **THEN** 打印将导入的 prompt 文件清单而不实际调用 Langfuse
 - **AND** 支持 --labels（默认 production）与 --exclude 参数
 
-#### Scenario: Langfuse 领先（UI 独有编辑）时拒绝发布
+#### Scenario: Langfuse 领先时拒绝发布
 
 - **GIVEN** 某 prompt 的 Langfuse production 内容 ≠ 本地 .md，且不命中该文件任何 git 历史已提交版本（UI 独有编辑未收编）
 - **WHEN** 执行 `uv run python scripts/deploy_prompts.py`
