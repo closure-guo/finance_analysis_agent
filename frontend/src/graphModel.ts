@@ -34,7 +34,11 @@ function buildGraphEdges(): GraphEdgeSpec[] {
   flow.push(...fan(['bull_r1', 'bear_r1', 'bull_r2', 'bear_r2'], ['research_manager']))
   flow.push({ source: 'research_manager', target: 'trader', kind: 'flow' })
   flow.push(...fan(['trader'], R1))
-  flow.push(...chain(R1))
+  // 风控三方 R1 并行（同秒启动），R1→R2 同侧延续——与多空辩论层
+  // bull_r1→bull_r2 写法对齐；R2 无入边会成 dagre 孤岛子图（10-08 实症）
+  flow.push({ source: 'aggressive_r1', target: 'aggressive_r2', kind: 'flow' })
+  flow.push({ source: 'conservative_r1', target: 'conservative_r2', kind: 'flow' })
+  flow.push({ source: 'neutral_r1', target: 'neutral_r2', kind: 'flow' })
   flow.push(...fan(R2, ['risk_judge']))
   flow.push({ source: 'risk_judge', target: 'fund_manager', kind: 'flow' })
   flow.push({ source: 'fund_manager', target: 'generate_report', kind: 'flow' })
