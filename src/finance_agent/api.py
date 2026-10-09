@@ -423,7 +423,7 @@ def _node_summary(node_name: str, accumulated: dict, update: dict) -> str:
             parts.append("宏观指标")
         if accumulated.get("news_list"):
             parts.append("新闻舆情")
-        if accumulated.get("peer_financials"):
+        if accumulated.get("peer_financials") is not None:
             parts.append("同业数据")
         src = "、".join(parts) if parts else "财务数据"
         return f"已获取 {name} 的{src}" if name else f"已获取{src}"
