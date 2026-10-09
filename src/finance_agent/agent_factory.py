@@ -531,16 +531,28 @@ def _resolve_peer_codes(
     """对标股代码归一化（add-peer-comparison）。
 
     LLM 显式传参优先于请求级闭包注入；归一化=字符串容错（schema string
-    fallback 下 LLM 可能传逗号串，按中英文逗号/顿号/空白切分）/strip/
-    剔非 6 位数字/去重/剔除主标的自身/上限 3 只。全无效返回 None
-    （不阻断主标的分析）。
+    fallback 下 LLM 可能传逗号串或 JSON 数组串，JSON 数组直接解析、
+    否则按中英文逗号/顿号/空白切分）/strip/剔非 6 位数字/去重/剔除主标的
+    自身/上限 3 只。全无效返回 None（不阻断主标的分析）。
     """
     raw = llm_codes if llm_codes else closure_codes
     # 字符串容错：harness build_schema_from_function 对 list[str] | None 注解
     # fallback 为 JSON "string"（llm_client.py 类型内省只认裸类型名），LLM 端
-    # 实际可能发 "000858,600519" 逗号串——直接迭代会逐字符校验、静默丢光。
+    # 实际可能发 "000858,600519" 逗号串——直接迭代会逐字符校验、静默丢光；
+    # 也可能把列表整体 JSON 序列化进 string 槽位（'["000858","600519"]'），
+    # 先试 json.loads 解析，失败回落逗号/顿号/空白切分。
     if isinstance(raw, str):
-        raw = raw.replace("，", ",").replace("、", ",").replace(",", " ").split()
+        stripped = raw.strip()
+        parsed: object = None
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                parsed = None
+        if isinstance(parsed, list):
+            raw = parsed
+        else:
+            raw = stripped.replace("，", ",").replace("、", ",").replace(",", " ").split()
     if not raw:
         return None
     seen: list[str] = []

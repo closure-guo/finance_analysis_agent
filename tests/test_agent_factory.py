@@ -110,6 +110,11 @@ class TestRunDeepAnalysisPeerCodes:
         assert _resolve_peer_codes("000858,600519", None, exclude="600519") == ["000858"]
         assert _resolve_peer_codes("000858， 601318", None) == ["000858", "601318"]
 
+    def test_resolve_tolerates_json_array_string(self):
+        """schema string 槽位下 LLM 高频把列表 JSON 序列化进字符串——须解析而非逐字符丢弃。"""
+        assert _resolve_peer_codes('["000858","600519"]', None, exclude="600519") == ["000858"]
+        assert _resolve_peer_codes('["000858", "601318"]', None) == ["000858", "601318"]
+
     def test_llm_schema_exposes_peer_codes(self):
         """工具 schema 对 LLM 可见 peer_codes（build_schema_from_function 从签名内省）。"""
         agent = build_agent(mode="deep", api_key="test-key")
