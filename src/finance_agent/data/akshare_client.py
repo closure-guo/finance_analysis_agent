@@ -1241,9 +1241,12 @@ class AKShareClient:
         return rows
 
     def fetch_peer_data(self, stock_codes: list[str]) -> pd.DataFrame | None:
-        """逐标的抓取同业名称/PE/PB（复用 _quote_via_chain 三级链）。
+        """逐标的抓取同业估值组（name/PE/PB/total_mv）+ 财务组（revenue_yoy/netprofit_yoy/gross_margin/report_period）。
 
-        单标的失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None。
+        估值组复用 _quote_via_chain 三级链；total_mv 由 quote.market_cap（元）÷1e8 归一亿元。
+        财务组复用 fetch_latest_period_snapshot（与主标的快照同源同口径），独立 try 边界：
+        失败仅财务列置 None，不丢行不拖垮估值组（字段组级降级，spec analyst-data-sources）。
+        单标的行情失败或无 PE/PB 跳过不拖垮整批；全部失败或输入空返回 None。
         spot 表惰性共享：腾讯主源健康时逐标的 1 请求、零 spot 调用；腾讯
         失败后首个标的触发一次全市场 spot 拉取，批内复用（N 标的 1×）。
         """
@@ -1269,9 +1272,47 @@ class AKShareClient:
             if pe is None and pb is None:
                 logger.warning("同业 %s 无 PE/PB（全回退失败），跳过", code)
                 continue
-            rows.append({"name": q.get("name") or code, "code": code, "PE": pe, "PB": pb})
+            mc = q.get("market_cap")
+            if mc is not None and pd.isna(mc):
+                mc = None
+            row = {
+                "name": q.get("name") or code,
+                "code": code,
+                "PE": pe,
+                "PB": pb,
+                "total_mv": round(float(mc) / 1e8, 2) if mc is not None else None,
+                "revenue_yoy": None,
+                "netprofit_yoy": None,
+                "gross_margin": None,
+                "report_period": None,
+            }
+            # 财务组：独立 try 边界，失败不丢行（字段组级降级）
+            try:
+                snap = self.fetch_latest_period_snapshot(code)
+                row["revenue_yoy"] = snap.get("营收同比(%)")
+                row["netprofit_yoy"] = snap.get("归母净利同比(%)")
+                row["gross_margin"] = snap.get("毛利率(%)")
+                row["report_period"] = snap.get("报告日")
+            except Exception as e:
+                logger.warning("同业 %s 财务组抓取失败，字段置缺失: %s", code, e)
+            rows.append(row)
         if not rows:
             return None
         # 出口根因归一（终审 C1）：混合行 DataFrame 构造把 None 强转回 float64
         # NaN 毒化同业均值——出口必须 _normalize_nan
-        return self._normalize_nan(pd.DataFrame(rows, columns=["name", "code", "PE", "PB"]))
+        return self._normalize_nan(
+            pd.DataFrame(
+                rows,
+                columns=[
+                    "name",
+                    "code",
+                    "PE",
+                    "PB",
+                    "total_mv",
+                    "revenue_yoy",
+                    "netprofit_yoy",
+                    "gross_margin",
+                    "report_period",
+                ],
+            )
+        )

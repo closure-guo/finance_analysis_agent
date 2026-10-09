@@ -881,6 +881,15 @@ class TestFetchPeerData:
             monkeypatch.setattr("finance_agent.data.akshare_client._AK_RETRY_DELAY", 0)
             yield
 
+    @pytest.fixture(autouse=True)
+    def _stub_financial_group(self, client, monkeypatch):
+        """add-peer-comparison：存量用例不断言财务组——stub 为全失败（字段组级降级路径）。"""
+
+        def _boom(code):
+            raise ValueError("stub: 存量用例不覆盖财务组")
+
+        monkeypatch.setattr(client, "fetch_latest_period_snapshot", _boom)
+
     def test_mixed_success_skips_failed_peer(self, client, monkeypatch):
         calls = []
 
@@ -945,6 +954,15 @@ class TestFetchPeerDataHeterogeneousRows:
     NaN 毒化同业均值并伪装成 fair。出口必须复用 _normalize_nan 根因归一。
     """
 
+    @pytest.fixture(autouse=True)
+    def _stub_financial_group(self, client, monkeypatch):
+        """add-peer-comparison：存量用例不断言财务组——stub 为全失败（字段组级降级路径）。"""
+
+        def _boom(code):
+            raise ValueError("stub: 存量用例不覆盖财务组")
+
+        monkeypatch.setattr(client, "fetch_latest_period_snapshot", _boom)
+
     @patch("finance_agent.data.akshare_client.ak")
     def test_mixed_none_and_value_pe_no_nan_leak(self, mock_ak, client, monkeypatch):
         monkeypatch.setattr(client, "_fetch_tencent_quote", lambda code: None)
@@ -978,6 +996,15 @@ class TestFetchPeerDataSharedSpot:
     update-quote-primary-source T3：腾讯主源失败后共享 spot 才启用——主源
     健康时逐标的 1 请求、零 spot 调用（见 test_tencent_primary_serves_peers_no_spot）。
     """
+
+    @pytest.fixture(autouse=True)
+    def _stub_financial_group(self, client, monkeypatch):
+        """add-peer-comparison：存量用例不断言财务组——stub 为全失败（字段组级降级路径）。"""
+
+        def _boom(code):
+            raise ValueError("stub: 存量用例不覆盖财务组")
+
+        monkeypatch.setattr(client, "fetch_latest_period_snapshot", _boom)
 
     @staticmethod
     def _spot_df() -> pd.DataFrame:
@@ -1054,6 +1081,93 @@ class TestFetchPeerDataSharedSpot:
         # 688012 来自 spot 表；600300 表未命中 → 走 quote 回退链（百度 PB，PE 缺）
         assert df.iloc[0]["PE"] == 55.0
         assert df.iloc[1]["PE"] is None and df.iloc[1]["PB"] == 11.26
+
+
+class TestFetchPeerDataFinancialGroup:
+    """add-peer-comparison：估值组+财务组字段扩展与字段组级降级。"""
+
+    def test_extended_columns_full_data(self, client, monkeypatch):
+        monkeypatch.setattr(
+            client,
+            "_fetch_tencent_quote",
+            lambda code: {
+                "name": "五粮液",
+                "code": code,
+                "PE": 15.0,
+                "PB": 3.2,
+                "market_cap": 5e11,
+            },
+        )
+        monkeypatch.setattr(
+            client,
+            "fetch_latest_period_snapshot",
+            lambda code: {
+                "营收同比(%)": 7.1,
+                "归母净利同比(%)": 8.2,
+                "毛利率(%)": 76.5,
+                "报告日": "2026-06-30",
+            },
+        )
+        df = client.fetch_peer_data(["000858"])
+        assert df is not None and len(df) == 1
+        assert list(df.columns) == [
+            "name",
+            "code",
+            "PE",
+            "PB",
+            "total_mv",
+            "revenue_yoy",
+            "netprofit_yoy",
+            "gross_margin",
+            "report_period",
+        ]
+        row = df.iloc[0]
+        assert row["total_mv"] == 5000.0  # 5e11 元 → 5000 亿
+        assert row["revenue_yoy"] == 7.1
+        assert row["netprofit_yoy"] == 8.2
+        assert row["gross_margin"] == 76.5
+        assert row["report_period"] == "2026-06-30"
+
+    def test_financial_group_failure_degrades_fields_not_rows(self, client, monkeypatch):
+        """财务组全失败：行保留（估值组完整），财务列缺失占位——字段组级降级。"""
+        monkeypatch.setattr(
+            client,
+            "_fetch_tencent_quote",
+            lambda code: {"name": "X", "code": code, "PE": 20.0, "PB": 3.0, "market_cap": 1e11},
+        )
+
+        def _boom(code):
+            raise ValueError(f"股票 {code} 利润表数据不可用")
+
+        monkeypatch.setattr(client, "fetch_latest_period_snapshot", _boom)
+        df = client.fetch_peer_data(["000858"])
+        assert df is not None and len(df) == 1
+        row = df.iloc[0]
+        assert row["PE"] == 20.0 and row["total_mv"] == 1000.0
+        assert pd.isna(row["revenue_yoy"]) and pd.isna(row["netprofit_yoy"])
+        assert pd.isna(row["gross_margin"]) and pd.isna(row["report_period"])
+
+    def test_market_cap_missing_degrades_field_only(self, client, monkeypatch):
+        """回退链 quote 无 market_cap：字段 None 占位，不丢行不阻断。"""
+        monkeypatch.setattr(
+            client,
+            "_fetch_tencent_quote",
+            lambda code: {"name": "X", "code": code, "PE": 20.0, "PB": 3.0},
+        )
+        monkeypatch.setattr(
+            client,
+            "fetch_latest_period_snapshot",
+            lambda code: {
+                "营收同比(%)": 1.0,
+                "归母净利同比(%)": 2.0,
+                "毛利率(%)": 50.0,
+                "报告日": "2026-06-30",
+            },
+        )
+        df = client.fetch_peer_data(["000858"])
+        assert df is not None and len(df) == 1
+        assert pd.isna(df.iloc[0]["total_mv"])
+        assert df.iloc[0]["revenue_yoy"] == 1.0
 
 
 class TestFetchTencentQuote:
