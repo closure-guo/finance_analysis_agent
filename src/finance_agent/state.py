@@ -61,7 +61,9 @@ class AnalysisState(TypedDict, total=False):
 
     # ── Layer 3 扩展: 同业+估值 ──
     peer_financials: pd.DataFrame | None
-    peer_comparison: dict | None
+    peer_comparison: (
+        str | None
+    )  # compute 写 markdown 字符串；analysts 注入保留 dict 兼容（遗留标志位形态）
     relative_valuation: dict | None
     garp_result: dict | None
     # 估值快照（update-financial-freshness-and-valuation Task 5）：compute_metrics 产出，

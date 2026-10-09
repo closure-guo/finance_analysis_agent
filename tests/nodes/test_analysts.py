@@ -683,3 +683,29 @@ class TestCoverageSourcesContext:
         ctx = _build_sentiment_context(state)
         assert "解禁" in ctx and "2026-10-09" in ctx
         assert "大宗" in ctx and "1270" in ctx
+
+
+class TestFundamentalPeerComparisonInjection:
+    def test_peer_comparison_string_injected_verbatim(self):
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        peer_text = "同业对比（主标的首行）：\n| 名称 | 代码 |\n|---|---|"
+        state = {"peer_comparison": peer_text}
+        ctx = _build_fundamental_context(state)
+        # 差异化断言：精确拼接锁定字符串直通。
+        # 旧路径 json.dumps(str, ensure_ascii=False) 会加首尾引号并把 \n 转义成字面两字符，
+        # 本断言在旧实现下必然失败，新实现（isinstance str 直通）下通过。
+        assert f"同业对比（state 键 peer_comparison）:\n{peer_text}" in ctx
+
+    def test_legacy_dict_still_rendered(self):
+        """防御：存量标志位 dict 形态不炸（向后兼容）。"""
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        ctx = _build_fundamental_context({"peer_comparison": {"available": True}})
+        assert "peer_comparison" in ctx
+
+    def test_no_peer_comparison_no_section(self):
+        from finance_agent.nodes.analysts import _build_fundamental_context
+
+        ctx = _build_fundamental_context({})
+        assert "peer_comparison" not in ctx

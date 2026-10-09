@@ -130,10 +130,10 @@ def compute_metrics(state: AnalysisState) -> dict[str, Any]:
     if q_income is not None and not q_income.empty:
         result["quarterly_trend"] = _calc_quarterly_trend(q_income)
 
-    # ── 同业对比（如果有 peer 数据）──
-    # TODO(Issue #4): peer_comparison 目前仅是标志位，需添加同业指标格式化器注入 LLM context
-    if peer_financials is not None:
-        result["peer_comparison"] = {"available": True}
+    # ── 同业对比（add-peer-comparison：格式化材料注入，关闭 Issue #4 标志位占位）──
+    peer_text = format_peer_comparison(state, result.get("valuation_snapshot"))
+    if peer_text is not None:
+        result["peer_comparison"] = peer_text
 
     # ── 技术指标 + 风控指标（需要 K 线数据）──
     kline = state.get("kline")
@@ -456,3 +456,86 @@ def _calc_quarterly_trend(q_income: pd.DataFrame) -> dict:
             )
 
     return trend
+
+
+_PEER_TABLE_COLUMNS = [
+    ("name", "名称"),
+    ("code", "代码"),
+    ("PE", "PE"),
+    ("PB", "PB"),
+    ("total_mv", "总市值(亿)"),
+    ("revenue_yoy", "营收同比(%)"),
+    ("netprofit_yoy", "归母净利同比(%)"),
+    ("gross_margin", "毛利率(%)"),
+    ("report_period", "报告期"),
+]
+
+
+def _peer_fmt(v) -> str:
+    try:
+        if v is None or pd.isna(v):
+            return "—"
+    except (TypeError, ValueError):
+        # pd.isna 对 list 等长度歧义对象 raise ValueError——按非缺失处理
+        pass
+    if isinstance(v, float):
+        return f"{v:.2f}"
+    return str(v)
+
+
+def format_peer_comparison(state: AnalysisState, valuation_snapshot: dict | None) -> str | None:
+    """peer_financials + 主标的估值快照/最新期快照 → markdown 对照表（主标的首行）。
+
+    财务组主标的与对标股同源自 latest_period_snapshot（同口径）；主标的 PE 取
+    估值快照已选口径（static 优先，回落 PE_ttm 时附跨口径提示）。peer 数据缺失时：
+    对比请求成立（state.peer_codes 非空）返回中性缺失声明（spec R4）；未指定
+    peer_codes 返回 None（调用方不写入 state.peer_comparison，R3 optional 降级）。
+    """
+    peer_df = state.get("peer_financials")
+    # isinstance 守卫：契约外形态（如 citation 覆盖测试用 list 充当 peer_financials）
+    # 不得炸 compute——按不可用处理，走与缺失相同的降级路径。
+    if not isinstance(peer_df, pd.DataFrame) or peer_df.empty:
+        # spec R4「peer 缺失如实声明」：对比请求成立（携带 peer_codes）但同业
+        # 抓取全部降级/未执行时，注入中性缺失声明，分析师不再对对比被请求过
+        # 一无所知；未指定 peer_codes 时维持 None（R3「无对标股不注入」）。
+        # 声明不断言具体原因——抓取失败与未执行（如行业信息缺失跳过）同路。
+        if state.get("peer_codes"):
+            return "同业数据不可用（抓取失败或未执行），无法提供同业对比；不作对比结论。"
+        return None
+    vs = valuation_snapshot or {}
+    snap = state.get("latest_period_snapshot") or {}
+    pe = vs.get("PE")
+    pe_ttm_fallback = False
+    if pe is None and vs.get("PE_ttm") is not None:
+        pe = vs.get("PE_ttm")
+        pe_ttm_fallback = True
+    target = {
+        "name": state.get("stock_name") or state.get("stock_code"),
+        "code": state.get("stock_code"),
+        "PE": pe,
+        "PB": vs.get("PB"),
+        "total_mv": vs.get("market_cap"),
+        "revenue_yoy": snap.get("营收同比(%)"),
+        "netprofit_yoy": snap.get("归母净利同比(%)"),
+        "gross_margin": snap.get("毛利率(%)"),
+        "report_period": snap.get("报告日"),
+    }
+    header = "| " + " | ".join(label for _, label in _PEER_TABLE_COLUMNS) + " |"
+    sep = "|" + "---|" * len(_PEER_TABLE_COLUMNS)
+
+    def _row(d: dict) -> str:
+        return "| " + " | ".join(_peer_fmt(d.get(k)) for k, _ in _PEER_TABLE_COLUMNS) + " |"
+
+    lines = [
+        "同业对比（主标的首行；估值为行情快照口径，财务组为最新报告期累计同比口径）：",
+        header,
+        sep,
+        _row(target),
+    ]
+    for _, r in peer_df.iterrows():
+        lines.append(_row(r.to_dict()))
+    if pe_ttm_fallback:
+        lines.append(
+            "注：主标的 PE 为 TTM 推导口径，对标股 PE 为行情快照口径，跨口径比较仅供参考。"
+        )
+    return "\n".join(lines)

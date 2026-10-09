@@ -523,6 +523,46 @@ def _build_summary_brief(accumulated: dict, report_md: str) -> str:
     return f"报告结论摘要：\n{brief}\n\n"
 
 
+def _resolve_peer_codes(
+    llm_codes: list | None,
+    closure_codes: list | None,
+    exclude: str | None = None,
+) -> list[str] | None:
+    """对标股代码归一化（add-peer-comparison）。
+
+    LLM 显式传参优先于请求级闭包注入；归一化=字符串容错（schema string
+    fallback 下 LLM 可能传逗号串或 JSON 数组串，JSON 数组直接解析、
+    否则按中英文逗号/顿号/空白切分）/strip/剔非 6 位数字/去重/剔除主标的
+    自身/上限 3 只。全无效返回 None（不阻断主标的分析）。
+    """
+    raw = llm_codes if llm_codes else closure_codes
+    # 字符串容错：harness build_schema_from_function 对 list[str] | None 注解
+    # fallback 为 JSON "string"（llm_client.py 类型内省只认裸类型名），LLM 端
+    # 实际可能发 "000858,600519" 逗号串——直接迭代会逐字符校验、静默丢光；
+    # 也可能把列表整体 JSON 序列化进 string 槽位（'["000858","600519"]'），
+    # 先试 json.loads 解析，失败回落逗号/顿号/空白切分。
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        parsed: object = None
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                parsed = None
+        if isinstance(parsed, list):
+            raw = parsed
+        else:
+            raw = stripped.replace("，", ",").replace("、", ",").replace(",", " ").split()
+    if not raw:
+        return None
+    seen: list[str] = []
+    for c in raw:
+        s = str(c).strip()
+        if len(s) == 6 and s.isdigit() and s != exclude and s not in seen:
+            seen.append(s)
+    return seen[:3] or None
+
+
 def _make_run_deep_analysis(
     api_key: str | None = None,
     analysis_type: str = "comprehensive",
@@ -534,17 +574,26 @@ def _make_run_deep_analysis(
 ):
     """创建 run_deep_analysis 流式工具，注入配置闭包。
 
-    LLM 只看到 stock_code 和 stock_name，其余参数通过闭包注入。
+    LLM 看到 stock_code / stock_name / peer_codes（显式传参优先于闭包注入
+    的 peer_codes），其余参数通过闭包注入。
     返回一个异步生成器，yield StreamEvent（PROGRESS + TOOL_RESULT）。
     session_id 用于 Langfuse session 聚合与 trace 属性（ADR-0015）。
     """
 
-    async def run_deep_analysis(stock_code: str, stock_name: str = ""):
+    # LLM 工具参数与闭包参数同名：闭包值另存，内层 peer_codes 为 LLM 显式传参
+    _closure_peer_codes = peer_codes
+
+    async def run_deep_analysis(
+        stock_code: str, stock_name: str = "", peer_codes: list[str] | None = None
+    ):
         """运行 5 层深度分析管线
 
         Args:
             stock_code: A 股股票代码，如 "600519"
             stock_name: 股票名称，如 "贵州茅台"
+            peer_codes: 对比请求时的对标股代码列表（1-3 个 6 位代码，须先经
+                search_stock 解析确认）；非对比请求留空。同业对比会注入主标的报告，
+                不要为对比发起多次调用
         """
         # ReAct 主链路快照与状态兜底（design.md §8 第 1 层）：
         # 工具自带 executor 线程不经 PipelineRunner，故在工具内维护
@@ -613,7 +662,7 @@ def _make_run_deep_analysis(
             "stock_code": stock_code,
             "stock_name": stock_name or stock_code,
             "analysis_type": analysis_type,
-            "peer_codes": peer_codes,
+            "peer_codes": _resolve_peer_codes(peer_codes, _closure_peer_codes, exclude=stock_code),
             "enable_web_search": enable_web_search,
             "api_key": api_key,
             "web_sources": web_sources or [],
