@@ -492,7 +492,9 @@ def format_peer_comparison(state: AnalysisState, valuation_snapshot: dict | None
     peer_codes 返回 None（调用方不写入 state.peer_comparison，R3 optional 降级）。
     """
     peer_df = state.get("peer_financials")
-    if peer_df is None or peer_df.empty:
+    # isinstance 守卫：契约外形态（如 citation 覆盖测试用 list 充当 peer_financials）
+    # 不得炸 compute——按不可用处理，走与缺失相同的降级路径。
+    if not isinstance(peer_df, pd.DataFrame) or peer_df.empty:
         # spec R4「peer 缺失如实声明」：对比请求成立（携带 peer_codes）但同业
         # 抓取全部降级/未执行时，注入中性缺失声明，分析师不再对对比被请求过
         # 一无所知；未指定 peer_codes 时维持 None（R3「无对标股不注入」）。

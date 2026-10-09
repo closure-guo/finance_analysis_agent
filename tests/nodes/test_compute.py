@@ -252,6 +252,20 @@ class TestFormatPeerComparison:
     def test_no_peer_data_returns_none(self):
         assert format_peer_comparison({"stock_code": "600519"}, {"PE": 22.0}) is None
 
+    def test_non_dataframe_peer_financials_treated_as_unusable(self):
+        """回归（CI test_citation 覆盖测试）：契约外形态（list 充当 peer_financials）
+        不得炸 compute——按不可用走既有降级路径。"""
+        bad = [{"code": "000001", "PE": 12.0, "PB": 1.1}]
+        assert (
+            format_peer_comparison({"stock_code": "600519", "peer_financials": bad}, {"PE": 22.0})
+            is None
+        )
+        text = format_peer_comparison(
+            {"stock_code": "600519", "peer_financials": bad, "peer_codes": ["000001"]},
+            {"PE": 22.0},
+        )
+        assert text is not None and "不可用" in text
+
     def test_peer_requested_but_fetch_degraded_returns_missing_declaration(self):
         """对比请求成立但同业抓取全部降级 → 注入缺失声明而非静默省略（spec R4）。"""
         state = {
