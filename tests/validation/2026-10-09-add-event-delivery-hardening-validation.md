@@ -36,7 +36,7 @@
 
 ## 三、真实管线终态送达观察（2026-10-09 实测两样本）
 
-**样本 A（本会话发起的 688072 深度研究跑批，session `8bc9b9a9-a66`）**：全程 SSE 带时戳消费（日志 `tests/validation/2026-10-09-fa-run-688072-sse.log`，660 行）。197s 完成（duration_ms=196477），**report_ready(187.3s) → done(196.5s) 间隔 9.2s，终态即时送达、流正常收尾**，无前置积压滞后（#266 部署后首个观察样本）。watch 决策三处一致（报告渲染行 688.5/570 = predictions 落库 trigger_high/low + session_id = chart_data.price.decision_levels），事件链 seq 单调。
+**样本 A（本会话发起的 688072 深度研究跑批，session `8bc9b9a9-a66`）**：全程 SSE 带时戳消费（日志 `tests/validation/2026-10-09-fa-run-688072-sse.txt`，660 行）。197s 完成（duration_ms=196477），**report_ready(187.3s) → done(196.5s) 间隔 9.2s，终态即时送达、流正常收尾**，无前置积压滞后（#266 部署后首个观察样本）。watch 决策三处一致（报告渲染行 688.5/570 = predictions 落库 trigger_high/low + session_id = chart_data.price.decision_levels），事件链 seq 单调。
 
 **样本 B（并发会话 16d351f6「分析宁德时代」，运行中活体观察）**：第二节 ops 探针所引——真实 thinking 洪峰 43,187 条有界丢弃且计数准确，订阅者队列深度 0，泵在洪峰下保持不积压。
 
