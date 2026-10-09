@@ -53,7 +53,7 @@
 
 ### Requirement: 同业指标格式化注入
 
-compute 层 SHALL 提供同业指标格式化器：将 `state.peer_financials` 渲染为结构化文本材料（标的×指标对照表，主标的置于首行并标注），写入 `state.peer_comparison` 注入基本面分析师 context（替换现标志位占位，关闭 Issue #4）。`peer_financials` 为 None（未指定或全部降级）时 SHALL 省略注入，与既有 optional 降级语义一致。财务字段组降级时 SHALL 在材料中以缺失标记如实呈现对应字段，MUST NOT 静默省略整列。
+compute 层 SHALL 提供同业指标格式化器：将 `state.peer_financials` 渲染为结构化文本材料（标的×指标对照表，主标的置于首行并标注），写入 `state.peer_comparison` 注入基本面分析师 context（替换现标志位占位，关闭 Issue #4）。请求未携带 `peer_codes` 时 SHALL 省略注入，与既有 optional 降级语义一致；对比请求成立但 `peer_financials` 全部降级为 None 时 SHALL 注入同业数据缺失声明（对齐「报告同业对比段呈现」R4）。财务字段组降级时 SHALL 在材料中以缺失标记如实呈现对应字段，MUST NOT 静默省略整列。
 
 #### Scenario: 完整 peer 数据注入
 

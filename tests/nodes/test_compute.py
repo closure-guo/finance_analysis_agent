@@ -252,6 +252,22 @@ class TestFormatPeerComparison:
     def test_no_peer_data_returns_none(self):
         assert format_peer_comparison({"stock_code": "600519"}, {"PE": 22.0}) is None
 
+    def test_peer_requested_but_fetch_degraded_returns_missing_declaration(self):
+        """对比请求成立但同业抓取全部降级 → 注入缺失声明而非静默省略（spec R4）。"""
+        state = {
+            "stock_code": "600519",
+            "peer_codes": ["000858"],
+        }
+        text = format_peer_comparison(state, {"PE": 22.0})
+        assert text is not None
+        assert "同业" in text
+        assert "不可用" in text
+
+    def test_no_peer_codes_and_no_data_returns_none(self):
+        """未指定对标股且无数据 → 维持省略注入（spec R3「无对标股不注入」）。"""
+        state = {"stock_code": "600519"}
+        assert format_peer_comparison(state, {"PE": 22.0}) is None
+
     def test_pe_ttm_fallback_caliber_note(self):
         """主标的静态 PE 缺失回落 PE_ttm 时，附跨口径提示（与 relative_valuation 口径标注同族）。"""
         state = {

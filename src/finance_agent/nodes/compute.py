@@ -483,11 +483,18 @@ def format_peer_comparison(state: AnalysisState, valuation_snapshot: dict | None
     """peer_financials + 主标的估值快照/最新期快照 → markdown 对照表（主标的首行）。
 
     财务组主标的与对标股同源自 latest_period_snapshot（同口径）；主标的 PE 取
-    估值快照已选口径（static 优先，回落 PE_ttm 时附跨口径提示）。peer 数据缺失
-    返回 None（调用方不写入 state.peer_comparison，与既有 optional 降级一致）。
+    估值快照已选口径（static 优先，回落 PE_ttm 时附跨口径提示）。peer 数据缺失时：
+    对比请求成立（state.peer_codes 非空）返回中性缺失声明（spec R4）；未指定
+    peer_codes 返回 None（调用方不写入 state.peer_comparison，R3 optional 降级）。
     """
     peer_df = state.get("peer_financials")
     if peer_df is None or peer_df.empty:
+        # spec R4「peer 缺失如实声明」：对比请求成立（携带 peer_codes）但同业
+        # 抓取全部降级/未执行时，注入中性缺失声明，分析师不再对对比被请求过
+        # 一无所知；未指定 peer_codes 时维持 None（R3「无对标股不注入」）。
+        # 声明不断言具体原因——抓取失败与未执行（如行业信息缺失跳过）同路。
+        if state.get("peer_codes"):
+            return "同业数据不可用（抓取失败或未执行），无法提供同业对比；不作对比结论。"
         return None
     vs = valuation_snapshot or {}
     snap = state.get("latest_period_snapshot") or {}
