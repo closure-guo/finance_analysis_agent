@@ -9,4 +9,4 @@
 - [x] 只读统计端点接入 IC/零模型读数（结论必附分位，点估计单独出现即拒绝）
 - [x] 前端观点日志 `duplicate_of_day` 徽标 + track-record E2E 套件加用例（三套件门禁全绿）
 - [x] 存量生产库 dry-run 核对：76 条 open 的分类结果人工复核（688072 预期 1 主 + N duplicate），不迁移数据
-- [ ] 人工验证报告落 `tests/validation/`，10-08 前部署（净值重启窗口）
+- [x] 人工验证报告落 `tests/validation/`（2026-10-09 补齐：2026-10-09-add-prediction-pool-integrity-validation.md；原定 10-08 部署窗口已过，实际部署晚一个交易日，报告中如实注记）
