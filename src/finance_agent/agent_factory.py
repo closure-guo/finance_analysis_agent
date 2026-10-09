@@ -668,6 +668,11 @@ def _make_run_deep_analysis(
             "web_sources": web_sources or [],
             # 请求级 LLM 配置透传到管线节点（call_llm_streaming / call_llm）
             "llm_config": llm_config,
+            # add-report-revision-view：回溯同标的上一份 completed 报告注入 state
+            # （与 fast path 同语义）；None = 首份报告；session_id 排除追问自身
+            "previous_report_snapshot": _session_store.get_previous_completed_session(
+                stock_code, session_id
+            ),
         }
 
         accumulated: dict = dict(initial_state)
@@ -1114,6 +1119,9 @@ def _make_run_deep_analysis(
                             duration_ms=int((_time_module.time() - _pipeline_start_time) * 1000),
                             file_paths=accumulated.get("file_paths") or {},
                             status="completed",
+                            # add-report-revision-view：终稿决策随报告落库（与 fast path 同语义），
+                            # 供同标的下份报告增量摘要回溯；无终稿落 NULL
+                            final_trade_decision=accumulated.get("final_trade_decision"),
                         )
                         # add-track-record:ReAct 深模式完成即落库观点(全量记录,含 reject)。
                         # 挂点曾只存在于旧 /api/analyze 路径,深模式经工具路径无挂点 →

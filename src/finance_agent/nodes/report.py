@@ -236,6 +236,140 @@ def _format_freshness_section(state: dict) -> str | None:
     return f"以下为管线确定性计算的数据快照与评分口径（非 LLM 生成，供交叉核对）：\n\n{body}\n"
 
 
+# ── 距上次报告增量摘要 / 多空辩论分歧卡（add-report-revision-view）──
+# 全链路零 LLM 调用：增量摘要 = 一次回溯查询（入口注入 state
+# `previous_report_snapshot`）+ 确定性 diff 渲染。纪律见 delta spec
+# report-decision-rendering：全维度基于结构化持久化数据，MUST NOT 解析
+# 上一报告 markdown 文本提取数字；缺失维度如实「未申报」。
+
+
+def _diff_scalar(old: object, new: object) -> str:
+    """标量维度 diff：任一侧缺失 → 「未申报」；相等 → 「旧 → 新（无变化）」。"""
+    if old is None or old == "" or new is None or new == "":
+        return "未申报"
+    if str(old) == str(new):
+        return f"{old} → {new}（无变化）"
+    return f"{old} → {new}"
+
+
+def _diff_number(old: object, new: object, *, price: bool = False) -> str:
+    """数值维度 diff（现价/PE/置信度，统一 %.2f）：任一侧缺失/非法 → 「未申报」。
+
+    price=True 时按 _fmt_price 同口径拒绝 ≤0（正常价位不可能 ≤0）；
+    PE 允许负值（亏损股），仅 None/非数值为缺失。
+    """
+    try:
+        old_v = float(old) if old is not None else None  # type: ignore[arg-type]
+        new_v = float(new) if new is not None else None  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "未申报"
+    if old_v is None or new_v is None:
+        return "未申报"
+    if price and (old_v <= 0 or new_v <= 0):
+        return "未申报"
+    if round(old_v, 2) == round(new_v, 2):
+        return f"{old_v:.2f} → {new_v:.2f}（无变化）"
+    return f"{old_v:.2f} → {new_v:.2f}"
+
+
+def _num_or_unreported(value: object) -> str:
+    """复合维度组内单项：None/非法 → 「未申报」词形（对齐触发位行纪律）。"""
+    try:
+        v = float(value) if value is not None else None  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "未申报"
+    return "未申报" if v is None or v <= 0 else f"{v:.2f}"
+
+
+def _level_repr(decision: dict) -> str | None:
+    """触发位/价位复合维度的单侧表示：双向触发位优先（watch 申报参数），
+    否则入场/止损/目标价三元组；两侧字段全缺返回 None（该侧「未申报」）。
+    术语对齐交易决策节：上破=trigger_high、下破=trigger_low。"""
+    tl, th = decision.get("trigger_low"), decision.get("trigger_high")
+    if tl is not None or th is not None:
+        return f"上破 {_num_or_unreported(th)} / 下破 {_num_or_unreported(tl)}"
+    entry, stop, target = (
+        decision.get("entry_price"),
+        decision.get("stop_loss"),
+        decision.get("target_price"),
+    )
+    if entry is not None or stop is not None or target is not None:
+        return (
+            f"入场 {_num_or_unreported(entry)} · 止损 {_num_or_unreported(stop)}"
+            f" · 目标 {_num_or_unreported(target)}"
+        )
+    return None
+
+
+def _diff_levels(old_dec: dict, new_dec: dict) -> str:
+    """触发位/价位维度 diff：任一侧无任何价位字段 → 「未申报」；
+    表示一致 → 「无变化」（复合维度不堆值，对齐 spec 场景）。"""
+    old_repr = _level_repr(old_dec)
+    new_repr = _level_repr(new_dec)
+    if old_repr is None or new_repr is None:
+        return "未申报"
+    if old_repr == new_repr:
+        return "无变化"
+    return f"{old_repr} → {new_repr}"
+
+
+def _format_revision_summary(state: dict, current_kpi: dict) -> str | None:
+    """「距上次报告（YYYY-MM-DD）」增量摘要节（纯文本正文，标题自带）。
+
+    previous_report_snapshot 由入口（api fast path / ReAct 工具路径）经
+    session_store.get_previous_completed_session 注入；None/缺失 = 首份报告，
+    整节不渲染。五个维度：决策方向/置信度/触发位（或价位）/现价/PE；
+    全部维度均不可得时整节不渲染。
+    """
+    prev = state.get("previous_report_snapshot")
+    if not isinstance(prev, dict):
+        return None
+    prev_date = str(prev.get("created_at") or "")[:10]
+    if len(prev_date) != 10:
+        return None  # 无可靠日期无法如实命名节标题，整节不渲染
+
+    old_dec = prev.get("final_trade_decision") or {}
+    new_dec = state.get("final_trade_decision") or state.get("trader_plan") or {}
+    old_kpi = prev.get("kpi") or {}
+
+    rows = [
+        ("决策方向", _diff_scalar(old_dec.get("action"), new_dec.get("action"))),
+        ("置信度", _diff_number(old_dec.get("confidence"), new_dec.get("confidence"))),
+        ("触发位/价位", _diff_levels(old_dec, new_dec)),
+        (
+            "现价",
+            _diff_number(
+                old_kpi.get("current_price"), current_kpi.get("current_price"), price=True
+            ),
+        ),
+        ("PE", _diff_number(old_kpi.get("pe"), current_kpi.get("pe"))),
+    ]
+    if all(value == "未申报" for _, value in rows):
+        return None
+    body = "\n".join(f"- {label}: {value}" for label, value in rows)
+    return f"## 距上次报告（{prev_date}）\n\n{body}\n"
+
+
+def _format_divergence_card(state: dict) -> str | None:
+    """多空辩论结论分歧卡：评级 · 置信度 · 结论首句（第一个完整句）。
+
+    评级/置信度取自研究经理结构化输出字段；缺失（历史会话/解析降级）时
+    返回 None，该节按现状纯文本渲染，MUST NOT 编造评级。
+    """
+    rating = state.get("research_manager_rating")
+    confidence = state.get("research_manager_confidence")
+    if not rating or not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        return None
+    conclusion = str(state.get("research_manager_conclusion") or "")
+    # 结构化解析成功时 conclusion 首行为前置的「评级: …（置信度 …）」，首句取正文
+    body = conclusion.split("\n", 1)[1] if conclusion.startswith("评级:") else conclusion
+    body = body.strip()
+    if not body:
+        return None
+    first_sentence = _truncate_at_sentence(body, limit=120)
+    return f"评级: {rating} · 置信度 {confidence:.2f} · 分歧焦点: {first_sentence}"
+
+
 # ── 研究聚焦摘要（LLM 生成，有兜底） ──
 
 
@@ -465,6 +599,11 @@ def generate_report(state: dict) -> dict:
     )
     if summary:
         sections.append(f"## 研究聚焦\n\n{summary}\n")
+    # add-report-revision-view：报告头「距上次报告」增量摘要（研究聚焦之后，
+    # 未编号 ## 与研究聚焦同为头部元素，不占章节序号）；首份报告/全维度缺失不渲染
+    revision_section = _format_revision_summary(state, chart_data.get("kpi") or {})
+    if revision_section:
+        sections.append(revision_section)
     # ── 图表：按 focus 排序，分重点/完整两组 ──
     if chart_paths:
         ordered = _rank_charts([c for c, _ in all_chart_titles], focus_tags)
@@ -544,7 +683,11 @@ def generate_report(state: dict) -> dict:
 
     conclusion = state.get("research_manager_conclusion")
     if conclusion:
-        sections.append(f"{next_title('多空辩论结论')}\n{conclusion}\n")
+        # add-report-revision-view：分歧卡（评级·置信度·结论首句）置于结论文本之前；
+        # 结构化评级缺失时退化为纯文本现状渲染，不编造评级
+        divergence_card = _format_divergence_card(state)
+        conclusion_body = f"{divergence_card}\n\n{conclusion}" if divergence_card else conclusion
+        sections.append(f"{next_title('多空辩论结论')}\n{conclusion_body}\n")
 
     decision = state.get("final_trade_decision") or state.get("trader_plan")
     if decision:

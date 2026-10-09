@@ -47,6 +47,7 @@ from finance_agent.session_store import (  # noqa: E402
     create_session,
     delete_session,
     get_max_event_seq,
+    get_previous_completed_session,
     get_session,
     get_session_trace_id,
     get_terminal_event,
@@ -1083,7 +1084,7 @@ def _run_graph_streaming(
 
         focus_value = derive_focus_from_query(req.query or "")
 
-    initial_state = {
+    initial_state: dict[str, Any] = {
         "stock_code": stock_code,
         "stock_name": stock_name or stock_code,
         "analysis_type": req.analysis_type or "comprehensive",
@@ -1127,6 +1128,14 @@ def _run_graph_streaming(
                 "timestamp": _now(),
             }
         )
+
+    # add-report-revision-view：管线启动时回溯同标的上一份 completed 报告注入 state，
+    # 供报告头「距上次报告」增量摘要渲染；None = 首份报告（含 DB 降级）。
+    # 新会话已置 running，查询按 status='completed' 过滤天然排除自身；
+    # 追问续跑（外部 session_id）按 id 显式排除
+    initial_state["previous_report_snapshot"] = get_previous_completed_session(
+        stock_code, session_id
+    )
 
     completed: set[str] = set()
     accumulated: dict = dict(initial_state)
@@ -1275,6 +1284,9 @@ def _run_graph_streaming(
                     file_paths=file_paths,
                     status="completed",
                     citations=citations,
+                    # add-report-revision-view：终稿决策随报告落库，供同标的下份报告
+                    # 「距上次报告」增量摘要回溯；无终稿（门禁阻断）时落 NULL
+                    final_trade_decision=accumulated.get("final_trade_decision"),
                 )
                 # 旁路落库批准的 TradeDecision(失败仅 ERROR,不阻断报告)
                 _persist_decision_log(accumulated, session_id, stock_code, stock_name_final)
