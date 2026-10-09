@@ -531,6 +531,11 @@ def generate_report(state: dict) -> dict:
             for name, report in reports.items():
                 sections.append(_format_analyst_report(name, report))
 
+    # ── 同业对比（add-peer-comparison R4：确定性渲染，不依赖分析师 markdown 正文转述）──
+    peer_section = _format_peer_section(state)
+    if peer_section:
+        sections.append(f"{next_title('同业对比')}\n{peer_section}\n")
+
     # ── 后续固定章节（编号自动顺延） ──
     freshness_section = _format_freshness_section(state)
     if freshness_section:
@@ -646,6 +651,37 @@ def _cn_num(n: int) -> str:
     if 1 <= n < len(_CN_NUMS):
         return _CN_NUMS[n]
     return str(n)
+
+
+_RELATIVE_CONCLUSION_ZH = {"undervalued": "偏低", "fair": "合理", "overvalued": "偏高"}
+
+
+def _format_peer_section(state: dict) -> str:
+    """同业对比段：确定性渲染 state.peer_comparison 对照材料（add-peer-comparison R4）。
+
+    分析师 markdown 正文不进报告（摘要式渲染为既有设计），对照表由代码直出，
+    「报告含同业对比段」不依赖 LLM 转述；材料自带口径标注与缺失标记（compute 层），
+    缺失声明与相对估值结论在此追加。
+    """
+    peer_md = state.get("peer_comparison")
+    lines: list[str] = []
+    if isinstance(peer_md, str) and peer_md.strip():
+        lines.append(peer_md.strip())
+    elif state.get("peer_codes"):
+        lines.append("同业数据不可用（抓取失败或未执行），无法提供同业对比；不作对比结论。")
+    rval = state.get("relative_valuation")
+    if isinstance(rval, dict):
+        for metric in ("PE", "PB"):
+            d = rval.get(metric)
+            if not isinstance(d, dict) or d.get("conclusion") not in _RELATIVE_CONCLUSION_ZH:
+                continue
+            if d.get("target") is None or d.get("peer_avg") is None:
+                continue
+            lines.append(
+                f"- 相对估值（{metric}）：主标的 {d['target']} vs 同业均值 {d['peer_avg']}"
+                f" → 相对同业{_RELATIVE_CONCLUSION_ZH[d['conclusion']]}"
+            )
+    return "\n".join(lines)
 
 
 def _format_analyst_report(name: str, report: AnalystReport | dict, star: bool = False) -> str:
