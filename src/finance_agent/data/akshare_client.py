@@ -44,6 +44,10 @@ def _call_ak(func, *args, **kwargs):
     """带超时 + 重试的 AKShare 调用包装。
 
     超时或连接异常（含 RemoteDisconnected 限频）时重试，全部失败返回 None。
+    连接级不可达（Network is unreachable / Connection refused）不重试——
+    该类错误在单次调用的秒级窗口内不会自愈，重试只产生纯等待与日志噪声
+    （CI 断网窗口曾 60 次 Errno 101 × 线性退避把 stub 套件拖过 25m 墙钟，
+    issue #246）；跨调用的恢复由调用方冷却（60s）承担。
 
     注意：不能用 `with ThreadPoolExecutor(...) as pool`（退出时 shutdown(wait=True)
     会无限等待卡死的 AKShare 线程，超时形同虚设，泄漏线程打满 executor 池）。
@@ -67,8 +71,15 @@ def _call_ak(func, *args, **kwargs):
                 _AK_MAX_RETRIES,
             )
         except Exception as e:
-            # 捕获 RemoteDisconnected / ConnectionError 等网络异常，重试而非直接抛出
             pool.shutdown(wait=False, cancel_futures=True)
+            if _is_connection_unreachable(e):
+                logger.error(
+                    "AKShare 连接不可达（不重试）: %s: %s",
+                    getattr(func, "__name__", str(func)),
+                    type(e).__name__,
+                )
+                return None
+            # 捕获 RemoteDisconnected / ConnectionError 等网络异常，重试而非直接抛出
             logger.warning(
                 "AKShare 调用异常: %s: %s (attempt %d/%d)",
                 getattr(func, "__name__", str(func)),
@@ -84,6 +95,30 @@ def _call_ak(func, *args, **kwargs):
         getattr(func, "__name__", str(func)),
     )
     return None
+
+
+def _is_connection_unreachable(exc: BaseException) -> bool:
+    """连接级不可达判别：网络不可达 / 拒绝连接（含 cause 链上的底层 OSError）。"""
+    for e in [exc, *(_walk_causes(exc))]:
+        if isinstance(e, (ConnectionRefusedError, OSError)) and getattr(e, "errno", None) in (
+            101,
+            111,
+            113,
+        ):
+            return True
+        msg = str(e)
+        if "Network is unreachable" in msg or "Connection refused" in msg:
+            return True
+    return False
+
+
+def _walk_causes(exc: BaseException):
+    seen = set()
+    cur = exc.__cause__ or exc.__context__
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+        cur = cur.__cause__ or cur.__context__
 
 
 def _sina_report(stock: str, symbol: str) -> pd.DataFrame:
