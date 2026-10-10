@@ -143,6 +143,37 @@ class TestDivergenceCard:
         assert "多空各执一词，结论偏谨慎。" in report
 
 
+class TestRealPipelineShapes:
+    """真实管线形态回归（本地实跑 601066 抓到的两处断点）。"""
+
+    def test_analysis_state_declares_previous_report_snapshot(self):
+        """AnalysisState 是 TypedDict，未声明键在图入口被静默丢弃——
+        previous_report_snapshot 必须在 schema 中声明，否则渲染恒不触发。"""
+        from finance_agent.state import AnalysisState
+
+        assert "previous_report_snapshot" in AnalysisState.__annotations__
+
+    def test_revision_summary_with_pydantic_decision_in_state(self):
+        """state 中 final_trade_decision 为 TradeDecision pydantic 对象时
+        增量摘要正常取值（渲染链不得 .get 炸 AttributeError）。"""
+        from finance_agent.models import TradeDecision
+
+        state = _base_state()
+        state["final_trade_decision"] = TradeDecision(
+            action="watch",
+            confidence=0.60,
+            reasoning="新报告推理",
+            trigger_low=22.91,
+            trigger_high=24.60,
+        )
+        state["previous_report_snapshot"] = _prev_snapshot()
+        report = generate_report(state)["final_report"]
+
+        assert "## 距上次报告（2026-09-30）" in report
+        assert "watch → watch（无变化）" in report
+        assert "0.55 → 0.60" in report
+
+
 class TestRevisionEndToEnd:
     """Task 5 端到端：DB 落库 → 回溯查询 → state 注入 → generate_report 渲染。
 

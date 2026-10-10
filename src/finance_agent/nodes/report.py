@@ -313,6 +313,17 @@ def _diff_levels(old_dec: dict, new_dec: dict) -> str:
     return f"{old_repr} → {new_repr}"
 
 
+def _decision_as_dict(decision: object) -> dict:
+    """终稿/trader plan 归一为 dict：真实管线 state 中是 TradeDecision pydantic
+    对象（非 dict），直接 .get 会 AttributeError（本地实跑 601066 实证）。"""
+    if isinstance(decision, dict):
+        return decision
+    if hasattr(decision, "model_dump"):
+        dumped: dict = decision.model_dump()
+        return dumped
+    return {}
+
+
 def _format_revision_summary(state: dict, current_kpi: dict) -> str | None:
     """「距上次报告（YYYY-MM-DD）」增量摘要节（纯文本正文，标题自带）。
 
@@ -328,8 +339,8 @@ def _format_revision_summary(state: dict, current_kpi: dict) -> str | None:
     if len(prev_date) != 10:
         return None  # 无可靠日期无法如实命名节标题，整节不渲染
 
-    old_dec = prev.get("final_trade_decision") or {}
-    new_dec = state.get("final_trade_decision") or state.get("trader_plan") or {}
+    old_dec = _decision_as_dict(prev.get("final_trade_decision"))
+    new_dec = _decision_as_dict(state.get("final_trade_decision") or state.get("trader_plan"))
     old_kpi = prev.get("kpi") or {}
 
     rows = [

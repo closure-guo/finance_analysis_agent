@@ -508,9 +508,13 @@ def update_session_report(
     用于管线启动时先创建 running session，完成后再回填报告。
     file_paths 记录报告文件产物路径（md/docx 等），供恢复会话还原导出入口。
     citations 为结构化引用数组（add-citation-display），None = 未校验（旧路径兼容）。
-    final_trade_decision 为终稿决策 JSON（add-report-revision-view），None 落 NULL——
-    管线阻断/未审批时 MUST NOT 以 trader 层 plan 冒充终稿。
+    final_trade_decision 为终稿决策（add-report-revision-view）：真实管线中是
+    TradeDecision pydantic 对象，落库前统一 model_dump 成 dict 再 JSON 序列化
+    （直接 json.dumps 走 default=str 会落 repr 串，回溯侧不可解析——实跑实证）；
+    None 落 NULL——管线阻断/未审批时 MUST NOT 以 trader 层 plan 冒充终稿。
     """
+    if final_trade_decision is not None and hasattr(final_trade_decision, "model_dump"):
+        final_trade_decision = final_trade_decision.model_dump()
     conn = _get_db()
     cur = conn.execute(
         """
