@@ -637,7 +637,8 @@ def _chart_stock_price(data: dict, out: str) -> str | None:
     _style_ax(ax, "股价 K 线（MA5/20/60，虚线为决策价位）")
     ax.tick_params(labelbottom=False)
 
-    volumes = [d.get("volume") or 0 for d in daily]
+    # 缺失日断开（NaN），不画 0 高量柱冒充真实成交（chart-data-integrity 三级语义）
+    volumes = [np.nan if d.get("volume") is None else d["volume"] for d in daily]
     ax_vol.bar(x, volumes, width=candle_w, color=colors, alpha=0.7)
     ax_vol.set_ylabel("成交量", fontsize=9)
     ax_vol.set_xlabel("日期", fontsize=10)

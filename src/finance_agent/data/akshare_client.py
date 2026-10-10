@@ -181,6 +181,8 @@ _PARENT_COL_CANDIDATES: dict[str, tuple[str, ...]] = {
     ),
     "归母所有者权益": (
         "归属于母公司股东权益合计",
+        "归属于母公司的股东权益合计",
+        "归属于母公司股东的权益合计",
         "归属于母公司股东的权益",
         "归属于母公司股东权益",
         "归属于母公司所有者权益合计",
@@ -191,9 +193,13 @@ _PARENT_COL_CANDIDATES: dict[str, tuple[str, ...]] = {
 }
 # 遗留列位回退：基于新浪接口旧版稳定列序（制造业模板），
 # 仅当列名归一化无法命中时使用（编码损坏场景）。
-_LEGACY_POSITION_MAP: dict[int, str] = {
-    50: "归母净利润",
-    137: "归母所有者权益",
+# 按报表类型标定（issue #238 上游归因）：50 是制造业「利润表」的归母净利润
+# 列位、137 是制造业「资产负债表」的归母权益列位——两表列位互不可用，
+# 跨表套用会把券商资产负债表第 50 列「资产总计」吞成「归母净利润」
+# （601066 六跑资产序列全 None 事故根因）。statement 未声明时不回退。
+_LEGACY_POSITION_MAP: dict[str, dict[int, str]] = {
+    "利润表": {50: "归母净利润"},
+    "资产负债表": {137: "归母所有者权益"},
 }
 
 
@@ -229,7 +235,7 @@ class AKShareClient:
     def _trim_years(self, df: pd.DataFrame, years: int = 5) -> pd.DataFrame:
         return df.head(years)
 
-    def _rename_parent_cols(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _rename_parent_cols(self, df: pd.DataFrame, statement: str | None = None) -> pd.DataFrame:
         """重命名归母口径列，解决终端编码不一致问题。
 
         解析策略（add-chart-data-integrity R1）：列名候选归一化匹配优先，
@@ -238,6 +244,11 @@ class AKShareClient:
         「归属于母公司股东的权益」在列 141；制造业模板列位 50/137 恰为
         真实列。按列位硬编码会把银行模板的「盈余公积转入」「未分配利润」
         错当归母口径（601818 ROE 27.98% 事故根因），故列位仅作最后回退。
+
+        列位回退按 statement 标定范围生效（利润表 50 / 资产负债表 137），
+        statement 未声明时不回退——跨表套用曾把券商资产负债表第 50 列
+        「资产总计」吞成「归母净利润」（issue #238 上游归因，601066 六跑
+        资产序列全 None）。券商权益列名变体已入候选清单，正常走列名命中。
 
         列名归一化：去除全部空白变体（半角/全角空格、不可见空白）后
         与候选列名精确匹配，兼容线上出现过的空白/编码差异形态。
@@ -267,10 +278,11 @@ class AKShareClient:
                     resolved[target] = True
                     break
 
-        if not all(resolved.values()):
-            # 列名归一化未全部命中（编码损坏等）→ 遗留列位回退
-            # （基于新浪接口旧版稳定列序，制造业模板验证可用）
-            for idx, new_name in _LEGACY_POSITION_MAP.items():
+        statement_map = _LEGACY_POSITION_MAP.get(statement) if statement else None
+        if statement_map and not all(resolved.values()):
+            # 列名归一化未全部命中（编码损坏等）→ 遗留列位回退，
+            # 仅套用本表标定的列位（基于新浪接口旧版稳定列序，制造业模板验证可用）
+            for idx, new_name in statement_map.items():
                 if resolved.get(new_name):
                     continue
                 if idx < len(cols):
@@ -291,7 +303,7 @@ class AKShareClient:
         stock = _add_prefix(stock_code)
         df = _sina_report(stock, "资产负债表")
         df = self._filter_annual(df)
-        df = self._rename_parent_cols(df)
+        df = self._rename_parent_cols(df, statement="资产负债表")
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)
 
@@ -299,7 +311,7 @@ class AKShareClient:
         stock = _add_prefix(stock_code)
         df = _sina_report(stock, "利润表")
         df = self._filter_annual(df)
-        df = self._rename_parent_cols(df)
+        df = self._rename_parent_cols(df, statement="利润表")
         self._check_min_years(df, stock_code)
         return self._trim_years(df, years)
 
@@ -660,7 +672,7 @@ class AKShareClient:
         inc = _sina_report(stock, "利润表")
         if inc.empty:
             raise ValueError(f"股票 {stock_code} 利润表数据不可用")
-        inc = self._rename_parent_cols(inc).copy()
+        inc = self._rename_parent_cols(inc, statement="利润表").copy()
         inc["_ymd"] = inc["报告日"].map(self._compact_date)
         inc = inc.sort_values("_ymd", ascending=False).reset_index(drop=True)
         latest = inc.iloc[0]
