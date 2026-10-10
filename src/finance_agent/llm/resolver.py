@@ -83,11 +83,16 @@ def _resolve_from_env(
 
 
 def _validate_options(provider: str, options: dict[str, Any]) -> dict[str, Any]:
-    """有 schema 的 provider 走 pydantic 校验（未知 key / 非法值显式报错）。"""
+    """有 schema 的 provider 走 pydantic 校验（未知 key / 非法值显式报错）。
+
+    返回校验归一后的**新** dict（#76：不返回调用方入参别名——调用方后续
+    mutate 不污染源 dict；schema 后续若增强制转换/清洗，下游拿到的即归一
+    形态；未显式设置的字段不物化）。
+    """
     schema = PROVIDER_OPTIONS_SCHEMAS.get(provider)
     if schema is not None:
-        schema.model_validate(options)
-    return options
+        return schema.model_validate(options).model_dump(exclude_unset=True)
+    return dict(options)
 
 
 def _provider_options_from_request(provider: str, llm_config: dict[str, Any]) -> dict[str, Any]:
