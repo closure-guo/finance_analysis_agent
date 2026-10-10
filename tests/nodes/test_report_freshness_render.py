@@ -98,3 +98,74 @@ def test_missing_fields_render_without_unit_suffix():
 
 def test_empty_state_returns_none():
     assert _format_freshness_section({}) is None
+
+
+class TestRiskMetricsAndPriceLevelsDisclosure:
+    """add-risk-metrics-disclosure（issue #242 断点 1）：风控链路确定性计算
+    （risk_metrics/price_levels）SHALL 在口径披露节可溯源——光大 601818 报告中
+    波动率/回撤/VaR/beta/触发价位首现于决策与风控节、报告内无出处的 P0-3 缺口。
+    """
+
+    def test_full_risk_metrics_and_price_levels_rendered(self):
+        state = {
+            "risk_metrics": {
+                "volatility": 0.1568,
+                "max_drawdown": 0.1868,
+                "var_95": 0.0173,
+                "beta": 0.004,
+            },
+            "price_levels": {
+                "available": True,
+                "entry_ref": 3.21,
+                "stop_band_long": {"low": 2.92, "high": 3.05},
+                "target_band_long": {"low": 3.55, "high": 3.86},
+            },
+        }
+        section = _format_freshness_section(state)
+        assert section is not None
+        # 百分数两位小数（光大审计原值复现口径）
+        assert "15.68%" in section and "18.68%" in section and "1.73%" in section
+        assert "0.004" in section  # beta
+        assert "波动率" in section and "最大回撤" in section and "VaR" in section
+        # 价位带
+        assert "3.21" in section and "2.92" in section and "3.05" in section
+        assert "3.55" in section and "3.86" in section
+        assert "止损" in section and "目标" in section
+        # 节内列表项：不产生新章节标题（导出切章/段数不变）
+        assert "###" not in section and "##" not in section
+
+    def test_beta_omitted_when_benchmark_unavailable(self):
+        state = {
+            "risk_metrics": {
+                "volatility": 0.1568,
+                "max_drawdown": 0.1868,
+                "var_95": 0.0173,
+            }
+        }
+        section = _format_freshness_section(state)
+        assert section is not None
+        assert "15.68%" in section and "VaR" in section
+        # beta 缺席是数据语义（基准不可得）而非字段缺失——省略该段而非「暂缺」
+        assert "beta" not in section.lower()
+        assert "暂缺" not in section
+
+    def test_price_levels_unavailable_honest_note(self):
+        state = {"price_levels": {"available": False, "reason": "insufficient_kline"}}
+        section = _format_freshness_section(state)
+        assert section is not None
+        assert "价位参考不可用" in section and "insufficient_kline" in section
+
+    def test_both_keys_absent_zero_regression(self):
+        # 两键全缺：不增行；三旧数据源也全缺时节整体 None（与现状逐字节一致）
+        assert _format_freshness_section({}) is None
+        # 仅有旧数据源时，输出与无两键完全一致（新增行不出现）
+        old_only = {
+            "health_score": {
+                "total": 55.0,
+                "rating": "caution",
+                "industry_override": {"industry": None, "metrics": []},
+            }
+        }
+        section = _format_freshness_section(old_only)
+        assert section is not None
+        assert "波动率" not in section and "止损" not in section
