@@ -371,7 +371,7 @@ class TestFMPromptPreApprovalClause:
 
     def test_prompt_has_preapproval_clause(self):
         prompt = (
-            Path(__file__).resolve().parents[1] / "src/finance_agent/prompts/fund_manager.md"
+            Path(__file__).resolve().parents[2] / "src/finance_agent/prompts/fund_manager.md"
         ).read_text(encoding="utf-8")
         assert "审批前核查" in prompt
         assert "估值完整性标注" in prompt
