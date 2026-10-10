@@ -64,6 +64,33 @@ def test_final_trade_decision_null_when_absent(tmp_path, monkeypatch):
     assert row["final_trade_decision"] is None
 
 
+def test_final_trade_decision_accepts_pydantic_model(tmp_path, monkeypatch):
+    """真实管线形态回归：accumulated 中 final_trade_decision 是 TradeDecision
+    pydantic 对象（非 dict）——持久化必须先 model_dump 再序列化，
+    否则落成 repr 串导致回溯侧 json.loads 失败恒「未申报」。"""
+    from finance_agent.models import TradeDecision
+
+    _make_db(tmp_path, monkeypatch)
+    sid = session_store.create_session(stock_code="601066", stock_name="中信建投", status="running")
+    decision = TradeDecision(
+        action="watch",
+        confidence=0.55,
+        reasoning="多方空方各执",
+        trigger_low=22.91,
+        trigger_high=24.60,
+    )
+    ok = session_store.update_session_report(
+        sid, report_markdown="# 报告", final_trade_decision=decision, status="completed"
+    )
+    assert ok is True
+
+    row = session_store.get_session(sid)
+    persisted = json.loads(row["final_trade_decision"])  # 必须是可解析 JSON
+    assert persisted["action"] == "watch"
+    assert persisted["trigger_low"] == 22.91
+    assert persisted["trigger_high"] == 24.60
+
+
 def test_previous_completed_session_skips_running_failed_and_self(tmp_path, monkeypatch):
     """回溯查询返回最近一条 completed（09-30），排除 running 行与调用会话自身。"""
     _make_db(tmp_path, monkeypatch)
