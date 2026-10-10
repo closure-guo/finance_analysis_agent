@@ -14,5 +14,5 @@
 
 ## 3. 收口
 
-- [ ] 3.1 PR 合并后 sync + archive
+- [x] 3.1 PR 合并后 sync + archive
 - [ ] 3.2 issue #243 子项 3 核销评论

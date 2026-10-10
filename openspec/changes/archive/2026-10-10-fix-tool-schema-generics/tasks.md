@@ -8,5 +8,5 @@
 
 ## 2. 收口
 
-- [ ] 2.1 PR 合并后 sync + archive
+- [x] 2.1 PR 合并后 sync + archive
 - [ ] 2.2 issue #277 核销评论
