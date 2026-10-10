@@ -141,7 +141,7 @@ def resolve_reports_path(file_name: str) -> Path:
 
 
 # Initialize session DB
-init_db()
+# (统一由下方 _init_stores() 执行——import 期建表失败仅 ERROR 降级,见 #57)
 
 # 决策日志表(幂等建表,decision_log 与 sessions 同库;decision-outcome-tracking)
 # cohort 跑批记账表(delta add-forward-paper-trading-cohort;独立于 predictions)
@@ -180,10 +180,28 @@ from finance_agent.outcome.track_record.model import (  # noqa: E402
 )
 from finance_agent.outcome.track_record.segments import segment_all  # noqa: E402
 
-init_decision_log()
-init_predictions()
-init_track_record_tables()
-init_cohort_runs()
+
+def _init_stores() -> None:
+    """import 期建表:任一存储初始化失败仅 ERROR 降级,不阻断 API 启动(#57)。
+
+    DB 不可写时相关路由的写入本就有 per-call 兜底;import 期裸调用一旦抛错,
+    整个进程起不来,/api/health 与只读路由一并陪葬。降级启动 + 日志可见,
+    运维可据 ERROR 定位具体哪张库失败。
+    """
+    for label, init_fn in (
+        ("sessions", init_db),
+        ("decision_log", init_decision_log),
+        ("predictions", init_predictions),
+        ("track_record", init_track_record_tables),
+        ("cohort_runs", init_cohort_runs),
+    ):
+        try:
+            init_fn()
+        except Exception:
+            _logger.error("初始化 %s 存储失败(降级继续,写入有 per-call 兜底)", label, exc_info=True)
+
+
+_init_stores()
 
 # ── Node → Layer/Description mapping (shared with frontend) ──
 
