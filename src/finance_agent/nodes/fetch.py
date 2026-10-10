@@ -85,6 +85,24 @@ def _make_stub_cash_flow() -> pd.DataFrame:
     )
 
 
+def _make_stub_peer_financials(stock_name: str = "") -> pd.DataFrame:
+    """stub 同业对照表（complete-peer-pipeline）：列契约与真实 fetch_peer_data 一致，
+    行业=stub industry_info 的「白酒」，主标的首行置前（compute 格式化器同序）。"""
+    return pd.DataFrame(
+        {
+            "name": [stock_name or "贵州茅台", "五粮液", "泸州老窖"],
+            "code": ["600519", "000858", "000568"],
+            "PE": [19.39, 16.5, 14.2],
+            "PB": [6.28, 3.1, 2.8],
+            "total_mv": [1.8e12, 5.0e11, 3.0e11],
+            "revenue_yoy": [18.1, 10.9, 15.3],
+            "netprofit_yoy": [15.2, 8.4, 13.0],
+            "gross_margin": [91.9, 75.8, 88.1],
+            "report_period": ["2025-12-31"] * 3,
+        }
+    )
+
+
 def _make_stub_kline(rows: int = 80) -> pd.DataFrame:
     """有效日 K 线（日期/开盘/收盘/最高/最低）。默认 80 期 ≥ 60 日窗口：
     全图 stub 管线的 derived_series 5/20/60 窗口全部可算，且与注入型
@@ -126,6 +144,9 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "benchmark_kline": _make_stub_kline(),
         "industry_pe": None,
         "quarterly_income": None,
+        # complete-peer-pipeline：自动选取使无显式 peer_codes 的真实路径常态产出
+        # peer_financials——stub 键集须同构（键集对齐守卫 TestStubRealKeysetParity）
+        "peer_financials": _make_stub_peer_financials(stock_name),
         # update-financial-freshness-and-valuation Task 4：最新报告期快照
         # （估值外的最新期关键科目 + 同比；失败降级空 dict，ERROR 日志见抓取循环特判）
         "latest_period_snapshot": {
@@ -380,7 +401,20 @@ def fetch_data(state: dict, cache=None, client=None, *, kline_days: int = 250) -
 
 def _fetch_peers(ak, code, state, industry_info):
     peer_codes = state.get("peer_codes")
-    if not peer_codes or not industry_info:
+    if not peer_codes:
+        # complete-peer-pipeline（issue #21 story 2）：无显式对标股时自动选取
+        # 行业成分市值 Top5（排除自身）；成分不可得/行业缺失 → 保持「不抓取」
+        # 降级（既有守卫测试钉住的契约收窄至此情形）。显式列表恒优先。
+        industry = (industry_info or {}).get("industry")
+        if not industry:
+            return None
+        constituents = ak.fetch_industry_constituents(industry)
+        if not constituents:
+            return None
+        peer_codes = [c["code"] for c in constituents if str(c.get("code")) != str(code)][:5]
+        if not peer_codes:
+            return None
+    if not industry_info:
         return None
     df = ak.fetch_peer_data(peer_codes)
     # clear-valuation-chain-debts D2：空表（全标的失败/无 PE/PB）归一 None，

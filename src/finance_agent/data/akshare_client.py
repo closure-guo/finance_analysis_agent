@@ -25,6 +25,20 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from finance_agent.data.cache import get_shared_cache
+
+
+def _safe_float(val, default=None):
+    """宽容数值解析（charts._safe_float 同语义）：None/非法/NaN → default。"""
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return default
+    if v != v:  # NaN
+        return default
+    return v
+
+
 logger = logging.getLogger(__name__)
 
 _SINA_MAX_RETRIES = 2
@@ -400,6 +414,49 @@ class AKShareClient:
             logger.error("行业数据降级后仍缺失（名称/cninfo 均无返回）: %s", stock_code)
             self.sources_seen["industry"].update({"cninfo", "missing"})
         return result
+
+    def fetch_industry_constituents(self, industry_name: str) -> list[dict] | None:
+        """行业板块成分股（complete-peer-pipeline：无显式对标股时的自动选取输入）。
+
+        主源东方财富行业板块成分接口；走 _call_ak 既有超时/重试/不可达
+        fail-fast 包装。结果按总市值降序（code/name/total_mv），经共享缓存
+        （行业维度键，TTL 24h）避免同行业重复抓取；失败/空返回 None 且
+        MUST NOT 写缓存（optional 降级语义）。
+        """
+        if not industry_name:
+            return None
+        cache = get_shared_cache()
+        cache_key = f"industry_constituents:{industry_name}"
+        cached: list[dict] | None = cache.get(cache_key)
+        if cached:
+            return cached
+        df = _call_ak(ak.stock_board_industry_cons_em, symbol=industry_name)
+        if df is None or df.empty:
+            return None
+        code_col = next((c for c in ("代码", "code") if c in df.columns), None)
+        name_col = next((c for c in ("名称", "name") if c in df.columns), None)
+        mv_col = next((c for c in ("总市值", "total_mv") if c in df.columns), None)
+        if code_col is None or mv_col is None:
+            logger.warning("行业成分表缺代码/总市值列，按接口失败降级: %s", industry_name)
+            return None
+        rows: list[dict] = []
+        for _, r in df.iterrows():
+            code = str(r[code_col]).strip()
+            mv = _safe_float(r[mv_col])
+            if not code or mv is None or mv <= 0:
+                continue
+            rows.append(
+                {
+                    "code": code,
+                    "name": str(r[name_col]).strip() if name_col else "",
+                    "total_mv": mv,
+                }
+            )
+        if not rows:
+            return None
+        rows.sort(key=lambda x: -x["total_mv"])
+        cache.set(cache_key, rows, ttl_seconds=86400)
+        return rows
 
     @staticmethod
     def _quote_from_spot_df(df, stock_code: str) -> dict | None:
