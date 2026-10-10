@@ -85,24 +85,6 @@ def _make_stub_cash_flow() -> pd.DataFrame:
     )
 
 
-def _make_stub_peer_financials(stock_name: str = "") -> pd.DataFrame:
-    """stub 同业对照表（complete-peer-pipeline）：列契约与真实 fetch_peer_data 一致，
-    行业=stub industry_info 的「白酒」，主标的首行置前（compute 格式化器同序）。"""
-    return pd.DataFrame(
-        {
-            "name": [stock_name or "贵州茅台", "五粮液", "泸州老窖"],
-            "code": ["600519", "000858", "000568"],
-            "PE": [19.39, 16.5, 14.2],
-            "PB": [6.28, 3.1, 2.8],
-            "total_mv": [1.8e12, 5.0e11, 3.0e11],
-            "revenue_yoy": [18.1, 10.9, 15.3],
-            "netprofit_yoy": [15.2, 8.4, 13.0],
-            "gross_margin": [91.9, 75.8, 88.1],
-            "report_period": ["2025-12-31"] * 3,
-        }
-    )
-
-
 def _make_stub_kline(rows: int = 80) -> pd.DataFrame:
     """有效日 K 线（日期/开盘/收盘/最高/最低）。默认 80 期 ≥ 60 日窗口：
     全图 stub 管线的 derived_series 5/20/60 窗口全部可算，且与注入型
@@ -145,8 +127,10 @@ def _stub_fetch_data(state: dict) -> dict[str, Any]:
         "industry_pe": None,
         "quarterly_income": None,
         # complete-peer-pipeline：自动选取使无显式 peer_codes 的真实路径常态产出
-        # peer_financials——stub 键集须同构（键集对齐守卫 TestStubRealKeysetParity）
-        "peer_financials": _make_stub_peer_financials(stock_name),
+        # peer_financials——stub 键集须同构（键集对齐守卫 TestStubRealKeysetParity
+        # 只比键名）。值置 None：stub 环境保持最小确定性内容，不因多出同业对照段
+        # 改变报告分段（message-actions 等按段数断言的 E2E 依赖内容稳定）
+        "peer_financials": None,
         # update-financial-freshness-and-valuation Task 4：最新报告期快照
         # （估值外的最新期关键科目 + 同比；失败降级空 dict，ERROR 日志见抓取循环特判）
         "latest_period_snapshot": {
