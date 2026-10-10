@@ -573,7 +573,7 @@ def generate_report(state: dict) -> dict:
         ("chart_assets", "总资产与归母权益"),
         ("chart_contract_liab", "合同负债"),
         ("chart_debt_ratio", "资产负债率趋势"),
-        ("chart_heatmap", "财报发布窗口期股价变化"),
+        ("chart_heatmap", "年报报告期窗口股价变化"),
         ("chart_dashboard", "财务指标综合仪表盘"),
         ("chart_market_share", "全球市场份额"),
     ]

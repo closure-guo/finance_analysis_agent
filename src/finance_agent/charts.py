@@ -263,7 +263,7 @@ def collect_chart_data(state: dict) -> dict:
     if decision_levels:
         chart_data["price"]["decision_levels"] = decision_levels
 
-    # ── 财报发布日期（从年报报告日推算）──
+    # ── 报告期截止日（利润表报告日，非披露日；标注措辞不得称「发布日」）──
     if income is not None and not income.empty:
         for d in income["报告日"]:
             date_str = str(d)
@@ -507,13 +507,13 @@ _TRIGGER_LEVEL_SPECS = (
 
 
 def _mark_earnings(ax, daily: list[dict], closes: list, earnings_dates: list[str]) -> None:
-    """财报发布日竖线标注（K 线/折线两形态共用）。"""
+    """报告期截止日竖线标注（K 线/折线两形态共用）。日期为报告期截止日而非披露日。"""
     for ed in earnings_dates:
         for i, d in enumerate(daily):
             if d["date"] == ed:
                 ax.axvline(x=i, color=_C_RED, linewidth=0.8, linestyle="--", alpha=0.5)
                 ax.annotate(
-                    "财报",
+                    "报告期止",
                     (i, closes[i]),
                     textcoords="offset points",
                     xytext=(5, 5),
@@ -802,13 +802,13 @@ def _chart_debt_ratio(data: dict, out: str) -> str | None:
 
 
 def _chart_heatmap(data: dict, out: str) -> str | None:
-    """P2: 财报发布窗口期股价变化热力图（行序时间升序，缺失格标注「缺」）。"""
+    """P2: 年报报告期窗口股价变化热力图（行序时间升序，缺失格标注「缺」）。锚点为报告期截止日。"""
     daily = data.get("price", {}).get("daily", [])
     earnings_dates = data.get("price", {}).get("earnings_dates", [])
     if len(earnings_dates) < 2 or len(daily) < 30:
         return None
 
-    # 计算每个财报日前后 N 天的收益率
+    # 计算每个报告期截止日前后 N 天的收益率
     windows = [-5, -1, 0, 1, 5, 10, 30]
     years_labels = []
     heatmap_data: list[list[float | None]] = []
@@ -864,7 +864,7 @@ def _chart_heatmap(data: dict, out: str) -> str | None:
     ax.set_yticks(range(len(years_labels)))
     ax.set_yticklabels(years_labels)
     ax.set_title(
-        "年报发布窗口期股价变化（%）", fontsize=13, fontweight="bold", color="#333", pad=12
+        "年报报告期窗口股价变化（%）", fontsize=13, fontweight="bold", color="#333", pad=12
     )
     # 标注数值；缺失格标注「缺」，MUST NOT 渲染为 0.0
     for i in range(len(years_labels)):
