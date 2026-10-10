@@ -12,6 +12,6 @@
 ## 2. 验证与回归
 
 - [x] 2.1 tests/nodes/test_report.py 全绿（既有披露节断言不受新增行影响——行内追加非新章节）
-- [ ] 2.2 全量 pytest -m not live 0 失败；ruff/mypy 任务范围零错误
+- [x] 2.2 全量 pytest -m not live 0 失败；ruff/mypy 任务范围零错误
 - [x] 2.3 openspec validate --strict 通过
 - [x] 2.4 光大场景复核：披露节含 15.68%/18.68%/1.73%/0.004 与触发价位带（tests/validation 人工验证报告，stub 数据确定性渲染截图或文本摘录）
