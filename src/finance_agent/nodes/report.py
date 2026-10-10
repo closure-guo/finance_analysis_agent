@@ -228,6 +228,44 @@ def _format_freshness_section(state: dict) -> str | None:
             f"- 财务健康度：{health.get('total')} 分（{health.get('rating')}），评分采用 {caliber_line}"
         )
 
+    # add-risk-metrics-disclosure（issue #242 断点 1）：风控链路确定性计算
+    # （risk_metrics / price_levels）与决策数字同源，此处程序渲染使报告内可溯源。
+    risk = state.get("risk_metrics")
+    if risk:
+
+        def _pct(label: str, key: str) -> str:
+            v = risk.get(key)
+            return f"{label} 暂缺" if v is None else f"{label} {v * 100:.2f}%"
+
+        risk_line = "- 风险指标（基于日 K 线与基准历史计算）：{vol}、{mdd}、{var}".format(
+            vol=_pct("年化波动率", "volatility"),
+            mdd=_pct("最大回撤", "max_drawdown"),
+            var=_pct("VaR95", "var_95"),
+        )
+        beta = risk.get("beta")
+        if beta is not None:
+            # beta 缺席 = 基准不可得（数据语义），省略该段而非渲染「暂缺」
+            risk_line += f"、beta {beta}"
+        lines.append(risk_line)
+
+    levels = state.get("price_levels")
+    if levels:
+        if levels.get("available"):
+            stop = levels.get("stop_band_long") or {}
+            target = levels.get("target_band_long") or {}
+            lines.append(
+                "- 价位参考（基于近期 K 线结构计算）：入场参考 {entry}、"
+                "止损带 {s_low}–{s_high}、目标带 {t_low}–{t_high}".format(
+                    entry=_v(levels.get("entry_ref")),
+                    s_low=_v(stop.get("low")),
+                    s_high=_v(stop.get("high")),
+                    t_low=_v(target.get("low")),
+                    t_high=_v(target.get("high")),
+                )
+            )
+        else:
+            lines.append(f"- 价位参考不可用（{levels.get('reason') or 'unknown'}）")
+
     if not lines:
         return None
     body = "\n".join(lines)
