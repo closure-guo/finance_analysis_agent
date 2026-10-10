@@ -619,8 +619,8 @@ def _make_run_deep_analysis(
         )
         from finance_agent.stream_registry import registry
         from finance_agent.timeline_builder import (
-            apply_pipeline_node_complete,
-            apply_pipeline_thinking_token,
+            NodeTimelineAccumulator,
+            timeline_persist_interval,
         )
 
         _pipeline_start_time = _time_module.time()
@@ -634,8 +634,17 @@ def _make_run_deep_analysis(
         )
         _tree: list[dict] = build_layer_tree() if _track_snapshot else []
         # 管线节点时序（persist-full-session-timeline）：thinking chunk 按 node 分组
-        # 持久化到 sessions.pipeline_timelines，写入节奏与 _persist_snapshot 一致
-        _nodeTimelines: dict[str, list[dict]] = {}
+        # 持久化到 sessions.pipeline_timelines。
+        # fix-timeline-write-amplification：可变累加器 O(1) 摊销（纯函数逐 token
+        # 调用是 O(n²)——全 dict 复制 + content 整串拼接，incident 039 放大器）；
+        # 语义等价性由 tests/test_timeline_accumulator.py 对照纯函数钉死。
+        _timelineAcc = NodeTimelineAccumulator()
+
+        def _dump_and_persist_timelines(sid: str, timelines: dict) -> int:
+            # 序列化一次并写库，返回字节数（自适应间隔输入，design D2）
+            payload = json.dumps(timelines, ensure_ascii=False)
+            _session_store.update_pipeline_timelines_json(sid, payload)
+            return len(payload.encode("utf-8"))
 
         def _now_ms() -> int:
             import time as _time
@@ -731,15 +740,17 @@ def _make_run_deep_analysis(
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
 
         async def _background_consume():
-            nonlocal _tree, _nodeTimelines
+            nonlocal _tree
             # 节点真实生命周期时间戳（custom 流的 node_start/node_end），
             # 用于给 updates 流的 node_complete 附加 server_*（修复快速节点计时恒 0）。
             node_lifecycle: dict[str, dict] = {}
             # thinking chunk 高频写库节流：上次 update_pipeline_timelines 的时间戳。
             # 修复「事件循环被高频同步 SQLite 写冻结」：写操作 to_thread 移出事件循环，
-            # 且按 TIMELINE_PERSIST_INTERVAL 节流，避免每个 thinking chunk 都写库。
+            # 且按自适应间隔节流（fix-timeline-write-amplification：间隔随上次序列化
+            # 字节数伸缩，写带宽 ≤256KB/s 有界——固定 0.5s 窗对 MB 级全量写是 O(n²)
+            # 写放大，incident 039 泵限速 ~1.3 事件/s 的根因）。
             last_timeline_persist = 0.0
-            TIMELINE_PERSIST_INTERVAL = 0.5  # 秒
+            last_persist_payload = 0  # 上次实际序列化字节数；0 → 下限 0.5s（现状冷启动）
             # thinking 明细丢弃累计（droppable 背压）：由 sink 内部计数与节流
             # 报告产出标记：updates 分支见到含 final_report 键的 update dict
             # （真实图最后一个 updates chunk 的标记）即置位。tail_thinking 压缩
@@ -826,18 +837,18 @@ def _make_run_deep_analysis(
                                 node = chunk.get("node", "")
                                 # 管线时序持久化：thinking chunk 按 node 累积（仅跟踪快照时）
                                 if _track_snapshot:
-                                    _nodeTimelines = apply_pipeline_thinking_token(
-                                        _nodeTimelines, node, chunk.get("token", "")
-                                    )
+                                    _timelineAcc.add_thinking_token(node, chunk.get("token", ""))
                                     # 高频写节流 + to_thread：避免每个 thinking chunk 都在
                                     # 事件循环线程同步写 SQLite 冻结事件循环（会话列表超时根因）
                                     now_p = _time_module.time()
-                                    if now_p - last_timeline_persist >= TIMELINE_PERSIST_INTERVAL:
+                                    if now_p - last_timeline_persist >= timeline_persist_interval(
+                                        last_persist_payload
+                                    ):
                                         last_timeline_persist = now_p
-                                        await asyncio.to_thread(
-                                            _session_store.update_pipeline_timelines,
+                                        last_persist_payload = await asyncio.to_thread(
+                                            _dump_and_persist_timelines,
                                             session_id,
-                                            _nodeTimelines,
+                                            _timelineAcc.materialize(),
                                         )
                                 await _put_event(
                                     StreamEvent.think(
@@ -963,12 +974,13 @@ def _make_run_deep_analysis(
                             # to_thread：快照写移出事件循环
                             await asyncio.to_thread(_persist_snapshot, _tree, _now)
                             # 管线时序收口：node_complete 将该节点末尾未完成 thinking 置 done
-                            _nodeTimelines = apply_pipeline_node_complete(_nodeTimelines, node_name)
-                            # to_thread：同步 SQLite 写移出事件循环（节点级低频，但仍不阻塞事件循环）
+                            _timelineAcc.apply_node_complete(node_name)
+                            # 节点边界即时冲刷（spec「与 pipeline_snapshot 同节奏」锚点，
+                            # 不经自适应间隔）；to_thread：同步 SQLite 写移出事件循环
                             await asyncio.to_thread(
-                                _session_store.update_pipeline_timelines,
+                                _dump_and_persist_timelines,
                                 session_id,
-                                _nodeTimelines,
+                                _timelineAcc.materialize(),
                             )
                         await _put_event(
                             StreamEvent.progress(
@@ -1059,7 +1071,7 @@ def _make_run_deep_analysis(
                     await asyncio.to_thread(_persist_snapshot, _tree, _now_ms())
                     # flush：thinking 高频写按节流可能跳过末尾 chunk，结束时补写完整时序
                     await asyncio.to_thread(
-                        _session_store.update_pipeline_timelines, session_id, _nodeTimelines
+                        _dump_and_persist_timelines, session_id, _timelineAcc.materialize()
                     )
 
                 report_md = accumulated.get("final_report", "")
