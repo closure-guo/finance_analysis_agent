@@ -154,3 +154,38 @@ class TestTimelinePersistInterval:
         sizes = [0, 64 * 1024, 256 * 1024, 1024 * 1024, 8 * 1024 * 1024, 128 * 1024 * 1024]
         intervals = [timeline_persist_interval(s) for s in sizes]
         assert all(a <= b for a, b in zip(intervals, intervals[1:], strict=False))
+
+
+class TestAccumulatorPerf:
+    """性能实证（tasks 4.3）：纯函数 fold 是 O(n²)（每 token 全串拼接），
+    累加器 O(1) 摊销。断言方向性（累加器更快）+ 打印比率供台账引用。
+    """
+
+    def test_flood_accumulation_not_quadratic(self):
+        import time
+
+        n = 20000  # 生产洪峰 6 万+ token 的缩影；再大纯函数臂耗时不可接受
+        token = "x" * 128
+
+        t0 = time.perf_counter()
+        timelines: dict[str, list[dict]] = {}
+        for i in range(n):
+            timelines = apply_pipeline_thinking_token(timelines, "trader", f"{token}{i}")
+        fold_elapsed = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        acc = NodeTimelineAccumulator()
+        for i in range(n):
+            acc.add_thinking_token("trader", f"{token}{i}")
+        acc_elapsed = time.perf_counter() - t0
+
+        # 物化结果同构（正确性顺带复核）
+        assert acc.materialize() == timelines
+        ratio = fold_elapsed / max(acc_elapsed, 1e-6)
+        print(
+            f"\n[perf] 纯函数 fold {fold_elapsed:.3f}s vs 累加器 {acc_elapsed:.3f}s "
+            f"（{n} tokens × 128B），比率 {ratio:.1f}×"
+        )
+        assert acc_elapsed < fold_elapsed, (
+            f"累加器 SHALL 快于纯函数 fold：fold={fold_elapsed:.3f}s acc={acc_elapsed:.3f}s"
+        )

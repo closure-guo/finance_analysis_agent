@@ -218,6 +218,10 @@ class NodeTimelineAccumulator:
         self._items: dict[str, list[dict]] = {}
         self._active_node: str | None = None
 
+    def __bool__(self) -> bool:
+        """空值守卫：结束 flush 的 `if acc:` 判据（等价旧 `if nodeTimelines:`）。"""
+        return bool(self._items)
+
     @staticmethod
     def _close_last_thinking_mut(timeline: list[dict]) -> None:
         last = timeline[-1] if timeline else None

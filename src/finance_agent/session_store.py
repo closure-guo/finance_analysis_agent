@@ -933,10 +933,19 @@ def update_pipeline_snapshot(session_id: str, snapshot: dict) -> bool:
 
 def update_pipeline_timelines(session_id: str, timelines: dict) -> bool:
     """持久化管线节点时序（JSON：{node: [TimelineItem]}）。返回是否更新到行。"""
+    return update_pipeline_timelines_json(session_id, json.dumps(timelines, ensure_ascii=False))
+
+
+def update_pipeline_timelines_json(session_id: str, payload_json: str) -> bool:
+    """以预序列化 JSON 写入管线时序（写放大治理，fix-timeline-write-amplification）。
+
+    调用方（两条管线消费路径）序列化一次并测得字节数——自适应中间写间隔的
+    输入（timeline_persist_interval），避免为测字节数重复 dumps。
+    """
     conn = _get_db()
     cur = conn.execute(
         "UPDATE sessions SET pipeline_timelines = ? WHERE session_id = ?",
-        (json.dumps(timelines, ensure_ascii=False), session_id),
+        (payload_json, session_id),
     )
     conn.commit()
     conn.close()

@@ -95,7 +95,7 @@ def test_update_pipeline_timelines_json_roundtrip(tmp_path, monkeypatch):
     )
     assert ok is True
     detail = session_store.get_session(sid)
-    assert json.loads(detail["pipeline_timelines"]) == timelines
+    assert detail["pipeline_timelines"] == timelines  # get_session 已解析 JSON
 
 
 # ── ReAct 路径（agent_factory._background_consume）──
@@ -187,7 +187,7 @@ def test_fastpath_flood_interim_writes_bounded(tmp_path, monkeypatch, fake_clock
     _assert_writes_bounded(spy.writes, total)
     # 结束时序落库完整（直接读库验证 flush 语义）
     detail = session_store.get_session(sid)
-    persisted = json.loads(detail["pipeline_timelines"])
+    persisted = detail["pipeline_timelines"]  # get_session 已解析 JSON
     content = "".join(
         item.get("content", "")
         for item in persisted.get("trader", [])
