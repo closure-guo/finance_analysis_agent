@@ -251,6 +251,7 @@ cache.db*
 data/test-e2e-sessions.db*
 # 跑赢指数对比 E2E 专属测试库（playwright.track-record.config.ts 注入）
 data/test-e2e-track-record.db*
+data/test-e2e-eval-ops.db*
 data/test-repro.db*
 data/*.corrupt-backup
 
