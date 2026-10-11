@@ -95,3 +95,15 @@
 - **WHEN** 某轮辩论出现 `value_mismatch` 或 `field_ref_echo_only` 非零
 - **THEN** 图路由 SHALL 与信号全零时完全一致，SHALL NOT 重跑辩手、SHALL NOT 置阻断标记、SHALL NOT 改写辩论上下文
 - **AND** 信号 SHALL 完整写入 `debate_anchor_checks` 与 span metadata，供下游审批上下文消费
+
+#### Scenario: channel 声明与图通道契约
+
+- **WHEN** 构建 `build_5layer_graph()`
+- **THEN** `builder.channels` SHALL 含 `debate_anchor_checks`，且该键 SHALL 出现在图通道契约测试的断言集合中（未声明键被图合并静默丢弃——incident 027）
+- **AND** 一次 deep 全流程后 state 中 `debate_anchor_checks` 条目数 SHALL 等于全部辩手发言的论点总数
+
+#### Scenario: rebuttal_to 编号语义不变
+
+- **WHEN** 第 2 轮辩手输出 `rebuttal_to=[1, 3]`
+- **THEN** SHALL 指向对方第 1 轮 `key_arguments` 的第 1、3 项（结构化后仍按位置计数）
+- **AND** 对手可见历史「R1 论点: ①…②…③…」SHALL 只含各项 `text`，交锋覆盖率计算 SHALL 与变更前一致

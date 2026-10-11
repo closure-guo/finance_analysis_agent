@@ -14,4 +14,4 @@
 - [x] 2.1 全量 pytest -m not live 0 失败；ruff/mypy 任务范围零错误
 - [x] 2.2 openspec validate --strict 通过（两 spec）
 - [x] 2.3 光大场景复核：估值缺失 + value_mismatch 锚点告警 + 披露节三段齐现 FM 上下文、无标注时上下文与现状一致（零回归）→ tests/validation 人工验证报告
-- [ ] 2.4 合并后 prompt deploy：`uv run python scripts/deploy_prompts.py` 发布 fund_manager.md（条件式条款先发安全，design D4）
+- [x] 2.4 合并后 prompt deploy：`uv run python scripts/deploy_prompts.py` 发布 fund_manager.md（条件式条款先发安全，design D4）
