@@ -41,7 +41,7 @@ GARP 对照（PE 5.2 < 行业 6.1、增长率 -24.01%、ROE 9%、负债率 91%�
 ## 5. 自动化验证汇总
 
 - 触达套件 389 passed（traffic_light 41 / garp 22 / akshare_client 76 / report 13 / charts 3 / prompt contracts 等）
-- 全量 `pytest -m "not live"`：4542 passed, 0 failed
+- 全量 `pytest -m "not live"`：4561 passed, 0 failed
 - ruff / ruff format / mypy 任务范围：新增代码零错误（行 841 Any|None 已守卫；余为存量，CI 该步 `|| true` 非门禁）
 - `openspec validate add-banking-industry-calibration --strict`：valid（四 spec）
 

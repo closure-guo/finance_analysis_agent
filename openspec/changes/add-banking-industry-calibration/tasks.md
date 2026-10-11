@@ -36,7 +36,7 @@
 
 ## 6. 验证与回归
 
-- [ ] 6.1 全量 pytest -m not live 0 失败；ruff/mypy 任务范围零错误
+- [x] 6.1 全量 pytest -m not live 0 失败；ruff/mypy 任务范围零错误
 - [x] 6.2 openspec validate --strict 通过（四 spec）
 - [x] 6.3 光大 601818 场景复核：fixtures 银行报表实算——GARP 不再恒败、健康度脱离通用压分（快照/健康度前后对照落 tests/validation 人工验证报告）
 - [ ] 6.4 合并后 prompt deploy（fundamental_analyst.md）
