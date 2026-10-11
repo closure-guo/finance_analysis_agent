@@ -815,8 +815,8 @@ def _make_run_deep_analysis(
                                         )
                                     if report_seen or tail_compress_budget > 0:
                                         # spec「图完成后工具消费端压缩缓冲明细」：
-                                        # 压缩丢弃（不做 timeline 累积、不入
-                                        # event_queue）使终态 TOOL_RESULT 有界送达。
+                                        # 压缩丢弃事件转发（不入 event_queue）使
+                                        # 终态 TOOL_RESULT 有界送达。
                                         # incident 039（2026-10-08 茅台）：真实语序下
                                         # thinking 洪峰在 final_report 之前——仅以
                                         # report_seen 为门槛时，消费者要先排完数万条
@@ -828,6 +828,17 @@ def _make_run_deep_analysis(
                                         # chunk 的合法 timeline 内容）走慢路径；
                                         # report_seen 后（报告已产出）的尾部明细
                                         # 无条件压缩。
+                                        # 压缩仅作用于事件转发——时间线累积照常
+                                        # （fix-timeline-write-amplification 后累积为
+                                        # O(1) parts 追加、持久化由自适应间隔限流，
+                                        # spec session-persistence「结束 flush 全量」
+                                        # 不因消费滞后丢内容；此前与压缩耦合是
+                                        # O(n²) 时代的历史包袱，滞后场景会把积压
+                                        # thinking 从落库时序里静默丢掉）。
+                                        if _track_snapshot:
+                                            _timelineAcc.add_thinking_token(
+                                                chunk.get("node", ""), chunk.get("token", "")
+                                            )
                                         registry.record_drop(session_id or "", "tail_thinking")
                                         if tail_compress_budget > 0:
                                             tail_compress_budget -= 1

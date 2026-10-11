@@ -194,3 +194,53 @@ def test_fastpath_flood_interim_writes_bounded(tmp_path, monkeypatch, fake_clock
         if item.get("type") == "thinking"
     )
     assert len(content) == total * 2048
+
+
+# ── 消费滞后回归（fix: 压缩仅作用于事件转发，时间线累积照常）──
+#
+# 机制（CI 实证 flake，同 commit 一次 4532 全过、一次红）：graph_done 是线程
+# Event，生产者线程排完流即置位；若消费者滞后，积压 thinking 在 graph_done 后
+# 走 incident-039 压缩分支。旧实现把「不做 timeline 累积」与压缩耦合——落库
+# 时序静默丢积压（CI 实测 1743/3000 = 消费位 1231 + TAIL_KEEP_MAX 512，精确
+# 吻合），违反 session-persistence「结束 flush 全量」。
+#
+# 滞后的确定性制造：to_thread 写库 await 是消费循环让出事件循环的真实窗口——
+# 期间生产者线程把剩余 chunk 全部调度进 chunk_queue（run_coroutine_threadsafe
+# 的 put 也是 loop 回调，仅在循环空闲时批量入队；在消费者里 sleep 反而把 put
+# 调度一起堵死，制造不出积压）。给 spy 写库加 worker 线程内 sleep 即可。
+
+
+@pytest.mark.asyncio
+async def test_react_lag_backlog_keeps_full_timeline(tmp_path, monkeypatch):
+    monkeypatch.setenv("PIPELINE_TIMEOUT_SECONDS", "60")
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "t.db")
+    session_store.init_db()
+    sid = session_store.create_session(stock_code="688072", stock_name="拓荆科技", status="running")
+    spy = _WriteSpy(monkeypatch)
+    total = 1500
+
+    # spy 之上再包一层 50ms worker 线程延迟：每次时序写 await 期间事件循环空闲，
+    # 生产者把大量 chunk 批量入队——消费者跨 graph_done 边界时积压必 > 512
+    spied_json = session_store.update_pipeline_timelines_json
+
+    def _slow_json(session_id_arg, payload_json):
+        time.sleep(0.05)
+        return spied_json(session_id_arg, payload_json)
+
+    monkeypatch.setattr(session_store, "update_pipeline_timelines_json", _slow_json)
+
+    def _stream(initial_state, config=None, session_id=None):
+        for _ in range(total):
+            yield ("custom", {"type": "thinking", "node": "trader", "token": _flood_token()})
+        yield _final_updates_chunk()
+
+    monkeypatch.setattr("finance_agent.agent_factory._stream_graph", _stream)
+    from finance_agent.agent_factory import _make_run_deep_analysis
+
+    tool = _make_run_deep_analysis(api_key="fake", session_id=sid)
+    events: list = []
+    async for ev in tool("688072", "拓荆科技"):
+        events.append(ev)
+
+    assert events, "事件流不应为空"
+    _assert_writes_bounded(spy.writes, total)
